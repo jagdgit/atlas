@@ -1,0 +1,35 @@
+system:
+  name: Atlas
+  version: 0.1.0
+  timezone: UTC
+
+paths:
+  data: /data/atlas_data
+  documents: /data/atlas_data/documents
+  knowledge: /data/atlas_data/knowledge
+  embeddings: /data/atlas_data/embeddings
+  models: /data/atlas_data/models
+  logs: /data/atlas_data/logs
+  checkpoints: /data/atlas_data/checkpoints
+  state: /data/atlas_data/state
+  cache: /data/atlas_data/cache
+
+database:
+  host: localhost
+  port: 5432
+  database: atlas
+  user: atlas
+  password: nl07EA@4284
+
+llm:
+  provider: ollama
+  host: http://localhost:11434
+  model: qwen3:4b
+  temperature: 0
+
+scheduler:
+  workers: 2
+  checkpoint_interval: 60
+
+logging:
+  level: INFO
