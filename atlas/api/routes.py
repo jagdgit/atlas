@@ -55,6 +55,7 @@ from atlas.api.schemas import (
     CodeRepoRequest,
     CodeSymbolsRequest,
     PythonRunRequest,
+    ReportRequest,
     ToolInfo,
     ToolsResponse,
     VerifyRequest,
@@ -291,6 +292,17 @@ def python_run(body: PythonRunRequest, request: Request) -> dict:
     )
 
 
+@v1_router.post("/report", tags=["reports"])
+def report(body: ReportRequest, request: Request) -> dict:
+    reports = _app(request).container.resolve("reports")
+    return reports.report(
+        body.objective,
+        {"claims": body.claims, "sources": body.sources or []},
+        budget=body.budget,
+        notes=body.notes or "",
+    )
+
+
 @v1_router.post("/verify", response_model=VerifyResponse, tags=["verification"])
 def verify(body: VerifyRequest, request: Request) -> VerifyResponse:
     verification = _app(request).container.resolve("verification")
@@ -311,6 +323,12 @@ def create_job(body: CreateJobRequest, request: Request) -> JobDetailResponse:
 def list_jobs(request: Request, status: str | None = None, limit: int = 50) -> JobsResponse:
     jobs = _app(request).container.resolve("jobs")
     return JobsResponse(jobs=[_job_out(j) for j in jobs.list_jobs(status=status, limit=limit)])
+
+
+@v1_router.get("/jobs/blocked", tags=["jobs"])
+def list_blocked_jobs(request: Request, limit: int = 50) -> dict:
+    jobs = _app(request).container.resolve("jobs")
+    return {"blocked": jobs.list_blocked(limit=limit)}
 
 
 @v1_router.get("/jobs/{job_id}", response_model=JobDetailResponse, tags=["jobs"])

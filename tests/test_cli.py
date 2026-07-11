@@ -27,6 +27,7 @@ from atlas.cli.main import (
     cmd_python,
     cmd_recall,
     cmd_remember,
+    cmd_report,
     cmd_search,
     cmd_tool,
     cmd_tools,
@@ -36,6 +37,7 @@ from atlas.cli.main import (
 from atlas.services.assistant_service import ChatTurn
 from atlas.knowledge.service import SearchResult
 from atlas.models import MemoryItem
+from atlas.reports.service import ReportService
 from atlas.verification.service import VerificationService
 
 
@@ -176,6 +178,10 @@ class FakeJobs:
     def list_jobs(self, *, status=None, limit=50):
         return [self._job]
 
+    def list_blocked(self, *, limit=50):
+        return [{"job_id": "job-1", "ordinal": 1, "capability": "web",
+                 "needs": "needs capability: web", "objective": "do research"}]
+
     def job_detail(self, job_id):
         if job_id != "job-1":
             raise KeyError(job_id)
@@ -216,6 +222,7 @@ class FakeApp:
                 "code": FakeCode(),
                 "python": FakePython(),
                 "verification": VerificationService(),
+                "reports": ReportService(VerificationService()),
             }
         )
 
@@ -539,6 +546,42 @@ def test_cmd_python_no_input_returns_2(capsys):
     args = build_parser().parse_args(["python"])
     rc = cmd_python(args, app=FakeApp())
     assert rc == 2
+
+
+# --- report + blocked queue (S17) -----------------------------------------
+def test_cmd_report_prints_markdown(capsys, tmp_path):
+    import json
+
+    graph = {
+        "objective": "Estimate soiling",
+        "claims": [
+            {
+                "id": "c1",
+                "statement": "Soiling ~ 4%",
+                "evidence": [
+                    {"source_id": "s1", "evidence_level": 4, "extracted_value": 3.9},
+                    {"source_id": "s2", "evidence_level": 3, "extracted_value": 4.0},
+                    {"source_id": "s3", "evidence_level": 4, "extracted_value": 3.8},
+                ],
+            }
+        ],
+    }
+    path = tmp_path / "g.json"
+    path.write_text(json.dumps(graph), encoding="utf-8")
+    args = build_parser().parse_args(["report", str(path)])
+    rc = cmd_report(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "# Research Report:" in out
+    assert "Soiling" in out
+
+
+def test_cmd_jobs_blocked(capsys):
+    args = build_parser().parse_args(["jobs", "--blocked"])
+    rc = cmd_jobs(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "needs capability: web" in out
 
 
 # --- verify (S15) ---------------------------------------------------------

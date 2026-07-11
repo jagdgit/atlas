@@ -154,7 +154,15 @@ def _drive(service, job_id, enqueue_log, limit=50):
         seen += 1
 
 
-def _make(planner_steps, runner):
+class FakeEvents:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event_type, payload=None, source=None):
+        self.events.append((event_type, payload or {}))
+
+
+def _make(planner_steps, runner, *, reports=None, events=None):
     repo = FakeJobRepo()
     enqueue_log = []
 
@@ -162,7 +170,8 @@ def _make(planner_steps, runner):
         enqueue_log.append(payload["job_id"])
 
     service = JobService(
-        repo, FakePlanner(planner_steps), runner, enqueue=enqueue
+        repo, FakePlanner(planner_steps), runner,
+        enqueue=enqueue, reports=reports, events=events,
     )
     return repo, service, enqueue_log
 
@@ -270,3 +279,46 @@ def test_recovery_reenqueues_unfinished_and_resets_running_steps():
 def test_advance_unknown_job_is_safe():
     repo, service, log = _make([], ScriptedRunner())
     assert service.advance_job_task({"job_id": "nope"})["status"] == "unknown_job"
+
+
+# --- S17: report on finalize + notifications + blocked queue --------------
+def _reports():
+    from atlas.reports.service import ReportService
+
+    return ReportService()  # no verification/LLM → deterministic render
+
+
+def test_report_attached_on_finalize():
+    steps = [DecomposedStep("react", "agent", {}, "a")]
+    repo, service, log = _make(steps, ScriptedRunner(), reports=_reports())
+    jid = service.create_job("investigate x")["job"].id
+    _drive(service, jid, log)
+    job = repo.get_job(jid)
+    assert "# Research Report:" in job.result["report"]
+    assert "report_sections" in job.result
+    assert job.result["overall_confidence"] is not None
+
+
+def test_notifications_emitted_on_block_and_finalize():
+    steps = [DecomposedStep("web_fetch", "web", {}, "b")]
+    events = FakeEvents()
+    repo, service, log = _make(
+        steps, ScriptedRunner(blocked_caps={"web"}), events=events
+    )
+    jid = service.create_job("needs web")["job"].id
+    _drive(service, jid, log)
+    types = [t for t, _ in events.events]
+    assert "job.step_blocked" in types
+    assert "job.finalized" in types
+
+
+def test_list_blocked_aggregates_across_jobs():
+    steps = [DecomposedStep("web_fetch", "web", {}, "b")]
+    repo, service, log = _make(steps, ScriptedRunner(blocked_caps={"web"}))
+    jid = service.create_job("needs web")["job"].id
+    _drive(service, jid, log)
+    blocked = service.list_blocked()
+    assert len(blocked) == 1
+    assert blocked[0]["job_id"] == jid
+    assert blocked[0]["capability"] == "web"
+    assert blocked[0]["objective"] == "needs web"

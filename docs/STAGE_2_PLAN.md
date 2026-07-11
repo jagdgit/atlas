@@ -1,11 +1,12 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–16 shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–17 shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
-> **Verification Engine + Evidence Graph** + **Python Execution Sandbox**; 478 tests).
+> **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
+> **Non-blocking HITL & Report Generator**; 497 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S17 — Research loop + Non-blocking HITL & Reports**.
+> Next: **S18 — Deeper Research + Learning Pipeline**.
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -680,7 +681,7 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S14** ✅ | **Code Understanding (Tier B)** | `CodeCapability` (D9, §5b): `ast`(Python)+tree-sitter parse, repo map, code-aware chunking→RAG, symbol index, **import + cross-file call graph** (Python-first), **pattern mining**; `code`-role LLM `explain`; `POST /v1/code/*`, `atlas code …` — §6f | reads/reviews code |
 | **S15** ✅ | **Verification & Evidence Graph** | Claim model, Evidence Levels 1–5, calculated confidence, convergence stopping rule, Evidence Budget, **Verification Engine** (D8, §5a) | defensible conclusions |
 | **S16** ✅ | **Python Execution** | Execution capability (D6, sandbox); computed results become **L5 evidence** in the graph (data-driven estimates) | analysis |
-| **S17** | **Non-blocking HITL & Reports** | `blocked`-step queue + notify + `atlas job resume` **(R3, never stalls the job)**; Report Generator (scientific-review structure, §5a.5) | usable research jobs |
+| **S17** ✅ | **Non-blocking HITL & Reports** | `blocked`-step queue (`list_blocked`/`GET /v1/jobs/blocked`/`atlas jobs --blocked`) + event notifications on block/finalize + `atlas job resume` **(R3, never stalls the job)**; **Report Generator** (scientific-review structure, §5a.5) auto-attached on job finalize; `reports` capability, `POST /v1/report`, `atlas report` | usable research jobs |
 | **S18** | **Deeper Research + Learning Pipeline** | YouTube transcripts, Scholar/arXiv/Semantic Scholar; **Learning Pipeline** (D11, §5d): completed job/repos/docs → the **five stores** with **governance** (policy + Learning Level, explainable/reversible); seed the **Experience store** | compounding knowledge |
 | **S19** | **Engineering Intelligence** *(NEW)* | Repository Learning, Code-Style Learning, Architecture Learning, **Engineering Pattern Extraction** (§5b.1 layer 6), Project Knowledge Graph, Cross-project Search, **Personal Coding Assistant**, **Engineering Experience Store** (D11, §5d) | Atlas learns *you* (L4–L5) |
 | **S20** | **Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, Git, DB, Email/LinkedIn | full toolbelt |
@@ -1107,7 +1108,58 @@ substrate for data-driven estimates whose results become **L5 evidence** (§5a.6
 - [x] `PythonSandboxService` (`python` capability) wired in bootstrap; `python.run` tool; `sandbox.*` config.
 - [x] `run_python` intent + dispatch + `JobPlanner`; `PythonExecutionCapability` contract.
 - [x] `POST /v1/python/run` + `atlas python`; hermetic tests (real subprocess: ok/error/timeout/net-block/result/artifacts/truncation, service, planner, assistant, api, cli, caps). **478 tests pass** (+34).
-- [ ] **Next — S17:** Research loop (gather→verify→decide) + Non-blocking HITL & scientific-review Report Generator (§5a.5).
+- [x] **Next — S17:** Research loop (gather→verify→decide) + Non-blocking HITL & scientific-review Report Generator (§5a.5). ✅ (§6i)
+
+---
+
+## 6i. Sprint 17 — Non-blocking HITL & Report Generator (§5a.5) (✅ DONE)
+
+The research pipeline now has an *output* and a *human loop*: a finished job carries a
+**scientific-review report**, and the sub-tasks a job couldn't do alone surface as a
+**queue awaiting the user** — without ever having stalled the job (R3).
+
+- **`atlas/reports/` — Report Generator (§5a.5).** `ReportGenerator.generate()` is a
+  **pure, deterministic** assembly of the nine review sections — *Executive Summary →
+  Answer → Confidence → Methodology → Evidence → References → Conflicting Views →
+  Limitations → Next Research* — from *verified* claim dicts + source dicts. Every
+  numeric answer carries its claim's **calculated confidence** and supporting/
+  contradicting counts (ties into S15). **Overall confidence is derived, never guessed**:
+  the most common claim confidence, tie-broken toward the *more conservative* level.
+  **Conflicting Views** auto-flags claims with contradicting sources or weak/insufficient
+  evidence; **Next Research** is derived from low-confidence / non-converged claims. An
+  optional **`summarizer`-role LLM** only *polishes* the executive-summary prose — with no
+  LLM (or on any failure) it falls back to deterministic text, so a report is **always
+  producible**. Renders both a structured dict and a **Markdown** document.
+- **`ReportService` = the `reports` capability.** `report(objective, graph, budget?)`
+  runs the **verify→render** pipeline (Verification Engine → §5a.5 report);
+  `render(objective, …)` renders directly from already-verified claims or a gathered
+  answer + sources (no verification) — used by the Job Engine.
+- **Job Engine integration.** On finalize, `JobService` builds a report from the job's
+  completed steps (answers + citations→references) and attaches
+  `result.report` (Markdown) + `result.report_sections` + `result.overall_confidence` —
+  a report **never fails the job** (best-effort, R2/R3).
+- **Non-blocking HITL (R3).** New `JobService.list_blocked()` aggregates **blocked steps
+  across jobs** into one queue (job id, ordinal, capability, what it *needs*, objective);
+  `resume_job` (S12) reruns them once the user provides the file/credential/capability.
+  **Event notifications** now fire on `job.step_blocked` and `job.finalized` (in-app via
+  the event dispatcher, Q2) so a surface can prompt the user.
+- **Surface.** `POST /v1/report` (objective + serialised graph → verified report),
+  `GET /v1/jobs/blocked` (the HITL queue), `atlas report graph.json`,
+  `atlas jobs --blocked`.
+
+> **Scope honesty:** S17 delivers the report *artifact* and the HITL *queue/notify* loop
+> on top of the existing deterministic job decomposition. A fully **autonomous multi-round
+> gather→verify→decide research orchestrator** (claim extraction from arbitrary sources,
+> budget-driven re-search) is the deep-research work of **S18** — S17 gives it the report
+> renderer and verification pipeline it will drive.
+
+**Definition of Done (S17)** — all met:
+- [x] `ReportGenerator` (§5a.5 nine sections, pure + optional summarizer-LLM polish, derived overall confidence, conflicting-views/next-research logic, Markdown).
+- [x] `ReportService` (`reports` capability): verify→render pipeline + direct `render`; wired in bootstrap (container/capabilities/lifecycle).
+- [x] `JobService` attaches a report on finalize; `list_blocked()` HITL queue; `job.step_blocked`/`job.finalized` notifications.
+- [x] `POST /v1/report` + `GET /v1/jobs/blocked`; `atlas report` + `atlas jobs --blocked`.
+- [x] Hermetic tests (generator sections/confidence/conflicts/references/LLM-polish, service verify→render, job report+notify+blocked, api, cli). **497 tests pass (+19).**
+- [ ] **Next — S18:** Deeper Research (YouTube/Scholar/arXiv) + the **Learning Pipeline** (D11/§5d) seeding the five stores.
 
 ---
 
@@ -1153,4 +1205,5 @@ substrate for data-driven estimates whose results become **L5 evidence** (§5a.6
 | 2026-07-11 | S14 | **Sprint 14 shipped ✅ — Code Understanding (`CodeCapability`, Tier B, D9).** New `atlas/code/`: **Python parsed via stdlib `ast`** (symbols/imports/**call sites**, full fidelity) + **tree-sitter** (`tree-sitter-language-pack`) for JS/TS/TSX/C/C++/Rust/Go/Java/Bash/SQL (symbols+imports); honest per-file outcomes (`ok`/`shallow`/`unsupported`/`error`, R2). **Repo map** (manifests → deps/frameworks/entry points), **symbol index**, **import + cross-file call graph** (Python-first, conservative resolution — builtins ignored, ambiguous counted not guessed), **pattern mining** (Repository/Service/Registry/pytest/Docker/Postgres/UUID/dataclasses/async/framework, evidence-backed → feeds S19). **`CodeService`** = `code` capability: `parse`/`repo_map`/`index`/`search_symbols`/`graph`/`patterns`/`explain`; **code-aware chunking → knowledge** (one chunk per symbol) and **`code`-role LLM `explain`** grounded on structure. Concrete **`CodeCapability`** contract (catalog `CAP_CODE` now provided). `POST /v1/code/*` + `atlas code …`; `code.*` config. Deps `tree-sitter`+`tree-sitter-language-pack`. **421 tests pass (+51).** Next: **S15 Verification & Evidence Graph (D8)**. |
 | 2026-07-11 | S16 | **Sprint 16 shipped ✅ — Python Execution Sandbox (D6, *hybrid*).** New `atlas/sandbox/`: a `SandboxBackend` swap point — **`SubprocessBackend`** (default) runs `python -I -B` in a child with a POSIX `preexec_fn` applying **rlimits** (CPU/`RLIMIT_AS` memory/file size/no-core), a **hard wall-clock timeout** that kills the whole **process group** (`start_new_session`+`killpg`), a **scratch workdir**, a **stripped env**, and (default) an in-interpreter **network block**; **`DockerBackend`** = selectable placeholder that honestly reports unavailable (R2) so stronger isolation drops in later via `sandbox.backend`. `ExecutionResult` (`ok`/`error`/`timeout`/`blocked`, stdout/stderr truncation, `duration_ms`, structured `result` from `result.json`, artifacts) — **never raises** (R2/R3). **`PythonSandboxService`** = `python` capability (`run`/`run_file`, per-run uuid workdir under `paths.data/sandbox`). Planner `run_python` intent (fenced code / "run python…") + `AssistantService._do_run_python` (honest output/error/timeout/blocked) + `JobPlanner` support. Concrete **`PythonExecutionCapability`** (`CAP_PYTHON`, S16). `sandbox.*` config; `POST /v1/python/run` + `atlas python`. **478 tests pass (+34).** Next: **S17 research loop + HITL & reports**. |
 | 2026-07-11 | S15 | **Sprint 15 shipped ✅ — Verification Engine + Evidence Graph (D8/§5a), *the differentiator*.** New `atlas/evidence/` (serialisable **Evidence Graph**: `Source`/`EvidenceItem`/`ClaimValue`/`Claim`/`EvidenceGraph` — claims are persistent + **re-verifiable**) and `atlas/verification/` (pure, no LLM/I/O): **Evidence Levels L1–L5** (quality not count); `convergence()` = largest-cluster agreement ∈ [0,1] (`3.7/3.9/4.0/3.8`→1.0, `2/11/6/4`→low); **calculated confidence** HIGH/MEDIUM/LOW/INSUFFICIENT (0.6·convergence + 0.4·quality, contradiction penalty; single/low-level source never HIGH) with a human `reasoning_trace`; **Evidence Budget** + `decide()` continue/stop w/ explicit unmet criteria (stop on *convergence*, not paper count). **`VerificationService`** = `verification` capability (`verify(graph, budget?)` → per-claim decision), wired in bootstrap; `research.*` config (`ResearchConfig`). `POST /v1/verify` + `atlas verify graph.json`. Scope = engine/graph/budget primitives; live gather→verify→decide loop + scientific-review Report Generator land **S17**, Python results become **L5** at **S16**. **444 tests pass (+23).** Next: **S16 Python Execution Sandbox**. |
+| 2026-07-11 | S17 | **Sprint 17 shipped ✅ — Non-blocking HITL & Report Generator (§5a.5).** New `atlas/reports/`: **`ReportGenerator`** = pure/deterministic assembly of the nine scientific-review sections (Exec Summary→Answer→Confidence→Methodology→Evidence→References→Conflicting Views→Limitations→Next Research) from *verified* claim dicts + sources; **overall confidence derived** (most-common, tie→conservative), conflicting-views auto-flag (contradictions/weak), next-research from low-confidence/non-converged claims, optional `summarizer`-LLM polish (deterministic fallback), Markdown render. **`ReportService`** = `reports` capability: `report()` verify→render pipeline (Verification Engine) + `render()` direct. **Job Engine**: report auto-attached on finalize (`result.report`/`report_sections`/`overall_confidence`, best-effort, never fails the job); **`list_blocked()`** HITL queue across jobs; **`job.step_blocked`/`job.finalized`** event notifications (Q2). Surface `POST /v1/report` + `GET /v1/jobs/blocked`; `atlas report` + `atlas jobs --blocked`. **497 tests pass (+19).** Autonomous multi-round research orchestration deferred to **S18**. Next: **S18 Deeper Research + Learning Pipeline (D11)**. |
 | 2026-07-11 | S13b | **Sprint 13b shipped ✅ — Web Search (D5) + Downloader.** **D5 locked → DuckDuckGo** (keyless HTML) default: new `atlas/search/` (`SearchProvider` protocol + `SearchResponse`/`SearchHit` + `DuckDuckGoProvider` unwrapping `uddg` redirects) and **`SearchPlugin`** (`search` capability, tool `web.search`) with an **ordered provider list → provider fallback** (SearXNG/Brave drop in via config); all over the resilient net layer so blocked/rate-limited backends degrade (R2/R3), never crash. New **`DownloaderPlugin`** (`downloader`, `web.download`) → size-capped fetch to a sandbox-confined downloads dir, honest block/skip. Planner gains **`web_search`** intent + `AssistantService._do_web_search` (lists results, reports blocked/empty honestly); `JobPlanner` accepts it. `POST /v1/search`; `atlas websearch`/`download`; `plugins.search`/`plugins.downloader` config, both enabled. **370 tests pass (+27).** Next: **S14 Code Understanding (D9)**. |

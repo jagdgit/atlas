@@ -232,6 +232,15 @@ class CodeExplainRequest(BaseModel):
     question: str | None = None
 
 
+class ReportRequest(BaseModel):
+    # Objective + a serialised Evidence Graph → a verified §5a.5 report (S17).
+    objective: str = Field(min_length=1)
+    claims: list[dict] = Field(default_factory=list)
+    sources: list[dict] | None = None
+    budget: dict | None = None
+    notes: str | None = None
+
+
 class PythonRunRequest(BaseModel):
     code: str = Field(min_length=1)
     timeout: float | None = Field(default=None, gt=0)

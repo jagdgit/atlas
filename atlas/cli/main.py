@@ -22,6 +22,8 @@ the DI container, so they work without a running API server:
     atlas code patterns ./repo  # mine recurring engineering patterns
     atlas python "print(2+2)"   # run Python in the sandbox (S16)
     atlas verify graph.json     # verify claims (Verification Engine, S15)
+    atlas report graph.json     # scientific-review report from claims (S17)
+    atlas jobs --blocked        # list job steps awaiting you (HITL queue, R3)
     atlas agents                # list registered agents
     atlas ask "question"        # ask an agent (default: rag)
     atlas search "query"        # semantic search over the knowledge base
@@ -130,6 +132,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_jobs = sub.add_parser("jobs", help="list jobs")
     p_jobs.add_argument("--status", default=None, help="filter by status")
     p_jobs.add_argument("--limit", type=int, default=50)
+    p_jobs.add_argument(
+        "--blocked", action="store_true", help="list blocked steps awaiting you (HITL)"
+    )
 
     p_job = sub.add_parser("job", help="manage a job (start/show/resume/cancel)")
     p_job.add_argument(
@@ -165,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_py.add_argument("code", nargs="?", default=None, help="Python source to run")
     p_py.add_argument("-f", "--file", default=None, help="run a .py file instead")
     p_py.add_argument("--timeout", type=float, default=None, help="wall-clock seconds")
+
+    p_report = sub.add_parser(
+        "report", help="generate a scientific-review report from a JSON evidence graph"
+    )
+    p_report.add_argument(
+        "path", help="JSON file: {objective, claims:[...], sources?, budget?, notes?}"
+    )
 
     p_verify = sub.add_parser(
         "verify", help="verify claims from a JSON evidence graph (Verification Engine)"
@@ -399,6 +411,14 @@ def _print_job_detail(detail) -> None:
 def cmd_jobs(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     jobs = app.container.resolve("jobs")
+    if getattr(args, "blocked", False):
+        blocked = jobs.list_blocked(limit=args.limit)
+        if not blocked:
+            print("(nothing blocked — no jobs are waiting on you)")
+        for b in blocked:
+            print(f"{b['job_id']} step {b['ordinal']} [{b['capability']}] "
+                  f"needs: {b['needs']}  — {b['objective']}")
+        return 0
     rows = jobs.list_jobs(status=args.status, limit=args.limit)
     if not rows:
         print("(no jobs)")
@@ -555,6 +575,23 @@ def cmd_python(args: argparse.Namespace, app: "Application | None" = None) -> in
     return 0 if result["outcome"] == "ok" else 1
 
 
+def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    import json
+    from pathlib import Path
+
+    data = json.loads(Path(args.path).read_text(encoding="utf-8"))
+    app = app or build_application()
+    reports = app.container.resolve("reports")
+    result = reports.report(
+        data.get("objective", ""),
+        {"claims": data.get("claims", []), "sources": data.get("sources", [])},
+        budget=data.get("budget"),
+        notes=data.get("notes", ""),
+    )
+    print(result["report"]["markdown"])
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -610,6 +647,7 @@ _HANDLERS = {
     "download": cmd_download,
     "code": cmd_code,
     "python": cmd_python,
+    "report": cmd_report,
     "verify": cmd_verify,
     "backup": cmd_backup,
 }

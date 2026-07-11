@@ -27,6 +27,8 @@ from atlas.code.parser import CodeParser
 from atlas.code.service import CodeService
 from atlas.sandbox.backends import create_backend
 from atlas.sandbox.service import PythonSandboxService
+from atlas.reports.generator import ReportGenerator
+from atlas.reports.service import ReportService
 from atlas.verification.engine import EvidenceBudget, VerificationEngine
 from atlas.verification.service import VerificationService
 from atlas.documents.service import DocumentService
@@ -247,6 +249,27 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # scheduler. Decomposes an objective into steps and advances them one per
     # `advance_job` task (self-re-enqueuing) so jobs interleave (R1) while steps
     # stay sequential (Q1); reuses the AssistantService step dispatch verbatim (D1).
+    # Verification Engine + Evidence Graph (Sprint 15, D8/§5a): verify by *claim*,
+    # calculate confidence from evidence quality + numeric convergence + contradictions,
+    # and enforce a per-job Evidence Budget (stop on convergence, not paper count).
+    verification_service = VerificationService(
+        VerificationEngine(numeric_tolerance=cfg.research.numeric_tolerance),
+        default_budget=EvidenceBudget(
+            min_sources=cfg.research.min_sources,
+            min_peer_reviewed=cfg.research.min_peer_reviewed,
+            min_government=cfg.research.min_government,
+            convergence=cfg.research.convergence,
+            max_search_iterations=cfg.research.max_search_iterations,
+        ),
+        logger=get_logger("atlas.verification"),
+    )
+    # Report Generator (Sprint 17, §5a.5): verified claims → scientific-review report.
+    report_service = ReportService(
+        verification_service,
+        ReportGenerator(llm=llm_service, logger=get_logger("atlas.reports")),
+        logger=get_logger("atlas.reports"),
+    )
+
     job_repo = JobRepository(db_manager)
     job_planner = JobPlanner(
         planner,
@@ -260,6 +283,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         assistant_service,
         enqueue=scheduler_service.enqueue,
         conversation=conversation_service,
+        reports=report_service,
+        events=events,
         step_max_retries=cfg.jobs.step_max_retries,
         retry_delay=cfg.jobs.retry_delay,
         logger=get_logger("atlas.jobs"),
@@ -331,21 +356,6 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         params={"code": "Python source to execute"}, plugin="python",
     )
 
-    # Verification Engine + Evidence Graph (Sprint 15, D8/§5a): verify by *claim*,
-    # calculate confidence from evidence quality + numeric convergence + contradictions,
-    # and enforce a per-job Evidence Budget (stop on convergence, not paper count).
-    verification_service = VerificationService(
-        VerificationEngine(numeric_tolerance=cfg.research.numeric_tolerance),
-        default_budget=EvidenceBudget(
-            min_sources=cfg.research.min_sources,
-            min_peer_reviewed=cfg.research.min_peer_reviewed,
-            min_government=cfg.research.min_government,
-            convergence=cfg.research.convergence,
-            max_search_iterations=cfg.research.max_search_iterations,
-        ),
-        logger=get_logger("atlas.verification"),
-    )
-
     ingestion_source = FilesystemSource(
         knowledge_service,
         documents_dir=cfg.paths.documents,
@@ -379,6 +389,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("code", code_service)
     container.register_instance("python", python_service)
     container.register_instance("verification", verification_service)
+    container.register_instance("reports", report_service)
     container.register_instance("ingestion", ingestion_source)
 
     # Advertise capabilities so agents can query the kernel instead of importing
@@ -414,6 +425,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         "python", python_service, contract=caps.PythonExecutionCapability, kind="service"
     )
     capabilities.register("verification", verification_service, kind="service")
+    capabilities.register("reports", report_service, kind="service")
     capabilities.register("ingestion", ingestion_source, kind="service")
 
     # 6. Core services (registration order = start order)
@@ -430,6 +442,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(code_service)
     registry.register(python_service)
     registry.register(verification_service)
+    registry.register(report_service)
     registry.register(ingestion_source)
 
     # 7. Application object — holds the shared registries by reference, so it can

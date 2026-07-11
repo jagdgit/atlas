@@ -17,6 +17,7 @@ from atlas.exceptions import AgentNotFoundError, ToolNotFoundError
 from atlas.knowledge.service import SearchResult
 from atlas.models import ConversationMessage, ConversationSession, MemoryItem
 from atlas.services.assistant_service import ChatTurn
+from atlas.reports.service import ReportService
 from atlas.services.base import HealthStatus
 from atlas.verification.service import VerificationService
 
@@ -159,6 +160,10 @@ class FakeJobs:
     def list_jobs(self, *, status=None, limit=50):
         return [self._job]
 
+    def list_blocked(self, *, limit=50):
+        return [{"job_id": "job-1", "ordinal": 1, "capability": "web",
+                 "needs": "needs capability: web", "objective": "do research"}]
+
     def job_detail(self, job_id):
         if job_id != "job-1":
             raise KeyError(job_id)
@@ -271,6 +276,7 @@ class FakeApplication:
                 "code": FakeCode(),
                 "python": FakePython(),
                 "verification": VerificationService(),
+                "reports": ReportService(VerificationService()),
                 "plugins": FakePluginManager(),
             }
         )
@@ -667,6 +673,45 @@ def test_verify_endpoint_requires_auth():
 def test_verify_endpoint_rejects_empty_claims():
     resp = _client().post("/v1/verify", headers=AUTH, json={"claims": []})
     assert resp.status_code == 422
+
+
+def test_report_endpoint_generates_report():
+    body = {
+        "objective": "Estimate soiling loss",
+        "claims": [
+            {
+                "id": "c1",
+                "statement": "Soiling loss ~ 4%",
+                "evidence": [
+                    {"source_id": "s1", "evidence_level": 4, "extracted_value": 3.9},
+                    {"source_id": "s2", "evidence_level": 3, "extracted_value": 4.0},
+                    {"source_id": "s3", "evidence_level": 4, "extracted_value": 3.8},
+                ],
+            }
+        ],
+    }
+    resp = _client().post("/v1/report", headers=AUTH, json=body)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["report"]["overall_confidence"] == "HIGH"
+    assert "# Research Report:" in data["report"]["markdown"]
+
+
+def test_report_endpoint_requires_objective():
+    resp = _client().post("/v1/report", headers=AUTH, json={"claims": []})
+    assert resp.status_code == 422
+
+
+def test_report_endpoint_requires_auth():
+    assert _client().post("/v1/report", json={"objective": "x"}).status_code == 401
+
+
+def test_blocked_jobs_endpoint():
+    resp = _client().get("/v1/jobs/blocked", headers=AUTH)
+    assert resp.status_code == 200
+    blocked = resp.json()["blocked"]
+    assert blocked[0]["capability"] == "web"
+    assert blocked[0]["job_id"] == "job-1"
 
 
 def test_invoke_tool():

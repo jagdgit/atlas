@@ -60,6 +60,8 @@ class JobService:
         *,
         enqueue: Callable[..., Any] | None = None,
         conversation: Any = None,
+        reports: Any = None,
+        events: Any = None,
         step_max_retries: int = 2,
         retry_delay: float = 2.0,
         logger: logging.Logger | None = None,
@@ -69,6 +71,8 @@ class JobService:
         self._runner = runner
         self._enqueue = enqueue
         self._conversation = conversation
+        self._reports = reports
+        self._events = events
         self._step_max_retries = step_max_retries
         self._retry_delay = retry_delay
         self._logger = logger or logging.getLogger("atlas.jobs")
@@ -110,6 +114,23 @@ class JobService:
 
     def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[Job]:
         return self._repo.list_jobs(status=status, limit=limit)
+
+    def list_blocked(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Aggregate blocked steps across jobs — the HITL queue (R3, Q2).
+
+        These are the sub-tasks waiting on the user (a file, a credential, a login,
+        or a capability to be enabled). Each never stalled its job — the job ran
+        everything else it could — and each is resumable via ``resume_job``.
+        """
+        out: list[dict[str, Any]] = []
+        for job in self._repo.list_jobs(status=JOB_COMPLETED_WITH_BLOCKS, limit=limit):
+            for step in self._repo.list_steps(job.id):
+                if step.status == STEP_BLOCKED:
+                    view = self._blocked_view(step)
+                    view["job_id"] = job.id
+                    view["objective"] = job.objective
+                    out.append(view)
+        return out
 
     def resume_job(self, job_id: str) -> dict[str, Any]:
         """Reset blocked/skipped steps to pending and re-run them (R3)."""
@@ -214,6 +235,15 @@ class JobService:
                 bump_attempts=True,
             )
             self._logger.info("job %s step %s blocked: %s", job.id, step.ordinal, outcome.blocked_reason)
+            self._notify(
+                "job.step_blocked",
+                {
+                    "job_id": str(job.id),
+                    "ordinal": step.ordinal,
+                    "capability": step.capability,
+                    "needs": outcome.blocked_reason,
+                },
+            )
             return
 
         self._repo.set_step_status(
@@ -256,9 +286,59 @@ class JobService:
             "answer": self._answer(steps),
             "progress": self._progress(steps),
         }
+        report = self._build_report(job_id, steps)
+        if report is not None:
+            result["report"] = report.get("markdown", "")
+            result["report_sections"] = report.get("sections", {})
+            result["overall_confidence"] = report.get("overall_confidence")
         self._repo.set_job_status(job_id, status, result=result)
         self._logger.info("job %s finalized: %s", job_id, status)
+        self._notify(
+            "job.finalized",
+            {
+                "job_id": str(job_id),
+                "status": status,
+                "progress": result["progress"],
+            },
+        )
         return status
+
+    def _build_report(self, job_id: str, steps: list[JobStep]) -> dict[str, Any] | None:
+        """Attach a scientific-review report (§5a.5) to the finished job (S17)."""
+        if self._reports is None:
+            return None
+        job = self._repo.get_job(job_id)
+        objective = job.objective if job else ""
+        answer = self._answer(steps)
+        sources: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for step in steps:
+            for cit in (step.result or {}).get("citations", []) or []:
+                did = str(cit.get("document_id") or cit.get("chunk_id") or "")
+                if did and did not in seen:
+                    seen.add(did)
+                    sources.append(
+                        {
+                            "id": did,
+                            "title": (cit.get("snippet") or "")[:80] or did,
+                            "evidence_level": 3,
+                        }
+                    )
+        try:
+            return self._reports.render(
+                objective, claims=[], sources=sources, answer=answer, notes=answer[:600]
+            )
+        except Exception:  # noqa: BLE001 - a report must never fail the job
+            self._logger.exception("job %s report generation failed", job_id)
+            return None
+
+    def _notify(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self._events is None:
+            return
+        try:
+            self._events.emit(event_type, payload, source="jobs")
+        except Exception:  # noqa: BLE001 - notifications are best-effort
+            self._logger.debug("notify %s failed", event_type)
 
     # --- views / helpers -----------------------------------------------
     @staticmethod
