@@ -20,7 +20,7 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = PACKAGE_DIR.parent
@@ -46,6 +46,7 @@ class PathsConfig(BaseModel):
     checkpoints: Path
     state: Path
     cache: Path
+    backups: Path
 
     def ensure_exist(self) -> None:
         """Create all configured directories if they do not exist."""
@@ -70,6 +71,15 @@ class DatabaseConfig(BaseModel):
         )
 
 
+class LLMRole(BaseModel):
+    """A role → model binding (D7). Callers ask ``LLMService`` for a *role*
+    (chat/planner/researcher/summarizer/code/vision/embed); the service resolves
+    it to a concrete (provider, model). Swap models by editing config only."""
+
+    provider: str = "ollama"
+    model: str
+
+
 class LLMConfig(BaseModel):
     provider: str = "ollama"
     host: str = "http://localhost:11434"
@@ -82,6 +92,26 @@ class LLMConfig(BaseModel):
     # the answer; think=true makes Ollama separate it into a `thinking` field so
     # callers get clean text. Non-reasoning models fall back automatically.
     think: bool = True
+    # R4 (hardware envelope): inference is CPU-only and RAM-heavy, so every LLM
+    # call passes through a single "LLM lane" (a semaphore) — running two models
+    # at once would thrash RAM. Concurrency for Atlas means parallel I/O, not
+    # parallel inference. Raise only when RAM/hardware allows.
+    max_concurrency: int = 1
+    # Role → model registry (D7). Seeded below so today's single `model` /
+    # `embedding_model` keep working: `chat` and `embed` always exist.
+    roles: dict[str, LLMRole] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _seed_default_roles(self) -> "LLMConfig":
+        # Back-compat: the legacy scalar model becomes the `chat` role and the
+        # embedding model becomes the `embed` role, unless explicitly overridden.
+        self.roles.setdefault(
+            "chat", LLMRole(provider=self.provider, model=self.model)
+        )
+        self.roles.setdefault(
+            "embed", LLMRole(provider=self.provider, model=self.embedding_model)
+        )
+        return self
 
 
 class SchedulerConfig(BaseModel):
@@ -104,6 +134,14 @@ class AuditConfig(BaseModel):
 
 class MonitoringConfig(BaseModel):
     health_interval: int = 30  # seconds between periodic health checks
+
+
+class BackupConfig(BaseModel):
+    enabled: bool = True
+    interval_seconds: int = 86400  # daily; 0 = manual only (no scheduled backups)
+    retention: int = 7  # keep this many most-recent dumps (0 = keep all)
+    pg_dump_path: str = "pg_dump"  # override if not on PATH
+    pg_restore_path: str = "pg_restore"  # referenced by the restore script/docs
 
 
 class KnowledgeConfig(BaseModel):
@@ -139,9 +177,13 @@ class ReactConfig(BaseModel):
 
 class IngestionConfig(BaseModel):
     enabled: bool = True
-    # File types the filesystem source extracts (ADR-0033). PDFs use their embedded
-    # text layer; scanned/image-only PDFs need a future OCRService.
-    extensions: list[str] = [".txt", ".md", ".pdf", ".html", ".htm"]
+    # File types the filesystem source extracts (ADR-0033; expanded S13 Document
+    # Reader). PDFs use their embedded text layer; scanned/image-only PDFs need a
+    # future OCRService.
+    extensions: list[str] = [
+        ".txt", ".md", ".pdf", ".html", ".htm",
+        ".docx", ".pptx", ".xlsx", ".csv", ".json",
+    ]
     scan_interval: int = 300  # seconds between scheduled scans (0 = manual only)
 
 
@@ -156,11 +198,39 @@ class WebPluginConfig(BaseModel):
     user_agent: str = "Atlas/0.1 (+https://localhost)"
 
 
+class NetConfig(BaseModel):
+    """Resilient, polite HTTP layer (D10 / §5c) shared by all web-facing plugins."""
+
+    user_agent: str = "Atlas/0.1 (+https://localhost)"
+    timeout: float = 15.0
+    max_bytes: int = 2_097_152  # cap fetched body (2 MiB)
+    per_domain_delay: float = 1.0  # min seconds between requests to one domain
+    max_retries: int = 3  # bounded retries on 429/503/5xx/timeout
+    backoff_base: float = 1.0  # delay = backoff_base * 2**attempt (+ jitter), capped
+    backoff_cap: float = 30.0
+    jitter: float = 0.25  # random 0..jitter seconds added to each backoff
+    respect_robots: bool = True  # honour robots.txt allow/deny + crawl-delay
+    cache_ttl: float = 300.0  # response cache TTL seconds (0 = disable cache)
+
+
+class SearchPluginConfig(BaseModel):
+    # Ordered providers (D5, provider fallback). First that returns results wins.
+    providers: list[str] = Field(default_factory=lambda: ["duckduckgo"])
+    max_results: int = 5
+    endpoint: str = "https://html.duckduckgo.com/html/"  # DuckDuckGo HTML backend
+
+
+class DownloaderPluginConfig(BaseModel):
+    dir: str | None = None  # downloads dir; None => paths.data/downloads
+
+
 class PluginsConfig(BaseModel):
     # Dotted module paths to load; each module exposes build(config) -> Plugin.
     enabled: list[str] = Field(default_factory=list)
     filesystem: FilesystemPluginConfig = FilesystemPluginConfig()
     web: WebPluginConfig = WebPluginConfig()
+    search: SearchPluginConfig = SearchPluginConfig()
+    downloader: DownloaderPluginConfig = DownloaderPluginConfig()
 
 
 class MemoryConfig(BaseModel):
@@ -169,6 +239,44 @@ class MemoryConfig(BaseModel):
     working_ttl_seconds: int = 3600  # default TTL for working memory (0 = never)
     embed_working: bool = False  # embed working memory too (costlier; usually off)
     prune_interval: int = 3600  # seconds between expired-memory prunes (0 = manual)
+
+
+class ConversationConfig(BaseModel):
+    max_context_turns: int = 10  # recent messages assembled into prompt context
+    working_memory_k: int = 5  # relevant working memories recalled per turn
+    session_ttl_seconds: int = 0  # 0 = sessions never expire (persist indefinitely)
+
+
+class JobConfig(BaseModel):
+    # Concurrent jobs (R1) are bounded by scheduler.workers: each `advance_job` task
+    # runs one step then re-enqueues, so many jobs interleave on the worker pool.
+    # Raise scheduler.workers to run more jobs at once (LLM calls still serialise
+    # through the single LLM lane, R4).
+    max_concurrent: int = 3  # advisory; informs recommended scheduler.workers
+    step_max_retries: int = 2  # per-step retries on transient error before `failed`
+    retry_delay: float = 2.0  # seconds before a retried step is re-attempted
+    # Decomposition (D2c): use the planner-role LLM to break objectives into steps.
+    # Off => deterministic single-step plans only (safe default until models are set).
+    llm_decompose: bool = False
+    max_steps: int = 6  # cap on decomposed steps per job
+
+
+class CodeConfig(BaseModel):
+    # Code understanding (S14, D9/§5b). Pure-CPU parse; caps keep repo scans bounded.
+    max_file_bytes: int = 1_048_576  # 1 MiB per-file parse cap
+    max_files: int = 5000            # cap on files scanned per repo
+    ingest_on_index: bool = False    # index() ingests code-aware chunks into knowledge
+
+
+class ResearchConfig(BaseModel):
+    # Evidence Budget (S15, D8/§5a): the per-job stopping criteria the Verification
+    # Engine enforces. Stop on *convergence*, not a fixed paper count.
+    min_sources: int = 5
+    min_peer_reviewed: int = 3       # L4+ (peer-reviewed papers)
+    min_government: int = 1          # L3 (government / national-lab reports)
+    convergence: float = 0.90        # numeric agreement threshold to stop
+    max_search_iterations: int = 20
+    numeric_tolerance: float = 0.15  # relative window for "values agree"
 
 
 class ApiConfig(BaseModel):
@@ -180,6 +288,7 @@ class ApiConfig(BaseModel):
     keys: list[str] = Field(default_factory=list, repr=False)
     docs_enabled: bool = True  # serve Swagger/OpenAPI at /docs
     cors_origins: list[str] = Field(default_factory=list)
+    metrics_enabled: bool = True  # expose Prometheus /metrics + JSON /v1/metrics
 
     @field_validator("keys", mode="before")
     @classmethod
@@ -199,11 +308,17 @@ class AtlasConfig(BaseModel):
     logging: LoggingConfig
     audit: AuditConfig
     monitoring: MonitoringConfig = MonitoringConfig()
+    backup: BackupConfig = BackupConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
     agent: AgentConfig = AgentConfig()
     react: ReactConfig = ReactConfig()
     ingestion: IngestionConfig = IngestionConfig()
     memory: MemoryConfig = MemoryConfig()
+    conversation: ConversationConfig = ConversationConfig()
+    jobs: JobConfig = JobConfig()
+    net: NetConfig = NetConfig()
+    code: CodeConfig = CodeConfig()
+    research: ResearchConfig = ResearchConfig()
     plugins: PluginsConfig = PluginsConfig()
     api: ApiConfig = ApiConfig()
 

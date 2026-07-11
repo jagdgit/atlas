@@ -14,13 +14,23 @@ Building does NOT start services. Call ``app.start()`` or ``app.run_forever()``.
 
 from __future__ import annotations
 
+from atlas import capabilities as caps
 from atlas.agents.rag_agent import RagAgent
 from atlas.agents.react_agent import ReActAgent
 from atlas.config import AtlasConfig, get_config
+from atlas.conversation.service import ConversationService
 from atlas.database.connection import DatabaseManager
 from atlas.events.dispatcher import EventDispatcher
 from atlas.events.handlers import WILDCARD, LoggingHandler
+from atlas.execution.executor import ToolExecutor
+from atlas.code.parser import CodeParser
+from atlas.code.service import CodeService
+from atlas.verification.engine import EvidenceBudget, VerificationEngine
+from atlas.verification.service import VerificationService
+from atlas.documents.service import DocumentService
 from atlas.ingestion.filesystem_source import FilesystemSource
+from atlas.jobs.planner import JobPlanner
+from atlas.jobs.service import JobService
 from atlas.kernel.application import Application
 from atlas.kernel.capabilities import CapabilityRegistry
 from atlas.kernel.lifecycle import LifecycleManager
@@ -30,17 +40,22 @@ from atlas.kernel.tools import ToolRegistry
 from atlas.knowledge.service import KnowledgeService
 from atlas.llm.ollama_provider import OllamaProvider
 from atlas.llm.service import LLMService
+from atlas.ops.backup import BackupManager
+from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
 from atlas.repositories.agent_run_repo import AgentRunRepository
 from atlas.repositories.chunk_repo import ChunkRepository
+from atlas.repositories.conversation_repo import ConversationRepository
 from atlas.repositories.document_repo import DocumentRepository
 from atlas.repositories.embedding_repo import EmbeddingRepository
 from atlas.repositories.health_repo import HealthRepository
+from atlas.repositories.job_repo import JobRepository
 from atlas.repositories.memory_repo import MemoryRepository
 from atlas.repositories.task_repo import TaskRepository
 from atlas.scheduler.handlers import HandlerRegistry
 from atlas.scheduler.service import SchedulerService
 from atlas.services.agent_service import AgentService
+from atlas.services.assistant_service import AssistantService
 from atlas.services.database_service import DatabaseService
 from atlas.services.health import HealthMonitor
 from atlas.services.memory_service import MemoryService
@@ -88,6 +103,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         llm_provider,
         model=cfg.llm.model,
         embedding_model=cfg.llm.embedding_model,
+        roles={role: spec.model for role, spec in cfg.llm.roles.items()},
+        max_concurrency=cfg.llm.max_concurrency,
         logger=get_logger("atlas.llm"),
     )
     knowledge_service = KnowledgeService(
@@ -184,9 +201,128 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     handlers.register("memory_prune", memory_service.prune_task)
 
+    # Backups (Sprint 9): durable, scheduler-driven pg_dump with retention.
+    backup_manager = BackupManager(
+        cfg.database,
+        cfg.paths.backups,
+        enabled=cfg.backup.enabled,
+        interval_seconds=cfg.backup.interval_seconds,
+        retention=cfg.backup.retention,
+        pg_dump_path=cfg.backup.pg_dump_path,
+        enqueue=scheduler_service.enqueue,
+        count_pending=task_repo.count_pending_of_type,
+        logger=get_logger("atlas.ops.backup"),
+    )
+    handlers.register("backup", backup_manager.backup_task)
+
+    # Conversation + Chat orchestrator (Sprint 10): the shared spine (D1) that the
+    # async Job Engine (S12) will reuse. ConversationService owns the transcript;
+    # the deterministic Planner routes intents; the ToolExecutor runs tool steps;
+    # the AssistantService ties session -> plan -> dispatch -> response together.
+    conversation_service = ConversationService(
+        ConversationRepository(db_manager),
+        memory_service,
+        max_context_turns=cfg.conversation.max_context_turns,
+        working_memory_k=cfg.conversation.working_memory_k,
+        logger=get_logger("atlas.conversation"),
+    )
+    planner = Planner()
+    tool_executor = ToolExecutor(tools, logger=get_logger("atlas.execution"))
+    assistant_service = AssistantService(
+        conversation_service,
+        planner,
+        tool_executor,
+        knowledge=knowledge_service,
+        memory=memory_service,
+        agent=agent_service,
+        llm=llm_service,
+        tools=tools,  # shared by ref; plugin tools (web.fetch) register later
+        capabilities=capabilities,  # shared by ref; plugins register 'web' later
+        logger=get_logger("atlas.assistant"),
+    )
+
+    # Job Engine (Sprint 12): persistent, concurrent, resumable jobs on the
+    # scheduler. Decomposes an objective into steps and advances them one per
+    # `advance_job` task (self-re-enqueuing) so jobs interleave (R1) while steps
+    # stay sequential (Q1); reuses the AssistantService step dispatch verbatim (D1).
+    job_repo = JobRepository(db_manager)
+    job_planner = JobPlanner(
+        planner,
+        llm_service if cfg.jobs.llm_decompose else None,
+        max_steps=cfg.jobs.max_steps,
+        logger=get_logger("atlas.jobs.planner"),
+    )
+    job_service = JobService(
+        job_repo,
+        job_planner,
+        assistant_service,
+        enqueue=scheduler_service.enqueue,
+        conversation=conversation_service,
+        step_max_retries=cfg.jobs.step_max_retries,
+        retry_delay=cfg.jobs.retry_delay,
+        logger=get_logger("atlas.jobs"),
+    )
+    handlers.register("advance_job", job_service.advance_job_task)
+
     # Ingestion source (Sprint 3): scan documents dir -> knowledge base. Embedding
     # is deferred to the scheduler's 'embed_document' task; scans re-enqueue
     # themselves so periodic ingestion is durable across restarts.
+    # Document Reader (Sprint 13): structured extraction across formats
+    # (pdf/docx/pptx/xlsx/csv/md/txt/html/json), exposed as the `document` capability.
+    document_service = DocumentService(logger=get_logger("atlas.documents"))
+
+    # Code Understanding (Sprint 14, D9/§5b, Tier B): structural parse (Python=ast,
+    # others=tree-sitter) → repo map + symbol index + import/call graph + pattern
+    # mining, with code-aware chunking into the knowledge base and a `code`-role LLM
+    # explanation grounded on the parsed structure.
+    code_service = CodeService(
+        CodeParser(max_file_bytes=cfg.code.max_file_bytes),
+        knowledge=knowledge_service,
+        llm=llm_service,
+        max_files=cfg.code.max_files,
+        logger=get_logger("atlas.code"),
+    )
+    tools.register(
+        "code.parse", code_service.parse,
+        description="Parse one code file into symbols/imports/calls.",
+        params={"path": "path to a source file"}, plugin="code",
+    )
+    tools.register(
+        "code.repo_map", code_service.repo_map,
+        description="Map a repository: languages, deps, frameworks, entry points.",
+        params={"root": "path to a repository root"}, plugin="code",
+    )
+    tools.register(
+        "code.symbols", code_service.search_symbols,
+        description="Search code symbols (functions/classes/methods) in a repo.",
+        params={"query": "name substring", "root": "repository root"}, plugin="code",
+    )
+    tools.register(
+        "code.graph", code_service.graph,
+        description="Build a repo's import graph + cross-file call graph.",
+        params={"root": "path to a repository root"}, plugin="code",
+    )
+    tools.register(
+        "code.patterns", code_service.patterns,
+        description="Mine recurring engineering patterns across a repo.",
+        params={"root": "path to a repository root"}, plugin="code",
+    )
+
+    # Verification Engine + Evidence Graph (Sprint 15, D8/§5a): verify by *claim*,
+    # calculate confidence from evidence quality + numeric convergence + contradictions,
+    # and enforce a per-job Evidence Budget (stop on convergence, not paper count).
+    verification_service = VerificationService(
+        VerificationEngine(numeric_tolerance=cfg.research.numeric_tolerance),
+        default_budget=EvidenceBudget(
+            min_sources=cfg.research.min_sources,
+            min_peer_reviewed=cfg.research.min_peer_reviewed,
+            min_government=cfg.research.min_government,
+            convergence=cfg.research.convergence,
+            max_search_iterations=cfg.research.max_search_iterations,
+        ),
+        logger=get_logger("atlas.verification"),
+    )
+
     ingestion_source = FilesystemSource(
         knowledge_service,
         documents_dir=cfg.paths.documents,
@@ -210,15 +346,47 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("agent_run_repo", agent_run_repo)
     container.register_instance("agent", agent_service)
     container.register_instance("memory", memory_service)
+    container.register_instance("backup", backup_manager)
+    container.register_instance("conversation", conversation_service)
+    container.register_instance("planner", planner)
+    container.register_instance("tool_executor", tool_executor)
+    container.register_instance("chat", assistant_service)
+    container.register_instance("jobs", job_service)
+    container.register_instance("documents", document_service)
+    container.register_instance("code", code_service)
+    container.register_instance("verification", verification_service)
     container.register_instance("ingestion", ingestion_source)
 
     # Advertise capabilities so agents can query the kernel instead of importing
-    # modules (ADR-0040). Plugins will register their own capabilities in Sprint 7.
-    capabilities.register("llm", llm_service, kind="service")
-    capabilities.register("knowledge", knowledge_service, kind="service")
+    # modules (ADR-0040). S11: attach typed contracts so the registry can verify a
+    # provider implements its protocol and report missing capabilities (R2).
+    capabilities.register("llm", llm_service, contract=caps.LLMCapability, kind="service")
+    capabilities.register(
+        "knowledge", knowledge_service, contract=caps.KnowledgeCapability, kind="service"
+    )
     capabilities.register("scheduler", scheduler_service, kind="service")
-    capabilities.register("agent", agent_service, kind="service")
-    capabilities.register("memory", memory_service, kind="service")
+    capabilities.register(
+        "agent", agent_service, contract=caps.ExecutionCapability, kind="service"
+    )
+    capabilities.register(
+        "memory", memory_service, contract=caps.MemoryCapability, kind="service"
+    )
+    capabilities.register("backup", backup_manager, kind="service")
+    capabilities.register(
+        "conversation",
+        conversation_service,
+        contract=caps.ConversationCapability,
+        kind="service",
+    )
+    capabilities.register("chat", assistant_service, kind="service")
+    capabilities.register("jobs", job_service, kind="service")
+    capabilities.register(
+        "document", document_service, contract=caps.DocumentCapability, kind="service"
+    )
+    capabilities.register(
+        "code", code_service, contract=caps.CodeCapability, kind="service"
+    )
+    capabilities.register("verification", verification_service, kind="service")
     capabilities.register("ingestion", ingestion_source, kind="service")
 
     # 6. Core services (registration order = start order)
@@ -227,6 +395,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(scheduler_service)
     registry.register(agent_service)
     registry.register(memory_service)
+    registry.register(backup_manager)
+    registry.register(conversation_service)
+    registry.register(assistant_service)
+    registry.register(job_service)
+    registry.register(document_service)
+    registry.register(code_service)
+    registry.register(verification_service)
     registry.register(ingestion_source)
 
     # 7. Application object — holds the shared registries by reference, so it can

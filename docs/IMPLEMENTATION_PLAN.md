@@ -1,6 +1,6 @@
 # Atlas — Implementation Plan & Discussion Document
 
-> **Status:** Sprints 1–8 complete — Multi-agent live (ReAct assistant + tools + agents-as-tools); next is Sprint 9 (Operations)  
+> **Status:** Sprints 1–9 complete — Operations live (systemd/Docker, Prometheus + JSON metrics, scheduled pg_dump backups); next is Web UI (backlog)  
 > **Last updated:** 2026-07-11  
 > **Purpose:** Capture architecture decisions, open questions, and a step-by-step implementation roadmap before writing production code.
 
@@ -30,6 +30,7 @@
 20. [Sprint 6 — Memory System (Detailed Plan)](#20-sprint-6--memory-system-detailed-plan)
 21. [Sprint 7 — Plugins & Tools (Detailed Plan)](#21-sprint-7--plugins--tools-detailed-plan)
 22. [Sprint 8 — Multi-Agent (Detailed Plan)](#22-sprint-8--multi-agent-detailed-plan)
+23. [Sprint 9 — Operations (Detailed Plan)](#23-sprint-9--operations-detailed-plan)
 
 ---
 
@@ -338,115 +339,180 @@ plus supporting layers (repositories, providers, events).
 
 ```
 atlas/
-├── atlas/                    # Python package
-│   ├── config/               # Configuration (loaded once, injected everywhere)
-│   │   └── manager.py        # AtlasConfig — ✅ done
+├── atlas/                    # Python package  (as-built through Sprint 9)
+│   ├── config/               # Configuration (loaded once, injected everywhere) ✅
+│   │   └── manager.py        # AtlasConfig + all *Config models (env overrides, secrets)
 │   │
-│   ├── kernel/               # THE MICROKERNEL — small & stable (evolves from core/)
+│   ├── kernel/               # THE MICROKERNEL — small & stable ✅
 │   │   ├── application.py    # Atlas application object (the running system)
-│   │   ├── bootstrap.py      # Ordered startup sequence
+│   │   ├── bootstrap.py      # Ordered startup: builds & wires every service/plugin/agent
 │   │   ├── lifecycle.py      # start / stop / shutdown hooks, signal handling
 │   │   ├── registry.py       # Service registry (register / resolve)
-│   │   ├── capabilities.py   # Capability Registry (ADR-0040) — Sprint 4+
+│   │   ├── capabilities.py   # Capability Registry (ADR-0040)
+│   │   ├── tools.py          # ToolRegistry (ADR-0050) — named invokable actions
 │   │   └── service_container.py  # Dependency injection container
 │   │
-│   ├── models/               # DOMAIN MODELS (ADR-0036) — typed, not raw dicts
-│   │   ├── base.py           # shared base (frozen dataclass / Pydantic)
-│   │   ├── document.py  chunk.py  embedding.py
-│   │   ├── task.py  agent_run.py  health.py  memory.py
+│   ├── models/               # DOMAIN MODELS (ADR-0036) — typed, not raw dicts ✅
+│   │   ├── base.py           # Model base (from_row / from_rows / to_dict)
+│   │   ├── document.py       # Document, Chunk, Embedding
+│   │   ├── agent_run.py      # AgentRecord, AgentRun, AgentStep
+│   │   ├── task.py  health.py  memory.py
 │   │
-│   ├── exceptions/           # TYPED EXCEPTIONS (ADR-0037)
+│   ├── exceptions/           # TYPED EXCEPTIONS (ADR-0037) ✅
 │   │   ├── base.py           # AtlasError root
-│   │   ├── database.py  llm.py  knowledge.py  agent.py  plugin.py
+│   │   ├── config.py  database.py  llm.py  knowledge.py  agent.py
+│   │   └── plugin.py         # PluginError + ToolError / ToolNotFoundError
 │   │
-│   ├── interfaces/           # ABSTRACT PROTOCOLS (ADR-0038) services depend on
-│   │   ├── llm.py            # LLMProvider (exists) + EmbeddingProvider
+│   ├── interfaces/           # ABSTRACT PROTOCOLS (ADR-0038) ✅
+│   │   ├── llm.py            # LLMProvider + EmbeddingProvider
 │   │   ├── memory.py         # MemoryProvider
 │   │   └── storage.py        # repository/storage abstractions
 │   │
-│   ├── telemetry/            # OBSERVABILITY (ADR-0039) — introduce early
-│   │   ├── metrics.py        # counters / gauges
+│   ├── telemetry/            # OBSERVABILITY (ADR-0039) ✅
+│   │   ├── metrics.py        # counters / gauges / histograms + snapshot()
+│   │   ├── prometheus.py     # render_prometheus(snapshot) (ADR-0054) — Sprint 9
 │   │   ├── tracing.py        # spans across the pipeline
-│   │   └── timers.py         # @timed decorator / context manager
+│   │   └── timers.py         # @timed decorator / timer() context manager
 │   │
-│   ├── events/               # Event system (in-process now; DB-backed later)
-│   │   ├── event.py          # Event base type / envelope
-│   │   ├── dispatcher.py     # Publish / dispatch (the "event bus")
-│   │   ├── handlers.py       # Handler base + built-in handlers
-│   │   └── subscriptions.py  # Subscription registry (event_type → handlers)
+│   ├── events/               # Event system (in-process) ✅
+│   │   ├── event.py  dispatcher.py  handlers.py  subscriptions.py
 │   │
-│   ├── services/             # SYSTEM SERVICES (capabilities, not infrastructure)
-│   │   ├── base.py           # Service protocol (start/stop/health_check)
-│   │   ├── health.py         # Health monitor
-│   │   ├── llm.py            # LLM access service (delegates to providers/)
-│   │   ├── memory_service.py # MemoryService        — Sprint 2+
-│   │   ├── knowledge_service.py  # (search entrypoint) — Sprint 2+
-│   │   ├── embedding_service.py  # EmbeddingService  — Sprint 2+
-│   │   ├── chunking_service.py   # ChunkingService   — Sprint 3+
-│   │   ├── ocr_service.py        # OCRService        — Sprint 3+
-│   │   ├── document_service.py   # DocumentService   — Sprint 3+
-│   │   ├── search_service.py     # SearchService     — Sprint 3+
-│   │   └── ranking_service.py    # RankingService    — Sprint 4+
+│   ├── services/             # SYSTEM SERVICES (lifecycle: start/stop/health) ✅
+│   │   ├── base.py           # Service protocol + HealthStatus
+│   │   ├── health.py         # HealthMonitor
+│   │   ├── database_service.py  # DatabaseManager wrapper (pool + health)
+│   │   ├── agent_service.py  # agent catalog + run(); persists agent records
+│   │   └── memory_service.py # MemoryService (MemoryProvider) + prune task
 │   │
-│   ├── providers/            # Swappable backends behind services
-│   │   ├── llm/              # ollama.py, vllm.py, llamacpp.py (future)
-│   │   └── embeddings/       # backend implementations (future)
+│   ├── llm/                  # LLM access + provider (providers/ folded in here) ✅
+│   │   ├── service.py        # LLMService (generate / chat / embed, timed)
+│   │   ├── provider.py       # provider protocol
+│   │   └── ollama_provider.py  # OllamaProvider (+ OllamaError : LLMError)
 │   │
-│   ├── repositories/         # The ONLY layer that knows SQL (repository pattern)
-│   │   ├── base.py           # Base repository (uses DatabaseManager)
-│   │   ├── settings_repo.py  # system.settings
-│   │   ├── task_repo.py      # scheduler.tasks / task_runs
-│   │   ├── event_repo.py     # audit.events
-│   │   ├── document_repo.py  # knowledge.*        — Sprint 2+
-│   │   └── memory_repo.py    # memory.*           — Sprint 2+
+│   ├── knowledge/            # RAG knowledge layer ✅
+│   │   ├── service.py        # KnowledgeService (ingest / search)
+│   │   └── chunking.py       # chunker
 │   │
-│   ├── plugins/              # PLUGINS — ALL external integrations (ADR-0041)
-│   │   ├── base.py           # Plugin protocol + capability registration
-│   │   ├── filesystem/       # local file access          — Sprint 7
-│   │   ├── browser/          # web search / browsing      — Sprint 7
-│   │   ├── github/           # GitHub integration          — Sprint 7
-│   │   ├── postgres/         # external Postgres targets   — Sprint 7
-│   │   ├── email/            # email                       — Sprint 7
-│   │   ├── shell/            # command execution           — future
-│   │   ├── weather/          # weather API                 — future
-│   │   ├── scada/            # Solar SCADA / digital twin  — future
-│   │   └── calendar/         # calendar                    — future
-│   │   # Note: even Ollama may become an `llm` plugin eventually (ADR-0041).
+│   ├── ingestion/            # Document ingestion ✅
+│   │   ├── filesystem_source.py  # scheduled folder scan (self-re-enqueue)
+│   │   └── extractors.py     # text/html/pdf → text (+ shared html_to_text)
 │   │
-│   ├── agents/               # AGENTS — orchestrate services + plugins — Sprint 3+
+│   ├── repositories/         # The ONLY layer that knows SQL ✅
+│   │   ├── base.py  settings_repo.py  task_repo.py  event_repo.py
+│   │   ├── document_repo.py  chunk_repo.py  embedding_repo.py
+│   │   ├── agent_run_repo.py  health_repo.py  memory_repo.py
 │   │
-│   ├── database/             # Connection manager + migration runner
-│   │   ├── connection.py     # ✅ done
-│   │   ├── migrations.py     # ✅ done
-│   │   └── cli.py            # ✅ done
+│   ├── plugins/              # PLUGINS — external integrations (ADR-0041/0049) ✅
+│   │   ├── base.py           # Plugin protocol + BasePlugin
+│   │   ├── manager.py        # PluginManager (config-driven load + lifecycle)
+│   │   ├── filesystem_plugin.py  # fs.list / fs.read (sandboxed) — Sprint 7
+│   │   ├── web_plugin.py     # web.fetch (via net layer)         — Sprint 7 / S13a
+│   │   ├── search_plugin.py  # web.search (SearchCapability, D5)  — Stage 2 S13b
+│   │   └── downloader_plugin.py  # web.download (net layer)       — Stage 2 S13b
 │   │
-│   ├── scheduler/            # Task workers (uses scheduler.* tables) — Sprint 2+
+│   ├── agents/               # AGENTS — orchestrate services + tools ✅
+│   │   ├── base.py           # AgentResult / Citation
+│   │   ├── rag_agent.py      # RagAgent (retrieval + cited answer)
+│   │   └── react_agent.py    # ReActAgent "assistant" (ADR-0051/0052) — Sprint 8
 │   │
-│   └── utils/
-│       └── logging.py        # Logger Manager — next
+│   ├── capabilities/         # TYPED CAPABILITY CONTRACTS (Stage 2 S11) ✅
+│   │   └── contracts.py      # runtime_checkable Protocols + ids + CAPABILITY_CATALOG
+│   │
+│   ├── conversation/         # Conversation sessions + context (Stage 2 S10) ✅
+│   │   └── service.py        # ConversationService (session/history/context)
+│   │
+│   ├── planner/              # Deterministic intent router (Stage 2 S10) ✅
+│   │   └── planner.py        # Planner v0 (Intent/Plan/PlanStep, canonical cap ids)
+│   │
+│   ├── execution/            # Tool execution (Stage 2 S10) ✅
+│   │   └── executor.py       # ToolExecutor + ToolResult (validate/retry/structured)
+│   │
+│   ├── jobs/                 # JOB ENGINE (Stage 2 S12) ✅
+│   │   ├── planner.py        # JobPlanner (deterministic + planner-role LLM decomposition)
+│   │   └── service.py        # JobService (advance_job loop, blocked/resume/recovery)
+│   │
+│   ├── documents/            # DOCUMENT READER (Stage 2 S13a) ✅
+│   │   └── service.py        # DocumentService (document cap; 9 formats, outcome-classified)
+│   │
+│   ├── net/                  # RESILIENT NET LAYER (Stage 2 S13a, D10/§5c) ✅
+│   │   └── client.py         # FetchClient (throttle/robots/backoff/cache; ok/blocked/skipped)
+│   │
+│   ├── search/               # WEB SEARCH (Stage 2 S13b, D5) ✅
+│   │   └── providers.py      # SearchProvider protocol + DuckDuckGoProvider (over net layer)
+│   │
+│   ├── code/                 # CODE UNDERSTANDING (Stage 2 S14, D9 Tier B) ✅
+│   │   ├── models.py         # Symbol/ImportRef/CallRef/FileParse/RepoMap/CodeGraph/Pattern
+│   │   ├── languages.py      # extension→language map + v1 grammar set
+│   │   ├── pyast.py          # Python parser (stdlib ast): symbols/imports/calls
+│   │   ├── treesitter.py     # multi-language parser (tree-sitter): symbols/imports
+│   │   ├── parser.py         # CodeParser (dispatch + honest outcomes)
+│   │   ├── repomap.py        # repo map: manifests→deps/frameworks/entry points
+│   │   ├── graph.py          # import + cross-file call graph (Python-first)
+│   │   ├── patterns.py       # pattern mining (§5b.1 layer 6, feeds S19)
+│   │   └── service.py        # CodeService (code cap; parse/map/index/graph/explain)
+│   │
+│   ├── evidence/             # EVIDENCE GRAPH (Stage 2 S15, D8/§5a) ✅
+│   │   └── models.py         # Source/EvidenceItem/ClaimValue/Claim/EvidenceGraph (serialisable)
+│   │
+│   ├── verification/         # VERIFICATION ENGINE (Stage 2 S15, D8/§5a) ✅
+│   │   ├── engine.py         # EvidenceBudget + convergence + calculated confidence + decide()
+│   │   └── service.py        # VerificationService (verification cap; verify graph + budget)
+│   │
+│   ├── ops/                  # OPERATIONS (Sprint 9) ✅
+│   │   └── backup.py         # BackupManager (pg_dump + retention, ADR-0055)
+│   │
+│   ├── api/                  # REST API (FastAPI, Sprint 5) ✅
+│   │   ├── app.py            # create_app (lifespan, error handlers, CORS)
+│   │   ├── server.py         # uvicorn serve()
+│   │   ├── routes.py         # public /health /metrics + authed /v1/*
+│   │   ├── auth.py           # require_api_key (Bearer, fail-closed)
+│   │   └── schemas.py        # Pydantic request/response models
+│   │
+│   ├── cli/                  # `atlas` CLI (argparse, Sprint 5) ✅
+│   │   └── main.py           # serve/status/chat/agents/ask/search/ingest/remember/recall/
+│   │                         #   forget/plugins/tools/capabilities/jobs/job/formats/
+│   │                         #   websearch/download/code/verify/tool/backup
+│   │
+│   ├── database/             # Connection manager + migration runner ✅
+│   │   ├── connection.py  migrations.py  cli.py
+│   │
+│   ├── scheduler/            # Durable task workers (scheduler.* tables) ✅
+│   │   ├── service.py  handlers.py
+│   │
+│   ├── utils/
+│   │   └── logging.py        # Logger manager (rotating file logs) ✅
+│   │
+│   ├── core/                 # legacy stub — empty (kernel/ superseded it, ADR-0023)
+│   └── memory/               # legacy stub — empty (see services/interfaces/repositories)
 │
 ├── config/
-│   ├── defaults.yaml
-│   └── local.yaml            # optional, gitignored
+│   └── defaults.yaml         # local.yaml optional + gitignored (not present)
 ├── database/
-│   ├── migrations/           # 0001–0005 applied
-│   ├── seed/  views/  functions/  triggers/
+│   ├── migrations/           # 0001–0010 applied (0010 = job engine)
 │   └── README.md
+├── deploy/                   # DEPLOY ARTIFACTS (Sprint 9, ADR-0053) ✅
+│   ├── systemd/atlas.service
+│   ├── atlas.env.example
+│   └── docker/               # Dockerfile + docker-compose.yml
+├── scripts/
+│   └── restore.sh            # pg_restore helper (ADR-0055)
 ├── docs/
-│   ├── initial_plan.txt
 │   └── IMPLEMENTATION_PLAN.md
-├── scripts/  tests/
+├── tests/                    # 28 test modules, 275 tests
 ├── run.py
 ├── pyproject.toml   uv.lock   requirements.txt
-├── .env / .env.example
-├── .gitignore
-├── README.md   ROADMAP.md   CHANGELOG.md   TODO.md   VERSION
+├── .env / .env.example   .dockerignore   .gitignore
+└── README.md
 ```
 
-> **Note (ADR-0023):** The current `atlas/core/` stub will be **evolved into
-> `atlas/kernel/`**. The `atlas/api/`, `atlas/ingestion/`, `atlas/llm/`,
-> `atlas/knowledge/`, `atlas/memory/` stubs will be reorganized into the
-> services / repositories / providers layers above as those sprints land.
+> **Note:** This tree is **as-built through Sprint 9** (not the original Sprint-1
+> sketch). A few things diverged from the early plan, intentionally: `atlas/core/`
+> and `atlas/memory/` are now-empty legacy stubs (the kernel and the
+> memory service/interface/repository trio replaced them); the planned
+> `providers/` layer was folded into `atlas/llm/`; and the many speculative
+> `services/*_service.py` / `plugins/<name>/` entries were consolidated into the
+> modules shown above. New layers `api/`, `cli/`, and `ops/` were added in
+> Sprints 5 and 9.
 
 ### Target: `/data/atlas_data` (Runtime Data — Not in Git)
 
@@ -932,13 +998,25 @@ Expected output:
 | **Sprint 6** | Memory System | working/episodic/semantic memory (`memory.items`, single-table + partial HNSW) | ✅ done |
 | **Sprint 7** | Plugins | config-loaded plugins + ToolRegistry; filesystem + web (github/db/email deferred) | ✅ done |
 | **Sprint 8** | Multi-Agent | ReAct assistant + reflection over the ToolRegistry; agents-as-tools delegation | ✅ done |
-| **Sprint 9** | Operations | systemd, Docker, monitoring, backups | ← next |
-| **Sprint 10** | Web UI (backlog) | local frontend over the REST API (CORS/auth already in place) — unscheduled, revisit after Ops |  |
+| **Sprint 9** | Operations | systemd unit + Docker/compose; Prometheus + JSON metrics; scheduled pg_dump backups + restore | ✅ done |
+| **Stage 2 →** | Research, Execution & Continuous Learning System | Stage 1 (the OS) is complete; Stage 2 evolves Atlas into a research/execution assistant **and a Continuous Engineering Intelligence System** that learns cumulatively (D11). **See `docs/STAGE_2_PLAN.md`** for the S10–S20 arc, decisions, and progress. | 🟢 building |
+| **Sprint 10** | Conversation & Planner Spine | LLM **roles** + single lane (D7/R4); `conversation` schema (migration 0009); deterministic Planner; ToolExecutor; `AssistantService` + `POST /v1/chat` + `atlas chat`; capability-gap pre-flight (R2). Chat Mode 5-test acceptance passing. Web UI re-slotted later in the Stage 2 arc. | ✅ done |
+| **Sprint 11** | Capability Contracts | typed `runtime_checkable` contracts + capability catalog (`atlas/capabilities/`); registry `contract`/`verify`/`missing`; services + plugins declare contracts; planner uses canonical ids; registry-driven, catalog-enriched gap pre-flight (R2); `GET /v1/capabilities` + `atlas capabilities`. 285 tests. | ✅ done |
+| **Sprint 12** | Job Engine | migration 0010 (`job.jobs` + `job.steps`); `Job`/`JobStep` models + `JobRepository`; `JobPlanner` (deterministic + planner-role LLM decomposition, D2c); `JobService` — self-re-enqueuing `advance_job` task → concurrent jobs (R1), sequential steps (Q1), non-blocking `blocked`/`skipped` + cascade (R3), resume/cancel, reboot recovery (Q10); reuses chat dispatch via `AssistantService.run_step`; `/v1/jobs*` + `atlas jobs`/`atlas job`. 312 tests. | ✅ done |
+| **Sprint 13a** | Document Reader + Net | extractors expanded to pdf/docx/pptx/xlsx/csv/md/txt/html/json; `atlas/documents/DocumentService` (`document` capability, outcome-classified); `atlas/net/FetchClient` (throttle + robots + backoff/retry + cache, outcomes ok/blocked/skipped/error, D10/§5c); `WebPlugin` rewired; `net.*` config; `GET /v1/documents/formats` + `atlas formats`. 343 tests. | ✅ done |
+| **Sprint 13b** | Web Search + Downloader | `atlas/search/` (`SearchProvider` + `DuckDuckGoProvider`, D5) + `SearchPlugin` (`search` cap, `web.search`, ordered provider fallback); `DownloaderPlugin` (`downloader`, `web.download`, sandboxed dir); planner `web_search` intent + `AssistantService._do_web_search` + `JobPlanner` support; `POST /v1/search` + `atlas websearch`/`download`; `plugins.search`/`plugins.downloader` config. 370 tests. | ✅ done |
+| **Sprint 14** | Code Understanding (Tier B) | `atlas/code/`: Python `ast` parser (symbols/imports/calls) + tree-sitter multi-language parser; repo map (deps/frameworks/entry points); symbol index; import + cross-file call graph (Python-first); pattern mining; `CodeService` (`code` capability) with code-aware RAG ingest + `code`-role grounded `explain`; concrete `CodeCapability` contract; `POST /v1/code/*` + `atlas code …`; `code.*` config; deps `tree-sitter`+`tree-sitter-language-pack`. 421 tests. | ✅ done |
+| **Sprint 15** | Verification + Evidence Graph | `atlas/evidence/` (serialisable Claim/Source/EvidenceItem/EvidenceGraph, re-verifiable) + `atlas/verification/` (Evidence Levels L1–L5, `convergence()`, calculated confidence + reasoning trace, Evidence Budget + `decide()`); `VerificationService` (`verification` capability); `research.*` config; `POST /v1/verify` + `atlas verify` (D8/§5a). 444 tests. | ✅ done |
 
 > **Note.** The old table had Memory→Agents→API→Browser→Ops. The new order (API →
 > Memory → Plugins → Multi-agent → Ops) reflects ADR-0044. Sprint 4 is a dedicated
 > "foundations hardening" pass so the cross-cutting concerns land before feature
 > sprints build on raw dicts / generic exceptions / untyped providers.
+>
+> **Stage 2 (from Sprint 10 on)** is tracked in `docs/STAGE_2_PLAN.md`, which owns the
+> living roadmap, decisions (D1–D10), and requirements (R1–R4). The old "Sprint 10 =
+> Web UI" is re-slotted into that arc; Sprint 10 is now the Conversation & Planner
+> Spine (the Chat-Mode vertical slice).
 
 ---
 
@@ -1048,6 +1126,18 @@ Please review and share your preferences before we start coding.
 | ADR-0050 | 2026-07-11 | **ToolRegistry** in the kernel: plugins register named, invokable actions (name + callable + description + param hints) alongside capabilities (ADR-0040). Tools are the fine-grained catalog agents select from in Sprint 8; exposed via `GET /v1/tools` + `POST /v1/tools/{name}/invoke` and `atlas tools`/`atlas tool` | ✅ Accepted |
 | ADR-0051 | 2026-07-11 | **ReAct agent with prompt-based JSON tool-calling**: the `assistant` agent loops reason→act→observe over the ToolRegistry, emitting one JSON object per turn (`{"tool","args"}` / `{"final"}`). Model-agnostic (no native tool-calling dependency), hermetically testable, bounded by a max-iterations cap, with an optional reflection pass. Ollama chain-of-thought is **off** for this agent (the JSON `thought` field replaces it) for speed/reliability; native tool-calling can be added later behind the same interface | ✅ Accepted |
 | ADR-0052 | 2026-07-11 | **Agents-as-tools**: existing agents are registered into the ToolRegistry (e.g. `agent.rag`) so the ReAct assistant delegates to them through the same interface it uses for plugin tools. Multi-agent delegation with no separate coordination framework; new agents become available to the orchestrator automatically | ✅ Accepted |
+| ADR-0053 | 2026-07-11 | **systemd-first deployment + optional Docker**: one hardened `atlas.service` runs `atlas serve`, whose lifespan boots the full kernel (scheduler/health/ingestion/memory-prune/backup) against host Postgres + Ollama — a single unit avoids two competing schedulers. A Dockerfile + compose (app + pgvector; Ollama via `host.docker.internal`) ship for portability | ✅ Accepted |
+| ADR-0054 | 2026-07-11 | **Prometheus `/metrics` (public text) + JSON `/v1/metrics` (authed)**: render the existing in-process telemetry `snapshot()` (ADR-0039) as Prometheus exposition without a client library; public scrape endpoint matches the `/health` convention, JSON endpoint stays behind auth. Gated by `api.metrics_enabled` | ✅ Accepted |
+| ADR-0055 | 2026-07-11 | **Scheduler-driven `pg_dump` backups**: a durable `backup` task self-re-enqueues (same pattern as ingestion/memory-prune), writes custom-format dumps to `paths.backups`, prunes to `backup.retention`; on-demand `atlas backup` + `scripts/restore.sh` (`pg_restore --clean --if-exists`). DB password via `PGPASSWORD` env, never argv. Backups survive restarts with no external cron | ✅ Accepted |
+| ADR-0056 | 2026-07-11 | **LLM selection by role + a single inference lane** (Stage 2 D7/R4): callers ask `LLMService.for_role("planner"/"researcher"/…)`, never a model name; roles→models live in `llm.roles` (config-only swaps). All generate/chat/embed calls pass one semaphore (`llm.max_concurrency`, default 1) because CPU-only inference must not run two models at once. Legacy `llm.model`/`embedding_model` seed the `chat`/`embed` roles (back-compat) | ✅ Accepted |
+| ADR-0057 | 2026-07-11 | **Conversation is first-class, separate from memory** (Stage 2 D3): new `conversation` schema (migration 0009: `sessions` + ordered `messages`, server-assigned ordinals) holds the transcript; remembered facts stay in `memory.items` scoped to the session id. Transcript = *what was said*; memory = *what to keep* — kept apart so recall isn't polluted by chat logs | ✅ Accepted |
+| ADR-0058 | 2026-07-11 | **Mode-agnostic Planner + ToolExecutor spine** (Stage 2 D1/D2/R2): a deterministic rule-based Planner routes a message to an intent + args (LLM composes answers, never routes; unmatched → ReAct fallback); a ToolExecutor validates args against the callable signature, retries transient failures, and returns a structured `ToolResult` (never raises). `AssistantService` ties session→plan→dispatch→response and runs a **capability-gap pre-flight** (honest "I can't do X"). The same objects will drive async job steps in S12 | ✅ Accepted |
+| ADR-0059 | 2026-07-11 | **Typed capability contracts** (Stage 2 S11): `atlas/capabilities/` defines `runtime_checkable` Protocols + canonical capability ids + a `CAPABILITY_CATALOG` (summary/unlocks/since for known-but-unbuilt capabilities). The `CapabilityRegistry` gains an optional `contract` per registration plus `verify()` (isinstance against the Protocol), `contract_of()`, and `missing()`. Services/plugins declare their contract; the planner tags steps with canonical ids; the R2 gap pre-flight is registry-driven and catalog-enriched. Registration stays back-compatible (contract optional). Surfaced via `GET /v1/capabilities` + `atlas capabilities` | ✅ Accepted |
+| ADR-0064 | 2026-07-11 | **Verification Engine + Evidence Graph — verification is a first-class subsystem** (Stage 2 S15, D8/§5a). Atlas emits **claims**, not raw conclusions. `atlas/evidence/` = a serialisable model — `Source`, `EvidenceItem` (source_id, level, extracted_value, snippet, locator, stance), `ClaimValue`, `Claim` (statement/value/evidence/*calculated* confidence/convergence/`last_verified`/`verification_method`/`reasoning_trace`), and `EvidenceGraph` (sources+claims, `as_dict`/`from_dict`) — so a graph persists in a job result and is **re-verifiable** when new evidence appears. `atlas/verification/` = the engine (pure, no LLM/I/O, hermetic): **Evidence Levels L1–L5** (quality not count); `convergence(values)` = largest cluster within a relative tolerance ∈ [0,1] (tight `3.7/3.9/4.0/3.8`→1.0; scattered `2/11/6/4`→low); `verify_claim` sets **calculated** confidence HIGH/MEDIUM/LOW/INSUFFICIENT (score = 0.6·convergence + 0.4·quality, contradiction penalty; a single or low-level source can never be HIGH) with a human reasoning trace; `decide(claim, budget, iteration)` enforces the per-job **Evidence Budget** (`min_sources`/`min_peer_reviewed`/`min_government`/`convergence`/`max_search_iterations`) → `stop`/`continue` with explicit unmet criteria (stop on *convergence*, not paper count). `VerificationService` = the `verification` capability (`verify(graph, budget?)` → per-claim decision); `research.*` config (`ResearchConfig`); `POST /v1/verify` + `atlas verify`. **Scope = engine/graph/budget primitives**; the live gather→verify→decide research loop + scientific-review Report Generator land at S17, and Python-computed results (S16) enter the same graph as **L5** evidence | ✅ Accepted |
+| ADR-0063 | 2026-07-11 | **Code Understanding — `CodeCapability`, Tier B** (Stage 2 S14, D9/§5b): read code as *structure*, not text. New `atlas/code/`: **Python parsed with the stdlib `ast`** (symbols/imports + **call sites with enclosing symbol** for the cross-file call graph — the Python-first path); **other languages via tree-sitter** (`tree-sitter-language-pack`: JS/TS/TSX/C/C++/Rust/Go/Java/Bash/SQL, symbols+imports). A `CodeParser` dispatches and returns an honest per-file **outcome** (`ok`/`shallow`/`unsupported`/`error`), never raising (R2). Higher layers: **repo map** (manifests → dependencies, inferred frameworks, entry points), **symbol index**, **import graph + cross-file call graph** (conservative resolution — builtins/externals ignored, ambiguous-but-known counted not guessed), and **pattern mining** (evidence-backed recurring patterns → seed for S19). `CodeService` = the `code` capability (`parse`/`repo_map`/`index`/`search_symbols`/`graph`/`patterns`/`explain`): **code-aware chunking** (one chunk per symbol) into the knowledge base for semantic code search, and a **`code`-role LLM `explain`** grounded on the parsed structure. Concrete `CodeCapability` contract registered (catalog `CAP_CODE` provided). Surfaced via `POST /v1/code/*` + `atlas code …`; `code.*` config; deps `tree-sitter`+`tree-sitter-language-pack` | ✅ Accepted |
+| ADR-0062 | 2026-07-11 | **Web Search + Downloader** (Stage 2 S13b): first research-retrieval capabilities, built on the resilient net layer (ADR-0061). **D5 locked → DuckDuckGo** (keyless HTML) default: `atlas/search/` defines a `SearchProvider` protocol → `SearchResponse`/`SearchHit`, `DuckDuckGoProvider` (unwraps `uddg` redirects, translates the net outcome instead of raising); `SearchPlugin` registers the `search` capability + `web.search` tool with an **ordered provider list → provider fallback** (SearXNG/Brave/Serper swap in via `plugins.search.providers` without touching the planner). `DownloaderPlugin` registers `downloader` + `web.download` (size-capped fetch → sandbox-confined downloads dir; honest block/skip, R2). Planner gains a `web_search` intent (+ `AssistantService._do_web_search` reporting blocked/empty honestly; `JobPlanner` accepts it). Surfaced via `POST /v1/search` + `atlas websearch`/`download`; `plugins.search`/`plugins.downloader` config, both enabled by default | ✅ Accepted |
+| ADR-0061 | 2026-07-11 | **Document Reader + resilient net layer** (Stage 2 S13a): shared extractors expanded to the fixed format set (pdf/docx/pptx/xlsx/csv/md/txt/html/json) with lazy per-parser imports; new `atlas/documents/DocumentService` (`document` capability) returns an `ExtractedDocument` **outcome** (ok/unsupported/empty/error) and never raises on a bad file (R2); scan + `atlas ingest` use it. New `atlas/net/FetchClient` (D10/§5c): one polite client (per-domain throttle + `robots.txt` + bounded backoff/retry w/ jitter + response cache) returning structured outcomes (`ok`/`blocked`/`skipped`/`error`) so jobs degrade not crash (R2/R3); `WebPlugin` fetches through it; top-level `net.*` config. Surfaced via `GET /v1/documents/formats` + `atlas formats` | ✅ Accepted |
+| ADR-0060 | 2026-07-11 | **Job Engine — one step per self-re-enqueuing task** (Stage 2 S12): a `job` (migration 0010: `job.jobs` + `job.steps`) is decomposed by `JobPlanner` (deterministic `Planner` fallback + optional planner-role LLM) and run by `JobService` on the durable scheduler. `create_job` enqueues an `advance_job` task that runs **one** runnable step then **re-enqueues itself**, so many jobs interleave on the worker pool (R1) without a long job starving the scheduler, while steps stay sequential per job (Q1). A `blocked` step (missing capability/file/login) is **non-fatal** and cascades to dependents (R3): the job finishes `completed_with_blocks` and is resumable. Steps reuse `AssistantService.run_step` (the chat dispatch, D1) extended with a `blocked` outcome. Reboot recovery re-hydrates running jobs/steps (Q10). Surfaced via `/v1/jobs*` + `atlas jobs`/`atlas job` | ✅ Accepted |
 
 > ADR-0029 through ADR-0035 were **confirmed on 2026-07-11** (see Q1–Q5 answers in
 > §17.12). Note ADR-0033 reflects a deliberate deviation from the initial
@@ -1083,7 +1173,8 @@ Step 11 REST API + CLI + Auth (Sprint 5)                          ✅ DONE
 Step 12 Memory System (Sprint 6)                                  ✅ DONE
 Step 13 Plugins & Tools (Sprint 7)                                ✅ DONE
 Step 14 Multi-agent: ReAct assistant + tools (Sprint 8)           ✅ DONE
-Step 15 Operations (Sprint 9); then Web UI (backlog)              ← NEXT
+Step 15 Operations: systemd/Docker, metrics, backups (Sprint 9)   ✅ DONE
+Step 16 Web UI (backlog)                                          ← NEXT
         (ADR-0044 revised order)
 ```
 
@@ -2030,8 +2121,12 @@ agents / API / CLI ─▶ kernel.invoke_tool("web.fetch", url=...) ─▶ plugin
   `register_all(kernel)`, lifecycle, aggregated health, captured `errors`.
 - **`atlas/plugins/filesystem_plugin.py`** — `FilesystemPlugin` (`fs.list`, `fs.read`),
   sandboxed to a root; `build(config)`.
-- **`atlas/plugins/web_plugin.py`** — `WebPlugin` (`web.fetch`), httpx + size cap +
-  HTML→text; `build(config)`.
+- **`atlas/plugins/web_plugin.py`** — `WebPlugin` (`web.fetch`), via the resilient net
+  layer (throttle/robots/backoff/cache) + HTML→text; `build(config)`.
+- **`atlas/plugins/search_plugin.py`** — `SearchPlugin` (`search` cap, `web.search`),
+  ordered `SearchProvider`s with fallback (D5); `build(config)` (Stage 2 S13b).
+- **`atlas/plugins/downloader_plugin.py`** — `DownloaderPlugin` (`downloader`,
+  `web.download`) → sandboxed downloads dir; `build(config)` (Stage 2 S13b).
 - **`atlas/ingestion/extractors.py`** — extracted a reusable `html_to_text(html)`.
 - **`atlas/config/manager.py` + `defaults.yaml`** — `PluginsConfig`
   (`enabled`, `filesystem.{root,max_bytes}`, `web.{timeout,max_bytes,user_agent}`);
@@ -2149,6 +2244,89 @@ query ─▶ [system prompt = preamble + tool catalog + JSON protocol]
 - **Explicit planner** (decompose-then-execute) and cross-agent memory sharing —
   the ReAct loop covers current needs; revisit if multi-step planning grows.
 - **Per-tool typed param schemas / validation** for stricter tool-calling.
+
+---
+
+## 23. Sprint 9 — Operations (Detailed Plan)
+
+> **Status:** ✅ COMPLETE (2026-07-11). **Depends on:** Sprints 1–8.
+> **New ADRs:** 0053 (systemd-first + Docker artifacts), 0054 (Prometheus + JSON metrics),
+> 0055 (scheduler-driven pg_dump backups).
+> **No migration** — backups dump the existing schemas; nothing new persisted.
+
+### 23.1 Goal
+
+Make Atlas **deployable, observable, and recoverable** on a self-hosted node:
+run it as a managed service, scrape its metrics, and back the database up on a
+schedule that survives restarts — without adding external daemons or cron.
+
+```
+systemd atlas.service ─▶ atlas serve ─▶ kernel (scheduler/health/ingestion/memory-prune/backup)
+                                         │
+       Prometheus ──scrape──▶ GET /metrics (text)   GET /v1/metrics (JSON, authed)
+                                         │
+       scheduler "backup" task ─▶ pg_dump -Fc ─▶ /data/atlas_data/backups (retention N)
+                                         └─re-enqueue(+interval)┘   restore via scripts/restore.sh
+```
+
+### 23.2 Decisions (locked)
+
+| # | Decision | Choice |
+|---|----------|--------|
+| O1 | Process model | **systemd-first + optional Docker** (ADR-0053) — one `atlas.service` runs `atlas serve`, whose lifespan boots the full kernel (scheduler, health, ingestion, memory-prune, backups). Postgres + Ollama on host. A Dockerfile + compose (app + pgvector) ship for portability |
+| O2 | Monitoring | **Prometheus `/metrics` (public text) + JSON `/v1/metrics` (authed)** (ADR-0054) — renders the existing in-process telemetry `snapshot()` (ADR-0039); no client library. Gated by `api.metrics_enabled` |
+| O3 | Backups | **Scheduler-driven `pg_dump -Fc` with retention** (ADR-0055) — a durable `backup` task self-re-enqueues (same pattern as ingestion/memory-prune), prunes to `backup.retention`, plus on-demand `atlas backup` and a `pg_restore` script |
+| O4 | Secrets | DB password passed to `pg_dump` via `PGPASSWORD` env (never argv/process list); sourced from config (ADR-0013). systemd `EnvironmentFile=/etc/atlas/atlas.env` |
+| O5 | Single service | Not a separate API vs worker split — the API server already starts the kernel; one unit avoids two competing schedulers on one box |
+
+### 23.3 Components
+
+- **`atlas/telemetry/prometheus.py`** — `render_prometheus(snapshot)`: counters/gauges →
+  `atlas_<name>{labels} value`, histograms → `_count/_sum/_avg/_max/_p50/_p95`;
+  names sanitized, label values escaped.
+- **`atlas/ops/backup.py`** — `BackupManager` (a lifecycle `Service`): `backup()`
+  (pg_dump custom format), `prune()` (retention), `backup_task()` (re-enqueues),
+  `start()` (seeds one chain, idempotent via `count_pending`), `health_check()`.
+- **`atlas/api/routes.py`** — public `GET /metrics` (Prometheus text) + authed
+  `GET /v1/metrics` (JSON), both 404 when `metrics_enabled=false`.
+- **`atlas/cli/main.py`** — `atlas backup` (on-demand dump).
+- **`atlas/config/manager.py` + `defaults.yaml`** — `BackupConfig`
+  (`enabled`, `interval_seconds`, `retention`, `pg_dump_path`, `pg_restore_path`),
+  `paths.backups`, `api.metrics_enabled`.
+- **`atlas/kernel/bootstrap.py`** — builds the `BackupManager`, registers the
+  `backup` handler, and wires it as a service/capability/container entry.
+- **Deploy artifacts** — `deploy/systemd/atlas.service` (hardened unit) +
+  `deploy/atlas.env.example`; `deploy/docker/Dockerfile` + `docker-compose.yml`
+  (app + pgvector Postgres, Ollama via `host.docker.internal`) + `.dockerignore`;
+  `scripts/restore.sh` (idempotent `pg_restore --clean --if-exists`).
+
+### 23.4 Testing
+
+- **20 new tests.** `tests/test_ops.py` (Prometheus rendering: counters/gauges/
+  labels/histograms/escaping/empty; BackupManager: pg_dump invocation with
+  `PGPASSWORD`, failure + missing-binary → `BackupError`, retention prune,
+  re-enqueue, start seed/skip-when-pending/skip-when-manual, health). API tests
+  for `/metrics`, `/v1/metrics` (auth + disabled→404). CLI test for `atlas backup`.
+  All hermetic — `subprocess.run` monkeypatched, no live Postgres needed.
+
+### 23.5 Verified
+
+- **214 pytest tests pass** (+20 over Sprint 8's 194). *(Stage 2 Sprint 10 later
+  brought this to 275; see `docs/STAGE_2_PLAN.md`.)*
+- Live: `atlas backup` → 102 KB custom-format dump in `/data/atlas_data/backups`;
+  `pg_restore --list` confirms a valid archive (94 TOC entries, all schemas:
+  agent/audit/knowledge/memory/public).
+
+### 23.6 Out of scope / caveats (deferred)
+
+- **Alerting / dashboards** (Grafana panels, alert rules) — the scrape endpoint is
+  in place; wiring a Prometheus/Grafana stack is an operator task.
+- **Off-host backup shipping** (S3/rsync) and point-in-time recovery (WAL archiving)
+  — current backups are local logical dumps with retention; revisit if durability
+  needs grow.
+- **Container image publishing / CI** — Dockerfile + compose are provided but not
+  pushed to a registry or built in CI yet.
+- **Log shipping / centralized logs** — rotating file logs remain local.
 
 ---
 

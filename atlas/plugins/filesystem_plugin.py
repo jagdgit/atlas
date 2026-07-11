@@ -41,7 +41,11 @@ class FilesystemPlugin(BasePlugin):
         self._logger = logger or logging.getLogger("atlas.plugins.filesystem")
 
     def register(self, kernel: "Application") -> None:
-        kernel.capabilities.register("filesystem", self, kind="plugin")
+        from atlas.capabilities import FilesystemCapability
+
+        kernel.capabilities.register(
+            "filesystem", self, contract=FilesystemCapability, kind="plugin"
+        )
         kernel.tools.register(
             "fs.list",
             self.list_dir,

@@ -50,6 +50,45 @@ class RunAgentResponse(BaseModel):
     run_id: str | None = None
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    session_id: str
+    answer: str
+    intent: str
+    citations: list[CitationOut] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    capability_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    run_id: str | None = None
+
+
+class SessionOut(BaseModel):
+    id: str
+    title: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class SessionsResponse(BaseModel):
+    sessions: list[SessionOut]
+
+
+class ChatMessageOut(BaseModel):
+    ordinal: int
+    role: str
+    content: str
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str | None = None
+
+
+class HistoryResponse(BaseModel):
+    session_id: str
+    messages: list[ChatMessageOut]
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=5, ge=1, le=50)
@@ -153,3 +192,110 @@ class PluginInfo(BaseModel):
 
 class PluginsResponse(BaseModel):
     plugins: list[PluginInfo]
+
+
+class DocumentFormatsResponse(BaseModel):
+    formats: list[str]
+
+
+class WebSearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+    max_results: int = Field(default=5, ge=1, le=25)
+
+
+class WebSearchResponse(BaseModel):
+    query: str
+    provider: str | None = None
+    outcome: str
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class CodeParseRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
+class CodeRepoRequest(BaseModel):
+    root: str = Field(min_length=1)
+
+
+class CodeSymbolsRequest(BaseModel):
+    root: str = Field(min_length=1)
+    query: str = ""
+    kind: str | None = None
+    lang: str | None = None
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class CodeExplainRequest(BaseModel):
+    path: str = Field(min_length=1)
+    question: str | None = None
+
+
+class VerifyRequest(BaseModel):
+    # A serialised Evidence Graph (claims + optional sources) plus an optional
+    # per-request Evidence Budget override (S15, D8/§5a).
+    claims: list[dict] = Field(min_length=1)
+    sources: list[dict] | None = None
+    budget: dict | None = None
+
+
+class VerifyResponse(BaseModel):
+    claims: list[dict]
+    sources: list[dict]
+    budget: dict
+
+
+class CreateJobRequest(BaseModel):
+    objective: str = Field(min_length=1)
+    session_id: str | None = None
+
+
+class JobStepOut(BaseModel):
+    ordinal: int
+    intent: str
+    capability: str
+    status: str
+    description: str = ""
+    depends_on: int | None = None
+    blocked_reason: str | None = None
+    error: str | None = None
+    attempts: int = 0
+
+
+class JobOut(BaseModel):
+    id: str
+    objective: str
+    status: str
+    session_id: str | None = None
+    result: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class JobsResponse(BaseModel):
+    jobs: list[JobOut]
+
+
+class JobDetailResponse(BaseModel):
+    job: JobOut
+    steps: list[JobStepOut]
+    progress: dict[str, int]
+    blocked: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CapabilityInfo(BaseModel):
+    id: str
+    provided: bool
+    kind: str | None = None
+    contract: str | None = None
+    summary: str = ""
+    unlocks: str = ""
+    since: str | None = None
+
+
+class CapabilitiesResponse(BaseModel):
+    capabilities: list[CapabilityInfo]

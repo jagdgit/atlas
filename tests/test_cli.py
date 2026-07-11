@@ -13,17 +13,29 @@ from atlas.cli.main import (
     build_parser,
     cmd_agents,
     cmd_ask,
+    cmd_backup,
+    cmd_capabilities,
+    cmd_chat,
+    cmd_code,
+    cmd_download,
     cmd_forget,
+    cmd_formats,
     cmd_ingest,
+    cmd_job,
+    cmd_jobs,
     cmd_plugins,
     cmd_recall,
     cmd_remember,
     cmd_search,
     cmd_tool,
     cmd_tools,
+    cmd_verify,
+    cmd_websearch,
 )
+from atlas.services.assistant_service import ChatTurn
 from atlas.knowledge.service import SearchResult
 from atlas.models import MemoryItem
+from atlas.verification.service import VerificationService
 
 
 class FakeAgentService:
@@ -67,6 +79,38 @@ class FakeMemory:
         return memory_id == "mem-1"
 
 
+class FakeDocuments:
+    def supported(self):
+        return [".csv", ".docx", ".pdf", ".txt"]
+
+
+class FakeCode:
+    def parse(self, path):
+        return {"path": path, "lang": "python", "loc": 3, "outcome": "ok",
+                "symbols": [{"name": "foo", "kind": "function", "parent": None,
+                             "signature": "def foo()", "start_line": 1, "end_line": 2}]}
+
+    def repo_map(self, root):
+        return {"root": root, "file_count": 2, "total_loc": 10,
+                "languages": {"python": 2}, "frameworks": ["FastAPI"],
+                "entry_points": ["run.py"], "dependencies": {"python": ["pytest"]}}
+
+    def graph(self, root):
+        return {"import_edges": [["a.py", "b.py"]], "call_edges": [],
+                "import_edge_count": 1, "call_edge_count": 0,
+                "unresolved_calls": 0, "external_imports": 1}
+
+    def patterns(self, root):
+        return [{"name": "Repository pattern", "description": "repo",
+                 "confidence": 0.9, "evidence": ["2 classes"]}]
+
+    def search_symbols(self, query, *, root, kind=None, lang=None, limit=50):
+        return [{"kind": "function", "qualname": "foo", "file": "a.py", "start_line": 1}]
+
+    def explain(self, path, question=None):
+        return {"path": path, "outcome": "ok", "outline": "file: a.py", "explanation": "x"}
+
+
 class FakePluginManager:
     def describe(self):
         return [{"name": "filesystem", "version": "0.1.0"}, {"name": "web", "version": "0.1.0"}]
@@ -77,19 +121,108 @@ class FakeTools:
         return [{"name": "fs.read", "description": "Read a file.", "params": {}, "plugin": "filesystem"}]
 
 
+class FakeBackup:
+    def backup(self):
+        return "/data/atlas_data/backups/atlas_atlas_20260101_000000.dump"
+
+
+class FakeChat:
+    def chat(self, message, *, session_id=None, **options):
+        return ChatTurn(
+            session_id=session_id or "sess-1",
+            answer=f"answer to {message!r}",
+            intent="react",
+        )
+
+
+class FakeJobs:
+    def __init__(self):
+        from atlas.models.job import Job, JobStep
+
+        self._job = Job(id="job-1", objective="do research", status="running")
+        self._steps = [
+            JobStep(id="s0", job_id="job-1", ordinal=0, intent="react",
+                    capability="agent", status="done"),
+            JobStep(id="s1", job_id="job-1", ordinal=1, intent="web_fetch",
+                    capability="web", status="blocked",
+                    blocked_reason="needs capability: web"),
+        ]
+        self.resumed = None
+        self.cancelled = None
+
+    def _detail(self):
+        return {
+            "job": self._job,
+            "steps": self._steps,
+            "progress": {"total": 2, "done": 1, "blocked": 1, "failed": 0},
+            "blocked": [],
+        }
+
+    def create_job(self, objective, *, session_id=None):
+        return self._detail()
+
+    def list_jobs(self, *, status=None, limit=50):
+        return [self._job]
+
+    def job_detail(self, job_id):
+        if job_id != "job-1":
+            raise KeyError(job_id)
+        return self._detail()
+
+    def resume_job(self, job_id):
+        self.resumed = job_id
+        return self._detail()
+
+    def cancel_job(self, job_id):
+        self.cancelled = job_id
+        return self._detail()
+
+
+def _fake_capabilities():
+    from atlas.capabilities import MemoryCapability
+    from atlas.kernel.capabilities import CapabilityRegistry
+
+    reg = CapabilityRegistry()
+    reg.register("memory", FakeMemory(), contract=MemoryCapability, kind="service")
+    return reg
+
+
 class FakeApp:
     def __init__(self):
         self.tools = FakeTools()
+        self.capabilities = _fake_capabilities()
         self.container = _Container(
             {
                 "agent": FakeAgentService(),
                 "knowledge": FakeKnowledge(),
                 "memory": FakeMemory(),
+                "chat": FakeChat(),
                 "plugins": FakePluginManager(),
+                "backup": FakeBackup(),
+                "jobs": FakeJobs(),
+                "documents": FakeDocuments(),
+                "code": FakeCode(),
+                "verification": VerificationService(),
             }
         )
 
     def invoke_tool(self, name, **kwargs):
+        if name == "web.search":
+            return {
+                "query": kwargs.get("query"),
+                "provider": "duckduckgo",
+                "outcome": "ok",
+                "results": [
+                    {"title": "R1", "url": "https://a.example", "snippet": "s"}
+                ],
+            }
+        if name == "web.download":
+            return {
+                "url": kwargs.get("url"),
+                "path": "/tmp/downloads/file.pdf",
+                "bytes": 42,
+                "outcome": "ok",
+            }
         return {"tool": name, "args": kwargs}
 
 
@@ -232,3 +365,181 @@ def test_cmd_tool_rejects_bad_arg():
     args = build_parser().parse_args(["tool", "fs.read", "--arg", "noequals"])
     rc = cmd_tool(args, app=FakeApp())
     assert rc == 1
+
+
+def test_cmd_capabilities_lists_provided_and_missing(capsys):
+    args = build_parser().parse_args(["capabilities"])
+    rc = cmd_capabilities(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    # provided one is marked ok; a catalogued-but-unregistered one shows unlocks
+    assert "[ok " in out and "memory" in out
+    assert "search" in out and "unlocks:" in out
+
+
+# --- chat -----------------------------------------------------------------
+def test_parser_chat_oneshot():
+    args = build_parser().parse_args(["chat", "hello"])
+    assert args.command == "chat"
+    assert args.message == "hello"
+    assert args.session is None
+
+
+def test_parser_chat_repl_has_no_message():
+    args = build_parser().parse_args(["chat"])
+    assert args.message is None
+
+
+def test_cmd_chat_oneshot_prints_answer(capsys):
+    args = build_parser().parse_args(["chat", "what is atlas?"])
+    rc = cmd_chat(args, app=FakeApp())
+    assert rc == 0
+    assert "answer to 'what is atlas?'" in capsys.readouterr().out
+
+
+# --- jobs -----------------------------------------------------------------
+def test_parser_job_start():
+    args = build_parser().parse_args(["job", "start", "research soiling loss"])
+    assert args.command == "job"
+    assert args.action == "start"
+    assert args.target == "research soiling loss"
+
+
+def test_cmd_jobs_lists(capsys):
+    args = build_parser().parse_args(["jobs"])
+    rc = cmd_jobs(args, app=FakeApp())
+    assert rc == 0
+    assert "job-1" in capsys.readouterr().out
+
+
+def test_cmd_job_start_prints_id(capsys):
+    args = build_parser().parse_args(["job", "start", "do research"])
+    rc = cmd_job(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "started job job-1" in out
+    assert "needs: needs capability: web" in out
+
+
+def test_cmd_job_show(capsys):
+    args = build_parser().parse_args(["job", "show", "job-1"])
+    rc = cmd_job(args, app=FakeApp())
+    assert rc == 0
+    assert "job job-1" in capsys.readouterr().out
+
+
+def test_cmd_job_resume(capsys):
+    app = FakeApp()
+    args = build_parser().parse_args(["job", "resume", "job-1"])
+    rc = cmd_job(args, app=app)
+    assert rc == 0
+    assert app.container.resolve("jobs").resumed == "job-1"
+
+
+def test_cmd_job_show_unknown(capsys):
+    args = build_parser().parse_args(["job", "show", "ghost"])
+    rc = cmd_job(args, app=FakeApp())
+    assert rc == 1
+    assert "no job ghost" in capsys.readouterr().err
+
+
+# --- documents ------------------------------------------------------------
+def test_cmd_formats_lists(capsys):
+    args = build_parser().parse_args(["formats"])
+    rc = cmd_formats(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert ".pdf" in out and ".docx" in out
+
+
+# --- web search / download ------------------------------------------------
+def test_cmd_websearch_lists(capsys):
+    args = build_parser().parse_args(["websearch", "solar soiling"])
+    rc = cmd_websearch(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "R1" in out and "https://a.example" in out
+
+
+def test_cmd_download_prints_path(capsys):
+    args = build_parser().parse_args(["download", "https://example.com/x.pdf"])
+    rc = cmd_download(args, app=FakeApp())
+    assert rc == 0
+    assert "/tmp/downloads/file.pdf" in capsys.readouterr().out
+
+
+# --- code -----------------------------------------------------------------
+def test_cmd_code_map(capsys):
+    args = build_parser().parse_args(["code", "map", "/repo"])
+    rc = cmd_code(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "FastAPI" in out and "run.py" in out
+
+
+def test_cmd_code_parse(capsys):
+    args = build_parser().parse_args(["code", "parse", "a.py"])
+    rc = cmd_code(args, app=FakeApp())
+    assert rc == 0
+    assert "def foo()" in capsys.readouterr().out
+
+
+def test_cmd_code_symbols(capsys):
+    args = build_parser().parse_args(["code", "symbols", "/repo", "-q", "foo"])
+    rc = cmd_code(args, app=FakeApp())
+    assert rc == 0
+    assert "foo" in capsys.readouterr().out
+
+
+def test_cmd_code_graph(capsys):
+    args = build_parser().parse_args(["code", "graph", "/repo"])
+    rc = cmd_code(args, app=FakeApp())
+    assert rc == 0
+    assert "import edges: 1" in capsys.readouterr().out
+
+
+def test_cmd_code_patterns(capsys):
+    args = build_parser().parse_args(["code", "patterns", "/repo"])
+    rc = cmd_code(args, app=FakeApp())
+    assert rc == 0
+    assert "Repository pattern" in capsys.readouterr().out
+
+
+# --- verify (S15) ---------------------------------------------------------
+def test_cmd_verify_prints_confidence(capsys, tmp_path):
+    import json
+
+    graph = {
+        "claims": [
+            {
+                "id": "c1",
+                "statement": "Soiling loss ~ 4%",
+                "evidence": [
+                    {"source_id": "s1", "evidence_level": 4, "extracted_value": 3.9},
+                    {"source_id": "s2", "evidence_level": 3, "extracted_value": 4.0},
+                    {"source_id": "s3", "evidence_level": 4, "extracted_value": 3.8},
+                ],
+            }
+        ]
+    }
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps(graph), encoding="utf-8")
+    args = build_parser().parse_args(["verify", str(path)])
+    rc = cmd_verify(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[HIGH]" in out
+    assert "convergence=100%" in out
+
+
+# --- backup ---------------------------------------------------------------
+def test_parser_backup():
+    args = build_parser().parse_args(["backup"])
+    assert args.command == "backup"
+
+
+def test_cmd_backup_prints_path(capsys):
+    args = build_parser().parse_args(["backup"])
+    rc = cmd_backup(args, app=FakeApp())
+    assert rc == 0
+    assert "atlas_atlas_20260101_000000.dump" in capsys.readouterr().out

@@ -7,18 +7,33 @@ here — the API is just another caller of the same services agents use (ADR-000
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
+
+from atlas.telemetry import get_metrics, render_prometheus
 
 from atlas.api.auth import require_api_key
 from atlas.api.schemas import (
     AgentsResponse,
+    CapabilitiesResponse,
+    CapabilityInfo,
+    ChatMessageOut,
+    ChatRequest,
+    ChatResponse,
+    CreateJobRequest,
     DetailedHealthResponse,
+    DocumentFormatsResponse,
     ForgetResponse,
     HealthResponse,
+    HistoryResponse,
     IngestRequest,
     IngestResponse,
     InvokeToolRequest,
     InvokeToolResponse,
+    JobDetailResponse,
+    JobOut,
+    JobsResponse,
+    JobStepOut,
     MemoryItemOut,
     PluginInfo,
     PluginsResponse,
@@ -33,8 +48,18 @@ from atlas.api.schemas import (
     SearchResponse,
     SearchResultOut,
     ServiceHealth,
+    SessionOut,
+    SessionsResponse,
+    CodeExplainRequest,
+    CodeParseRequest,
+    CodeRepoRequest,
+    CodeSymbolsRequest,
     ToolInfo,
     ToolsResponse,
+    VerifyRequest,
+    VerifyResponse,
+    WebSearchRequest,
+    WebSearchResponse,
 )
 
 # Public: liveness only, no auth (safe to expose to a load balancer / probe).
@@ -68,6 +93,26 @@ def health(request: Request) -> HealthResponse:
     return HealthResponse(status="ok", version=cfg.system.version)
 
 
+@public_router.get("/metrics", response_class=PlainTextResponse, tags=["monitoring"])
+def metrics(request: Request) -> PlainTextResponse:
+    """Prometheus text exposition of in-process metrics (ADR-0054).
+
+    Public (unauthenticated) so a local Prometheus can scrape it, matching the
+    convention for /health; disable via api.metrics_enabled.
+    """
+    if not _app(request).config.api.metrics_enabled:
+        raise HTTPException(status_code=404, detail="metrics disabled")
+    return PlainTextResponse(render_prometheus(get_metrics().snapshot()))
+
+
+@v1_router.get("/metrics", tags=["monitoring"])
+def metrics_json(request: Request) -> dict:
+    """Detailed metrics snapshot as JSON (authenticated)."""
+    if not _app(request).config.api.metrics_enabled:
+        raise HTTPException(status_code=404, detail="metrics disabled")
+    return get_metrics().snapshot()
+
+
 @v1_router.get("/health", response_model=DetailedHealthResponse, tags=["health"])
 def detailed_health(request: Request) -> DetailedHealthResponse:
     report = _app(request).health()
@@ -92,6 +137,198 @@ def run_agent(name: str, body: RunAgentRequest, request: Request) -> RunAgentRes
     agent_service = _app(request).container.resolve("agent")
     result = agent_service.run(name, body.query, **body.options)
     return RunAgentResponse(**result.as_dict())
+
+
+@v1_router.post("/chat", response_model=ChatResponse, tags=["chat"])
+def chat(body: ChatRequest, request: Request) -> ChatResponse:
+    assistant = _app(request).container.resolve("chat")
+    turn = assistant.chat(body.message, session_id=body.session_id)
+    return ChatResponse(**turn.as_dict())
+
+
+@v1_router.get("/chat/sessions", response_model=SessionsResponse, tags=["chat"])
+def list_sessions(request: Request, limit: int = 50) -> SessionsResponse:
+    conversation = _app(request).container.resolve("conversation")
+    sessions = conversation.list_sessions(limit=limit)
+    return SessionsResponse(
+        sessions=[
+            SessionOut(
+                id=s.id,
+                title=s.title,
+                created_at=s.created_at.isoformat() if s.created_at else None,
+                updated_at=s.updated_at.isoformat() if s.updated_at else None,
+            )
+            for s in sessions
+        ]
+    )
+
+
+@v1_router.get(
+    "/chat/sessions/{session_id}", response_model=HistoryResponse, tags=["chat"]
+)
+def session_history(session_id: str, request: Request) -> HistoryResponse:
+    conversation = _app(request).container.resolve("conversation")
+    if conversation.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    messages = conversation.history(session_id)
+    return HistoryResponse(
+        session_id=session_id,
+        messages=[
+            ChatMessageOut(
+                ordinal=m.ordinal,
+                role=m.role,
+                content=m.content,
+                tool_calls=m.tool_calls,
+                created_at=m.created_at.isoformat() if m.created_at else None,
+            )
+            for m in messages
+        ],
+    )
+
+
+def _job_out(job) -> JobOut:
+    return JobOut(
+        id=job.id,
+        objective=job.objective,
+        status=job.status,
+        session_id=job.session_id,
+        result=job.result,
+        error=job.error,
+        created_at=job.created_at.isoformat() if job.created_at else None,
+        updated_at=job.updated_at.isoformat() if job.updated_at else None,
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        completed_at=job.completed_at.isoformat() if job.completed_at else None,
+    )
+
+
+def _step_out(step) -> JobStepOut:
+    return JobStepOut(
+        ordinal=step.ordinal,
+        intent=step.intent,
+        capability=step.capability,
+        status=step.status,
+        description=step.description,
+        depends_on=step.depends_on,
+        blocked_reason=step.blocked_reason,
+        error=step.error,
+        attempts=step.attempts,
+    )
+
+
+def _job_detail(detail) -> JobDetailResponse:
+    return JobDetailResponse(
+        job=_job_out(detail["job"]),
+        steps=[_step_out(s) for s in detail["steps"]],
+        progress=detail["progress"],
+        blocked=detail["blocked"],
+    )
+
+
+@v1_router.get("/documents/formats", response_model=DocumentFormatsResponse, tags=["documents"])
+def document_formats(request: Request) -> DocumentFormatsResponse:
+    documents = _app(request).container.resolve("documents")
+    return DocumentFormatsResponse(formats=documents.supported())
+
+
+@v1_router.post("/search", response_model=WebSearchResponse, tags=["web"])
+def web_search(body: WebSearchRequest, request: Request) -> WebSearchResponse:
+    result = _app(request).invoke_tool(
+        "web.search", query=body.query, max_results=body.max_results
+    )
+    return WebSearchResponse(
+        query=result.get("query", body.query),
+        provider=result.get("provider"),
+        outcome=result.get("outcome", "error"),
+        results=result.get("results", []),
+        reason=result.get("reason"),
+    )
+
+
+# --- code understanding (S14) --------------------------------------------
+def _code(request: Request):
+    return _app(request).container.resolve("code")
+
+
+@v1_router.post("/code/parse", tags=["code"])
+def code_parse(body: CodeParseRequest, request: Request) -> dict:
+    return _code(request).parse(body.path)
+
+
+@v1_router.post("/code/repo-map", tags=["code"])
+def code_repo_map(body: CodeRepoRequest, request: Request) -> dict:
+    return _code(request).repo_map(body.root)
+
+
+@v1_router.post("/code/graph", tags=["code"])
+def code_graph(body: CodeRepoRequest, request: Request) -> dict:
+    return _code(request).graph(body.root)
+
+
+@v1_router.post("/code/patterns", tags=["code"])
+def code_patterns(body: CodeRepoRequest, request: Request) -> dict:
+    return {"patterns": _code(request).patterns(body.root)}
+
+
+@v1_router.post("/code/symbols", tags=["code"])
+def code_symbols(body: CodeSymbolsRequest, request: Request) -> dict:
+    symbols = _code(request).search_symbols(
+        body.query, root=body.root, kind=body.kind, lang=body.lang, limit=body.limit
+    )
+    return {"symbols": symbols}
+
+
+@v1_router.post("/code/explain", tags=["code"])
+def code_explain(body: CodeExplainRequest, request: Request) -> dict:
+    return _code(request).explain(body.path, body.question)
+
+
+@v1_router.post("/verify", response_model=VerifyResponse, tags=["verification"])
+def verify(body: VerifyRequest, request: Request) -> VerifyResponse:
+    verification = _app(request).container.resolve("verification")
+    result = verification.verify(
+        {"claims": body.claims, "sources": body.sources or []}, budget=body.budget
+    )
+    return VerifyResponse(**result)
+
+
+@v1_router.post("/jobs", response_model=JobDetailResponse, tags=["jobs"])
+def create_job(body: CreateJobRequest, request: Request) -> JobDetailResponse:
+    jobs = _app(request).container.resolve("jobs")
+    detail = jobs.create_job(body.objective, session_id=body.session_id)
+    return _job_detail(detail)
+
+
+@v1_router.get("/jobs", response_model=JobsResponse, tags=["jobs"])
+def list_jobs(request: Request, status: str | None = None, limit: int = 50) -> JobsResponse:
+    jobs = _app(request).container.resolve("jobs")
+    return JobsResponse(jobs=[_job_out(j) for j in jobs.list_jobs(status=status, limit=limit)])
+
+
+@v1_router.get("/jobs/{job_id}", response_model=JobDetailResponse, tags=["jobs"])
+def get_job(job_id: str, request: Request) -> JobDetailResponse:
+    jobs = _app(request).container.resolve("jobs")
+    try:
+        return _job_detail(jobs.job_detail(job_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
+
+
+@v1_router.post("/jobs/{job_id}/resume", response_model=JobDetailResponse, tags=["jobs"])
+def resume_job(job_id: str, request: Request) -> JobDetailResponse:
+    jobs = _app(request).container.resolve("jobs")
+    try:
+        return _job_detail(jobs.resume_job(job_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
+
+
+@v1_router.post("/jobs/{job_id}/cancel", response_model=JobDetailResponse, tags=["jobs"])
+def cancel_job(job_id: str, request: Request) -> JobDetailResponse:
+    jobs = _app(request).container.resolve("jobs")
+    try:
+        return _job_detail(jobs.cancel_job(job_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
 
 
 @v1_router.post("/knowledge/search", response_model=SearchResponse, tags=["knowledge"])
@@ -163,6 +400,21 @@ def recent_memory(
 def forget(memory_id: str, request: Request) -> ForgetResponse:
     memory = _app(request).container.resolve("memory")
     return ForgetResponse(forgotten=memory.forget(memory_id))
+
+
+@v1_router.get("/capabilities", response_model=CapabilitiesResponse, tags=["plugins"])
+def list_capabilities(request: Request) -> CapabilitiesResponse:
+    """Honest inventory of what Atlas can and cannot do (R2).
+
+    Merges the capability catalog with what's actually registered, so a caller can
+    see which capabilities are ``provided`` and what building the missing ones
+    unlocks.
+    """
+    from atlas.capabilities import describe_capabilities
+
+    registry = _app(request).capabilities
+    rows = describe_capabilities(registry)
+    return CapabilitiesResponse(capabilities=[CapabilityInfo(**r) for r in rows])
 
 
 @v1_router.get("/plugins", response_model=PluginsResponse, tags=["plugins"])

@@ -13,6 +13,7 @@ paths:
   checkpoints: /data/atlas_data/checkpoints
   state: /data/atlas_data/state
   cache: /data/atlas_data/cache
+  backups: /data/atlas_data/backups
 
 database:
   host: localhost
@@ -25,12 +26,24 @@ database:
 llm:
   provider: ollama
   host: http://localhost:11434
-  model: qwen3:4b
-  embedding_model: nomic-embed-text
+  model: qwen3:4b                 # back-compat scalar; seeds the `chat` role below
+  embedding_model: nomic-embed-text   # back-compat scalar; seeds the `embed` role
   temperature: 0
   timeout: 120
   keep_alive: 5m
   think: true
+  max_concurrency: 1              # R4: single LLM lane on CPU (never two models at once)
+  # Role → model registry (D7). Callers ask LLMService for a *role*, never a model.
+  # 16 GB now: chat=4b, heavier roles=8b. At 64 GB, bump researcher to a 14b model
+  # here (config-only) — no code changes. Pull a model before the sprint that uses it.
+  roles:
+    chat:       { provider: ollama, model: qwen3:4b }
+    planner:    { provider: ollama, model: qwen3:8b }
+    researcher: { provider: ollama, model: qwen3:8b }   # 64GB: deepseek-r1:14b / qwen3:14b
+    summarizer: { provider: ollama, model: qwen3:8b }
+    code:       { provider: ollama, model: qwen3-coder }
+    vision:     { provider: ollama, model: gemma3 }
+    embed:      { provider: ollama, model: nomic-embed-text }
 
 knowledge:
   chunk_max_words: 200
@@ -45,7 +58,7 @@ react:
   think: false              # JSON "thought" field replaces Ollama chain-of-thought (faster)
 
 scheduler:
-  workers: 2
+  workers: 3                # ≥ jobs.max_concurrent so 3 jobs can advance at once (R1)
   checkpoint_interval: 60
   max_retries: 3
 
@@ -57,6 +70,13 @@ logging:
 audit:
   retention_days: 90
 
+backup:
+  enabled: true
+  interval_seconds: 86400   # daily pg_dump; 0 = manual only
+  retention: 7              # keep the 7 most-recent dumps (0 = keep all)
+  pg_dump_path: pg_dump
+  pg_restore_path: pg_restore
+
 memory:
   recall_k: 5
   similarity_floor: 0.0
@@ -64,12 +84,56 @@ memory:
   embed_working: false        # embed working memory for recall (usually off)
   prune_interval: 3600        # seconds between expired-memory prunes (0 = manual)
 
+conversation:
+  max_context_turns: 10       # recent messages assembled into prompt context per turn
+  working_memory_k: 5         # relevant working memories recalled per turn
+  session_ttl_seconds: 0      # 0 = sessions persist indefinitely
+
+jobs:
+  max_concurrent: 3           # R1: concurrent jobs (bounded by scheduler.workers)
+  step_max_retries: 2         # per-step transient-error retries before `failed`
+  retry_delay: 2.0            # seconds before a retried step re-runs
+  llm_decompose: false        # D2c: planner-role LLM decomposition (off => deterministic)
+  max_steps: 6                # cap on decomposed steps per job
+
+net:
+  # Resilient/polite HTTP layer (D10 / §5c) shared by every web-facing plugin.
+  user_agent: "Atlas/0.1 (+https://localhost)"
+  timeout: 15
+  max_bytes: 2097152        # 2 MiB fetched-body cap
+  per_domain_delay: 1.0     # min seconds between requests to the same domain
+  max_retries: 3            # bounded retries on 429/503/5xx/timeout (with backoff)
+  backoff_base: 1.0         # delay = backoff_base * 2**attempt (+ jitter), capped
+  backoff_cap: 30.0
+  jitter: 0.25              # random 0..jitter seconds added per backoff
+  respect_robots: true      # honour robots.txt allow/deny + crawl-delay
+  cache_ttl: 300.0          # response cache TTL seconds (0 = disable)
+
+code:
+  # Code understanding (S14, D9/§5b): pure-CPU structural parse (Python=ast,
+  # others=tree-sitter). Caps keep repo scans bounded on the R4 hardware.
+  max_file_bytes: 1048576   # 1 MiB per-file parse cap
+  max_files: 5000           # cap on files scanned per repo
+  ingest_on_index: false    # index() pushes code-aware chunks into the knowledge base
+
+research:
+  # Evidence Budget (S15, D8/§5a): the Verification Engine stops on *convergence*,
+  # not a fixed paper count. Per-job overridable by the planner.
+  min_sources: 5
+  min_peer_reviewed: 3      # L4+ peer-reviewed papers
+  min_government: 1         # L3 government / national-lab reports
+  convergence: 0.90         # numeric agreement threshold to stop
+  max_search_iterations: 20
+  numeric_tolerance: 0.15   # relative window within which values "agree"
+
 plugins:
   # Dotted module paths; each exposes build(config) -> Plugin. Only listed
   # plugins load (fail-closed). Add github/database/email modules here later.
   enabled:
     - atlas.plugins.filesystem_plugin
     - atlas.plugins.web_plugin
+    - atlas.plugins.search_plugin
+    - atlas.plugins.downloader_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -77,11 +141,18 @@ plugins:
     timeout: 15
     max_bytes: 2097152      # 2 MiB fetched-body cap
     user_agent: "Atlas/0.1 (+https://localhost)"
+  search:
+    providers: [duckduckgo] # D5: ordered; first with results wins (fallback)
+    max_results: 5
+    endpoint: "https://html.duckduckgo.com/html/"
+  downloader:
+    dir: null               # downloads dir; null => paths.data/downloads
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network
   port: 8000
   docs_enabled: true     # Swagger UI at /docs, OpenAPI at /openapi.json
   cors_origins: []       # e.g. ["http://localhost:5173"] for a local web UI
+  metrics_enabled: true  # Prometheus /metrics + JSON /v1/metrics
   # keys: set via ATLAS_API_KEYS (comma-separated) in .env — never commit secrets.
   #       Empty => the API fails closed (all protected routes return 401).

@@ -88,6 +88,23 @@ class DocumentRepository(BaseRepository):
         )
         return Document.from_rows(rows)
 
+    def recent(self, *, limit: int = 50) -> list[Document]:
+        """List documents newest-first (excludes the large ``content`` column)."""
+        rows = self.fetch_all(
+            """
+            SELECT id, source, uri, title, content_type, checksum, metadata,
+                   status, created_at, updated_at
+            FROM knowledge.documents
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return Document.from_rows(rows)
+
+    def count(self) -> int:
+        return self.fetch_val("SELECT count(*) FROM knowledge.documents") or 0
+
     def set_status(self, document_id: UUID | str, status: str) -> bool:
         if status not in VALID_STATUSES:
             raise ValueError(f"invalid status: {status}")

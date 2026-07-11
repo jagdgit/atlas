@@ -15,8 +15,10 @@ from atlas.api.app import create_app
 from atlas.config import get_config
 from atlas.exceptions import AgentNotFoundError, ToolNotFoundError
 from atlas.knowledge.service import SearchResult
-from atlas.models import MemoryItem
+from atlas.models import ConversationMessage, ConversationSession, MemoryItem
+from atlas.services.assistant_service import ChatTurn
 from atlas.services.base import HealthStatus
+from atlas.verification.service import VerificationService
 
 API_KEY = "test-secret-key"
 AUTH = {"Authorization": f"Bearer {API_KEY}"}
@@ -94,6 +96,117 @@ class FakeMemory:
         return True
 
 
+class FakeChat:
+    def chat(self, message, *, session_id=None, **options):
+        return ChatTurn(
+            session_id=session_id or "sess-1",
+            answer=f"reply to {message!r}",
+            intent="ask_knowledge",
+            citations=[
+                {
+                    "index": 1,
+                    "document_id": "doc-1",
+                    "chunk_id": "chunk-1",
+                    "similarity": 0.9,
+                    "snippet": "snip",
+                }
+            ],
+            tool_calls=[{"intent": "ask_knowledge", "action": "rag"}],
+            run_id="run-1",
+        )
+
+
+class FakeConversation:
+    def list_sessions(self, *, limit=50):
+        return [ConversationSession(id="sess-1", title="First")]
+
+    def get_session(self, session_id):
+        return ConversationSession(id=session_id) if session_id == "sess-1" else None
+
+    def history(self, session_id, *, limit=None):
+        return [
+            ConversationMessage(id="m0", session_id=session_id, ordinal=0, role="user", content="hi"),
+            ConversationMessage(id="m1", session_id=session_id, ordinal=1, role="assistant", content="hello"),
+        ]
+
+
+class FakeJobs:
+    def __init__(self):
+        from atlas.models.job import Job, JobStep
+
+        self._job = Job(id="job-1", objective="research x", status="completed_with_blocks")
+        self._steps = [
+            JobStep(id="s0", job_id="job-1", ordinal=0, intent="react",
+                    capability="agent", status="done", description="reason"),
+            JobStep(id="s1", job_id="job-1", ordinal=1, intent="web_fetch",
+                    capability="web", status="blocked", description="fetch",
+                    blocked_reason="needs capability: web"),
+        ]
+        self.resumed = None
+        self.cancelled = None
+
+    def _detail(self):
+        return {
+            "job": self._job,
+            "steps": self._steps,
+            "progress": {"total": 2, "done": 1, "blocked": 1},
+            "blocked": [{"ordinal": 1, "needs": "needs capability: web"}],
+        }
+
+    def create_job(self, objective, *, session_id=None):
+        return self._detail()
+
+    def list_jobs(self, *, status=None, limit=50):
+        return [self._job]
+
+    def job_detail(self, job_id):
+        if job_id != "job-1":
+            raise KeyError(job_id)
+        return self._detail()
+
+    def resume_job(self, job_id):
+        if job_id != "job-1":
+            raise KeyError(job_id)
+        self.resumed = job_id
+        return self._detail()
+
+    def cancel_job(self, job_id):
+        if job_id != "job-1":
+            raise KeyError(job_id)
+        self.cancelled = job_id
+        return self._detail()
+
+
+class FakeDocuments:
+    def supported(self):
+        return [".csv", ".docx", ".pdf", ".txt"]
+
+
+class FakeCode:
+    def parse(self, path):
+        return {"path": path, "lang": "python", "outcome": "ok",
+                "symbols": [{"name": "foo", "kind": "function"}]}
+
+    def repo_map(self, root):
+        return {"root": root, "file_count": 3, "frameworks": ["FastAPI"]}
+
+    def graph(self, root):
+        return {"import_edges": [["a.py", "b.py"]], "call_edges": [],
+                "import_edge_count": 1, "call_edge_count": 0,
+                "unresolved_calls": 0, "external_imports": 2}
+
+    def patterns(self, root):
+        return [{"name": "Repository pattern", "confidence": 0.9, "evidence": []}]
+
+    def search_symbols(self, query, *, root, kind=None, lang=None, limit=50):
+        return [{"name": "foo", "qualname": "foo", "kind": "function",
+                 "file": "a.py", "start_line": 1}]
+
+    def explain(self, path, question=None):
+        return {"path": path, "outcome": "ok", "outline": "file: a.py",
+                "explanation": "does things", "grounded": True}
+
+
 class FakePluginManager:
     def describe(self):
         return [{"name": "filesystem", "version": "0.1.0"}]
@@ -111,6 +224,16 @@ class FakeTools:
         ]
 
 
+def _fake_capabilities():
+    from atlas.capabilities import KnowledgeCapability, MemoryCapability
+    from atlas.kernel.capabilities import CapabilityRegistry
+
+    reg = CapabilityRegistry()
+    reg.register("memory", FakeMemory(), contract=MemoryCapability, kind="service")
+    reg.register("knowledge", FakeKnowledge(), contract=KnowledgeCapability, kind="service")
+    return reg
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -125,16 +248,33 @@ class FakeApplication:
         cfg.api.keys = list(keys)
         self.config = cfg
         self.tools = FakeTools()
+        self.capabilities = _fake_capabilities()
         self.container = FakeContainer(
             {
                 "agent": FakeAgentService(),
                 "knowledge": FakeKnowledge(),
                 "memory": FakeMemory(),
+                "chat": FakeChat(),
+                "conversation": FakeConversation(),
+                "jobs": FakeJobs(),
+                "documents": FakeDocuments(),
+                "code": FakeCode(),
+                "verification": VerificationService(),
                 "plugins": FakePluginManager(),
             }
         )
 
     def invoke_tool(self, name, **kwargs):
+        if name == "web.search":
+            return {
+                "query": kwargs.get("query"),
+                "provider": "duckduckgo",
+                "outcome": "ok",
+                "results": [
+                    {"title": "R1", "url": "https://a.example", "snippet": "s"}
+                ],
+                "reason": None,
+            }
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
         return {"url": kwargs.get("url"), "status": 200, "text": "hello"}
@@ -196,6 +336,47 @@ def test_run_unknown_agent_maps_to_404():
 def test_run_agent_validates_empty_query():
     resp = _client().post("/v1/agents/rag/run", headers=AUTH, json={"query": ""})
     assert resp.status_code == 422  # pydantic min_length
+
+
+def test_chat_returns_answer_and_session():
+    resp = _client().post(
+        "/v1/chat", headers=AUTH, json={"message": "What does it say?"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == "sess-1"
+    assert body["intent"] == "ask_knowledge"
+    assert body["citations"][0]["document_id"] == "doc-1"
+    assert body["tool_calls"][0]["action"] == "rag"
+
+
+def test_chat_requires_auth():
+    resp = _client().post("/v1/chat", json={"message": "hi"})
+    assert resp.status_code == 401
+
+
+def test_chat_validates_empty_message():
+    resp = _client().post("/v1/chat", headers=AUTH, json={"message": ""})
+    assert resp.status_code == 422
+
+
+def test_list_sessions():
+    resp = _client().get("/v1/chat/sessions", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["sessions"][0]["id"] == "sess-1"
+
+
+def test_session_history_ok():
+    resp = _client().get("/v1/chat/sessions/sess-1", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == "sess-1"
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+
+
+def test_session_history_unknown_404():
+    resp = _client().get("/v1/chat/sessions/ghost", headers=AUTH)
+    assert resp.status_code == 404
 
 
 def test_search():
@@ -284,6 +465,182 @@ def test_list_tools():
     assert tools[0]["plugin"] == "web"
 
 
+def test_list_capabilities():
+    resp = _client().get("/v1/capabilities", headers=AUTH)
+    assert resp.status_code == 200
+    caps = {c["id"]: c for c in resp.json()["capabilities"]}
+    # registered capability is reported as provided, with its contract name
+    assert caps["memory"]["provided"] is True
+    assert caps["memory"]["contract"] == "MemoryCapability"
+    # a catalogued-but-unregistered capability is honestly reported as missing
+    assert caps["search"]["provided"] is False
+    assert caps["search"]["unlocks"]
+
+
+def test_capabilities_require_auth():
+    resp = _client().get("/v1/capabilities")
+    assert resp.status_code == 401
+
+
+def test_create_job():
+    resp = _client().post("/v1/jobs", headers=AUTH, json={"objective": "research x"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["job"]["id"] == "job-1"
+    assert body["progress"]["blocked"] == 1
+    assert body["steps"][1]["blocked_reason"] == "needs capability: web"
+
+
+def test_create_job_validates_empty_objective():
+    resp = _client().post("/v1/jobs", headers=AUTH, json={"objective": ""})
+    assert resp.status_code == 422
+
+
+def test_list_jobs():
+    resp = _client().get("/v1/jobs", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["jobs"][0]["id"] == "job-1"
+
+
+def test_get_job_ok_and_unknown():
+    ok = _client().get("/v1/jobs/job-1", headers=AUTH)
+    assert ok.status_code == 200
+    assert ok.json()["job"]["status"] == "completed_with_blocks"
+    missing = _client().get("/v1/jobs/ghost", headers=AUTH)
+    assert missing.status_code == 404
+
+
+def test_resume_job():
+    resp = _client().post("/v1/jobs/job-1/resume", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["job"]["id"] == "job-1"
+
+
+def test_cancel_job_unknown_404():
+    resp = _client().post("/v1/jobs/ghost/cancel", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_jobs_require_auth():
+    resp = _client().get("/v1/jobs")
+    assert resp.status_code == 401
+
+
+def test_document_formats():
+    resp = _client().get("/v1/documents/formats", headers=AUTH)
+    assert resp.status_code == 200
+    assert ".pdf" in resp.json()["formats"]
+
+
+def test_document_formats_require_auth():
+    resp = _client().get("/v1/documents/formats")
+    assert resp.status_code == 401
+
+
+def test_web_search_endpoint_returns_results():
+    resp = _client().post(
+        "/v1/search", headers=AUTH, json={"query": "solar soiling", "max_results": 3}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["outcome"] == "ok"
+    assert body["provider"] == "duckduckgo"
+    assert body["results"][0]["url"] == "https://a.example"
+
+
+def test_web_search_requires_auth():
+    resp = _client().post("/v1/search", json={"query": "x"})
+    assert resp.status_code == 401
+
+
+def test_code_repo_map_endpoint():
+    resp = _client().post("/v1/code/repo-map", headers=AUTH, json={"root": "/x"})
+    assert resp.status_code == 200
+    assert resp.json()["frameworks"] == ["FastAPI"]
+
+
+def test_code_parse_endpoint():
+    resp = _client().post("/v1/code/parse", headers=AUTH, json={"path": "a.py"})
+    assert resp.status_code == 200
+    assert resp.json()["symbols"][0]["name"] == "foo"
+
+
+def test_code_graph_endpoint():
+    resp = _client().post("/v1/code/graph", headers=AUTH, json={"root": "/x"})
+    assert resp.status_code == 200
+    assert resp.json()["import_edge_count"] == 1
+
+
+def test_code_symbols_endpoint():
+    resp = _client().post(
+        "/v1/code/symbols", headers=AUTH, json={"root": "/x", "query": "foo"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["symbols"][0]["qualname"] == "foo"
+
+
+def test_code_patterns_endpoint():
+    resp = _client().post("/v1/code/patterns", headers=AUTH, json={"root": "/x"})
+    assert resp.status_code == 200
+    assert resp.json()["patterns"][0]["name"] == "Repository pattern"
+
+
+def test_code_endpoints_require_auth():
+    assert _client().post("/v1/code/repo-map", json={"root": "/x"}).status_code == 401
+
+
+def test_verify_endpoint_calculates_confidence():
+    body = {
+        "claims": [
+            {
+                "id": "c1",
+                "statement": "Soiling loss ≈ 4%.",
+                "evidence": [
+                    {"source_id": "s1", "evidence_level": 4, "extracted_value": 3.9},
+                    {"source_id": "s2", "evidence_level": 3, "extracted_value": 4.0},
+                    {"source_id": "s3", "evidence_level": 4, "extracted_value": 3.8},
+                ],
+            }
+        ]
+    }
+    resp = _client().post("/v1/verify", headers=AUTH, json=body)
+    assert resp.status_code == 200
+    claim = resp.json()["claims"][0]
+    assert claim["confidence"] == "HIGH"
+    assert claim["convergence"] == 1.0
+    assert claim["budget_decision"]["decision"] in {"stop", "continue"}
+
+
+def test_verify_endpoint_budget_override():
+    body = {
+        "claims": [
+            {
+                "id": "c1",
+                "statement": "x",
+                "evidence": [
+                    {"source_id": "s1", "evidence_level": 4, "extracted_value": 3.9},
+                    {"source_id": "s2", "evidence_level": 4, "extracted_value": 4.0},
+                ],
+            }
+        ],
+        "budget": {"min_sources": 2, "min_peer_reviewed": 2, "min_government": 0},
+    }
+    resp = _client().post("/v1/verify", headers=AUTH, json=body)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["budget"]["min_sources"] == 2
+    assert data["claims"][0]["budget_decision"]["decision"] == "stop"
+
+
+def test_verify_endpoint_requires_auth():
+    assert _client().post("/v1/verify", json={"claims": [{"statement": "x"}]}).status_code == 401
+
+
+def test_verify_endpoint_rejects_empty_claims():
+    resp = _client().post("/v1/verify", headers=AUTH, json={"claims": []})
+    assert resp.status_code == 422
+
+
 def test_invoke_tool():
     resp = _client().post(
         "/v1/tools/web.fetch/invoke",
@@ -319,3 +676,33 @@ def test_openapi_docs_served():
     resp = _client().get("/openapi.json")
     assert resp.status_code == 200
     assert resp.json()["info"]["title"] == "Atlas API"
+
+
+def test_metrics_prometheus_public():
+    from atlas.telemetry import get_metrics
+
+    get_metrics().incr("api.test.requests", 3)
+    resp = _client().get("/metrics")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "atlas_api_test_requests" in resp.text
+
+
+def test_metrics_json_requires_auth():
+    resp = _client().get("/v1/metrics")
+    assert resp.status_code == 401
+
+
+def test_metrics_json_authed():
+    resp = _client().get("/v1/metrics", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "counters" in body and "histograms" in body
+
+
+def test_metrics_disabled_returns_404():
+    app = FakeApplication((API_KEY,))
+    app.config.api.metrics_enabled = False
+    client = TestClient(create_app(app))
+    assert client.get("/metrics").status_code == 404
+    assert client.get("/v1/metrics", headers=AUTH).status_code == 404

@@ -11,7 +11,6 @@ from atlas.config import get_config
 from atlas.exceptions import PluginError
 from atlas.kernel.capabilities import CapabilityRegistry
 from atlas.kernel.tools import ToolRegistry
-from atlas.plugins import web_plugin
 from atlas.plugins.base import BasePlugin
 from atlas.plugins.filesystem_plugin import FilesystemPlugin
 from atlas.plugins.manager import PluginManager
@@ -98,7 +97,7 @@ def test_filesystem_enforces_size_cap(tmp_path):
         plugin.read_file("big.txt")
 
 
-# --- WebPlugin ------------------------------------------------------------
+# --- WebPlugin (now over the resilient net layer, S13) --------------------
 class _FakeResp:
     def __init__(self, content, headers, status=200, url="https://example.com"):
         self.content = content
@@ -108,41 +107,51 @@ class _FakeResp:
         self.encoding = "utf-8"
 
 
-class _FakeClient:
-    def __init__(self, resp, **kwargs):
-        self._resp = resp
+def _web_plugin(resp_map, *, respect_robots=False):
+    """Build a WebPlugin whose FetchClient uses a canned URL→response map."""
+    from atlas.net import FetchClient
 
-    def __enter__(self):
-        return self
+    def http_get(url, headers):
+        return resp_map[url]
 
-    def __exit__(self, *exc):
-        return False
+    client = FetchClient(
+        http_get=http_get,
+        respect_robots=respect_robots,
+        per_domain_delay=0.0,
+        cache_ttl=0.0,
+        sleep=lambda _s: None,
+    )
+    return WebPlugin(client)
 
-    def get(self, url):
-        return self._resp
 
-
-def test_web_fetch_extracts_html_text(monkeypatch):
+def test_web_fetch_extracts_html_text():
     resp = _FakeResp(
         b"<html><body><h1>Hi</h1><script>evil()</script></body></html>",
         {"content-type": "text/html; charset=utf-8"},
     )
-    monkeypatch.setattr(web_plugin.httpx, "Client", lambda **kw: _FakeClient(resp))
-    plugin = WebPlugin()
+    plugin = _web_plugin({"https://example.com": resp})
     result = plugin.fetch("https://example.com")
     assert result["status"] == 200
     assert "Hi" in result["text"]
     assert "evil" not in result["text"]  # script stripped
+    assert result["outcome"] == "ok"
 
 
-def test_web_fetch_passes_through_plain_text(monkeypatch):
+def test_web_fetch_passes_through_plain_text():
     resp = _FakeResp(b"just text", {"content-type": "text/plain"})
-    monkeypatch.setattr(web_plugin.httpx, "Client", lambda **kw: _FakeClient(resp))
-    plugin = WebPlugin()
+    plugin = _web_plugin({"https://example.com": resp})
     assert plugin.fetch("https://example.com")["text"] == "just text"
 
 
 def test_web_fetch_rejects_non_http():
-    plugin = WebPlugin()
+    plugin = _web_plugin({})
     with pytest.raises(PluginError):
         plugin.fetch("ftp://example.com/file")
+
+
+def test_web_fetch_blocked_raises_plugin_error():
+    resp = _FakeResp(b"", {"content-type": "text/html"}, status=403)
+    plugin = _web_plugin({"https://example.com": resp})
+    with pytest.raises(PluginError) as exc:
+        plugin.fetch("https://example.com")
+    assert "blocked" in str(exc.value)
