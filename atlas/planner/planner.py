@@ -22,6 +22,7 @@ from atlas.capabilities import (
     CAP_KNOWLEDGE,
     CAP_LLM,
     CAP_MEMORY,
+    CAP_PYTHON,
     CAP_SEARCH,
     CAP_WEB,
 )
@@ -33,6 +34,7 @@ class Intent:
     REMEMBER = "remember"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
+    RUN_PYTHON = "run_python"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
@@ -105,6 +107,19 @@ _SEARCH_PREFIX_RE = re.compile(
     r"find(?:\s+me)?)\s*[:,]?\s*",
     re.IGNORECASE,
 )
+# A fenced ```python code block, or an explicit "run this python …" instruction.
+_PYTHON_FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_PYTHON_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:run|execute|eval(?:uate)?)\s+(?:this\s+)?"
+    r"(?:python|py|code|script)\b[:,]?\s*",
+    re.IGNORECASE,
+)
+_PYTHON_RE = re.compile(
+    r"```(?:python|py)\b"
+    r"|^\s*(?:please\s+)?(?:run|execute|eval(?:uate)?)\s+(?:this\s+)?"
+    r"(?:python|py|code|script)\b",
+    re.IGNORECASE,
+)
 
 
 def _url_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -132,6 +147,14 @@ def _query_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
 def _search_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     query = _SEARCH_PREFIX_RE.sub("", message).strip()
     return {"query": query or message.strip()}
+
+
+def _python_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    fence = _PYTHON_FENCE_RE.search(message)
+    if fence:
+        return {"code": fence.group(1).strip()}
+    code = _PYTHON_PREFIX_RE.sub("", message).strip().strip("`").strip()
+    return {"code": code}
 
 
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
@@ -172,6 +195,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
             re.IGNORECASE,
         ),
         _remember_args,
+    ),
+    (
+        Intent.RUN_PYTHON,
+        CAP_PYTHON,
+        _PYTHON_RE,
+        _python_args,
     ),
     (
         Intent.WEB_FETCH,
@@ -227,6 +256,7 @@ _DESCRIPTIONS = {
     Intent.REMEMBER: "Store a fact in memory.",
     Intent.WEB_FETCH: "Fetch a web page.",
     Intent.WEB_SEARCH: "Search the web for sources.",
+    Intent.RUN_PYTHON: "Run Python code in the sandbox.",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",

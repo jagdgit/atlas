@@ -20,6 +20,7 @@ the DI container, so they work without a running API server:
     atlas code symbols ./repo -q Foo   # search code symbols
     atlas code graph ./repo     # import + cross-file call graph
     atlas code patterns ./repo  # mine recurring engineering patterns
+    atlas python "print(2+2)"   # run Python in the sandbox (S16)
     atlas verify graph.json     # verify claims (Verification Engine, S15)
     atlas agents                # list registered agents
     atlas ask "question"        # ask an agent (default: rag)
@@ -159,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_code.add_argument("--kind", default=None, help="symbol kind filter")
     p_code.add_argument("--lang", default=None, help="language filter")
     p_code.add_argument("--question", default=None, help="question for `explain`")
+
+    p_py = sub.add_parser("python", help="run Python in the sandbox (S16)")
+    p_py.add_argument("code", nargs="?", default=None, help="Python source to run")
+    p_py.add_argument("-f", "--file", default=None, help="run a .py file instead")
+    p_py.add_argument("--timeout", type=float, default=None, help="wall-clock seconds")
 
     p_verify = sub.add_parser(
         "verify", help="verify claims from a JSON evidence graph (Verification Engine)"
@@ -521,6 +527,34 @@ def cmd_code(args: argparse.Namespace, app: "Application | None" = None) -> int:
     return 1
 
 
+def cmd_python(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    sandbox = app.container.resolve("python")
+    if args.file:
+        result = sandbox.run_file(args.file, timeout=args.timeout)
+    elif args.code:
+        result = sandbox.run(args.code, timeout=args.timeout)
+    else:
+        print("provide code or --file")
+        return 2
+    print(
+        f"outcome: {result['outcome']}  "
+        f"({result['duration_ms']} ms, backend={result['backend']})"
+    )
+    stdout = result.get("stdout") or ""
+    if stdout:
+        print(stdout, end="" if stdout.endswith("\n") else "\n")
+    if result["outcome"] != "ok":
+        stderr = (result.get("stderr") or "").strip()
+        if stderr:
+            print(stderr)
+        if result.get("error"):
+            print(f"error: {result['error']}")
+    if result.get("result") is not None:
+        print(f"result: {result['result']}")
+    return 0 if result["outcome"] == "ok" else 1
+
+
 def cmd_verify(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -575,6 +609,7 @@ _HANDLERS = {
     "websearch": cmd_websearch,
     "download": cmd_download,
     "code": cmd_code,
+    "python": cmd_python,
     "verify": cmd_verify,
     "backup": cmd_backup,
 }

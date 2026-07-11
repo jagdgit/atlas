@@ -1,11 +1,11 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–15 shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–16 shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
-> **Verification Engine + Evidence Graph**; 444 tests). Plan finalized
-> (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S16 — Python Execution Sandbox**.
+> **Verification Engine + Evidence Graph** + **Python Execution Sandbox**; 478 tests).
+> Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
+> Next: **S17 — Research loop + Non-blocking HITL & Reports**.
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -254,11 +254,15 @@ config without touching the planner. Every provider fetches through the shared
 resilient net layer (D10), so a rate-limited/blocked backend degrades to a structured
 outcome (R2/R3) instead of crashing.
 
-### D6 — Python execution sandbox  ·  Status: OPEN (gate at S16)
-- **(a) Subprocess in a dedicated venv + resource limits (rlimit/timeout)** [REC-start]
-- **(b) Docker-per-execution** — stronger isolation, heavier, needs Docker on host.
-- **(c) Defer** Python executor until after research plugins.
-*Security-sensitive; decide when we reach S16.*
+### D6 — Python execution sandbox  ·  Status: ✅ LOCKED (shipped S16) — *hybrid*
+**Decision (user):** **hybrid** — the executor targets a small ``SandboxBackend``
+interface; the **subprocess backend is the default now** (child interpreter + `rlimit`
+CPU/memory/file caps + hard wall-clock timeout that kills the process group + scratch
+workdir + stripped env + **network disabled by default**), and a **Docker backend** is
+swappable via config later for stronger isolation — without touching callers. Network
+is **off by default** (opt-in per run); network needs go through Atlas capabilities.
+Every run returns a structured outcome (`ok`/`error`/`timeout`/`blocked`), never a raw
+crash (R2/R3). Computed results become **L5 evidence** in the graph (§5a.6). — §6h.
 
 ### D7 — LLM selection: roles, not a single model  ·  Status: ✅ LOCKED
 **Decision (user):** Do **not** hard-wire a "research model." Configure **roles**;
@@ -675,7 +679,7 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S13** ✅ | **Research Plugins I** | **S13a ✅** Document Reader (pdf/docx/pptx/xlsx/csv/md/txt/html/json) + **resilient fetch layer `atlas/net/`** (D10, §5c) — §6d. **S13b ✅** `SearchCapability` (D5, DuckDuckGo + provider fallback) + `web.search`/`web.download`; planner `web_search` intent; `POST /v1/search`, `atlas websearch`/`download` — §6e | evidence gathering |
 | **S14** ✅ | **Code Understanding (Tier B)** | `CodeCapability` (D9, §5b): `ast`(Python)+tree-sitter parse, repo map, code-aware chunking→RAG, symbol index, **import + cross-file call graph** (Python-first), **pattern mining**; `code`-role LLM `explain`; `POST /v1/code/*`, `atlas code …` — §6f | reads/reviews code |
 | **S15** ✅ | **Verification & Evidence Graph** | Claim model, Evidence Levels 1–5, calculated confidence, convergence stopping rule, Evidence Budget, **Verification Engine** (D8, §5a) | defensible conclusions |
-| **S16** | **Python Execution** | Execution capability (D6, sandbox); computed results become **L5 evidence** in the graph (data-driven estimates) | analysis |
+| **S16** ✅ | **Python Execution** | Execution capability (D6, sandbox); computed results become **L5 evidence** in the graph (data-driven estimates) | analysis |
 | **S17** | **Non-blocking HITL & Reports** | `blocked`-step queue + notify + `atlas job resume` **(R3, never stalls the job)**; Report Generator (scientific-review structure, §5a.5) | usable research jobs |
 | **S18** | **Deeper Research + Learning Pipeline** | YouTube transcripts, Scholar/arXiv/Semantic Scholar; **Learning Pipeline** (D11, §5d): completed job/repos/docs → the **five stores** with **governance** (policy + Learning Level, explainable/reversible); seed the **Experience store** | compounding knowledge |
 | **S19** | **Engineering Intelligence** *(NEW)* | Repository Learning, Code-Style Learning, Architecture Learning, **Engineering Pattern Extraction** (§5b.1 layer 6), Project Knowledge Graph, Cross-project Search, **Personal Coding Assistant**, **Engineering Experience Store** (D11, §5d) | Atlas learns *you* (L4–L5) |
@@ -1059,7 +1063,51 @@ contradictions, and stop on **convergence**, not a fixed paper count.
 - [x] Evidence Budget + `decide()` continue/stop with explicit unmet criteria.
 - [x] `VerificationService` (`verification` capability) wired in bootstrap; `research.*` config.
 - [x] `POST /v1/verify` + `atlas verify`; hermetic tests (convergence, confidence, budget, graph, service, API, CLI). **444 tests pass** (+23).
-- [ ] **Next — S16:** Python Execution Sandbox (computed results become L5 evidence).
+- [x] **Done — S16:** Python Execution Sandbox (computed results become L5 evidence) — §6h.
+
+---
+
+## 6h. Sprint 16 — Python Execution Sandbox (D6, hybrid) (✅ DONE)
+
+Atlas can now **run analysis code** in an isolated, resource-limited sandbox — the
+substrate for data-driven estimates whose results become **L5 evidence** (§5a.6).
+
+- **`atlas/sandbox/`**: `SandboxBackend` is the swap point (D6 *hybrid*).
+  - **`SubprocessBackend`** (default): child interpreter (`python -I -B`) with a POSIX
+    `preexec_fn` applying **rlimits** (`RLIMIT_CPU`, `RLIMIT_AS` memory, `RLIMIT_FSIZE`,
+    no core dump); a **hard wall-clock timeout** that kills the whole **process group**
+    (`start_new_session` + `killpg`); a **scratch working dir**; a **stripped env**; and
+    — unless explicitly enabled — an in-interpreter **network block** (neutralises
+    `socket.socket`/`create_connection`).
+  - **`DockerBackend`**: selectable placeholder (reports itself unavailable → every run
+    is `blocked`, R2) so stronger isolation drops in later via `sandbox.backend: docker`.
+- **`ExecutionResult`** (serialisable): `outcome` (`ok`/`error`/`timeout`/`blocked`),
+  stdout/stderr (truncated to a cap), returncode, `duration_ms`, `timed_out`, an optional
+  structured **`result`** (parsed from a `result.json` the code writes), and **artifacts**
+  (files the run produced). A run **never raises** into the caller (R2/R3).
+- **`PythonSandboxService`** = the `python` capability: `run(code, timeout?, files?, stdin?,
+  network?)` / `run_file(path)`; owns policy (limits, network default, per-run uuid workdir
+  under `paths.data/sandbox`) and delegates to the backend.
+- **Planner/dispatch**: new `run_python` intent (fenced ` ```python ` blocks or an explicit
+  "run/execute python …") + `AssistantService._do_run_python` (reports output, errors,
+  timeouts, and sandbox-unavailable honestly); `JobPlanner` accepts it (jobs can compute).
+- **Concrete `PythonExecutionCapability`** contract (catalog `CAP_PYTHON`, since S16).
+- **Config** `sandbox.*` (backend, timeout, cpu_seconds, memory_mb, output/code caps,
+  network). **Surface:** `POST /v1/python/run` + `atlas python "…"`/`-f file.py`.
+
+> **Isolation honesty:** the subprocess backend is *soft* isolation (kernel rlimits +
+> an in-interpreter net block) — the right default for **trusted-ish** analysis code on
+> the single self-hosted node. Hostile-code-grade isolation is the Docker backend's job
+> (already the selectable path, D6).
+
+**Definition of Done (S16)** — all met:
+- [x] `SandboxBackend` interface + subprocess backend (rlimits, timeout→killpg, scratch dir, stripped env, net block).
+- [x] Docker backend selectable + honestly unavailable (R2); `create_backend` factory.
+- [x] `ExecutionResult` (ok/error/timeout/blocked) + `result.json` + artifacts; never raises.
+- [x] `PythonSandboxService` (`python` capability) wired in bootstrap; `python.run` tool; `sandbox.*` config.
+- [x] `run_python` intent + dispatch + `JobPlanner`; `PythonExecutionCapability` contract.
+- [x] `POST /v1/python/run` + `atlas python`; hermetic tests (real subprocess: ok/error/timeout/net-block/result/artifacts/truncation, service, planner, assistant, api, cli, caps). **478 tests pass** (+34).
+- [ ] **Next — S17:** Research loop (gather→verify→decide) + Non-blocking HITL & scientific-review Report Generator (§5a.5).
 
 ---
 
@@ -1081,6 +1129,7 @@ contradictions, and stop on **convergence**, not a fixed paper count.
 | Q7 | 2026-07-11 | Secrets/credentials stay in `.env` / `/etc/atlas`; never in DB or plaintext logs | ✅ Locked |
 | D9 | 2026-07-11 | Code understanding = **Tier B**: tree-sitter parse + code-aware RAG + repo map + symbol index + import **& cross-file call graph** + dependency analysis + `code`-role LLM (§5b); **own sprint S14**; incrementally enrichable (feeds S18 learning) | ✅ Locked |
 | D10 | 2026-07-11 | Resilient/polite fetching: throttle + backoff + robots + cache + provider fallback; block → skip that source, job continues (§5c) | ✅ Locked |
+| D6 | 2026-07-11 | **Python execution sandbox = hybrid** (shipped S16, §6h): a `SandboxBackend` interface with a **subprocess** default (child interpreter + rlimit CPU/memory/file caps + hard timeout→killpg + scratch dir + stripped env + **network off by default**) and a **Docker** backend swappable via `sandbox.backend` for stronger isolation. Runs return an outcome (`ok`/`error`/`timeout`/`blocked`), never crash (R2/R3); results become **L5 evidence** (§5a.6). Subprocess is soft isolation (trusted-ish code); Docker is the hostile-code path | ✅ Locked |
 | D13 | 2026-07-11 | **Resilient net layer is a shared foundation, not per-plugin** (`atlas/net/FetchClient`): every web-facing capability fetches through one polite client (per-domain throttle + robots + backoff/retry + cache) that **classifies outcomes** (`ok`/`blocked`/`skipped`/`error`) instead of raising, so jobs degrade not crash (R2/R3, §5c). **Document Reader** = the fixed Q8 nine-format set via shared extractors + a `DocumentService`/`DocumentCapability` that reports an outcome (never throws on a bad file). S13 split: **S13a** (reader + net) done; **S13b** (search D5 + downloader) next — §6d | ✅ Locked |
 | D12 | 2026-07-11 | **Job Engine = one step per self-re-enqueuing `advance_job` task** (not one task per whole job): short tasks interleave many jobs on the worker pool (R1) without a long job starving the scheduler; steps sequential per job (Q1). `blocked` is non-fatal and cascades to dependents (R3); reboot recovery re-hydrates jobs/steps (Q10) — §6c | ✅ Locked |
 | D11 | 2026-07-11 | **Continuous Learning = third pillar** (Continuous Engineering Intelligence, §1b/§5d): `LearningCapability`; **five stores** (Knowledge/Memory/**Code**/**Experience**/Conversation); Learning Levels L1–L5; **governed** promotion (Temporary/Project/Personal/Verified) — explainable, reviewable, reversible, never silent; code **Pattern Mining**. Roadmap: S18 Learning Pipeline + **S19 Engineering Intelligence**; former tools sprint → **S20** (arc now S10–S20) | ✅ Locked |
@@ -1102,5 +1151,6 @@ contradictions, and stop on **convergence**, not a fixed paper count.
 | 2026-07-11 | S12 | **Sprint 12 shipped ✅ — Job Engine.** Migration **0010** (`job` schema: `job.jobs` + `job.steps` w/ `depends_on`/`blocked_reason`/`attempts` + grants); `Job`/`JobStep` models + `JobRepository`; **`JobPlanner`** (deterministic fallback + optional planner-role LLM decomposition, D2c); **`JobService`** — one-step `advance_job` task that **re-enqueues itself** so jobs interleave (R1) while steps stay sequential (Q1); **`blocked`/`skipped`** states + dependency **cascade** (R3), `resume_job`/`cancel_job`, reboot recovery (Q10). Reuses chat dispatch via new **`AssistantService.run_step`** + `blocked` outcome (D1); missing capability/file → `blocked` not failed (R2/R3). Config `jobs.*`; `scheduler.workers`→3. `POST/GET /v1/jobs[/{id}][/resume|/cancel]` + `atlas jobs`/`atlas job …`. **312 tests pass (+27).** |
 | 2026-07-11 | — | **D11 locked — Continuous Learning made the third pillar.** Vision retitled *Research, Execution & Continuous Learning System*; added §1b (Continuous Engineering Intelligence) and §5d (`LearningCapability`; **five stores** incl. new **Code** + **Experience**; capability→learns-from→produces table; **Learning Levels L1–L5**; **Continuous Learning Policy** + **Learning Governance** Temporary/Project/Personal/Verified — explainable/reviewable/reversible). `CodeCapability` gains **Pattern Mining** (§5b.1). Roadmap: **S18 Learning Pipeline**, **S19 Engineering Intelligence** (NEW), former tools → **S20** (arc now **S10–S20**). §2 mapping, §5 diagram + building blocks + contracts, D4 scope updated. |
 | 2026-07-11 | S14 | **Sprint 14 shipped ✅ — Code Understanding (`CodeCapability`, Tier B, D9).** New `atlas/code/`: **Python parsed via stdlib `ast`** (symbols/imports/**call sites**, full fidelity) + **tree-sitter** (`tree-sitter-language-pack`) for JS/TS/TSX/C/C++/Rust/Go/Java/Bash/SQL (symbols+imports); honest per-file outcomes (`ok`/`shallow`/`unsupported`/`error`, R2). **Repo map** (manifests → deps/frameworks/entry points), **symbol index**, **import + cross-file call graph** (Python-first, conservative resolution — builtins ignored, ambiguous counted not guessed), **pattern mining** (Repository/Service/Registry/pytest/Docker/Postgres/UUID/dataclasses/async/framework, evidence-backed → feeds S19). **`CodeService`** = `code` capability: `parse`/`repo_map`/`index`/`search_symbols`/`graph`/`patterns`/`explain`; **code-aware chunking → knowledge** (one chunk per symbol) and **`code`-role LLM `explain`** grounded on structure. Concrete **`CodeCapability`** contract (catalog `CAP_CODE` now provided). `POST /v1/code/*` + `atlas code …`; `code.*` config. Deps `tree-sitter`+`tree-sitter-language-pack`. **421 tests pass (+51).** Next: **S15 Verification & Evidence Graph (D8)**. |
+| 2026-07-11 | S16 | **Sprint 16 shipped ✅ — Python Execution Sandbox (D6, *hybrid*).** New `atlas/sandbox/`: a `SandboxBackend` swap point — **`SubprocessBackend`** (default) runs `python -I -B` in a child with a POSIX `preexec_fn` applying **rlimits** (CPU/`RLIMIT_AS` memory/file size/no-core), a **hard wall-clock timeout** that kills the whole **process group** (`start_new_session`+`killpg`), a **scratch workdir**, a **stripped env**, and (default) an in-interpreter **network block**; **`DockerBackend`** = selectable placeholder that honestly reports unavailable (R2) so stronger isolation drops in later via `sandbox.backend`. `ExecutionResult` (`ok`/`error`/`timeout`/`blocked`, stdout/stderr truncation, `duration_ms`, structured `result` from `result.json`, artifacts) — **never raises** (R2/R3). **`PythonSandboxService`** = `python` capability (`run`/`run_file`, per-run uuid workdir under `paths.data/sandbox`). Planner `run_python` intent (fenced code / "run python…") + `AssistantService._do_run_python` (honest output/error/timeout/blocked) + `JobPlanner` support. Concrete **`PythonExecutionCapability`** (`CAP_PYTHON`, S16). `sandbox.*` config; `POST /v1/python/run` + `atlas python`. **478 tests pass (+34).** Next: **S17 research loop + HITL & reports**. |
 | 2026-07-11 | S15 | **Sprint 15 shipped ✅ — Verification Engine + Evidence Graph (D8/§5a), *the differentiator*.** New `atlas/evidence/` (serialisable **Evidence Graph**: `Source`/`EvidenceItem`/`ClaimValue`/`Claim`/`EvidenceGraph` — claims are persistent + **re-verifiable**) and `atlas/verification/` (pure, no LLM/I/O): **Evidence Levels L1–L5** (quality not count); `convergence()` = largest-cluster agreement ∈ [0,1] (`3.7/3.9/4.0/3.8`→1.0, `2/11/6/4`→low); **calculated confidence** HIGH/MEDIUM/LOW/INSUFFICIENT (0.6·convergence + 0.4·quality, contradiction penalty; single/low-level source never HIGH) with a human `reasoning_trace`; **Evidence Budget** + `decide()` continue/stop w/ explicit unmet criteria (stop on *convergence*, not paper count). **`VerificationService`** = `verification` capability (`verify(graph, budget?)` → per-claim decision), wired in bootstrap; `research.*` config (`ResearchConfig`). `POST /v1/verify` + `atlas verify graph.json`. Scope = engine/graph/budget primitives; live gather→verify→decide loop + scientific-review Report Generator land **S17**, Python results become **L5** at **S16**. **444 tests pass (+23).** Next: **S16 Python Execution Sandbox**. |
 | 2026-07-11 | S13b | **Sprint 13b shipped ✅ — Web Search (D5) + Downloader.** **D5 locked → DuckDuckGo** (keyless HTML) default: new `atlas/search/` (`SearchProvider` protocol + `SearchResponse`/`SearchHit` + `DuckDuckGoProvider` unwrapping `uddg` redirects) and **`SearchPlugin`** (`search` capability, tool `web.search`) with an **ordered provider list → provider fallback** (SearXNG/Brave drop in via config); all over the resilient net layer so blocked/rate-limited backends degrade (R2/R3), never crash. New **`DownloaderPlugin`** (`downloader`, `web.download`) → size-capped fetch to a sandbox-confined downloads dir, honest block/skip. Planner gains **`web_search`** intent + `AssistantService._do_web_search` (lists results, reports blocked/empty honestly); `JobPlanner` accepts it. `POST /v1/search`; `atlas websearch`/`download`; `plugins.search`/`plugins.downloader` config, both enabled. **370 tests pass (+27).** Next: **S14 Code Understanding (D9)**. |

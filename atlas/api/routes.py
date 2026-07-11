@@ -54,6 +54,7 @@ from atlas.api.schemas import (
     CodeParseRequest,
     CodeRepoRequest,
     CodeSymbolsRequest,
+    PythonRunRequest,
     ToolInfo,
     ToolsResponse,
     VerifyRequest,
@@ -280,6 +281,14 @@ def code_symbols(body: CodeSymbolsRequest, request: Request) -> dict:
 @v1_router.post("/code/explain", tags=["code"])
 def code_explain(body: CodeExplainRequest, request: Request) -> dict:
     return _code(request).explain(body.path, body.question)
+
+
+@v1_router.post("/python/run", tags=["python"])
+def python_run(body: PythonRunRequest, request: Request) -> dict:
+    sandbox = _app(request).container.resolve("python")
+    return sandbox.run(
+        body.code, timeout=body.timeout, files=body.files, stdin=body.stdin
+    )
 
 
 @v1_router.post("/verify", response_model=VerifyResponse, tags=["verification"])

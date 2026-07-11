@@ -232,6 +232,13 @@ class CodeExplainRequest(BaseModel):
     question: str | None = None
 
 
+class PythonRunRequest(BaseModel):
+    code: str = Field(min_length=1)
+    timeout: float | None = Field(default=None, gt=0)
+    files: dict[str, str] | None = None
+    stdin: str | None = None
+
+
 class VerifyRequest(BaseModel):
     # A serialised Evidence Graph (claims + optional sources) plus an optional
     # per-request Evidence Budget override (S15, D8/§5a).

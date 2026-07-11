@@ -268,6 +268,18 @@ class CodeConfig(BaseModel):
     ingest_on_index: bool = False    # index() ingests code-aware chunks into knowledge
 
 
+class SandboxConfig(BaseModel):
+    # Python execution sandbox (S16, D6). Hybrid: subprocess default, docker later.
+    backend: str = "subprocess"       # "subprocess" | "docker"
+    timeout: float = 30.0             # wall-clock seconds before the run is killed
+    cpu_seconds: int = 30             # RLIMIT_CPU (CPU-time seconds)
+    memory_mb: int = 1024             # RLIMIT_AS (address-space cap, MiB)
+    max_output_bytes: int = 262_144   # truncate stdout/stderr beyond this
+    max_code_bytes: int = 262_144     # refuse code larger than this
+    network: bool = False             # network disabled by default (soft block)
+    dir: str | None = None            # workdir root; None => paths.data/sandbox
+
+
 class ResearchConfig(BaseModel):
     # Evidence Budget (S15, D8/§5a): the per-job stopping criteria the Verification
     # Engine enforces. Stop on *convergence*, not a fixed paper count.
@@ -318,6 +330,7 @@ class AtlasConfig(BaseModel):
     jobs: JobConfig = JobConfig()
     net: NetConfig = NetConfig()
     code: CodeConfig = CodeConfig()
+    sandbox: SandboxConfig = SandboxConfig()
     research: ResearchConfig = ResearchConfig()
     plugins: PluginsConfig = PluginsConfig()
     api: ApiConfig = ApiConfig()

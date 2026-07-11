@@ -25,6 +25,8 @@ from atlas.events.handlers import WILDCARD, LoggingHandler
 from atlas.execution.executor import ToolExecutor
 from atlas.code.parser import CodeParser
 from atlas.code.service import CodeService
+from atlas.sandbox.backends import create_backend
+from atlas.sandbox.service import PythonSandboxService
 from atlas.verification.engine import EvidenceBudget, VerificationEngine
 from atlas.verification.service import VerificationService
 from atlas.documents.service import DocumentService
@@ -308,6 +310,27 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         params={"root": "path to a repository root"}, plugin="code",
     )
 
+    # Python Execution Sandbox (Sprint 16, D6 — hybrid): run analysis code in a
+    # resource-limited child interpreter (subprocess default; docker swappable) with
+    # network disabled by default; computed results can become L5 evidence (§5a.6).
+    sandbox_root = cfg.sandbox.dir or str(cfg.paths.data / "sandbox")
+    python_service = PythonSandboxService(
+        create_backend(cfg.sandbox.backend),
+        workdir=sandbox_root,
+        timeout=cfg.sandbox.timeout,
+        memory_mb=cfg.sandbox.memory_mb,
+        cpu_seconds=cfg.sandbox.cpu_seconds,
+        max_output_bytes=cfg.sandbox.max_output_bytes,
+        max_code_bytes=cfg.sandbox.max_code_bytes,
+        network=cfg.sandbox.network,
+        logger=get_logger("atlas.sandbox"),
+    )
+    tools.register(
+        "python.run", python_service.run,
+        description="Run Python in an isolated, resource-limited sandbox.",
+        params={"code": "Python source to execute"}, plugin="python",
+    )
+
     # Verification Engine + Evidence Graph (Sprint 15, D8/§5a): verify by *claim*,
     # calculate confidence from evidence quality + numeric convergence + contradictions,
     # and enforce a per-job Evidence Budget (stop on convergence, not paper count).
@@ -354,6 +377,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("jobs", job_service)
     container.register_instance("documents", document_service)
     container.register_instance("code", code_service)
+    container.register_instance("python", python_service)
     container.register_instance("verification", verification_service)
     container.register_instance("ingestion", ingestion_source)
 
@@ -386,6 +410,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register(
         "code", code_service, contract=caps.CodeCapability, kind="service"
     )
+    capabilities.register(
+        "python", python_service, contract=caps.PythonExecutionCapability, kind="service"
+    )
     capabilities.register("verification", verification_service, kind="service")
     capabilities.register("ingestion", ingestion_source, kind="service")
 
@@ -401,6 +428,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(job_service)
     registry.register(document_service)
     registry.register(code_service)
+    registry.register(python_service)
     registry.register(verification_service)
     registry.register(ingestion_source)
 

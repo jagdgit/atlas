@@ -24,6 +24,7 @@ from atlas.cli.main import (
     cmd_job,
     cmd_jobs,
     cmd_plugins,
+    cmd_python,
     cmd_recall,
     cmd_remember,
     cmd_search,
@@ -126,6 +127,17 @@ class FakeBackup:
         return "/data/atlas_data/backups/atlas_atlas_20260101_000000.dump"
 
 
+class FakePython:
+    def run(self, code, *, timeout=None):
+        return {"outcome": "ok", "stdout": "4\n", "stderr": "", "returncode": 0,
+                "duration_ms": 3, "error": None, "result": None, "backend": "subprocess"}
+
+    def run_file(self, path, *, timeout=None):
+        return {"outcome": "ok", "stdout": "from file\n", "stderr": "",
+                "returncode": 0, "duration_ms": 3, "error": None, "result": None,
+                "backend": "subprocess"}
+
+
 class FakeChat:
     def chat(self, message, *, session_id=None, **options):
         return ChatTurn(
@@ -202,6 +214,7 @@ class FakeApp:
                 "jobs": FakeJobs(),
                 "documents": FakeDocuments(),
                 "code": FakeCode(),
+                "python": FakePython(),
                 "verification": VerificationService(),
             }
         )
@@ -503,6 +516,29 @@ def test_cmd_code_patterns(capsys):
     rc = cmd_code(args, app=FakeApp())
     assert rc == 0
     assert "Repository pattern" in capsys.readouterr().out
+
+
+# --- python (S16) ---------------------------------------------------------
+def test_cmd_python_inline(capsys):
+    args = build_parser().parse_args(["python", "print(2+2)"])
+    rc = cmd_python(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "outcome: ok" in out
+    assert "4" in out
+
+
+def test_cmd_python_file(capsys):
+    args = build_parser().parse_args(["python", "-f", "prog.py"])
+    rc = cmd_python(args, app=FakeApp())
+    assert rc == 0
+    assert "from file" in capsys.readouterr().out
+
+
+def test_cmd_python_no_input_returns_2(capsys):
+    args = build_parser().parse_args(["python"])
+    rc = cmd_python(args, app=FakeApp())
+    assert rc == 2
 
 
 # --- verify (S15) ---------------------------------------------------------

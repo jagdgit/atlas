@@ -114,7 +114,7 @@ class FakeLLM:
 
 def _assistant(
     *, memory=None, knowledge=None, agent=None, with_web=True, with_search=True,
-    search_result=None, capabilities=None,
+    search_result=None, with_python=True, python_result=None, capabilities=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -130,6 +130,14 @@ def _assistant(
         }
         payload = search_result if search_result is not None else default
         tools.register("web.search", lambda query, max_results=5: payload)
+    if with_python:
+        default_py = {
+            "outcome": "ok", "ok": True, "stdout": "4\n", "stderr": "",
+            "returncode": 0, "error": None, "result": None, "artifacts": {},
+            "backend": "subprocess", "duration_ms": 3,
+        }
+        py_payload = python_result if python_result is not None else default_py
+        tools.register("python.run", lambda code, **kw: py_payload)
     return AssistantService(
         ConversationService(FakeConvRepo(), memory),
         Planner(),
@@ -236,6 +244,47 @@ def test_search_gap_when_no_search_tool():
     turn = _assistant(with_search=False).chat("search the web for solar soiling")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "search"
+
+
+# --- run_python (S16) -----------------------------------------------------
+def test_run_python_reports_output():
+    turn = _assistant().chat("run this:\n```python\nprint(2 + 2)\n```")
+    assert turn.intent == "run_python"
+    assert "4" in turn.answer
+    assert turn.tool_calls[0]["action"] == "python.run"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+
+
+def test_run_python_reports_error_honestly():
+    err = {"outcome": "error", "ok": False, "stdout": "", "returncode": 1,
+           "stderr": "ValueError: boom", "error": "ValueError: boom",
+           "result": None, "artifacts": {}, "backend": "subprocess", "duration_ms": 2}
+    turn = _assistant(python_result=err).chat("execute python: raise ValueError('boom')")
+    assert turn.intent == "run_python"
+    assert "error" in turn.answer.lower()
+    assert "boom" in turn.answer
+
+
+def test_run_python_timeout_is_honest():
+    to = {"outcome": "timeout", "ok": False, "stdout": "", "returncode": None,
+          "stderr": "", "error": "timed out after 30s", "result": None,
+          "artifacts": {}, "backend": "subprocess", "duration_ms": 30000}
+    turn = _assistant(python_result=to).chat("run python: while True: pass")
+    assert "timed out" in turn.answer.lower()
+
+
+def test_run_python_blocked_when_sandbox_unavailable():
+    blocked = {"outcome": "blocked", "ok": False, "stdout": "", "returncode": None,
+               "stderr": "", "error": "docker sandbox backend is not implemented yet",
+               "result": None, "artifacts": {}, "backend": "docker", "duration_ms": 0}
+    turn = _assistant(python_result=blocked).chat("run python: print(1)")
+    assert "unavailable" in turn.answer.lower()
+
+
+def test_python_gap_when_no_python_tool():
+    turn = _assistant(with_python=False).chat("run this:\n```python\nprint(1)\n```")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "python"
 
 
 def test_ingest_without_path_asks_for_one():

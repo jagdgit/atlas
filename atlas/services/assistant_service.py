@@ -130,6 +130,7 @@ class AssistantService:
         capabilities: "CapabilityRegistry | None" = None,
         web_tool: str = "web.fetch",
         search_tool: str = "web.search",
+        python_tool: str = "python.run",
         search_limit: int = 5,
         list_limit: int = 25,
         logger: logging.Logger | None = None,
@@ -145,6 +146,7 @@ class AssistantService:
         self._capabilities = capabilities
         self._web_tool = web_tool
         self._search_tool = search_tool
+        self._python_tool = python_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
         self._responder = ResponseBuilder(llm, logger)
@@ -226,6 +228,7 @@ class AssistantService:
             Intent.INGEST_PATH: self._do_ingest,
             Intent.WEB_FETCH: self._do_web_fetch,
             Intent.WEB_SEARCH: self._do_web_search,
+            Intent.RUN_PYTHON: self._do_run_python,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
@@ -411,6 +414,45 @@ class AssistantService:
                 lines.append(f"   {snippet}")
         return _Outcome(answer="\n".join(lines))
 
+    def _do_run_python(self, args, context, tool_calls) -> _Outcome:
+        code = (args.get("code") or "").strip()
+        if not code:
+            return _Outcome(answer="What Python code should I run?")
+        result = self._executor.execute(self._python_tool, {"code": code})
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.RUN_PYTHON,
+                "action": "python.run",
+                "capability": "python",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't run that code: {result.error}")
+        if outcome == "blocked":
+            return _Outcome(
+                answer=f"The sandbox is unavailable: {data.get('error')}",
+                blocked=True,
+                blocked_reason=f"sandbox unavailable: {data.get('error')}",
+            )
+        if outcome == "timeout":
+            return _Outcome(
+                answer=f"The code timed out ({data.get('error')}). "
+                "Try a smaller or faster computation."
+            )
+        stdout = (data.get("stdout") or "").strip()
+        if outcome == "ok":
+            body = stdout or "(the code produced no output)"
+            res = data.get("result")
+            tail = f"\n\nStructured result: {res}" if res is not None else ""
+            return _Outcome(answer=f"Ran it successfully. Output:\n{body}{tail}")
+        stderr = (data.get("stderr") or "").strip()
+        detail = data.get("error") or (stderr.splitlines()[-1] if stderr else "error")
+        return _Outcome(answer=f"The code raised an error: {detail}")
+
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
         if self._agent is None:
@@ -454,6 +496,9 @@ class AssistantService:
     def _has_search_tool(self) -> bool:
         return self._tools is not None and self._tools.has(self._search_tool)
 
+    def _has_python_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._python_tool)
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -469,6 +514,7 @@ class AssistantService:
             "agent": self._agent is not None,
             "web": self._has_web_tool(),
             "search": self._has_search_tool(),
+            "python": self._has_python_tool(),
         }.get(capability, True)
 
     def _preflight_gaps(self, plan: Plan) -> list[dict[str, Any]]:

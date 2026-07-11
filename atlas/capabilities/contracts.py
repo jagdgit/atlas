@@ -29,6 +29,7 @@ CAP_AGENT = "agent"
 CAP_CONVERSATION = "conversation"
 CAP_SEARCH = "search"
 CAP_CODE = "code"
+CAP_PYTHON = "python"
 CAP_LEARNING = "learning"
 
 
@@ -113,6 +114,14 @@ class CodeCapability(Protocol):
     def graph(self, root: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class PythonExecutionCapability(Protocol):
+    """Run Python in an isolated, resource-limited sandbox (S16, D6)."""
+
+    def run(self, code: str, *args: Any, **kwargs: Any) -> Any: ...
+    def run_file(self, path: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -188,6 +197,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Parse/understand code: symbols, import & call graph, patterns.",
         "Reading and reviewing code as structure, not text.",
         "S14",
+    ),
+    CAP_PYTHON: CapabilitySpec(
+        CAP_PYTHON,
+        PythonExecutionCapability,
+        "Run Python in an isolated, resource-limited sandbox (no network by default).",
+        "Data-driven computation; results become L5 evidence (§5a.6).",
+        "S16",
     ),
     CAP_LEARNING: CapabilitySpec(
         CAP_LEARNING,

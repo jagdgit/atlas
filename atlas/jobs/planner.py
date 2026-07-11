@@ -34,6 +34,7 @@ _VALID_INTENTS = {
     Intent.REMEMBER,
     Intent.WEB_FETCH,
     Intent.WEB_SEARCH,
+    Intent.RUN_PYTHON,
     Intent.LIST_DOCUMENTS,
     Intent.INGEST_PATH,
     Intent.ASK_KNOWLEDGE,
@@ -46,8 +47,8 @@ _DECOMPOSE_SYSTEM = (
     "with keys: intent, capability, args (object), description, depends_on (integer "
     "index of a prerequisite step, or null). "
     "Allowed intents: smalltalk, recall, remember, web_fetch, web_search, "
-    "list_documents, ingest_path, ask_knowledge, react. "
-    "Allowed capabilities: llm, memory, knowledge, web, search, agent, document. "
+    "run_python, list_documents, ingest_path, ask_knowledge, react. "
+    "Allowed capabilities: llm, memory, knowledge, web, search, python, agent, document. "
     "Prefer 'react' for open-ended reasoning. Keep it to at most 6 steps. "
     "Do not include any prose outside the JSON array."
 )

@@ -207,6 +207,16 @@ class FakeCode:
                 "explanation": "does things", "grounded": True}
 
 
+class FakePython:
+    def run(self, code, *, timeout=None, files=None, stdin=None):
+        return {
+            "outcome": "ok", "ok": True, "stdout": "hi\n", "stderr": "",
+            "returncode": 0, "duration_ms": 4, "timed_out": False,
+            "truncated": False, "error": None, "result": None,
+            "artifacts": {}, "backend": "subprocess", "workdir": "/tmp/sandbox/x",
+        }
+
+
 class FakePluginManager:
     def describe(self):
         return [{"name": "filesystem", "version": "0.1.0"}]
@@ -259,6 +269,7 @@ class FakeApplication:
                 "jobs": FakeJobs(),
                 "documents": FakeDocuments(),
                 "code": FakeCode(),
+                "python": FakePython(),
                 "verification": VerificationService(),
                 "plugins": FakePluginManager(),
             }
@@ -630,6 +641,23 @@ def test_verify_endpoint_budget_override():
     data = resp.json()
     assert data["budget"]["min_sources"] == 2
     assert data["claims"][0]["budget_decision"]["decision"] == "stop"
+
+
+def test_python_run_endpoint():
+    resp = _client().post("/v1/python/run", headers=AUTH, json={"code": "print('hi')"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["outcome"] == "ok"
+    assert "hi" in body["stdout"]
+
+
+def test_python_run_requires_auth():
+    assert _client().post("/v1/python/run", json={"code": "print(1)"}).status_code == 401
+
+
+def test_python_run_rejects_empty_code():
+    resp = _client().post("/v1/python/run", headers=AUTH, json={"code": ""})
+    assert resp.status_code == 422
 
 
 def test_verify_endpoint_requires_auth():

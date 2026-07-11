@@ -115,3 +115,17 @@ def test_code_capability_contract_verified():
     assert reg.verify(CAP_CODE) is True
     assert CAPABILITY_CATALOG[CAP_CODE].contract is CodeCapability
     assert CAPABILITY_CATALOG[CAP_CODE].since == "S14"
+
+
+def test_python_capability_contract_verified(tmp_path):
+    from atlas.capabilities import CAP_PYTHON, PythonExecutionCapability
+    from atlas.sandbox.service import PythonSandboxService
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_PYTHON, PythonSandboxService(workdir=tmp_path),
+        contract=PythonExecutionCapability, kind="service",
+    )
+    assert reg.verify(CAP_PYTHON) is True
+    assert CAPABILITY_CATALOG[CAP_PYTHON].contract is PythonExecutionCapability
+    assert CAPABILITY_CATALOG[CAP_PYTHON].since == "S16"

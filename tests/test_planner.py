@@ -82,6 +82,24 @@ def test_web_fetch_wins_over_search_when_url_present(planner):
     assert plan.intent == Intent.WEB_FETCH
 
 
+def test_run_python_fenced_block(planner):
+    plan = planner.plan("run this:\n```python\nprint(2 + 2)\n```")
+    assert plan.intent == Intent.RUN_PYTHON
+    assert plan.steps[0].capability == "python"
+    assert plan.steps[0].args["code"] == "print(2 + 2)"
+
+
+def test_run_python_prefix(planner):
+    plan = planner.plan("execute python: print('hi')")
+    assert plan.intent == Intent.RUN_PYTHON
+    assert plan.steps[0].args["code"] == "print('hi')"
+
+
+def test_run_python_fence_wins_over_url_inside_code(planner):
+    plan = planner.plan("```python\nimport urllib\nx = 'https://example.com'\n```")
+    assert plan.intent == Intent.RUN_PYTHON
+
+
 def test_ingest_extracts_path(planner):
     plan = planner.plan("ingest /data/atlas_data/documents/report.pdf")
     assert plan.intent == Intent.INGEST_PATH
