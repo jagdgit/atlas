@@ -1,0 +1,6 @@
+"""Scheduler package: durable task execution."""
+
+from atlas.scheduler.handlers import HandlerRegistry, TaskHandler
+from atlas.scheduler.service import SchedulerService
+
+__all__ = ["HandlerRegistry", "TaskHandler", "SchedulerService"]

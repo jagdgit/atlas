@@ -1,1 +1,48 @@
-# start 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# uv
+.uv/
+
+# Secrets
+.env
+config/local.yaml
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data (runtime — lives in /data/atlas_data)
+documents/
+knowledge/
+logs/
+models/
+state/
+cache/
+backups/
+checkpoints/
+experiments/
+tmp/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Atlas runtime
+*.log

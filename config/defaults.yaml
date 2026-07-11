@@ -19,17 +19,69 @@ database:
   port: 5432
   database: atlas
   user: atlas
-  password: nl07EA@4284
+  # password: set via ATLAS_DB_PASSWORD env var or .env file (never commit secrets)
+  pool_size: 5
 
 llm:
   provider: ollama
   host: http://localhost:11434
   model: qwen3:4b
+  embedding_model: nomic-embed-text
   temperature: 0
+  timeout: 120
+  keep_alive: 5m
+  think: true
+
+knowledge:
+  chunk_max_words: 200
+  chunk_overlap: 40
+  embed_batch: 32
+
+react:
+  max_iterations: 6         # cap on reason->act->observe cycles per run
+  reflection: true          # self-review pass before answering
+  max_observation_chars: 2000
+  temperature: 0
+  think: false              # JSON "thought" field replaces Ollama chain-of-thought (faster)
 
 scheduler:
   workers: 2
   checkpoint_interval: 60
+  max_retries: 3
 
 logging:
   level: INFO
+  max_bytes: 10485760   # 10MB
+  backup_count: 5
+
+audit:
+  retention_days: 90
+
+memory:
+  recall_k: 5
+  similarity_floor: 0.0
+  working_ttl_seconds: 3600   # working memory expires after 1h by default (0 = never)
+  embed_working: false        # embed working memory for recall (usually off)
+  prune_interval: 3600        # seconds between expired-memory prunes (0 = manual)
+
+plugins:
+  # Dotted module paths; each exposes build(config) -> Plugin. Only listed
+  # plugins load (fail-closed). Add github/database/email modules here later.
+  enabled:
+    - atlas.plugins.filesystem_plugin
+    - atlas.plugins.web_plugin
+  filesystem:
+    root: null              # sandbox root for reads/lists; null => paths.documents
+    max_bytes: 1048576      # 1 MiB per-file read cap
+  web:
+    timeout: 15
+    max_bytes: 2097152      # 2 MiB fetched-body cap
+    user_agent: "Atlas/0.1 (+https://localhost)"
+
+api:
+  host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network
+  port: 8000
+  docs_enabled: true     # Swagger UI at /docs, OpenAPI at /openapi.json
+  cors_origins: []       # e.g. ["http://localhost:5173"] for a local web UI
+  # keys: set via ATLAS_API_KEYS (comma-separated) in .env — never commit secrets.
+  #       Empty => the API fails closed (all protected routes return 401).
