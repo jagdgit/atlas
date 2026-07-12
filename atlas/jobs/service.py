@@ -19,9 +19,11 @@ Design (D1/R1/R3/R4/Q1/Q10):
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from atlas.conversation.service import ConversationContext
+from atlas.jobs.workspace import JobWorkspace
 from atlas.models.job import (
     JOB_CANCELLED,
     JOB_COMPLETED,
@@ -63,6 +65,7 @@ class JobService:
         reports: Any = None,
         events: Any = None,
         learning: Any = None,
+        workspace_root: str | Path | None = None,
         step_max_retries: int = 2,
         retry_delay: float = 2.0,
         logger: logging.Logger | None = None,
@@ -75,6 +78,11 @@ class JobService:
         self._reports = reports
         self._events = events
         self._learning = learning
+        # Per-job on-disk workspace root (§5a, C3). When set (``<data>``), each job
+        # gets ``<data>/jobs/job_<id>/`` with a manifest, notes, and final report —
+        # so work is durable and inspectable ("open the workspace"). Best-effort:
+        # workspace I/O never fails a job. Left unset in lightweight tests.
+        self._workspace_root = Path(workspace_root) if workspace_root else None
         self._step_max_retries = step_max_retries
         self._retry_delay = retry_delay
         self._logger = logger or logging.getLogger("atlas.jobs")
@@ -99,6 +107,13 @@ class JobService:
         self._logger.info(
             "created job %s (%d step(s)): %s", job.id, len(steps), objective[:80]
         )
+        ws = self._workspace(job.id)
+        if ws is not None:
+            try:
+                ws.init_manifest(objective=objective)
+                ws.append_note(f"job created ({len(steps)} step(s)): {objective[:120]}")
+            except Exception:  # noqa: BLE001 - workspace I/O must never fail a job
+                self._logger.debug("job %s workspace init failed", job.id)
         self._enqueue_advance(job.id)
         return self.job_detail(job.id)
 
@@ -293,6 +308,7 @@ class JobService:
             result["report"] = report.get("markdown", "")
             result["report_sections"] = report.get("sections", {})
             result["overall_confidence"] = report.get("overall_confidence")
+        self._persist_workspace(job_id, status, result)
         self._repo.set_job_status(job_id, status, result=result)
         self._logger.info("job %s finalized: %s", job_id, status)
         self._observe_learning(job_id, steps, result)
@@ -347,6 +363,35 @@ class JobService:
         except Exception:  # noqa: BLE001 - a report must never fail the job
             self._logger.exception("job %s report generation failed", job_id)
             return None
+
+    def _workspace(self, job_id: str) -> JobWorkspace | None:
+        if self._workspace_root is None:
+            return None
+        return JobWorkspace.for_job(self._workspace_root, str(job_id))
+
+    def _persist_workspace(
+        self, job_id: str, status: str, result: dict[str, Any]
+    ) -> None:
+        """Write the final report + result summary into the job workspace (§5a)."""
+        ws = self._workspace(job_id)
+        if ws is None:
+            return
+        try:
+            if result.get("report"):
+                ws.write_text(ws.report_path.name, result["report"])
+            ws.write_json(
+                "result.json",
+                {
+                    "status": status,
+                    "summary": result.get("summary", ""),
+                    "progress": result.get("progress", {}),
+                    "overall_confidence": result.get("overall_confidence"),
+                },
+            )
+            ws.append_note(f"finalized: {status}")
+            result["workspace"] = str(ws.root)
+        except Exception:  # noqa: BLE001 - workspace I/O must never fail a job
+            self._logger.debug("job %s workspace persist failed", job_id)
 
     def _notify(self, event_type: str, payload: dict[str, Any]) -> None:
         if self._events is None:

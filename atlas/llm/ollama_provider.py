@@ -138,16 +138,24 @@ class OllamaProvider:
         casing model names we try once and gracefully fall back.
         """
         think = options.get("think", self._think)
+        timeout = options.get("timeout")
         try:
-            return self._post(path, {**payload, "think": think})
+            return self._post(path, {**payload, "think": think}, timeout=timeout)
         except OllamaError as exc:
             if "think" in str(exc).lower() or "does not support" in str(exc).lower():
-                return self._post(path, payload)
+                return self._post(path, payload, timeout=timeout)
             raise
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self, path: str, payload: dict[str, Any], *, timeout: float | None = None
+    ) -> dict[str, Any]:
+        # A per-call ``timeout`` (e.g. the shorter interactive-chat wall-clock, D3.12c)
+        # overrides the client default; omit it otherwise so the client default holds.
         try:
-            resp = self._client.post(path, json=payload)
+            if timeout is not None:
+                resp = self._client.post(path, json=payload, timeout=timeout)
+            else:
+                resp = self._client.post(path, json=payload)
         except httpx.HTTPError as exc:
             raise OllamaError(f"request to {path} failed: {exc}") from exc
         if resp.status_code >= 400:

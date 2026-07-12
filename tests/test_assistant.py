@@ -286,9 +286,19 @@ def test_ask_knowledge_uses_rag_and_returns_citations():
     assert turn.run_id == "run-rag"
 
 
-def test_general_question_uses_react():
+def test_general_question_uses_fast_answer():
+    # RC/D3.12: a plain question takes the fast single-call answer path (no agent).
     agent = FakeAgent()
-    turn = _assistant(agent=agent).chat("What is 12 times 8?")
+    turn = _assistant(agent=agent).chat("What is the stock market?")
+    assert turn.intent == "answer"
+    assert turn.answer == "SUMMARY"
+    assert agent.calls == []  # the ReAct agent was never invoked
+
+
+def test_current_info_question_uses_react():
+    # A question that needs live data still escalates to the ReAct agent.
+    agent = FakeAgent()
+    turn = _assistant(agent=agent).chat("What are the latest headlines today?")
     assert turn.intent == "react"
     assert agent.calls[0][0] == "assistant"
 

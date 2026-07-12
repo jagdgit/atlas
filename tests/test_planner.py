@@ -32,8 +32,16 @@ def test_acceptance_intents(planner, message, expected):
 
 
 # --- routing edges --------------------------------------------------------
-def test_general_question_falls_back_to_react(planner):
-    assert planner.plan("What is 12 times 8?").intent == Intent.REACT
+def test_general_question_falls_back_to_answer(planner):
+    # RC/D3.12: a plain general question takes the fast single-call answer path,
+    # not the (slow, multi-call) ReAct agent.
+    assert planner.plan("What is the stock market?").intent == Intent.ANSWER
+
+
+def test_current_info_question_escalates_to_react(planner):
+    # A question that plainly needs live data still escalates to the agent.
+    assert planner.plan("What are the latest AI headlines today?").intent == Intent.REACT
+    assert planner.plan("What is the current price of gold?").intent == Intent.REACT
 
 
 def test_greeting_is_smalltalk(planner):
@@ -284,5 +292,8 @@ def test_empty_message_is_smalltalk(planner):
     assert plan.intent == Intent.SMALLTALK
 
 
-def test_fallback_capability_is_agent(planner):
-    assert planner.plan("ponder the meaning of life").steps[0].capability == "agent"
+def test_fallback_capability_is_llm(planner):
+    # The default fallback is the fast answer path (llm), not the agent (RC/D3.12).
+    step = planner.plan("ponder the meaning of life").steps[0]
+    assert step.intent == Intent.ANSWER
+    assert step.capability == "llm"

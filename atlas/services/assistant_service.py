@@ -38,6 +38,15 @@ _SMALLTALK_SYSTEM = (
     "briefly and helpfully. If the user greets or thanks you, respond in kind and "
     "offer to help."
 )
+# RC / D3.12: the fast fallback for general questions. One chat-model call, no
+# tools — the path that keeps trivial questions from running the full ReAct loop.
+_ANSWER_SYSTEM = (
+    "You are Atlas, a knowledgeable, concise assistant. Answer the user's question "
+    "directly using your own knowledge. Be clear and helpful; use short paragraphs "
+    "or bullets when useful. If the answer genuinely depends on up-to-date or live "
+    "information you can't be sure of, say so in one line and offer to research it. "
+    "Do not invent specific facts, figures, or citations."
+)
 _WEB_SUMMARY_SYSTEM = (
     "You are Atlas. Summarize the fetched web page for the user in a few sentences, "
     "focusing on what answers their request. Do not invent details."
@@ -233,13 +242,20 @@ class ResponseBuilder:
         *,
         context: "ConversationContext | None" = None,
         fallback: str = "",
+        timeout: float | None = None,
     ) -> str:
         messages = [ChatMessage("system", system)]
         if context is not None:
             messages.extend(context.as_chat_messages())
         messages.append(ChatMessage("user", user))
+        options: dict[str, Any] = {}
+        if timeout is not None:
+            options["timeout"] = timeout
         try:
-            return self._llm.for_role("chat").chat(messages).text.strip() or fallback
+            return (
+                self._llm.for_role("chat").chat(messages, **options).text.strip()
+                or fallback
+            )
         except Exception:  # noqa: BLE001 - never let composition crash a turn
             self._logger.exception("response composition failed")
             return fallback
@@ -280,6 +296,7 @@ class AssistantService:
         research_tool: str = "research.run",
         search_limit: int = 5,
         list_limit: int = 25,
+        interactive_timeout: float | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._conversation = conversation
@@ -304,6 +321,7 @@ class AssistantService:
         self._research_tool = research_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
+        self._interactive_timeout = interactive_timeout
         self._responder = ResponseBuilder(llm, logger)
         self._logger = logger or logging.getLogger("atlas.assistant")
 
@@ -393,6 +411,7 @@ class AssistantService:
             Intent.BROWSE_URL: self._do_browse,
             Intent.RESEARCH: self._do_research,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
+            Intent.ANSWER: self._do_answer,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
         return handler(args, context, tool_calls)
@@ -400,9 +419,36 @@ class AssistantService:
     def _do_smalltalk(self, args, context, tool_calls) -> _Outcome:
         msg = args.get("query", "")
         answer = self._responder.compose(
-            _SMALLTALK_SYSTEM, msg, context=context, fallback="Hello! How can I help?"
+            _SMALLTALK_SYSTEM, msg, context=context, fallback="Hello! How can I help?",
+            timeout=self._interactive_timeout,
         )
         tool_calls.append({"intent": Intent.SMALLTALK, "action": "smalltalk"})
+        return _Outcome(answer=answer)
+
+    def _do_answer(self, args, context, tool_calls) -> _Outcome:
+        """Fast fallback (RC/D3.12): answer a general question in one model call.
+
+        This is the default route for open-ended messages the deterministic router
+        doesn't map to a tool. It deliberately avoids the ReAct agent (multiple LLM
+        calls, each carrying the full tool catalog) so a plain question returns
+        quickly instead of timing out on CPU-only inference. An interactive timeout
+        keeps a slow generation from hanging the chat; on timeout the user is offered
+        the background-job path, which is where heavy tool work belongs.
+        """
+        msg = args.get("query", "")
+        answer = self._responder.compose(
+            _ANSWER_SYSTEM,
+            msg,
+            context=context,
+            fallback=(
+                "That took longer than I allow for an interactive answer. I can run "
+                "it as a background research job instead — just ask me to research it."
+            ),
+            timeout=self._interactive_timeout,
+        )
+        tool_calls.append(
+            {"intent": Intent.ANSWER, "action": "answer", "capability": "llm"}
+        )
         return _Outcome(answer=answer)
 
     def _do_remember(self, args, context, tool_calls) -> _Outcome:

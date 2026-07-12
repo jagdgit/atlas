@@ -84,6 +84,22 @@ def test_chat_returns_message_content():
     assert res.text == "hi"
 
 
+def test_chat_applies_per_call_timeout():
+    # RC/D3.12c: an interactive-chat call can pass a shorter wall-clock than the
+    # client default; it must reach the request without leaking into model options.
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions.get("timeout")
+        seen["options"] = json.loads(request.content).get("options", {})
+        return httpx.Response(200, json={"message": {"content": "hi"}})
+
+    _provider(handler).chat([ChatMessage("user", "hello")], timeout=5.0)
+    # httpx records per-request timeouts (seconds) in the request extensions.
+    assert seen["timeout"] == {"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}
+    assert "timeout" not in seen["options"]
+
+
 def test_embed_returns_vectors():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/embed"

@@ -249,6 +249,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         llm=llm_service,
         tools=tools,  # shared by ref; plugin tools (web.fetch) register later
         capabilities=capabilities,  # shared by ref; plugins register 'web' later
+        interactive_timeout=cfg.llm.interactive_timeout,  # RC/D3.12c
         logger=get_logger("atlas.assistant"),
     )
 
@@ -322,6 +323,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         reports=report_service,
         events=events,
         learning=learning_service,
+        workspace_root=cfg.paths.data,  # §5a/C3: per-job on-disk workspaces
         step_max_retries=cfg.jobs.step_max_retries,
         retry_delay=cfg.jobs.retry_delay,
         logger=get_logger("atlas.jobs"),

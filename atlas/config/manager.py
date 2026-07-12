@@ -87,6 +87,10 @@ class LLMConfig(BaseModel):
     embedding_model: str = "nomic-embed-text"  # pull before knowledge sprint
     temperature: float = 0.0
     timeout: float = 120.0  # seconds; model load on first call can be slow
+    # RC / D3.12c: a shorter wall-clock for interactive chat than for background
+    # jobs. A slow generation returns an honest "run it as a job" message instead
+    # of hanging the /api/chat request for the full (job-sized) `timeout`.
+    interactive_timeout: float = 60.0
     keep_alive: str = "5m"  # how long Ollama keeps the model resident
     # Reasoning models (qwen3) ignore think=false and leak chain-of-thought into
     # the answer; think=true makes Ollama separate it into a `thinking` field so

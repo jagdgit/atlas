@@ -100,6 +100,10 @@ class JobPlanner:
         steps = self._llm_decompose(objective) if self._llm is not None else []
         if not steps:
             steps = self._deterministic(objective)
+        # The fast single-call `answer` fallback is a chat-responsiveness optimization
+        # (RC/D3.12); a background job is for deep work, so a bare `answer` step is
+        # promoted to the capable ReAct agent rather than a one-shot model reply.
+        steps = self._promote_bare_answer(steps)
         # A job is for deep work: if the plan collapsed to a single open-ended
         # `react` step, the objective wasn't recognised as a concrete task, so run
         # the research loop (gather→verify→report with sources) instead of letting
@@ -118,6 +122,19 @@ class JobPlanner:
     @staticmethod
     def _is_bare_react(steps: list[DecomposedStep]) -> bool:
         return len(steps) == 1 and steps[0].intent == Intent.REACT
+
+    @staticmethod
+    def _promote_bare_answer(steps: list[DecomposedStep]) -> list[DecomposedStep]:
+        if len(steps) == 1 and steps[0].intent == Intent.ANSWER:
+            return [
+                DecomposedStep(
+                    Intent.REACT,
+                    "agent",
+                    dict(steps[0].args),
+                    "Reason and use tools to answer the objective.",
+                )
+            ]
+        return steps
 
     # --- deterministic fallback ----------------------------------------
     def _deterministic(self, objective: str) -> list[DecomposedStep]:

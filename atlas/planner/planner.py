@@ -54,7 +54,8 @@ class Intent:
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
-    REACT = "react"  # fallback: open-ended reasoning via the ReAct strategy
+    ANSWER = "answer"  # fast fallback: a single chat-model call, no tools (RC/D3.12)
+    REACT = "react"  # escalation: open-ended reasoning + tools via the ReAct strategy
 
 
 @dataclass(frozen=True)
@@ -257,6 +258,20 @@ _BROWSE_RE = re.compile(
     r"|\bjavascript[- ]?(?:rendered|heavy)\b"
     r"|\bdynamic(?:ally)?\b[^.?!]{0,20}\b(?:page|site|content|rendered|loaded)\b)",
     re.IGNORECASE | re.DOTALL,
+)
+# RC / D3.12: when an unmatched (open-ended) message reaches the fallback, only
+# escalate to the (slow, multi-call) ReAct agent if it plainly needs *current data*
+# or a tool/action. Everything else is a general question the chat model can answer
+# in a single call — which is what keeps trivial chat fast instead of timing out.
+_ESCALATE_RE = re.compile(
+    r"\b(?:latest|newest|current(?:ly)?|today|tonight|as of|"
+    r"up[- ]?to[- ]?date|recent(?:ly)?|breaking|live)\b"
+    r"|\bright now\b|\bthis (?:week|month|year|morning|evening)\b"
+    r"|\b(?:news|headlines?)\b"
+    r"|\b(?:price|cost|value|rate|quote)\s+(?:of|for)\b"
+    r"|\bstock price\b|\bexchange rate\b|\bweather\b|\bforecast\b"
+    r"|\b(?:download|scrape|crawl|monitor|fetch|browse)\b",
+    re.IGNORECASE,
 )
 
 
@@ -554,6 +569,7 @@ _DESCRIPTIONS = {
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",
+    Intent.ANSWER: "Answer the question directly (fast, single model call).",
     Intent.REACT: "Reason and use tools to answer (ReAct).",
 }
 
@@ -576,10 +592,17 @@ class Planner:
                     steps=[self._step(intent, capability, build_args(text, None))],
                 )
 
-        # Fallback: open-ended reasoning via the ReAct strategy (never dead-end).
+        # Fallback (RC/D3.12): a general question gets a fast single-call answer;
+        # only messages that plainly need current data or a tool escalate to ReAct,
+        # so simple chat stays responsive instead of running the full agent loop.
+        if _ESCALATE_RE.search(text):
+            return Plan(
+                message=text,
+                steps=[self._step(Intent.REACT, CAP_AGENT, {"query": text})],
+            )
         return Plan(
             message=text,
-            steps=[self._step(Intent.REACT, CAP_AGENT, {"query": text})],
+            steps=[self._step(Intent.ANSWER, CAP_LLM, {"query": text})],
         )
 
     @staticmethod

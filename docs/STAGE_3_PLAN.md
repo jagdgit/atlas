@@ -1,8 +1,10 @@
 # Atlas — Stage 3 Plan & Discussion (From an Operating System to a *Researcher*)
 
-> **Status:** 🟢 **PLANNED — gating decisions LOCKED (2026-07-12).** Ready to build on your go.
-> The gating Open Decisions (§7) are resolved from your answers; the build sequence (§8) is
-> firm. First increment: **Workspace + Source Classifier (C3)**.
+> **Status:** ✅ **FINALIZED FOR IMPLEMENTATION (2026-07-12).** All gating + non-gating
+> decisions resolved (§7, §11); ambiguities enumerated with resolutions (§13). Build order:
+> **Step 0 (responsive chat) → Step 1 (Workspace + Source Classifier) → …** (§8).
+> Six items in §13 are flagged **[CONFIRM]** — sensible defaults are chosen so work can start
+> regardless, but your word changes the shape of a few pieces.
 > **Started:** 2026-07-12
 > **Source vision:** the user's "stop designing, start building — build the Research
 > Worker" critique (2026-07-12) after the first two real research runs on
@@ -199,6 +201,45 @@ These are hard requirements from you, not options. Every capability below must h
 
 ---
 
+## 3b. Two universes, one engine — Knowledge Domains (foundational)
+
+Your feedback (2026-07-12) named the concept Stage 3 was missing: **knowledge is not one
+undifferentiated store.** Atlas has **two universes** that stay **separate but connected**:
+
+- **Universe 1 — External knowledge** (*the world*): IEEE, NREL, arXiv, GitHub-at-large,
+  YouTube, docs, standards. This is what the **Research Worker (Stage 3)** learns.
+- **Universe 2 — Personal knowledge** (*you*): your code, research, documents, designs,
+  decisions, career. This is **Stage 4–5**.
+
+To keep them separate-but-connected, knowledge carries a first-class **Domain** tag. This is
+the key architectural addition; it maps onto (does not replace) the existing stores:
+
+| Domain | What lives here | Backed by | Populated in |
+|---|---|---|---|
+| `external` | world facts, docs, standards | Knowledge store (tagged) | **Stage 3** |
+| `research` | verified claims + evidence from research jobs | Evidence graph + Knowledge | **Stage 3** |
+| `experience` | problem → root-cause → solution → lesson | Experience/Learning store | Stage 3 (jobs) → 4 |
+| `code` | your repos: architecture, patterns, symbols | Code store (S18b) | Stage 4 |
+| `personal` | identity: bio, education, skills, projects, career | new (Stage 5) | Stage 5 |
+| `professional` | LinkedIn, CV, portfolio, ORCID, Scholar, GitHub profile | new (Stage 5) | Stage 5 |
+
+Retrieval becomes **domain-scoped**: a research job reads `external + research`; a future
+LinkedIn draft reads `professional + code + experience` and **never** Wikipedia. One engine,
+three "personalities":
+
+- **Researcher** — reads the world (`external`/`research`). *(Stage 3)*
+- **Engineer** — reads your code (`code`/`experience`). *(Stage 4)*
+- **Biographer** — reads you (`personal`/`professional`), keeping LinkedIn / CV / portfolio /
+  bios / promotion packets consistent. *(Stage 5)*
+
+**What Stage 3 does now (minimal, zero debt):** establish the `domain` tag on stored knowledge,
+write research outputs to `external`/`research`, and make retrieval **domain-aware** (the
+Researcher defaults to external). Stage 3 does **not** build the personal/professional domains
+— it only guarantees everything it learns is **tagged**, so Stage 4/5 slot in without a
+migration. See **D3.13**.
+
+---
+
 ## 4. Reuse map — build the gap, not another plugin
 
 Per the user: *"Don't build plugin #11. Prove plugins 1–10 work together."* Most of the
@@ -337,10 +378,12 @@ Claim 3  LOW     (single source)
 plus Executive Summary, Methodology, Evidence, References (real, from read sources),
 Conflicting Views, Limitations, Future Work — and a link to the job workspace.
 
-### 5j. Learn / Store
+### 5j. Learn / Store (domain-tagged — RS)
 On a successful, sufficiently-confident job: ingest read documents into Knowledge (chunks +
-embeddings), record an Experience (governed, reversible — Stage 2 §5d), and persist the
-evidence graph so future jobs can reuse it. Governed by the existing learning ledger.
+embeddings) **tagged `domain=external`**, persist verified claims + the evidence graph **tagged
+`domain=research`**, and record an **Experience** (governed, reversible — Stage 2 §5d) tagged
+`domain=experience`. Retrieval is domain-scoped so the Researcher never mixes the user's future
+personal knowledge into a world-facing answer. Governed by the existing learning ledger.
 
 ---
 
@@ -364,6 +407,30 @@ on a real run (not a unit test).
 Milestones (user's roadmap): **M1** complete one research job to a verified report (C1–C6) →
 **M2** learn one repository (C7) → **M3** 100 repositories → M4 coding assistant → M5 research
 assistant → M6 digital-twin platform. **Stage 3 = M1.** Everything after M2 is out of scope here.
+
+### 6a. Forward roadmap — the domain stages (context, not Stage-3 scope)
+
+Aligned to the two-universes model (§3b). Recorded here so Stage 3's choices (esp. the domain
+tag) set them up cleanly. **LinkedIn is Stage 5, not Stage 3** — a strong professional profile
+depends on Atlas first knowing your engineering work.
+
+- **Stage 4 — Engineering Intelligence** (Universe 2, `code`/`experience`). *Same Job Engine,
+  `code` reader instead of a paper reader.* Acceptance:
+  1. Learn one repository end-to-end. 2. Explain its architecture. 3. Learn coding patterns
+  across repositories. 4. Build a cross-project knowledge graph. 5. Answer questions about your
+  historical code and engineering decisions (*"why did I drop Redis Streams in PeakPulse v2?"* →
+  commit + discussion + benchmark + migration). This is **engineering memory**, not RAG.
+- **Stage 5 — Personal Intelligence / the Biographer** (Universe 2, `personal`/`professional`).
+  Built on a **Personal Knowledge Base** (identity: biography, education, employment, skills,
+  projects, publications, patents, talks, certifications, career goals, preferences) — not
+  "memory," *identity*. Acceptance: 1. Build the professional knowledge base. 2. Maintain a
+  structured career timeline. 3. Generate/update your CV. 4. Draft/improve your LinkedIn
+  profile. 5. Recommend posts from recent work (e.g. a Friday review of commits/jobs/docs →
+  *"this week you implemented the Verification Engine — update your LinkedIn draft?"*).
+  6. Learn your writing style for professional comms. A **Professional Profile capability**
+  is fed by swappable plugins (LinkedIn, Résumé, CV, ORCID, Google Scholar, GitHub) — LinkedIn
+  is *never hardcoded*; it's just one **view** of the `professional` domain, with publish
+  human-in-the-loop (platform-ToS constrained, per the earlier LinkedIn discussion).
 
 ---
 
@@ -444,6 +511,17 @@ later (config-only) if RAM allows.
 is switched ON now* — Atlas learns from everything we do during Stage 3 (governed/reversible),
 even though the deep code-learning *capabilities* wait for Stage 4.
 
+### D3.13 — Knowledge Domains: how much to build in Stage 3? — **LOCKED**
+**Decision (2026-07-12): establish the tag now, populate only external/research.** Add a
+first-class **`domain`** dimension to stored knowledge (`external`, `research`, `experience`,
+`code`, `personal`, `professional`) and make Knowledge retrieval **domain-scoped**. Stage 3
+implements the *minimum*: tag research learning as `external`/`research`/`experience` and
+default the Researcher to those domains. It does **not** build the `personal`/`professional`
+domains (Stage 5) or `code` (Stage 4) — but by tagging from day one, those stages need **no
+migration**. Mechanism (tag column vs. separate collections vs. metadata filter) is a non-gating
+implementation detail decided at build time; the *contract* (every stored item has a domain,
+reads are domain-scoped) is locked.
+
 ### D3.12 — How do we make chat responsive (RC)? — **LOCKED**
 **Problem:** `Planner.plan()` routes every open-ended message to the `REACT` fallback
 (`atlas/planner/planner.py` ~L579), so a plain question runs the ReAct agent — multiple LLM
@@ -479,13 +557,23 @@ poll-based (simple, works today); upgrade to server-sent events only if 2s polli
 Capability increments, each ending in its acceptance test (not sprint numbers). Each step
 keeps the full suite green and adds a real-run acceptance check.
 
-0. **Responsive chat fix** (RC / D3.12) — *quick win, do first; independent of the research
-   pipeline.* Add a fast single-call `answer` path and make it the default fallback; reserve
-   ReAct for tool/action queries; add an interactive timeout. Fixes the *"api/chat timed out"*
-   on trivial questions. Acceptance: *"what is the stock market?"* answers in one generation,
-   no timeout.
-1. **Workspace + Source Classifier** (C3) — foundations; deterministic; fully testable offline.
-   Per-job `atlas_data/jobs/job_<id>/` (§5a) + domain→type/level map (§5c).
+0. **Responsive chat fix** (RC / D3.12) — ✅ **SHIPPED (2026-07-12).** Added `Intent.ANSWER`
+   (a single chat-model call, no tools) as the default router fallback; ReAct is reserved for
+   messages with tool/action/recency signals (`_ESCALATE_RE`). Added a per-call interactive
+   timeout (`llm.interactive_timeout`, 60s) threaded through the Ollama provider, with an honest
+   "run it as a background job" fallback on timeout. Job planner promotes a bare `answer` step to
+   ReAct (jobs do deep work). Acceptance: *"what is the stock market?"* routes to `answer` (one
+   generation, no ReAct loop); *"latest headlines today?"* still escalates to ReAct. Full suite
+   green (785 passed).
+1. **Workspace + Source Classifier** (C3) — ✅ **SHIPPED (2026-07-12).** New
+   `atlas/research/classifier.py` (deterministic domain→`{source_type, kind, evidence_level,
+   access_method}` map, offline, DOI as a weak fallback) is wired into `ResearchService._gather`,
+   fixing §2.2 (web hits are now classified L1–L5 instead of a blanket L2). New
+   `atlas/jobs/workspace.py` (`JobWorkspace`: per-job `<data>/jobs/job_<id>/` with
+   search/downloads/documents dirs, notes, manifest with found→downloaded→read→extracted→verified
+   counts) is wired into `JobService` (manifest at creation, `report.md`+`result.json`+notes on
+   finalize; best-effort, never fails a job). Deterministic + fully offline. Full suite green
+   (818 passed; +33 tests).
 2. **Live activity feed** (C0 / RL) — per-job progress events → workspace + event bus; Console
    renders a live feed for running jobs (poll-based). Landed early so we can *watch* the rest
    of Stage 3 build itself out.
@@ -499,19 +587,24 @@ keeps the full suite green and adds a real-run acceptance check.
    the engine; per-claim confidence; artifact manifest (found/downloaded/read/extracted/verified).
 6. **Gap-driven iteration + recommend-more** (C5 / D3.2) — replace synonym cross-product with
    evidence-gap targeting; at the doc cap, surface ranked *"recommended further reading."*
-7. **Self-aware learning** (C6 / RS) — ingest read docs into Knowledge + record a governed
-   Experience per job; Atlas can report what it has done/learned/read. (Switched on from
-   step 1's jobs onward, wired fully here.)
+7. **Self-aware learning, domain-tagged** (C6 / RS / D3.13) — ingest read docs into Knowledge
+   (`domain=external`) + verified claims/graph (`domain=research`) + a governed Experience
+   (`domain=experience`); make retrieval domain-scoped so the Researcher stays in its universe.
+   Atlas can report what it has done/learned/read. (Learning is on from step 1's jobs onward,
+   wired fully here. `code`/`personal`/`professional` domains are Stage 4–5.)
 
 ---
 
 ## 9. Non-goals for Stage 3 (explicit)
 
 - ❌ No new external plugin (no "plugin #11"). Browser automation stays deferred (D3.3c).
-- ❌ No Code Worker / Engineering Worker yet (Stage 4).
-- ❌ No LinkedIn/CV/personal-assistant capability yet.
-- ❌ No new "architecture layer." Stage 3 adds exactly one cognition stage (extraction) +
-  two supports (workspace, classifier) and **wires the rest.**
+- ❌ No **Engineering Intelligence** (learn your repos/architecture/patterns) — that's **Stage 4**.
+- ❌ No **Personal Intelligence** — personal/professional knowledge base, CV, and **LinkedIn**
+  are **Stage 5** (they depend on Stage 4 first; see §6a).
+- ❌ Stage 3 does **not** populate the `personal`/`professional`/`code` domains — it only
+  establishes the domain *tag* and fills `external`/`research`/`experience` (D3.13).
+- ❌ No new "architecture layer." Stage 3 adds one cognition stage (extraction) + supports
+  (workspace, classifier, domain tag) and **wires the rest.**
 
 ---
 
@@ -544,6 +637,11 @@ keeps the full suite green and adds a real-run acceptance check.
 - **2026-07-12 — RC / D3.12 LOCKED:** responsive chat — fast single-call `answer` path as the
   default fallback, ReAct only on tool/action signals, interactive timeout, optional streaming.
   Scheduled as build **Step 0** (quick win). Fixes trivial-question timeouts.
+- **2026-07-12 — D3.13 LOCKED (Knowledge Domains):** two universes (external vs personal);
+  first-class `domain` tag + domain-scoped retrieval; three personalities (Researcher/Engineer/
+  Biographer). Stage 3 tags `external`/`research`/`experience` only. **Roadmap re-aligned:**
+  Stage 4 = Engineering Intelligence (`code`), Stage 5 = Personal Intelligence + LinkedIn
+  (`personal`/`professional`). LinkedIn is **not** in Stage 3 (§6a).
 - *Still OPEN (non-gating, decide as we reach them): D3.4 (classifier mechanism — shipping
   static map first), D3.5 (workspace retention), D3.6 (typed steps vs full DSL), D3.7
   (qualitative claim agreement).*
@@ -560,7 +658,127 @@ All gating questions answered (2026-07-12) and locked in §7 / §11:
 - ✅ D3.8 — capabilities + acceptance tests.
 - ✅ New: RL (watch it work live) + D3.11 (how).
 - ✅ New: RC (responsive chat) + D3.12 — fast single-call answers; scheduled as build **Step 0**.
+- ✅ New: D3.13 (Knowledge Domains) — two universes, `domain` tag, three personalities; Stage 3
+  tags external/research only; Stage 4 = Engineering Intelligence, Stage 5 = Personal
+  Intelligence + LinkedIn (§6a).
 
-**Next action:** begin **Step 1 — Workspace + Source Classifier (C3)** — the smallest, safest,
-fully-offline first win. Remaining OPEN items (D3.4–D3.7, D3.5 retention) are non-gating and
-will be decided as we reach them.
+**Next action:** begin build **Step 0 — Responsive chat fix (RC/D3.12)** (independent, unblocks
+daily use), then **Step 1 — Workspace + Source Classifier (C3)**. The remaining non-gating
+decisions are resolved with defaults in §13 so nothing blocks the start.
+
+---
+
+## 13. Finalization — ambiguities & resolutions
+
+Everything gating is locked. What remains are implementation ambiguities. Each is given a
+**default so work can start immediately**; items marked **[CONFIRM]** are ones where your answer
+would meaningfully change the shape and I'd like a yes/adjust (silence = I proceed with the
+default). Items marked **[FYI]** I'll simply decide unless you object.
+
+### A1 — Pipeline granularity: how much shows up as job *steps*? **[CONFIRM]** *(new decision D3.14)*
+- **Constraint discovered:** `JobService.create_job` builds **all** steps up front from
+  `planner.decompose()`; there is **no** mid-job step insertion today. Documents are only
+  discovered *at runtime* (after search/acquire), so "one job step per downloaded paper" would
+  require new dynamic-step-expansion machinery in the engine.
+- **Three models:**
+  - **(A) Fixed pipeline steps** — planner emits a fixed 6–7-step chain for research objectives
+    (`search → classify → acquire → read → extract → verify → report/learn`); `read`/`extract`
+    process the *batch* of acquired docs internally. Visible step table, no engine change.
+  - **(B) Per-document dynamic steps** — a step per paper (matches your original "Queued→Running
+    →Completed per document" sketch), but needs new dynamic-step support in the job engine.
+  - **(C) Single `research` step + rich activity feed** — the whole Acquire→Read→Extract→Verify
+    loop lives inside a rebuilt `ResearchService` (one job step, as today), and **visibility
+    comes from the live activity feed (Step 2)** rather than the step table. Least invasive;
+    concentrates the correctness fix in one place.
+- **Default (recommended): (C) for v1, refactor toward (A) as a fast-follow.** The activity feed
+  already satisfies "watch it work"; getting the *cognition* correct (read→extract→verify claims)
+  matters more than step-table granularity, and (C) needs no engine surgery. (B) is deferred.
+- *Note:* build-sequence Step 4's phrase "queued per-document steps" therefore means **queued
+  per-document work items surfaced in the activity feed**, not literal `job.steps`, under (C).
+
+### A2 — Claim de-duplication / "same claim across sources" (resolves **D3.7**) **[CONFIRM]**
+- Multi-source agreement needs a rule for *when two extracted claims are the same claim*.
+- **Default:**
+  - **Quantitative claims** (value + unit + quantity-kind, e.g. "soiling loss ≈ 0.3–1%/day"):
+    group deterministically by normalized quantity + unit; agreement = overlapping ranges. This
+    reuses the existing numeric-convergence machinery — reliable on CPU, no extra LLM.
+  - **Prose claims:** group by embedding-similarity over the claim sentence (cosine ≥ ~0.8,
+    threshold tunable); no heavy pairwise-LLM matching in v1.
+  - Contradiction = same quantity/subject, disjoint values or opposite polarity.
+- Confidence stays **per-claim** (evidence count × source level × agreement − contradictions).
+
+### A3 — Domain storage mechanism (resolves **D3.13** mechanism) **[FYI]**
+- **Default:** add a single `domain` column (+ index) to the knowledge/embedding store; backfill
+  existing rows to `external`; retrieval takes an optional `domains=[…]` filter, Researcher
+  defaults to `{external, research, experience}`. One small forward-only migration. (Not separate
+  collections — cheaper, still satisfies the locked contract.)
+
+### A4 — Activity-feed transport & storage (resolves **D3.11** mechanism) **[FYI]**
+- **Default:** append newline-JSON events to `job_<id>/activity.jsonl` in the workspace **and**
+  emit on the event bus; expose the tail via the existing `GET /v1/jobs/{id}` payload (new
+  `activity: [...]` field, last N events) so the Console's existing 2s poll renders it with no
+  new endpoint. SSE only if polling feels laggy.
+
+### A5 — Extraction model, sections & caps (resolves **D3.9** specifics) **[CONFIRM]**
+- **Default:** use the `researcher` role (`qwen3:4b` today) for prose-claim extraction; always
+  extract from the **abstract**; for full text, scope to **results + conclusions + tables/
+  figures captions**; **cap ≈ 15 claims/document** and skip a doc's full-text pass if its text
+  layer is empty and OCR would exceed a per-doc time budget (record "read: abstract-only" in the
+  manifest). Numbers are config knobs; confirm the ballpark.
+
+### A6 — What gets promoted into Knowledge, and when (resolves RS/C6 threshold) **[CONFIRM]**
+- **Default:** **read documents** are always ingested (`domain=external`) — they're real sources
+  Atlas actually read. **Verified claims + evidence graph** are stored (`domain=research`) for
+  any completed job. A distilled **Experience** record (`domain=experience`, "objective → what
+  worked → confidence → gaps") is written per job regardless of confidence, but flagged
+  `provisional` when overall confidence < MEDIUM. Everything is governed/reversible via the
+  learning ledger (nothing silently poisons the KB).
+
+### A7 — Chat direct-answer scope & escalation signals (resolves **D3.12** specifics) **[CONFIRM]**
+- **Default fast `answer` path = a single pure-LLM call** (no tools, no RAG) for general-
+  knowledge questions ("what is the stock market?"). **Escalate to ReAct** only on explicit
+  signals: an http(s) URL, a filesystem path, or an action/recency verb
+  (`search, browse, download, run, execute, open, fetch, scrape, latest, today, current,
+  now, this week, price of, news`). **Consult Knowledge (RAG) instead of pure-LLM** when the
+  message refers to the user's own material ("my notes/docs/report", "what did we find",
+  "the job/paper"). Confirm the signal list; it's easy to tune.
+
+### A8 — Interactive vs. job timeouts (resolves **D3.12c**) **[FYI]**
+- **Default:** interactive chat wall-clock ≈ **60s** (vs. jobs' 300s); on timeout return a clear
+  "that took too long — want me to run it as a background job?" message rather than a raw error.
+
+### A9 — Workspace retention (resolves **D3.5**) **[FYI]**
+- **Default:** keep everything by default (reproducibility/audit); add a config knob
+  `workspace.retain_downloads` and a future `atlas jobs gc` for pruning. No auto-deletion in
+  Stage 3.
+
+### A10 — Source classifier map (resolves **D3.4** first cut) **[FYI]**
+- **Shipped default:** a **static domain→(type, level)** map, fully offline, aligned to the
+  `evidence.models` scheme (`arxiv.org`/`ar5iv`→preprint **L3**; `ieeexplore`/`sciencedirect`/
+  `springer`/`wiley`/`nature`/`mdpi`/`plos`/PMC→peer-reviewed **L4**; `nrel.gov`/`*.gov`/`*.mil`/
+  `*.int`→government/lab **L3**; `zenodo`/`figshare`/`data.gov`/dataset repos→field data **L5**;
+  `youtube.com`→presentation **L2**; `reddit`/`linkedin`/forums→discussion **L1**; blogs/unknown
+  →technical **L2**). A bare DOI on an unknown host is a weak peer-reviewed signal.
+  DOI/Crossref/Unpaywall enrichment is a later, network-gated upgrade — no behavior depends on it.
+  *(Correction from the draft: government/lab is **L3**, not L5; L5 is reserved for measured field
+  data / datasets, matching `evidence.models` and §5c.)*
+
+**Bottom line:** none of A1–A10 block starting. All defaults implemented as written.
+
+### Confirmed (2026-07-12) — all [CONFIRM] items resolved on the recommended default
+- ✅ **A1 / D3.14 LOCKED = (C):** single `research` job step + rich live activity feed for
+  visibility; refactor toward (A) fixed pipeline steps as a fast-follow; (B) per-document steps
+  deferred. Build-sequence Step 4's "queued per-document steps" = per-document work items in the
+  feed, not literal `job.steps`.
+- ✅ **A2 / D3.7 LOCKED:** deterministic grouping for quantitative claims (value+unit+quantity),
+  embedding-similarity (cosine ≥ ~0.8) for prose; contradiction = same subject/quantity, disjoint
+  values/opposite polarity; per-claim confidence.
+- ✅ **A5 / D3.9 LOCKED:** `researcher` role (`qwen3:4b`); abstract always + results/conclusions/
+  tables; ~15 claims/doc cap; abstract-only fallback when no text layer / OCR over budget.
+- ✅ **A6 LOCKED:** read docs always ingested (`external`); verified claims + graph stored
+  (`research`); per-job Experience (`experience`) written always, flagged `provisional` when
+  overall confidence < MEDIUM; all governed/reversible via the ledger.
+- ✅ **A7 / D3.12 LOCKED:** fast single-LLM `answer` default; escalate to ReAct on URL/path +
+  action/recency verbs (`search, browse, download, run, execute, open, fetch, scrape, latest,
+  today, current, now, this week, price of, news`); RAG when the message references the user's own
+  material; else answer directly.

@@ -30,6 +30,7 @@ llm:
   embedding_model: nomic-embed-text   # back-compat scalar; seeds the `embed` role
   temperature: 0
   timeout: 300                    # CPU inference under memory pressure can exceed 120s
+  interactive_timeout: 60         # RC/D3.12c: shorter wall-clock for /api/chat answers
   keep_alive: 5m
   think: false                   # qwen3 chain-of-thought is very slow on CPU; keep answers direct
   max_concurrency: 1              # R4: single LLM lane on CPU (never two models at once)

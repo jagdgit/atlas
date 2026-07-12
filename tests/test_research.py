@@ -146,6 +146,42 @@ def test_empty_when_providers_return_nothing():
     assert result["iterations"] == 2
 
 
+class _UrlSearch:
+    """Yields hits at caller-supplied URLs (one per round) to exercise classification."""
+
+    def __init__(self, urls):
+        self._urls = list(urls)
+        self.calls = 0
+
+    def search_web(self, query, max_results=None):
+        idx = min(self.calls, len(self._urls) - 1)
+        url = self._urls[idx]
+        self.calls += 1
+        hit = SearchHit(title=f"Result {self.calls}", url=url,
+                        snippet="the measured value is 42 units")
+        return SearchResponse(query, "fake_web", "ok", hits=[hit])
+
+
+def test_web_hits_are_classified_not_hardcoded_L2():
+    # §2.2 fix (C3): a web hit's evidence level now comes from the classifier, so an
+    # IEEE URL is L4, an arXiv URL L3, and a forum URL L1 — not a blanket L2.
+    urls = [
+        "https://ieeexplore.ieee.org/document/10847915",
+        "https://arxiv.org/abs/2301.12939",
+        "https://www.reddit.com/r/solar/x",
+    ]
+    svc = _service(search=_UrlSearch(urls))
+    result = svc.research("research classified web sources", max_iterations=3)
+
+    assert result["outcome"] == RESEARCH_OK
+    levels = {s["url"]: s["evidence_level"] for s in result["graph"]["sources"]}
+    assert levels["https://ieeexplore.ieee.org/document/10847915"] == 4
+    assert levels["https://arxiv.org/abs/2301.12939"] == 3
+    assert levels["https://www.reddit.com/r/solar/x"] == 1
+    # and none of them are the old hardcoded kind="web"
+    assert all(s["kind"] != "web" for s in result["graph"]["sources"])
+
+
 def test_provider_error_is_skipped_not_fatal():
     # Scholar raises; the loop must survive and use the web provider (R3).
     svc = _service(scholar=FakeScholar([], raises=True),

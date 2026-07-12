@@ -26,12 +26,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from atlas.evidence.models import (
-    LEVEL_TECHNICAL,
     Claim,
     EvidenceGraph,
     EvidenceItem,
     Source,
 )
+from atlas.research.classifier import classify
 from atlas.verification.engine import EvidenceBudget
 
 RESEARCH_OK = "ok"
@@ -213,12 +213,17 @@ class ResearchService:
                 return []
             out = []
             for hit in getattr(resp, "hits", []):
-                sid = getattr(hit, "url", "") or (getattr(hit, "title", "") or "")[:60]
+                url = getattr(hit, "url", "") or ""
+                sid = url or (getattr(hit, "title", "") or "")[:60]
                 if not sid:
                     continue
+                # §2.2 fix (C3): classify the source instead of hardcoding L2, so the
+                # peer-reviewed / government / preprint signal reaches the Evidence
+                # Budget (a web hit to ieeexplore is L4, to arxiv L3, to a forum L1).
+                cls = classify(url)
                 src = Source(
-                    id=sid, title=getattr(hit, "title", ""), url=getattr(hit, "url", ""),
-                    evidence_level=LEVEL_TECHNICAL, kind="web",
+                    id=sid, title=getattr(hit, "title", ""), url=url,
+                    evidence_level=cls.evidence_level, kind=cls.kind,
                 )
                 snippet = getattr(hit, "snippet", "") or ""
                 out.append(_Gathered(src, extract_value(snippet), snippet[:300]))

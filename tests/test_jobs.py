@@ -171,7 +171,8 @@ class FakeLearning:
         return {"event": {"id": "evt-1"}, "applied": False}
 
 
-def _make(planner_steps, runner, *, reports=None, events=None, learning=None):
+def _make(planner_steps, runner, *, reports=None, events=None, learning=None,
+          workspace_root=None):
     repo = FakeJobRepo()
     enqueue_log = []
 
@@ -181,6 +182,7 @@ def _make(planner_steps, runner, *, reports=None, events=None, learning=None):
     service = JobService(
         repo, FakePlanner(planner_steps), runner,
         enqueue=enqueue, reports=reports, events=events, learning=learning,
+        workspace_root=workspace_root,
     )
     return repo, service, enqueue_log
 
@@ -191,6 +193,27 @@ def test_create_job_persists_steps_and_enqueues():
     detail = service.create_job("do x")
     assert detail["progress"]["total"] == 1
     assert len(log) == 1  # advance enqueued once
+
+
+def test_workspace_created_and_report_persisted(tmp_path):
+    # §5a/C3: with a workspace root, a job gets an on-disk directory with a manifest
+    # at creation and the final report written on finalize.
+    from atlas.jobs.workspace import JobWorkspace
+
+    steps = [DecomposedStep("react", "agent", {}, "a")]
+    repo, service, log = _make(steps, ScriptedRunner(), workspace_root=tmp_path)
+    detail = service.create_job("study soiling")
+    jid = detail["job"].id
+
+    ws = JobWorkspace.for_job(tmp_path, jid)
+    assert ws.manifest_path.is_file()
+    assert ws.load_manifest()["objective"] == "study soiling"
+
+    _drive(service, jid, log)
+    assert repo.get_job(jid).status == JOB_COMPLETED
+    # notes.md records the lifecycle; report.md/result.json exist after finalize.
+    assert "job created" in ws.notes_path.read_text(encoding="utf-8")
+    assert ws.read_json("result.json")["status"] == JOB_COMPLETED
 
 
 def test_job_runs_to_completion():
