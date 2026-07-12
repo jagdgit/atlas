@@ -249,6 +249,13 @@ def _fake_capabilities():
     return reg
 
 
+def _fake_learning():
+    from atlas.services.learning_service import LearningService
+    from tests.test_learning import FakeLearningRepo
+
+    return LearningService(FakeLearningRepo())
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -277,6 +284,7 @@ class FakeApplication:
                 "python": FakePython(),
                 "verification": VerificationService(),
                 "reports": ReportService(VerificationService()),
+                "learning": _fake_learning(),
                 "plugins": FakePluginManager(),
             }
         )
@@ -291,6 +299,21 @@ class FakeApplication:
                     {"title": "R1", "url": "https://a.example", "snippet": "s"}
                 ],
                 "reason": None,
+            }
+        if name == "scholar.search":
+            return {
+                "query": kwargs.get("query"),
+                "provider": "semantic_scholar",
+                "outcome": "ok",
+                "results": [{"title": "Paper A", "year": 2021, "level_name": "L4 peer-reviewed"}],
+                "sources": [{"id": "10.1/x", "evidence_level": 4, "kind": "peer_reviewed"}],
+                "reason": None,
+            }
+        if name == "youtube.transcript":
+            return {
+                "video_id": "abcdefghijk", "url": kwargs.get("video"), "outcome": "ok",
+                "title": "How Solar Works", "language": "en",
+                "text": "Solar panels convert sunlight.", "segments": [], "reason": None,
             }
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
@@ -570,6 +593,36 @@ def test_web_search_requires_auth():
     assert resp.status_code == 401
 
 
+def test_scholar_endpoint_returns_papers():
+    resp = _client().post(
+        "/v1/scholar", headers=AUTH, json={"query": "pv soiling", "max_results": 3}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["outcome"] == "ok"
+    assert data["results"][0]["title"] == "Paper A"
+    assert data["sources"][0]["evidence_level"] == 4
+
+
+def test_scholar_endpoint_requires_auth():
+    assert _client().post("/v1/scholar", json={"query": "x"}).status_code == 401
+
+
+def test_youtube_transcript_endpoint():
+    resp = _client().post(
+        "/v1/youtube/transcript", headers=AUTH,
+        json={"video": "https://youtu.be/abcdefghijk"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["outcome"] == "ok"
+    assert "Solar panels" in resp.json()["text"]
+
+
+def test_youtube_transcript_requires_video():
+    resp = _client().post("/v1/youtube/transcript", headers=AUTH, json={})
+    assert resp.status_code == 422
+
+
 def test_code_repo_map_endpoint():
     resp = _client().post("/v1/code/repo-map", headers=AUTH, json={"root": "/x"})
     assert resp.status_code == 200
@@ -704,6 +757,49 @@ def test_report_endpoint_requires_objective():
 
 def test_report_endpoint_requires_auth():
     assert _client().post("/v1/report", json={"objective": "x"}).status_code == 401
+
+
+def test_learning_remember_apply_and_recall():
+    c = _client()
+    resp = c.post(
+        "/v1/learning/experiences",
+        headers=AUTH,
+        json={"problem": "deadlock on migrate", "solution": "lock_timeout",
+              "lessons": "run migrations serially"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["applied"] is True
+    # recall via query
+    recall = c.get("/v1/learning/experiences?q=deadlock", headers=AUTH)
+    assert recall.status_code == 200
+    hits = recall.json()["experiences"]
+    assert len(hits) == 1
+    assert "deadlock" in hits[0]["problem"]
+
+
+def test_learning_event_lifecycle_endpoints():
+    c = _client()
+    c.post("/v1/learning/experiences", headers=AUTH, json={"problem": "p1"})
+    events = c.get("/v1/learning/events", headers=AUTH).json()["events"]
+    assert events
+    eid = events[0]["id"]
+    # explain
+    detail = c.get(f"/v1/learning/events/{eid}", headers=AUTH)
+    assert detail.status_code == 200
+    assert "explanation" in detail.json()
+    # revert
+    rev = c.post(f"/v1/learning/events/{eid}/revert", headers=AUTH)
+    assert rev.status_code == 200
+    assert rev.json()["reverted"] is True
+
+
+def test_learning_apply_unknown_event_404():
+    resp = _client().post("/v1/learning/events/nope/apply", headers=AUTH, json={})
+    assert resp.status_code == 404
+
+
+def test_learning_requires_auth():
+    assert _client().get("/v1/learning/events").status_code == 401
 
 
 def test_blocked_jobs_endpoint():

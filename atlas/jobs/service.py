@@ -62,6 +62,7 @@ class JobService:
         conversation: Any = None,
         reports: Any = None,
         events: Any = None,
+        learning: Any = None,
         step_max_retries: int = 2,
         retry_delay: float = 2.0,
         logger: logging.Logger | None = None,
@@ -73,6 +74,7 @@ class JobService:
         self._conversation = conversation
         self._reports = reports
         self._events = events
+        self._learning = learning
         self._step_max_retries = step_max_retries
         self._retry_delay = retry_delay
         self._logger = logger or logging.getLogger("atlas.jobs")
@@ -293,6 +295,7 @@ class JobService:
             result["overall_confidence"] = report.get("overall_confidence")
         self._repo.set_job_status(job_id, status, result=result)
         self._logger.info("job %s finalized: %s", job_id, status)
+        self._observe_learning(job_id, steps, result)
         self._notify(
             "job.finalized",
             {
@@ -302,6 +305,19 @@ class JobService:
             },
         )
         return status
+
+    def _observe_learning(
+        self, job_id: str, steps: list[JobStep], result: dict[str, Any]
+    ) -> None:
+        """Propose an Experience from the finished job (S18b, §5d). Governed and
+        best-effort: never auto-verifies and never fails the job."""
+        if self._learning is None:
+            return
+        try:
+            job = self._repo.get_job(job_id)
+            self._learning.observe_job({"job": job, "steps": steps, "result": result})
+        except Exception:  # noqa: BLE001 - learning must never break finalization
+            self._logger.debug("job %s learning observation failed", job_id)
 
     def _build_report(self, job_id: str, steps: list[JobStep]) -> dict[str, Any] | None:
         """Attach a scientific-review report (§5a.5) to the finished job (S17)."""

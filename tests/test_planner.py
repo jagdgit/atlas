@@ -82,6 +82,37 @@ def test_web_fetch_wins_over_search_when_url_present(planner):
     assert plan.intent == Intent.WEB_FETCH
 
 
+def test_scholar_search_routes_on_papers_phrasing(planner):
+    plan = planner.plan("find recent papers on perovskite solar cells")
+    assert plan.intent == Intent.SCHOLAR_SEARCH
+    assert plan.steps[0].capability == "scholar"
+    assert plan.steps[0].args["query"] == "perovskite solar cells"
+
+
+def test_scholar_search_routes_on_arxiv_mention(planner):
+    plan = planner.plan("search arxiv for graph neural networks")
+    assert plan.intent == Intent.SCHOLAR_SEARCH
+    assert plan.steps[0].args["query"] == "graph neural networks"
+
+
+def test_scholar_beats_generic_web_search(planner):
+    # "papers on X" should go to scholar, not generic web search.
+    plan = planner.plan("papers on lithium battery degradation")
+    assert plan.intent == Intent.SCHOLAR_SEARCH
+
+
+def test_youtube_url_routes_to_transcript(planner):
+    plan = planner.plan("get the transcript of https://youtu.be/abcdefghijk")
+    assert plan.intent == Intent.YOUTUBE_TRANSCRIPT
+    assert plan.steps[0].capability == "transcript"
+    assert plan.steps[0].args["video"] == "https://youtu.be/abcdefghijk"
+
+
+def test_youtube_url_beats_web_fetch(planner):
+    plan = planner.plan("https://www.youtube.com/watch?v=abcdefghijk")
+    assert plan.intent == Intent.YOUTUBE_TRANSCRIPT
+
+
 def test_run_python_fenced_block(planner):
     plan = planner.plan("run this:\n```python\nprint(2 + 2)\n```")
     assert plan.intent == Intent.RUN_PYTHON

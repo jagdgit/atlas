@@ -1,12 +1,14 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–17 shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–18b shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
-> **Non-blocking HITL & Report Generator**; 497 tests).
+> **Non-blocking HITL & Report Generator** + **Deeper Research: Scholarly + YouTube** +
+> **Learning Pipeline (Experience store, governed)**;
+> 555 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S18 — Deeper Research + Learning Pipeline**.
+> Next: **S19 — Engineering Intelligence** (D11/§5d: Learning Levels L2–L5, promotion into the other stores).
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -682,7 +684,8 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S15** ✅ | **Verification & Evidence Graph** | Claim model, Evidence Levels 1–5, calculated confidence, convergence stopping rule, Evidence Budget, **Verification Engine** (D8, §5a) | defensible conclusions |
 | **S16** ✅ | **Python Execution** | Execution capability (D6, sandbox); computed results become **L5 evidence** in the graph (data-driven estimates) | analysis |
 | **S17** ✅ | **Non-blocking HITL & Reports** | `blocked`-step queue (`list_blocked`/`GET /v1/jobs/blocked`/`atlas jobs --blocked`) + event notifications on block/finalize + `atlas job resume` **(R3, never stalls the job)**; **Report Generator** (scientific-review structure, §5a.5) auto-attached on job finalize; `reports` capability, `POST /v1/report`, `atlas report` | usable research jobs |
-| **S18** | **Deeper Research + Learning Pipeline** | YouTube transcripts, Scholar/arXiv/Semantic Scholar; **Learning Pipeline** (D11, §5d): completed job/repos/docs → the **five stores** with **governance** (policy + Learning Level, explainable/reversible); seed the **Experience store** | compounding knowledge |
+| **S18a** ✅ | **Deeper Research Sources** | **Scholarly search** (`scholar` cap: arXiv=L3 + Semantic Scholar=L4, provider fallback) producing **graded evidence Sources** for the Verification Engine (§5a); **YouTube transcripts** (`transcript` cap, L1) over the resilient net layer; planner `scholar_search`/`youtube_transcript` intents; `POST /v1/scholar` + `/v1/youtube/transcript`, `atlas scholar`/`youtube` | higher-quality evidence |
+| **S18b** ✅ | **Learning Pipeline** | **Continuous Learning** (D11, §5d): governed, explainable, **reversible** learning ledger (`learning` cap) — completed jobs → *proposed* `LearningEvent`s (never silent); **Experience store** (problem→diagnosis→actions→mistakes→solution→lessons) with lexical **recall**; `propose→apply→revert` + policy/Learning-Level; migration 0011; `/v1/learning/*`, `atlas learn` | compounding knowledge |
 | **S19** | **Engineering Intelligence** *(NEW)* | Repository Learning, Code-Style Learning, Architecture Learning, **Engineering Pattern Extraction** (§5b.1 layer 6), Project Knowledge Graph, Cross-project Search, **Personal Coding Assistant**, **Engineering Experience Store** (D11, §5d) | Atlas learns *you* (L4–L5) |
 | **S20** | **Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, Git, DB, Email/LinkedIn | full toolbelt |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
@@ -1159,7 +1162,116 @@ The research pipeline now has an *output* and a *human loop*: a finished job car
 - [x] `JobService` attaches a report on finalize; `list_blocked()` HITL queue; `job.step_blocked`/`job.finalized` notifications.
 - [x] `POST /v1/report` + `GET /v1/jobs/blocked`; `atlas report` + `atlas jobs --blocked`.
 - [x] Hermetic tests (generator sections/confidence/conflicts/references/LLM-polish, service verify→render, job report+notify+blocked, api, cli). **497 tests pass (+19).**
-- [ ] **Next — S18:** Deeper Research (YouTube/Scholar/arXiv) + the **Learning Pipeline** (D11/§5d) seeding the five stores.
+- [x] **Next — S18:** Deeper Research (YouTube/Scholar/arXiv) + the **Learning Pipeline** (D11/§5d) seeding the five stores. **S18a done** (§6j); **S18b** (Learning Pipeline) next.
+
+---
+
+## 6j. Sprint 18a — Deeper Research Sources (Scholarly + YouTube) (✅ DONE)
+
+Atlas's research reach now extends past general web links to **academic literature** and
+**spoken-word** sources — and, crucially, each result arrives **pre-graded on the
+Evidence Level scale (§5a.2)** so it drops straight into the Verification Engine and
+scientific-review reports (S15/S17).
+
+- **`atlas/search/scholarly.py` — scholarly providers.** A `ScholarlyProvider` mirrors
+  the D5 web-search protocol but returns **`Paper`s** (title, authors, year, venue,
+  abstract, DOI, citation count) each tagged with an Evidence Level, plus an
+  `as_source()` in the exact Evidence-Graph `Source` shape.
+  - **`ArxivProvider`** — arXiv Atom API (keyless); preprints ⇒ **L3** (configurable).
+  - **`SemanticScholarProvider`** — Semantic Scholar Graph API (keyless, rate-limited;
+    optional key); published venues + citation counts ⇒ **L4** peer-reviewed.
+  Both fetch through the resilient net layer and **translate outcomes, never raise**.
+- **`ScholarPlugin`** = the `scholar` capability (tool `scholar.search`): ordered
+  providers with **provider fallback** — the first `ok`-with-papers wins; a
+  blocked/rate-limited backend falls through, and the final structured outcome is
+  returned (R2/R3). Output carries both `results` (papers) and `sources` (graded).
+- **`atlas/transcripts/` — YouTube transcripts.** `YouTubeTranscriptProvider` does two
+  polite fetches (watch page → scrape `captionTracks` → timedtext XML → decode cues),
+  returning a `TranscriptResult` (text + timed segments) as **L1** evidence. Every
+  failure mode is an *outcome* (`error`/`skipped`/`blocked`), never an exception.
+  `YouTubePlugin` = the `transcript` capability (tool `youtube.transcript`).
+- **Planner/dispatch.** New `scholar_search` intent (arXiv/Scholar mentions or
+  "papers/studies on …" — routed *ahead* of generic web search) and `youtube_transcript`
+  intent (a YouTube URL — routed *ahead* of generic web fetch — or an explicit
+  "transcript/transcribe" request), with `AssistantService._do_scholar_search` /
+  `_do_youtube` (honest blocked/skipped reporting). `JobPlanner` accepts both so research
+  jobs can gather peer-reviewed evidence and talks.
+- **Concrete contracts** `ScholarCapability` / `TranscriptCapability` (catalog
+  `CAP_SCHOLAR` / `CAP_TRANSCRIPT`, since S18). **Config** `plugins.scholar`
+  (providers, levels, optional S2 key) + `plugins.youtube` (languages). **Surface:**
+  `POST /v1/scholar` + `POST /v1/youtube/transcript`; `atlas scholar "…"` +
+  `atlas youtube <url|id>`.
+
+> **Why this ordering:** deeper *retrieval* was split from the *Learning Pipeline*
+> (S13a/S13b precedent) because it is a direct extension of the shipped search-provider
+> architecture and immediately feeds the S15 Verification Engine and S17 reports with
+> **L3/L4 sources** — the biggest single quality lever for defensible conclusions.
+
+**Definition of Done (S18a)** — all met:
+- [x] `ArxivProvider` + `SemanticScholarProvider` (graded `Paper` → Evidence `Source`; never raise); `ScholarPlugin` (`scholar` cap) with provider fallback.
+- [x] `YouTubeTranscriptProvider` (watch-page + timedtext scrape, outcomes not exceptions); `YouTubePlugin` (`transcript` cap).
+- [x] Planner `scholar_search` (ahead of web search) + `youtube_transcript` (ahead of web fetch) intents + dispatch; `JobPlanner` support.
+- [x] `ScholarCapability`/`TranscriptCapability` contracts + catalog; `plugins.scholar`/`plugins.youtube` config; both plugins enabled by default.
+- [x] `POST /v1/scholar` + `/v1/youtube/transcript`; `atlas scholar`/`youtube`.
+- [x] Hermetic tests (arXiv/S2 parse + grading, fallback, transcript flow/skip/block/lang, planner routing, assistant handlers/gaps, api, cli, caps). **532 tests pass (+35).**
+- [x] **Done → S18b:** the **Learning Pipeline** (§6k).
+
+---
+
+## 6k. Sprint 18b — Learning Pipeline (Continuous Learning, the third pillar) (✅ DONE)
+
+Atlas stops being amnesiac. Every completed activity **may** become durable
+engineering knowledge — but only through a **governed, explainable, reversible**
+pipeline, honouring the two hard guarantees of §1b/§5d: *Atlas never silently learns*,
+and *learning is governed*.
+
+- **`learning.events` ledger (migration 0011).** Every learning action is a row with
+  *what* (`summary`), *why* (`reason`), *from where* (`origin`), a governance `policy`
+  (**temporary/project/personal/verified**, §5d.5), a **Learning Level** (`level`,
+  §5d.6), and a lifecycle `status` (**proposed → applied → reverted**). Nothing is in a
+  store until an event is *applied*, and every application can be *reverted* — the
+  guarantees are enforced by the schema, not just documented.
+- **The Experience store (`learning.experiences`) — the "missing fifth store".** Each
+  entry is a reusable **problem → diagnosis → actions → mistakes → solution → lessons**
+  record so Atlas can recall *how* it solved a class of problem, not just facts.
+  `status='reverted'` hides an experience without destroying the audit trail.
+- **`LearningService` = the `learning` capability.**
+  - `observe_job(detail)` distils a finished job into an Experience *candidate* and
+    records a **proposed** event (default `auto_apply=false` ⇒ propose-only; never
+    silent). Best-effort: it never raises into — or fails — a job.
+  - `apply(event_id, policy?, level?)` promotes a proposal into its store (creating the
+    Experience) and stamps the event `applied` with its governance labels;
+    `revert(event_id)` flips it to `reverted` and deactivates the created record.
+  - `remember_experience(...)` is the manual path (an explicit act ⇒ applied at once);
+    `recall(query)` does lexical recall over the Experience store; `explain(event_id)`
+    renders the what/why/from-where + status (explainable).
+  - Concrete `LearningCapability` contract replaces the S18 catalog placeholder.
+- **Wiring & governance defaults.** `JobService._finalize` calls `learning.observe_job`
+  after the report is attached (guarded, best-effort). `LearningConfig`
+  (`enabled/observe_jobs/auto_apply/default_policy/default_level/recall_k`) defaults are
+  conservative: **propose-only, temporary policy, L1**. Registered in bootstrap
+  (container/capabilities/lifecycle).
+- **Surface.** `GET /v1/learning/events[/{id}]`, `POST /v1/learning/events/{id}/apply`,
+  `.../revert`, `GET|POST /v1/learning/experiences`; `atlas learn
+  events|show|apply|revert|experiences|recall`.
+
+> **Scope line (why now):** S18b lands the *ledger + Experience store + job
+> observation + review/apply/revert/recall* — the governance spine and the one
+> concrete store. Promotion into the **other** stores (knowledge graph, code/
+> architecture, generalized patterns) and the higher **Learning Levels L2–L5**
+> (Understand/Connect/Generalize/Recommend) are the Engineering-Intelligence work of
+> **S19**; the ledger already models them (`store`/`level`), so S19 adds sinks, not
+> schema.
+
+**Definition of Done (S18b)** — all met:
+- [x] Migration 0011 `learning` schema (`events` + `experiences`, CHECK-constrained policy/status/level).
+- [x] `LearningEvent` + `Experience` models (constants for sources/stores/policies/levels); repository (event + experience CRUD, lexical `search_experiences`, counts).
+- [x] `LearningService` (`learning` cap): `observe_job`/`propose`/`apply`/`revert`/`remember_experience`/`recall`/`explain` + governance; never-silent + reversible enforced.
+- [x] Concrete `LearningCapability` contract (replaces S18 catalog placeholder).
+- [x] Bootstrap wiring + `JobService.observe_job` on finalize; `LearningConfig` + `learning:` defaults.
+- [x] `/v1/learning/*` endpoints + `atlas learn` CLI.
+- [x] Hermetic tests (service governance/apply/revert/recall/explain, repo-fake, job-observe, api, cli, caps). **555 tests pass (+23).**
+- [ ] **Next — S19:** **Engineering Intelligence** — promote into the other stores + Learning Levels L2–L5 (Understand/Connect/Generalize/Recommend).
 
 ---
 
@@ -1205,5 +1317,7 @@ The research pipeline now has an *output* and a *human loop*: a finished job car
 | 2026-07-11 | S14 | **Sprint 14 shipped ✅ — Code Understanding (`CodeCapability`, Tier B, D9).** New `atlas/code/`: **Python parsed via stdlib `ast`** (symbols/imports/**call sites**, full fidelity) + **tree-sitter** (`tree-sitter-language-pack`) for JS/TS/TSX/C/C++/Rust/Go/Java/Bash/SQL (symbols+imports); honest per-file outcomes (`ok`/`shallow`/`unsupported`/`error`, R2). **Repo map** (manifests → deps/frameworks/entry points), **symbol index**, **import + cross-file call graph** (Python-first, conservative resolution — builtins ignored, ambiguous counted not guessed), **pattern mining** (Repository/Service/Registry/pytest/Docker/Postgres/UUID/dataclasses/async/framework, evidence-backed → feeds S19). **`CodeService`** = `code` capability: `parse`/`repo_map`/`index`/`search_symbols`/`graph`/`patterns`/`explain`; **code-aware chunking → knowledge** (one chunk per symbol) and **`code`-role LLM `explain`** grounded on structure. Concrete **`CodeCapability`** contract (catalog `CAP_CODE` now provided). `POST /v1/code/*` + `atlas code …`; `code.*` config. Deps `tree-sitter`+`tree-sitter-language-pack`. **421 tests pass (+51).** Next: **S15 Verification & Evidence Graph (D8)**. |
 | 2026-07-11 | S16 | **Sprint 16 shipped ✅ — Python Execution Sandbox (D6, *hybrid*).** New `atlas/sandbox/`: a `SandboxBackend` swap point — **`SubprocessBackend`** (default) runs `python -I -B` in a child with a POSIX `preexec_fn` applying **rlimits** (CPU/`RLIMIT_AS` memory/file size/no-core), a **hard wall-clock timeout** that kills the whole **process group** (`start_new_session`+`killpg`), a **scratch workdir**, a **stripped env**, and (default) an in-interpreter **network block**; **`DockerBackend`** = selectable placeholder that honestly reports unavailable (R2) so stronger isolation drops in later via `sandbox.backend`. `ExecutionResult` (`ok`/`error`/`timeout`/`blocked`, stdout/stderr truncation, `duration_ms`, structured `result` from `result.json`, artifacts) — **never raises** (R2/R3). **`PythonSandboxService`** = `python` capability (`run`/`run_file`, per-run uuid workdir under `paths.data/sandbox`). Planner `run_python` intent (fenced code / "run python…") + `AssistantService._do_run_python` (honest output/error/timeout/blocked) + `JobPlanner` support. Concrete **`PythonExecutionCapability`** (`CAP_PYTHON`, S16). `sandbox.*` config; `POST /v1/python/run` + `atlas python`. **478 tests pass (+34).** Next: **S17 research loop + HITL & reports**. |
 | 2026-07-11 | S15 | **Sprint 15 shipped ✅ — Verification Engine + Evidence Graph (D8/§5a), *the differentiator*.** New `atlas/evidence/` (serialisable **Evidence Graph**: `Source`/`EvidenceItem`/`ClaimValue`/`Claim`/`EvidenceGraph` — claims are persistent + **re-verifiable**) and `atlas/verification/` (pure, no LLM/I/O): **Evidence Levels L1–L5** (quality not count); `convergence()` = largest-cluster agreement ∈ [0,1] (`3.7/3.9/4.0/3.8`→1.0, `2/11/6/4`→low); **calculated confidence** HIGH/MEDIUM/LOW/INSUFFICIENT (0.6·convergence + 0.4·quality, contradiction penalty; single/low-level source never HIGH) with a human `reasoning_trace`; **Evidence Budget** + `decide()` continue/stop w/ explicit unmet criteria (stop on *convergence*, not paper count). **`VerificationService`** = `verification` capability (`verify(graph, budget?)` → per-claim decision), wired in bootstrap; `research.*` config (`ResearchConfig`). `POST /v1/verify` + `atlas verify graph.json`. Scope = engine/graph/budget primitives; live gather→verify→decide loop + scientific-review Report Generator land **S17**, Python results become **L5** at **S16**. **444 tests pass (+23).** Next: **S16 Python Execution Sandbox**. |
+| 2026-07-12 | S18b | **Sprint 18b shipped ✅ — Learning Pipeline (Continuous Learning, the third pillar; D11/§5d).** Atlas stops being amnesiac, *without* silently learning. New migration **0011** `learning` schema: **`learning.events`** = the governed ledger (what=`summary`/why=`reason`/from-where=`origin`, `policy` temporary/project/personal/verified, `level` L1–L5, `status` **proposed→applied→reverted**) and **`learning.experiences`** = the **Experience store** (problem→diagnosis→actions→mistakes→solution→lessons; `reverted` hides w/o deleting). New `LearningEvent`/`Experience` models + `LearningRepository` (CRUD + lexical `search_experiences`). **`LearningService`** = concrete `learning` cap: `observe_job` distils a finished job into a **proposed** Experience (never silent; `auto_apply` off by default, best-effort, never fails a job); `apply(policy?,level?)` creates the store record + stamps the event; `revert` deactivates it (reversible); `remember_experience` (manual→applied) + `recall` (lexical) + `explain` (what/why/where). Concrete **`LearningCapability`** contract replaces the S18 catalog placeholder. `JobService._finalize` observes after the report (guarded); `LearningConfig` (`enabled/observe_jobs/auto_apply/default_policy/default_level/recall_k`, conservative defaults) + `learning:` YAML; bootstrap container/caps/lifecycle. `GET/POST /v1/learning/*`; `atlas learn events|show|apply|revert|experiences|recall`. Scope = ledger + Experience store + job observation + review/apply/revert/recall; promotion into the other stores + Learning Levels L2–L5 = **S19** (ledger already models `store`/`level`). **555 tests pass (+23).** Next: **S19 Engineering Intelligence**. |
+| 2026-07-11 | S18a | **Sprint 18a shipped ✅ — Deeper Research Sources (Scholarly + YouTube).** New `atlas/search/scholarly.py`: a `ScholarlyProvider` protocol → `Paper` (title/authors/year/venue/abstract/DOI/citations) + `as_source()` in the Evidence-Graph shape, graded on the **Evidence Level** scale (§5a.2). **`ArxivProvider`** (arXiv Atom, keyless; preprints ⇒ **L3**) + **`SemanticScholarProvider`** (Graph API, keyless/optional-key; published ⇒ **L4**), both over the resilient net layer (translate outcomes, never raise). **`ScholarPlugin`** = `scholar` cap (tool `scholar.search`) with **provider fallback**; output carries `results` + graded `sources`. New `atlas/transcripts/`: **`YouTubeTranscriptProvider`** (watch-page `captionTracks` → timedtext XML → decoded cues; **L1** evidence; outcomes not exceptions) + **`YouTubePlugin`** = `transcript` cap (tool `youtube.transcript`). Planner **`scholar_search`** (ahead of web search) + **`youtube_transcript`** (ahead of web fetch) intents + `AssistantService` handlers + `JobPlanner` support. `ScholarCapability`/`TranscriptCapability` contracts (`CAP_SCHOLAR`/`CAP_TRANSCRIPT`, S18). `plugins.scholar`/`plugins.youtube` config; both enabled. `POST /v1/scholar` + `/v1/youtube/transcript`; `atlas scholar`/`youtube`. **532 tests pass (+35).** Split from the Learning Pipeline (S18b next). |
 | 2026-07-11 | S17 | **Sprint 17 shipped ✅ — Non-blocking HITL & Report Generator (§5a.5).** New `atlas/reports/`: **`ReportGenerator`** = pure/deterministic assembly of the nine scientific-review sections (Exec Summary→Answer→Confidence→Methodology→Evidence→References→Conflicting Views→Limitations→Next Research) from *verified* claim dicts + sources; **overall confidence derived** (most-common, tie→conservative), conflicting-views auto-flag (contradictions/weak), next-research from low-confidence/non-converged claims, optional `summarizer`-LLM polish (deterministic fallback), Markdown render. **`ReportService`** = `reports` capability: `report()` verify→render pipeline (Verification Engine) + `render()` direct. **Job Engine**: report auto-attached on finalize (`result.report`/`report_sections`/`overall_confidence`, best-effort, never fails the job); **`list_blocked()`** HITL queue across jobs; **`job.step_blocked`/`job.finalized`** event notifications (Q2). Surface `POST /v1/report` + `GET /v1/jobs/blocked`; `atlas report` + `atlas jobs --blocked`. **497 tests pass (+19).** Autonomous multi-round research orchestration deferred to **S18**. Next: **S18 Deeper Research + Learning Pipeline (D11)**. |
 | 2026-07-11 | S13b | **Sprint 13b shipped ✅ — Web Search (D5) + Downloader.** **D5 locked → DuckDuckGo** (keyless HTML) default: new `atlas/search/` (`SearchProvider` protocol + `SearchResponse`/`SearchHit` + `DuckDuckGoProvider` unwrapping `uddg` redirects) and **`SearchPlugin`** (`search` capability, tool `web.search`) with an **ordered provider list → provider fallback** (SearXNG/Brave drop in via config); all over the resilient net layer so blocked/rate-limited backends degrade (R2/R3), never crash. New **`DownloaderPlugin`** (`downloader`, `web.download`) → size-capped fetch to a sandbox-confined downloads dir, honest block/skip. Planner gains **`web_search`** intent + `AssistantService._do_web_search` (lists results, reports blocked/empty honestly); `JobPlanner` accepts it. `POST /v1/search`; `atlas websearch`/`download`; `plugins.search`/`plugins.downloader` config, both enabled. **370 tests pass (+27).** Next: **S14 Code Understanding (D9)**. |

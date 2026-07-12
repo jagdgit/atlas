@@ -130,6 +130,8 @@ class AssistantService:
         capabilities: "CapabilityRegistry | None" = None,
         web_tool: str = "web.fetch",
         search_tool: str = "web.search",
+        scholar_tool: str = "scholar.search",
+        youtube_tool: str = "youtube.transcript",
         python_tool: str = "python.run",
         search_limit: int = 5,
         list_limit: int = 25,
@@ -146,6 +148,8 @@ class AssistantService:
         self._capabilities = capabilities
         self._web_tool = web_tool
         self._search_tool = search_tool
+        self._scholar_tool = scholar_tool
+        self._youtube_tool = youtube_tool
         self._python_tool = python_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
@@ -228,6 +232,8 @@ class AssistantService:
             Intent.INGEST_PATH: self._do_ingest,
             Intent.WEB_FETCH: self._do_web_fetch,
             Intent.WEB_SEARCH: self._do_web_search,
+            Intent.SCHOLAR_SEARCH: self._do_scholar_search,
+            Intent.YOUTUBE_TRANSCRIPT: self._do_youtube,
             Intent.RUN_PYTHON: self._do_run_python,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
@@ -414,6 +420,87 @@ class AssistantService:
                 lines.append(f"   {snippet}")
         return _Outcome(answer="\n".join(lines))
 
+    def _do_scholar_search(self, args, context, tool_calls) -> _Outcome:
+        query = (args.get("query") or "").strip()
+        if not query:
+            return _Outcome(answer="What topic should I search academic sources for?")
+        result = self._executor.execute(
+            self._scholar_tool,
+            {"query": query, "max_results": args.get("max_results", self._search_limit)},
+        )
+        data = result.data if isinstance(result.data, dict) else {}
+        tool_calls.append(
+            {
+                "intent": Intent.SCHOLAR_SEARCH,
+                "action": "scholar.search",
+                "capability": "scholar",
+                "ok": result.ok,
+                "provider": data.get("provider"),
+                "outcome": data.get("outcome"),
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't search academic sources: {result.error}")
+        outcome = data.get("outcome")
+        papers = data.get("results") or []
+        if outcome != "ok":
+            reason = data.get("reason") or outcome
+            return _Outcome(
+                answer=f"Academic search was unavailable ({outcome}): {reason}. "
+                "I couldn't gather papers for that."
+            )
+        if not papers:
+            return _Outcome(answer=f"I found no academic papers for '{query}'.")
+        lines = [f"Top papers for '{query}':"]
+        for i, p in enumerate(papers, start=1):
+            authors = ", ".join(p.get("authors", [])[:3])
+            meta = " · ".join(
+                bit for bit in (
+                    authors,
+                    str(p.get("year") or ""),
+                    p.get("venue") or "",
+                    p.get("level_name") or "",
+                ) if bit
+            )
+            lines.append(f"{i}. {p.get('title')} ({meta})")
+            if p.get("url"):
+                lines.append(f"   {p['url']}")
+        return _Outcome(answer="\n".join(lines))
+
+    def _do_youtube(self, args, context, tool_calls) -> _Outcome:
+        video = (args.get("video") or "").strip()
+        if not video:
+            return _Outcome(
+                answer="Which YouTube video? Give me a link or an 11-character video id."
+            )
+        result = self._executor.execute(self._youtube_tool, {"video": video})
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.YOUTUBE_TRANSCRIPT,
+                "action": "youtube.transcript",
+                "capability": "transcript",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't fetch that transcript: {result.error}")
+        if outcome != "ok":
+            reason = data.get("reason") or outcome
+            return _Outcome(
+                answer=f"No transcript available ({outcome}): {reason}."
+            )
+        text = (data.get("text") or "").strip()
+        title = data.get("title") or data.get("video_id")
+        summary = self._responder.compose(
+            _WEB_SUMMARY_SYSTEM,
+            f"Summarize this YouTube transcript ({title}):\n\n{text[:4000]}",
+            fallback=f"Transcript of '{title}' ({len(text)} characters).",
+        )
+        return _Outcome(answer=summary)
+
     def _do_run_python(self, args, context, tool_calls) -> _Outcome:
         code = (args.get("code") or "").strip()
         if not code:
@@ -499,6 +586,12 @@ class AssistantService:
     def _has_python_tool(self) -> bool:
         return self._tools is not None and self._tools.has(self._python_tool)
 
+    def _has_scholar_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._scholar_tool)
+
+    def _has_youtube_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._youtube_tool)
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -514,6 +607,8 @@ class AssistantService:
             "agent": self._agent is not None,
             "web": self._has_web_tool(),
             "search": self._has_search_tool(),
+            "scholar": self._has_scholar_tool(),
+            "transcript": self._has_youtube_tool(),
             "python": self._has_python_tool(),
         }.get(capability, True)
 

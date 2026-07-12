@@ -224,6 +224,21 @@ class DownloaderPluginConfig(BaseModel):
     dir: str | None = None  # downloads dir; None => paths.data/downloads
 
 
+class ScholarPluginConfig(BaseModel):
+    # Ordered academic providers (provider fallback, mirrors D5 web search).
+    providers: list[str] = Field(
+        default_factory=lambda: ["semantic_scholar", "arxiv"]
+    )
+    max_results: int = 5
+    arxiv_level: int = 3  # arXiv preprints ⇒ L3 (not peer-reviewed)
+    semantic_scholar_level: int = 4  # published venues ⇒ L4 peer-reviewed
+    semantic_scholar_api_key: str = ""  # optional; keyless works but is rate-limited
+
+
+class YouTubePluginConfig(BaseModel):
+    languages: list[str] = Field(default_factory=lambda: ["en"])
+
+
 class PluginsConfig(BaseModel):
     # Dotted module paths to load; each module exposes build(config) -> Plugin.
     enabled: list[str] = Field(default_factory=list)
@@ -231,6 +246,8 @@ class PluginsConfig(BaseModel):
     web: WebPluginConfig = WebPluginConfig()
     search: SearchPluginConfig = SearchPluginConfig()
     downloader: DownloaderPluginConfig = DownloaderPluginConfig()
+    scholar: ScholarPluginConfig = ScholarPluginConfig()
+    youtube: YouTubePluginConfig = YouTubePluginConfig()
 
 
 class MemoryConfig(BaseModel):
@@ -291,6 +308,19 @@ class ResearchConfig(BaseModel):
     numeric_tolerance: float = 0.15  # relative window for "values agree"
 
 
+class LearningConfig(BaseModel):
+    """Continuous Learning (S18b, D11/§5d). Governance defaults are conservative:
+    Atlas **never silently learns** — completed activities are only *proposed*, and
+    promotion into a store is an explicit, reviewable, reversible action."""
+
+    enabled: bool = True
+    observe_jobs: bool = True  # propose an Experience from each completed job
+    auto_apply: bool = False   # if True, apply proposals immediately (still governed)
+    default_policy: str = "temporary"  # temporary | project | personal | verified
+    default_level: int = 1     # Learning Level L1 (Store); higher levels land in S19
+    recall_k: int = 5          # experiences returned per recall
+
+
 class ApiConfig(BaseModel):
     host: str = "127.0.0.1"  # bind localhost by default (personal, self-hosted)
     port: int = 8000
@@ -332,6 +362,7 @@ class AtlasConfig(BaseModel):
     code: CodeConfig = CodeConfig()
     sandbox: SandboxConfig = SandboxConfig()
     research: ResearchConfig = ResearchConfig()
+    learning: LearningConfig = LearningConfig()
     plugins: PluginsConfig = PluginsConfig()
     api: ApiConfig = ApiConfig()
 

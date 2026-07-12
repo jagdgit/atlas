@@ -139,6 +139,16 @@ research:
   max_search_iterations: 20
   numeric_tolerance: 0.15   # relative window within which values "agree"
 
+learning:
+  # Continuous Learning (S18b, D11/§5d). Atlas never silently learns: completed
+  # activities are *proposed*; applying them into a store is explicit & reversible.
+  enabled: true
+  observe_jobs: true       # propose an Experience from each completed job
+  auto_apply: false        # if true, apply proposals immediately (still governed)
+  default_policy: temporary  # temporary | project | personal | verified
+  default_level: 1         # Learning Level L1 (Store)
+  recall_k: 5
+
 plugins:
   # Dotted module paths; each exposes build(config) -> Plugin. Only listed
   # plugins load (fail-closed). Add github/database/email modules here later.
@@ -147,6 +157,8 @@ plugins:
     - atlas.plugins.web_plugin
     - atlas.plugins.search_plugin
     - atlas.plugins.downloader_plugin
+    - atlas.plugins.scholar_plugin
+    - atlas.plugins.youtube_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -160,6 +172,14 @@ plugins:
     endpoint: "https://html.duckduckgo.com/html/"
   downloader:
     dir: null               # downloads dir; null => paths.data/downloads
+  scholar:                  # S18a: academic search → graded evidence (§5a)
+    providers: [semantic_scholar, arxiv]  # ordered; first with papers wins
+    max_results: 5
+    arxiv_level: 3          # arXiv preprints ⇒ L3 (not peer-reviewed)
+    semantic_scholar_level: 4  # published venues ⇒ L4 peer-reviewed
+    semantic_scholar_api_key: ""  # optional; keyless works but is rate-limited
+  youtube:                  # S18a: video transcripts (L1 evidence)
+    languages: [en]
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network

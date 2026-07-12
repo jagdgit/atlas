@@ -115,6 +115,7 @@ class FakeLLM:
 def _assistant(
     *, memory=None, knowledge=None, agent=None, with_web=True, with_search=True,
     search_result=None, with_python=True, python_result=None, capabilities=None,
+    with_scholar=True, scholar_result=None, with_youtube=True, youtube_result=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -130,6 +131,26 @@ def _assistant(
         }
         payload = search_result if search_result is not None else default
         tools.register("web.search", lambda query, max_results=5: payload)
+    if with_scholar:
+        default_sch = {
+            "query": "q", "provider": "semantic_scholar", "outcome": "ok",
+            "results": [
+                {"title": "A Review of PV Soiling", "authors": ["A. Smith"],
+                 "year": 2021, "venue": "Solar Energy", "url": "https://s2.org/1",
+                 "level_name": "L4 peer-reviewed"}
+            ],
+            "sources": [{"id": "10.1/s2.1", "evidence_level": 4, "kind": "peer_reviewed"}],
+        }
+        sch_payload = scholar_result if scholar_result is not None else default_sch
+        tools.register("scholar.search", lambda query, max_results=5: sch_payload)
+    if with_youtube:
+        default_yt = {
+            "video_id": "abcdefghijk", "url": "https://youtu.be/abcdefghijk",
+            "outcome": "ok", "title": "How Solar Works", "language": "en",
+            "text": "Solar panels convert sunlight into electricity.", "segments": [],
+        }
+        yt_payload = youtube_result if youtube_result is not None else default_yt
+        tools.register("youtube.transcript", lambda video: yt_payload)
     if with_python:
         default_py = {
             "outcome": "ok", "ok": True, "stdout": "4\n", "stderr": "",
@@ -244,6 +265,51 @@ def test_search_gap_when_no_search_tool():
     turn = _assistant(with_search=False).chat("search the web for solar soiling")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "search"
+
+
+# --- scholar + youtube (S18a) ---------------------------------------------
+def test_scholar_search_lists_papers():
+    turn = _assistant().chat("find recent papers on PV soiling")
+    assert turn.intent == "scholar_search"
+    assert "A Review of PV Soiling" in turn.answer
+    assert turn.tool_calls[0]["action"] == "scholar.search"
+    assert turn.tool_calls[0]["ok"] is True
+
+
+def test_scholar_reports_blocked_honestly():
+    blocked = {"query": "q", "provider": "arxiv", "outcome": "blocked",
+               "results": [], "sources": [], "reason": "HTTP 429"}
+    turn = _assistant(scholar_result=blocked).chat("papers on graph neural networks")
+    assert turn.intent == "scholar_search"
+    assert "unavailable" in turn.answer.lower()
+
+
+def test_scholar_gap_when_no_tool():
+    turn = _assistant(with_scholar=False).chat("find papers on lithium batteries")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "scholar"
+
+
+def test_youtube_transcript_summarizes():
+    turn = _assistant().chat("transcript of https://youtu.be/abcdefghijk")
+    assert turn.intent == "youtube_transcript"
+    assert turn.answer == "SUMMARY"
+    assert turn.tool_calls[0]["action"] == "youtube.transcript"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+
+
+def test_youtube_no_transcript_is_honest():
+    none = {"video_id": "abcdefghijk", "url": "u", "outcome": "skipped",
+            "title": "", "language": "", "text": "", "segments": [],
+            "reason": "no captions available"}
+    turn = _assistant(youtube_result=none).chat("transcript of https://youtu.be/abcdefghijk")
+    assert "no transcript" in turn.answer.lower()
+
+
+def test_youtube_gap_when_no_tool():
+    turn = _assistant(with_youtube=False).chat("get the transcript of https://youtu.be/abcdefghijk")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "transcript"
 
 
 # --- run_python (S16) -----------------------------------------------------

@@ -15,6 +15,8 @@ the DI container, so they work without a running API server:
     atlas formats               # list document formats the reader supports
     atlas websearch "query"     # search the web (SearchCapability)
     atlas download <url>        # download a URL to the downloads dir
+    atlas scholar "query"       # search academic sources (arXiv/Semantic Scholar, S18a)
+    atlas youtube <url|id>      # fetch a YouTube transcript (S18a)
     atlas code map ./repo       # map a repo (langs/deps/frameworks/entry points)
     atlas code parse ./f.py     # parse one file into symbols/imports/calls
     atlas code symbols ./repo -q Foo   # search code symbols
@@ -155,6 +157,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_dl.add_argument("url", help="absolute http(s) URL")
     p_dl.add_argument("--filename", default=None, help="output filename (sanitised)")
 
+    p_sch = sub.add_parser("scholar", help="search academic sources (arXiv, Semantic Scholar)")
+    p_sch.add_argument("query", help="search query")
+    p_sch.add_argument("--limit", type=int, default=5, help="max papers")
+
+    p_yt = sub.add_parser("youtube", help="fetch a YouTube video transcript")
+    p_yt.add_argument("video", help="YouTube URL or 11-char video id")
+    p_yt.add_argument("--full", action="store_true", help="print the full transcript text")
+
     p_code = sub.add_parser("code", help="code understanding (CodeCapability)")
     p_code.add_argument(
         "action",
@@ -184,6 +194,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument(
         "path", help="path to a JSON file: {claims: [...], sources?: [...], budget?: {...}}"
     )
+
+    p_learn = sub.add_parser(
+        "learn", help="continuous learning: review/apply/revert/recall (S18b)"
+    )
+    p_learn.add_argument(
+        "action",
+        choices=["events", "show", "apply", "revert", "experiences", "recall"],
+        help="events|show <id>|apply <id>|revert <id>|experiences|recall <query>",
+    )
+    p_learn.add_argument("target", nargs="?", help="event id, or a recall query")
+    p_learn.add_argument("--status", help="filter events by status")
+    p_learn.add_argument("--store", help="filter events by store")
+    p_learn.add_argument("--policy", help="policy when applying (temporary|project|personal|verified)")
+    p_learn.add_argument("--level", type=int, help="Learning Level (1-5) when applying")
+    p_learn.add_argument("--limit", type=int, default=20)
 
     sub.add_parser("backup", help="run an on-demand database backup (pg_dump)")
 
@@ -485,6 +510,43 @@ def cmd_download(args: argparse.Namespace, app: "Application | None" = None) -> 
     return 0
 
 
+def cmd_scholar(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    result = app.invoke_tool("scholar.search", query=args.query, max_results=args.limit)
+    outcome = result.get("outcome")
+    if outcome != "ok":
+        print(f"scholar {outcome}: {result.get('reason') or 'no results'}", file=sys.stderr)
+        return 1
+    papers = result.get("results", [])
+    if not papers:
+        print(f"no papers for {args.query!r}")
+        return 0
+    for i, p in enumerate(papers, start=1):
+        authors = ", ".join(p.get("authors", [])[:3])
+        meta = " · ".join(
+            b for b in (authors, str(p.get("year") or ""), p.get("venue") or "",
+                        p.get("level_name") or "") if b
+        )
+        print(f"{i}. {p.get('title')} ({meta})")
+        if p.get("url"):
+            print(f"   {p['url']}")
+    return 0
+
+
+def cmd_youtube(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    result = app.invoke_tool("youtube.transcript", video=args.video)
+    outcome = result.get("outcome")
+    if outcome != "ok":
+        print(f"transcript {outcome}: {result.get('reason') or 'unavailable'}", file=sys.stderr)
+        return 1
+    title = result.get("title") or result.get("video_id")
+    text = result.get("text", "")
+    print(f"# {title}  [{result.get('language')}]  ({len(text)} chars)")
+    print(text if args.full else (text[:1000] + ("…" if len(text) > 1000 else "")))
+    return 0
+
+
 def cmd_code(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     code = app.container.resolve("code")
@@ -617,6 +679,78 @@ def cmd_verify(args: argparse.Namespace, app: "Application | None" = None) -> in
     return 0
 
 
+def cmd_learn(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    learning = app.container.resolve("learning")
+    action = args.action
+
+    if action == "events":
+        events = learning.list_events(
+            status=args.status, store=args.store, limit=args.limit
+        )
+        if not events:
+            print("no learning events")
+            return 0
+        for e in events:
+            print(f"[{e['status']}] {e['id']}  {e['store']}/{e['level_name']}  "
+                  f"({e['policy']})  {e['summary']}")
+        return 0
+
+    if action == "show":
+        if not args.target:
+            print("usage: atlas learn show <event_id>")
+            return 2
+        try:
+            data = learning.explain(args.target)
+        except KeyError:
+            print("event not found")
+            return 1
+        print(data.get("explanation", ""))
+        return 0
+
+    if action == "apply":
+        if not args.target:
+            print("usage: atlas learn apply <event_id>")
+            return 2
+        try:
+            result = learning.apply(args.target, policy=args.policy, level=args.level)
+        except KeyError:
+            print("event not found")
+            return 1
+        except ValueError as exc:
+            print(str(exc))
+            return 2
+        print(f"applied: {result['event']['id']} → {result['event']['store']}")
+        return 0
+
+    if action == "revert":
+        if not args.target:
+            print("usage: atlas learn revert <event_id>")
+            return 2
+        try:
+            learning.revert(args.target)
+        except KeyError:
+            print("event not found")
+            return 1
+        print(f"reverted: {args.target}")
+        return 0
+
+    if action == "experiences":
+        for x in learning.list_experiences(limit=args.limit):
+            print(f"{x['id']}  ({x['policy']})  {x['title'] or x['problem'][:80]}")
+        return 0
+
+    if action == "recall":
+        query = args.target or ""
+        for x in learning.recall(query, limit=args.limit):
+            print(f"{x['id']}  {x['title'] or x['problem'][:80]}")
+            if x.get("lessons"):
+                print(f"    lessons: {x['lessons']}")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     backup = app.container.resolve("backup")
@@ -645,10 +779,13 @@ _HANDLERS = {
     "formats": cmd_formats,
     "websearch": cmd_websearch,
     "download": cmd_download,
+    "scholar": cmd_scholar,
+    "youtube": cmd_youtube,
     "code": cmd_code,
     "python": cmd_python,
     "report": cmd_report,
     "verify": cmd_verify,
+    "learn": cmd_learn,
     "backup": cmd_backup,
 }
 

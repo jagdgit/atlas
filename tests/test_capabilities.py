@@ -129,3 +129,44 @@ def test_python_capability_contract_verified(tmp_path):
     assert reg.verify(CAP_PYTHON) is True
     assert CAPABILITY_CATALOG[CAP_PYTHON].contract is PythonExecutionCapability
     assert CAPABILITY_CATALOG[CAP_PYTHON].since == "S16"
+
+
+def test_scholar_capability_contract_verified():
+    from atlas.capabilities import CAP_SCHOLAR, ScholarCapability
+    from atlas.plugins.scholar_plugin import ScholarPlugin
+
+    reg = CapabilityRegistry()
+    reg.register(CAP_SCHOLAR, ScholarPlugin([]), contract=ScholarCapability, kind="plugin")
+    assert reg.verify(CAP_SCHOLAR) is True
+    assert CAPABILITY_CATALOG[CAP_SCHOLAR].contract is ScholarCapability
+    assert CAPABILITY_CATALOG[CAP_SCHOLAR].since == "S18"
+
+
+def test_transcript_capability_contract_verified():
+    from atlas.capabilities import CAP_TRANSCRIPT, TranscriptCapability
+    from atlas.plugins.youtube_plugin import YouTubePlugin
+    from atlas.transcripts import YouTubeTranscriptProvider
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_TRANSCRIPT, YouTubePlugin(YouTubeTranscriptProvider(None)),
+        contract=TranscriptCapability, kind="plugin",
+    )
+    assert reg.verify(CAP_TRANSCRIPT) is True
+    assert CAPABILITY_CATALOG[CAP_TRANSCRIPT].contract is TranscriptCapability
+    assert CAPABILITY_CATALOG[CAP_TRANSCRIPT].since == "S18"
+
+
+def test_learning_capability_contract_verified():
+    from atlas.capabilities import CAP_LEARNING, LearningCapability
+    from atlas.services.learning_service import LearningService
+    from tests.test_learning import FakeLearningRepo
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_LEARNING, LearningService(FakeLearningRepo()),
+        contract=LearningCapability, kind="service",
+    )
+    assert reg.verify(CAP_LEARNING) is True
+    assert CAPABILITY_CATALOG[CAP_LEARNING].contract is LearningCapability
+    assert CAPABILITY_CATALOG[CAP_LEARNING].since == "S18"

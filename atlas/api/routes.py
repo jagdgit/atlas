@@ -54,14 +54,18 @@ from atlas.api.schemas import (
     CodeParseRequest,
     CodeRepoRequest,
     CodeSymbolsRequest,
+    ExperienceRequest,
+    LearningApplyRequest,
     PythonRunRequest,
     ReportRequest,
+    ScholarSearchRequest,
     ToolInfo,
     ToolsResponse,
     VerifyRequest,
     VerifyResponse,
     WebSearchRequest,
     WebSearchResponse,
+    YouTubeTranscriptRequest,
 )
 
 # Public: liveness only, no auth (safe to expose to a load balancer / probe).
@@ -246,6 +250,18 @@ def web_search(body: WebSearchRequest, request: Request) -> WebSearchResponse:
     )
 
 
+@v1_router.post("/scholar", tags=["research"])
+def scholar_search(body: ScholarSearchRequest, request: Request) -> dict:
+    return _app(request).invoke_tool(
+        "scholar.search", query=body.query, max_results=body.max_results
+    )
+
+
+@v1_router.post("/youtube/transcript", tags=["research"])
+def youtube_transcript(body: YouTubeTranscriptRequest, request: Request) -> dict:
+    return _app(request).invoke_tool("youtube.transcript", video=body.video)
+
+
 # --- code understanding (S14) --------------------------------------------
 def _code(request: Request):
     return _app(request).container.resolve("code")
@@ -301,6 +317,57 @@ def report(body: ReportRequest, request: Request) -> dict:
         budget=body.budget,
         notes=body.notes or "",
     )
+
+
+@v1_router.get("/learning/events", tags=["learning"])
+def learning_events(
+    request: Request, status: str | None = None, store: str | None = None, limit: int = 50
+) -> dict:
+    learning = _app(request).container.resolve("learning")
+    return {"events": learning.list_events(status=status, store=store, limit=limit)}
+
+
+@v1_router.get("/learning/events/{event_id}", tags=["learning"])
+def learning_event(event_id: str, request: Request) -> dict:
+    learning = _app(request).container.resolve("learning")
+    try:
+        return learning.explain(event_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="learning event not found")
+
+
+@v1_router.post("/learning/events/{event_id}/apply", tags=["learning"])
+def learning_apply(event_id: str, body: LearningApplyRequest, request: Request) -> dict:
+    learning = _app(request).container.resolve("learning")
+    try:
+        return learning.apply(event_id, policy=body.policy, level=body.level)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="learning event not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@v1_router.post("/learning/events/{event_id}/revert", tags=["learning"])
+def learning_revert(event_id: str, request: Request) -> dict:
+    learning = _app(request).container.resolve("learning")
+    try:
+        return learning.revert(event_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="learning event not found")
+
+
+@v1_router.get("/learning/experiences", tags=["learning"])
+def learning_experiences(request: Request, q: str | None = None, limit: int = 50) -> dict:
+    learning = _app(request).container.resolve("learning")
+    if q:
+        return {"experiences": learning.recall(q, limit=limit)}
+    return {"experiences": learning.list_experiences(limit=limit)}
+
+
+@v1_router.post("/learning/experiences", tags=["learning"])
+def learning_remember(body: ExperienceRequest, request: Request) -> dict:
+    learning = _app(request).container.resolve("learning")
+    return learning.remember_experience(**body.model_dump(exclude_none=True))
 
 
 @v1_router.post("/verify", response_model=VerifyResponse, tags=["verification"])

@@ -23,7 +23,9 @@ from atlas.capabilities import (
     CAP_LLM,
     CAP_MEMORY,
     CAP_PYTHON,
+    CAP_SCHOLAR,
     CAP_SEARCH,
+    CAP_TRANSCRIPT,
     CAP_WEB,
 )
 
@@ -34,6 +36,8 @@ class Intent:
     REMEMBER = "remember"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
+    SCHOLAR_SEARCH = "scholar_search"
+    YOUTUBE_TRANSCRIPT = "youtube_transcript"
     RUN_PYTHON = "run_python"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
@@ -107,6 +111,34 @@ _SEARCH_PREFIX_RE = re.compile(
     r"find(?:\s+me)?)\s*[:,]?\s*",
     re.IGNORECASE,
 )
+# Academic search: arXiv/Scholar mentions, or "find papers/studies on …" phrasing.
+_SCHOLAR_RE = re.compile(
+    r"\barxiv\b|\bgoogle scholar\b|\bsemantic scholar\b|\bpeer[- ]reviewed\b"
+    r"|\bacademic (?:papers?|sources?|literature)\b|\bliterature review\b"
+    r"|\b(?:find|search|look up|get|fetch)\b[^?]{0,30}"
+    r"\b(?:papers?|studies|publications?|journal articles?)\b"
+    r"|\b(?:papers?|studies|research)\s+(?:on|about)\b",
+    re.IGNORECASE,
+)
+_SCHOLAR_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:find|search|look\s+up|get|fetch)\s+(?:me\s+)?(?:some\s+)?"
+    r"(?:recent\s+)?(?:"
+    r"(?:papers?|studies|research|publications?|academic\s+\w+|literature)"
+    r"|(?:on\s+)?(?:arxiv|semantic\s+scholar|google\s+scholar|scholar)"
+    r")\s*(?:on|about|for|regarding)?\s*[:,]?\s*",
+    re.IGNORECASE,
+)
+# A YouTube URL, or an explicit "transcript/transcribe" request.
+_YOUTUBE_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?[^\s]*v=|shorts/|embed/|v/)"
+    r"|youtu\.be/)[\w\-]{11}[^\s<>\"')]*",
+    re.IGNORECASE,
+)
+_YOUTUBE_RE = re.compile(
+    r"youtu\.?be|youtube\.com/(?:watch|shorts|embed|v/)"
+    r"|\b(?:transcript|transcribe|subtitles?|captions?)\b",
+    re.IGNORECASE,
+)
 # A fenced ```python code block, or an explicit "run this python …" instruction.
 _PYTHON_FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _PYTHON_PREFIX_RE = re.compile(
@@ -147,6 +179,27 @@ def _query_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
 def _search_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     query = _SEARCH_PREFIX_RE.sub("", message).strip()
     return {"query": query or message.strip()}
+
+
+def _scholar_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    query = _SCHOLAR_PREFIX_RE.sub("", message).strip()
+    query = re.sub(
+        r"\b(?:on|in|from)\s+(?:arxiv|semantic\s+scholar|google\s+scholar|scholar)\b",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    ).strip()
+    return {"query": query or message.strip()}
+
+
+def _youtube_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    match = _YOUTUBE_URL_RE.search(message)
+    if match:
+        video = match.group(0).rstrip(".,);")
+    else:
+        token = re.search(r"\b[A-Za-z0-9_-]{11}\b", message)
+        video = token.group(0) if token else ""
+    return {"video": video}
 
 
 def _python_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -203,10 +256,22 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         _python_args,
     ),
     (
+        Intent.YOUTUBE_TRANSCRIPT,
+        CAP_TRANSCRIPT,
+        _YOUTUBE_RE,
+        _youtube_args,
+    ),
+    (
         Intent.WEB_FETCH,
         CAP_WEB,
         _URL_RE,
         _url_args,
+    ),
+    (
+        Intent.SCHOLAR_SEARCH,
+        CAP_SCHOLAR,
+        _SCHOLAR_RE,
+        _scholar_args,
     ),
     (
         Intent.WEB_SEARCH,
@@ -256,6 +321,8 @@ _DESCRIPTIONS = {
     Intent.REMEMBER: "Store a fact in memory.",
     Intent.WEB_FETCH: "Fetch a web page.",
     Intent.WEB_SEARCH: "Search the web for sources.",
+    Intent.SCHOLAR_SEARCH: "Search academic sources (arXiv, Semantic Scholar).",
+    Intent.YOUTUBE_TRANSCRIPT: "Fetch a YouTube video transcript.",
     Intent.RUN_PYTHON: "Run Python code in the sandbox.",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",

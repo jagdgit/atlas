@@ -54,6 +54,7 @@ from atlas.repositories.document_repo import DocumentRepository
 from atlas.repositories.embedding_repo import EmbeddingRepository
 from atlas.repositories.health_repo import HealthRepository
 from atlas.repositories.job_repo import JobRepository
+from atlas.repositories.learning_repo import LearningRepository
 from atlas.repositories.memory_repo import MemoryRepository
 from atlas.repositories.task_repo import TaskRepository
 from atlas.scheduler.handlers import HandlerRegistry
@@ -62,6 +63,7 @@ from atlas.services.agent_service import AgentService
 from atlas.services.assistant_service import AssistantService
 from atlas.services.database_service import DatabaseService
 from atlas.services.health import HealthMonitor
+from atlas.services.learning_service import LearningService
 from atlas.services.memory_service import MemoryService
 from atlas.utils.logging import get_logger, setup_logging
 
@@ -269,6 +271,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         ReportGenerator(llm=llm_service, logger=get_logger("atlas.reports")),
         logger=get_logger("atlas.reports"),
     )
+    # Continuous Learning (Sprint 18b, D11/§5d): governed, reversible promotion of
+    # completed activities into the five stores; seeds the Experience store.
+    learning_service = LearningService(
+        LearningRepository(db_manager),
+        cfg.learning,
+        logger=get_logger("atlas.learning"),
+    )
 
     job_repo = JobRepository(db_manager)
     job_planner = JobPlanner(
@@ -285,6 +294,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         conversation=conversation_service,
         reports=report_service,
         events=events,
+        learning=learning_service,
         step_max_retries=cfg.jobs.step_max_retries,
         retry_delay=cfg.jobs.retry_delay,
         logger=get_logger("atlas.jobs"),
@@ -390,6 +400,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("python", python_service)
     container.register_instance("verification", verification_service)
     container.register_instance("reports", report_service)
+    container.register_instance("learning", learning_service)
     container.register_instance("ingestion", ingestion_source)
 
     # Advertise capabilities so agents can query the kernel instead of importing
@@ -426,6 +437,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register("verification", verification_service, kind="service")
     capabilities.register("reports", report_service, kind="service")
+    capabilities.register(
+        "learning", learning_service, contract=caps.LearningCapability, kind="service"
+    )
     capabilities.register("ingestion", ingestion_source, kind="service")
 
     # 6. Core services (registration order = start order)
@@ -443,6 +457,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(python_service)
     registry.register(verification_service)
     registry.register(report_service)
+    registry.register(learning_service)
     registry.register(ingestion_source)
 
     # 7. Application object — holds the shared registries by reference, so it can

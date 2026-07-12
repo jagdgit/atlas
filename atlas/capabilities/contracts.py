@@ -28,6 +28,8 @@ CAP_WEB = "web"
 CAP_AGENT = "agent"
 CAP_CONVERSATION = "conversation"
 CAP_SEARCH = "search"
+CAP_SCHOLAR = "scholar"
+CAP_TRANSCRIPT = "transcript"
 CAP_CODE = "code"
 CAP_PYTHON = "python"
 CAP_LEARNING = "learning"
@@ -104,6 +106,20 @@ class SearchCapability(Protocol):
 
 
 @runtime_checkable
+class ScholarCapability(Protocol):
+    """Academic *search* — query → graded papers (arXiv, Semantic Scholar; S18)."""
+
+    def search_scholar(self, query: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class TranscriptCapability(Protocol):
+    """Video → transcript text (YouTube; S18)."""
+
+    def get_transcript(self, video: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
 class CodeCapability(Protocol):
     """Understand code as structure (S14, Tier B): parse, map, index, graph."""
 
@@ -120,6 +136,16 @@ class PythonExecutionCapability(Protocol):
 
     def run(self, code: str, *args: Any, **kwargs: Any) -> Any: ...
     def run_file(self, path: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class LearningCapability(Protocol):
+    """Promote completed activities into the five stores, governed (S18b, §5d)."""
+
+    def observe_job(self, detail: Any, *args: Any, **kwargs: Any) -> Any: ...
+    def apply(self, event_id: str, *args: Any, **kwargs: Any) -> Any: ...
+    def revert(self, event_id: str, *args: Any, **kwargs: Any) -> Any: ...
+    def recall(self, query: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # --- the catalog ---------------------------------------------------------
@@ -191,6 +217,20 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Discovering sources, not just fetching a known URL.",
         "S13",
     ),
+    CAP_SCHOLAR: CapabilitySpec(
+        CAP_SCHOLAR,
+        ScholarCapability,
+        "Academic search (arXiv, Semantic Scholar): papers graded L3/L4.",
+        "Peer-reviewed evidence for the Verification Engine (§5a).",
+        "S18",
+    ),
+    CAP_TRANSCRIPT: CapabilitySpec(
+        CAP_TRANSCRIPT,
+        TranscriptCapability,
+        "Fetch a video transcript (YouTube) as readable text (L1 evidence).",
+        "Learning from talks/lectures, not just written sources.",
+        "S18",
+    ),
     CAP_CODE: CapabilitySpec(
         CAP_CODE,
         CodeCapability,
@@ -207,9 +247,9 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
     ),
     CAP_LEARNING: CapabilitySpec(
         CAP_LEARNING,
-        Protocol,  # concrete LearningCapability contract lands with its impl (S18)
-        "Promote completed activities into the five stores, governed (planned).",
-        "Continuous learning: Atlas compounds over time (§5d).",
+        LearningCapability,
+        "Promote completed activities into the five stores, governed & reversible.",
+        "Continuous learning: Atlas compounds over time (§5d); Experience store.",
         "S18",
     ),
 }

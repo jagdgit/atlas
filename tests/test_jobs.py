@@ -162,7 +162,16 @@ class FakeEvents:
         self.events.append((event_type, payload or {}))
 
 
-def _make(planner_steps, runner, *, reports=None, events=None):
+class FakeLearning:
+    def __init__(self):
+        self.observed = []
+
+    def observe_job(self, detail):
+        self.observed.append(detail)
+        return {"event": {"id": "evt-1"}, "applied": False}
+
+
+def _make(planner_steps, runner, *, reports=None, events=None, learning=None):
     repo = FakeJobRepo()
     enqueue_log = []
 
@@ -171,7 +180,7 @@ def _make(planner_steps, runner, *, reports=None, events=None):
 
     service = JobService(
         repo, FakePlanner(planner_steps), runner,
-        enqueue=enqueue, reports=reports, events=events,
+        enqueue=enqueue, reports=reports, events=events, learning=learning,
     )
     return repo, service, enqueue_log
 
@@ -310,6 +319,18 @@ def test_notifications_emitted_on_block_and_finalize():
     types = [t for t, _ in events.events]
     assert "job.step_blocked" in types
     assert "job.finalized" in types
+
+
+def test_learning_observed_on_finalize():
+    steps = [DecomposedStep("react", "agent", {}, "a")]
+    learning = FakeLearning()
+    repo, service, log = _make(steps, ScriptedRunner(), learning=learning)
+    jid = service.create_job("investigate x")["job"].id
+    _drive(service, jid, log)
+    assert len(learning.observed) == 1
+    detail = learning.observed[0]
+    assert detail["job"].id == jid
+    assert detail["steps"]
 
 
 def test_list_blocked_aggregates_across_jobs():

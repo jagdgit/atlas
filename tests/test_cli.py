@@ -23,16 +23,19 @@ from atlas.cli.main import (
     cmd_ingest,
     cmd_job,
     cmd_jobs,
+    cmd_learn,
     cmd_plugins,
     cmd_python,
     cmd_recall,
     cmd_remember,
     cmd_report,
+    cmd_scholar,
     cmd_search,
     cmd_tool,
     cmd_tools,
     cmd_verify,
     cmd_websearch,
+    cmd_youtube,
 )
 from atlas.services.assistant_service import ChatTurn
 from atlas.knowledge.service import SearchResult
@@ -223,6 +226,7 @@ class FakeApp:
                 "python": FakePython(),
                 "verification": VerificationService(),
                 "reports": ReportService(VerificationService()),
+                "learning": _fake_learning(),
             }
         )
 
@@ -243,7 +247,31 @@ class FakeApp:
                 "bytes": 42,
                 "outcome": "ok",
             }
+        if name == "scholar.search":
+            return {
+                "query": kwargs.get("query"),
+                "provider": "semantic_scholar",
+                "outcome": "ok",
+                "results": [
+                    {"title": "Paper A", "authors": ["A. Smith"], "year": 2021,
+                     "venue": "Solar Energy", "url": "https://s2.org/1",
+                     "level_name": "L4 peer-reviewed"}
+                ],
+            }
+        if name == "youtube.transcript":
+            return {
+                "video_id": "abcdefghijk", "url": kwargs.get("video"), "outcome": "ok",
+                "title": "How Solar Works", "language": "en",
+                "text": "Solar panels convert sunlight into electricity.", "segments": [],
+            }
         return {"tool": name, "args": kwargs}
+
+
+def _fake_learning():
+    from atlas.services.learning_service import LearningService
+    from tests.test_learning import FakeLearningRepo
+
+    return LearningService(FakeLearningRepo())
 
 
 class _Container:
@@ -481,6 +509,24 @@ def test_cmd_websearch_lists(capsys):
     assert "R1" in out and "https://a.example" in out
 
 
+def test_cmd_scholar_lists_papers(capsys):
+    args = build_parser().parse_args(["scholar", "pv soiling"])
+    rc = cmd_scholar(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Paper A" in out
+    assert "L4 peer-reviewed" in out
+
+
+def test_cmd_youtube_prints_transcript(capsys):
+    args = build_parser().parse_args(["youtube", "https://youtu.be/abcdefghijk"])
+    rc = cmd_youtube(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "How Solar Works" in out
+    assert "Solar panels convert sunlight" in out
+
+
 def test_cmd_download_prints_path(capsys):
     args = build_parser().parse_args(["download", "https://example.com/x.pdf"])
     rc = cmd_download(args, app=FakeApp())
@@ -582,6 +628,46 @@ def test_cmd_jobs_blocked(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "needs capability: web" in out
+
+
+# --- learn (S18b) ---------------------------------------------------------
+def test_cmd_learn_remember_and_recall(capsys):
+    app = FakeApp()
+    learning = app.container.resolve("learning")
+    learning.remember_experience(
+        problem="deadlock on migrate", solution="lock_timeout",
+        lessons="run migrations serially",
+    )
+    args = build_parser().parse_args(["learn", "recall", "deadlock"])
+    rc = cmd_learn(args, app=app)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "deadlock" in out
+    assert "run migrations serially" in out
+
+
+def test_cmd_learn_events_and_revert(capsys):
+    app = FakeApp()
+    learning = app.container.resolve("learning")
+    learning.remember_experience(problem="p1", solution="s1")
+    events = learning.list_events()
+    eid = events[0]["id"]
+
+    args = build_parser().parse_args(["learn", "events"])
+    assert cmd_learn(args, app=app) == 0
+    assert eid in capsys.readouterr().out
+
+    args = build_parser().parse_args(["learn", "revert", eid])
+    assert cmd_learn(args, app=app) == 0
+    assert "reverted" in capsys.readouterr().out
+    assert learning.list_experiences() == []
+
+
+def test_cmd_learn_show_unknown_returns_1(capsys):
+    args = build_parser().parse_args(["learn", "show", "ghost"])
+    rc = cmd_learn(args, app=FakeApp())
+    assert rc == 1
+    assert "not found" in capsys.readouterr().out
 
 
 # --- verify (S15) ---------------------------------------------------------

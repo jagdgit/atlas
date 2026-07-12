@@ -232,6 +232,15 @@ class CodeExplainRequest(BaseModel):
     question: str | None = None
 
 
+class ScholarSearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+    max_results: int = Field(default=5, ge=1, le=25)
+
+
+class YouTubeTranscriptRequest(BaseModel):
+    video: str = Field(min_length=1)  # YouTube URL or 11-char video id
+
+
 class ReportRequest(BaseModel):
     # Objective + a serialised Evidence Graph → a verified §5a.5 report (S17).
     objective: str = Field(min_length=1)
@@ -239,6 +248,25 @@ class ReportRequest(BaseModel):
     sources: list[dict] | None = None
     budget: dict | None = None
     notes: str | None = None
+
+
+class LearningApplyRequest(BaseModel):
+    # Promote a proposed learning event into its store (S18b, §5d).
+    policy: str | None = None  # temporary | project | personal | verified
+    level: int | None = Field(default=None, ge=1, le=5)
+
+
+class ExperienceRequest(BaseModel):
+    # Manually record an Experience (problem → solution → lessons).
+    title: str | None = None
+    problem: str = Field(min_length=1)
+    diagnosis: str | None = None
+    actions: list[str] | None = None
+    mistakes: str | None = None
+    solution: str | None = None
+    lessons: str | None = None
+    tags: list[str] | None = None
+    policy: str | None = None
 
 
 class PythonRunRequest(BaseModel):
