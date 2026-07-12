@@ -26,6 +26,7 @@ from atlas.capabilities import (
     CAP_PYTHON,
     CAP_SCHOLAR,
     CAP_SEARCH,
+    CAP_SQL,
     CAP_TRANSCRIPT,
     CAP_WEB,
 )
@@ -41,6 +42,7 @@ class Intent:
     YOUTUBE_TRANSCRIPT = "youtube_transcript"
     RUN_PYTHON = "run_python"
     GIT_STATUS = "git_status"
+    SQL_QUERY = "sql_query"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
@@ -165,6 +167,28 @@ _GIT_RE = re.compile(
 _GIT_DIR_RE = re.compile(
     r"(?:\"([^\"]+)\"|'([^']+)'|((?:~|\.{1,2})?/[\w./\-]+))"
 )
+# A fenced ```sql block, or an explicit "run/query … sql/database" instruction, or a
+# bare SELECT/WITH statement.
+_SQL_FENCE_RE = re.compile(r"```sql\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_SQL_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:run|execute|query)\s+(?:this\s+)?"
+    r"(?:sql|query|the\s+database|database|db)\b[:,]?\s*",
+    re.IGNORECASE,
+)
+_SQL_RE = re.compile(
+    r"```sql\b"
+    r"|^\s*(?:please\s+)?(?:run|execute|query)\s+(?:this\s+)?"
+    r"(?:sql|query|the\s+database|database|db)\b"
+    r"|^\s*(?:select|with)\b[\s\S]*\bfrom\b"
+    r"|\bquery\s+the\s+(?:database|db|table)\b",
+    re.IGNORECASE,
+)
+# A database source token: a quoted path or a *.db / *.sqlite file.
+_SQL_SOURCE_RE = re.compile(
+    r"(?:\"([^\"]+\.(?:db|sqlite3?|s3db))\"|'([^']+\.(?:db|sqlite3?|s3db))'"
+    r"|([\w./\-]+\.(?:db|sqlite3?|s3db)))",
+    re.IGNORECASE,
+)
 
 
 def _url_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -242,6 +266,29 @@ def _git_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"action": action, "repo": repo}
 
 
+def _sql_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    source = None
+    src = _SQL_SOURCE_RE.search(message)
+    if src:
+        source = next((g for g in src.groups() if g), None)
+    fence = _SQL_FENCE_RE.search(message)
+    if fence:
+        return {"sql": fence.group(1).strip(), "source": source}
+    body = _SQL_PREFIX_RE.sub("", message).strip().strip("`").strip()
+    # If the message *is* a bare SELECT/WITH, keep it as-is.
+    if re.match(r"^\s*(?:select|with)\b", message, re.IGNORECASE):
+        body = message.strip()
+    # Drop a trailing "on/from/in <source.db>" mention so it doesn't pollute the SQL.
+    if source:
+        body = re.sub(
+            r"\b(?:on|from|in|against|using)\s+['\"]?[\w./\-]+\.(?:db|sqlite3?|s3db)['\"]?\s*$",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        ).strip()
+    return {"sql": body, "source": source}
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -292,6 +339,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         CAP_GIT,
         _GIT_RE,
         _git_args,
+    ),
+    (
+        Intent.SQL_QUERY,
+        CAP_SQL,
+        _SQL_RE,
+        _sql_args,
     ),
     (
         Intent.YOUTUBE_TRANSCRIPT,
@@ -363,6 +416,7 @@ _DESCRIPTIONS = {
     Intent.YOUTUBE_TRANSCRIPT: "Fetch a YouTube video transcript.",
     Intent.RUN_PYTHON: "Run Python code in the sandbox.",
     Intent.GIT_STATUS: "Inspect a local git repository (read-only).",
+    Intent.SQL_QUERY: "Run a read-only SQL query on a local database.",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",

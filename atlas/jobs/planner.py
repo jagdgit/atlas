@@ -38,6 +38,7 @@ _VALID_INTENTS = {
     Intent.YOUTUBE_TRANSCRIPT,
     Intent.RUN_PYTHON,
     Intent.GIT_STATUS,
+    Intent.SQL_QUERY,
     Intent.LIST_DOCUMENTS,
     Intent.INGEST_PATH,
     Intent.ASK_KNOWLEDGE,
@@ -50,10 +51,10 @@ _DECOMPOSE_SYSTEM = (
     "with keys: intent, capability, args (object), description, depends_on (integer "
     "index of a prerequisite step, or null). "
     "Allowed intents: smalltalk, recall, remember, web_fetch, web_search, "
-    "scholar_search, youtube_transcript, run_python, git_status, list_documents, "
-    "ingest_path, ask_knowledge, react. "
+    "scholar_search, youtube_transcript, run_python, git_status, sql_query, "
+    "list_documents, ingest_path, ask_knowledge, react. "
     "Allowed capabilities: llm, memory, knowledge, web, search, scholar, transcript, "
-    "python, git, agent, document. "
+    "python, git, sql, agent, document. "
     "Prefer 'react' for open-ended reasoning. Keep it to at most 6 steps. "
     "Do not include any prose outside the JSON array."
 )

@@ -1,16 +1,16 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a + S20b shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
 > **Non-blocking HITL & Report Generator** + **Deeper Research: Scholarly + YouTube** +
 > **Learning Pipeline (Experience store, governed)** +
 > **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)** +
-> **Git (read-only local VCS, S20a)**;
-> 598 tests).
+> **Git (read-only local VCS, S20a)** + **SQL (read-only local databases, S20b)**;
+> 645 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S20b — remaining Tier 2/3 tools** (browser automation, OCR, DB, Email/LinkedIn — as needed).
+> Next: **S20c — remaining Tier 2/3 tools** (browser automation, OCR, Email/LinkedIn — as needed).
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -155,7 +155,8 @@ Honest mapping of current assets to Stage 2 needs:
 | Knowledge/RAG | ✅ ingest + chunk + embed + cited search | Ingestion limited to txt/md/pdf/html; no structured PDF understanding |
 | Filesystem | ✅ `filesystem_plugin` (`fs.list`, `fs.read`, sandboxed) | Read-only; no write/copy/move/watch-as-tool, no recursive find |
 | Web | ✅ `web_plugin` (`web.fetch` one URL → text) | No **web *search***, no downloader, no scholarly/YouTube |
-| Git | ✅ `git_plugin` (`git` cap, S20a: status/log/diff/show/branches/file_history) | **Read-only** local VCS, network-free; no write/browser/OCR/DB yet |
+| Git | ✅ `git_plugin` (`git` cap, S20a: status/log/diff/show/branches/file_history) | **Read-only** local VCS, network-free |
+| SQL | ✅ `sql_plugin` (`sql` cap, S20b: query/tables/schema, SQLite default) | **Read-only** (guard + `mode=ro`), sandboxed sources; Postgres backend swappable later |
 | Evidence | ✅ RAG citations (per-answer) | No **evidence graph** (claim→sources→confidence) across a job |
 | Human-in-the-loop | ⚠️ scheduler states (pending/claimed/running/…) | No `waiting_for_user` + notify + resume flow |
 | Determinism | ✅ temp=0 defaults, durable ret/recovery | No cross-check / verify pass; no report pipeline |
@@ -691,7 +692,8 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S18b** ✅ | **Learning Pipeline** | **Continuous Learning** (D11, §5d): governed, explainable, **reversible** learning ledger (`learning` cap) — completed jobs → *proposed* `LearningEvent`s (never silent); **Experience store** (problem→diagnosis→actions→mistakes→solution→lessons) with lexical **recall**; `propose→apply→revert` + policy/Learning-Level; migration 0011; `/v1/learning/*`, `atlas learn` | compounding knowledge |
 | **S19** ✅ | **Engineering Intelligence** | `intelligence` cap over the **Code store** (migration 0012): **L2** `learn_repository` (repo map + patterns + symbols → structure, promoted through the S18b ledger via a **store sink** — governed & reversible); **L3** cross-project `search` + `connections` (shared frameworks/langs); **L4** `generalize` (patterns/frameworks/languages you *always* use, prevalence-scored materialised view); **L5** `recommend` + `profile` (the **Personal Coding Assistant**); `/v1/intelligence/*`, `atlas intel` | Atlas learns *you* (L4–L5) |
 | **S20a** ✅ | **Git (read-only)** | `git` cap over a local repo: `status`/`log`/`diff`/`show`/`branches`/`file_history` via an injectable command-runner; **read-only by design** (no fetch/pull/push/commit) & network-free; honest outcomes (`ok`/`not_a_repo`/`unavailable`/`error`, never raises); planner `git_status` intent; `POST /v1/git`, `atlas git` | VCS-aware coding assistant |
-| **S20b** | **Remaining Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, DB, Email/LinkedIn | full toolbelt |
+| **S20b** ✅ | **SQL (read-only)** | `sql` cap over a local database (SQLite default): `query`/`tables`/`schema` via an injectable backend; **read-only by construction** — a statement guard (SELECT/WITH/EXPLAIN/VALUES only, single statement) **plus** a `mode=ro` connection; sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`blocked`/`unavailable`/`error`, never raises); result sets are **L5 evidence** (§5a.6); planner `sql_query` intent; `POST /v1/db/*`, `atlas sql` | structured-data analysis |
+| **S20c** | **Remaining Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, Email/LinkedIn | full toolbelt |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
 
 Plugin build order (from the doc, capability-first): Filesystem → Document Reader →
@@ -1378,7 +1380,55 @@ repo look like now, and how did it get here?" — without ever mutating a repo.
 - [x] Planner `git_status` intent + `AssistantService._do_git` (+ `git` gap fallback) + `JobPlanner` intent/capability.
 - [x] `POST /v1/git` + `atlas git` CLI.
 - [x] Hermetic tests (status/log/diff/branches/file-history parsing, unavailable/not-a-repo/error, plugin+registration, planner, assistant, api, cli, caps) **+ real-repo integration**. **598 tests pass (+25).**
-- [ ] **Next — S20b:** browser automation / OCR / DB / Email/LinkedIn, as needed.
+- [x] **Next — S20b:** SQL (read-only database querying).
+
+---
+
+## 6n. Sprint 20b — SQL (read-only local databases) (✅ DONE)
+
+The second Tier-2 tool: Atlas can now *query structured data*. It pairs with the Python
+sandbox (S16) — a computed result set is L5-quality evidence (§5a.6) — and follows the
+exact safety shape of Git (S20a): **read-only by construction**, injectable backend,
+honest outcomes, hermetic tests.
+
+- **`SQLClient` (`atlas/sql/client.py`)** runs a *single* statement through an
+  injectable **`SQLBackend`** (default **`SQLiteBackend`**, stdlib — always available).
+  Two independent layers keep it read-only: (1) a **statement guard** (`is_read_only`)
+  strips comments, rejects multiple statements, requires the statement to start with
+  `SELECT`/`WITH`/`EXPLAIN`/`VALUES`, and blocks any mutating keyword
+  (`INSERT`/`UPDATE`/`DELETE`/`DROP`/`ATTACH`/`PRAGMA`/…); and (2) the SQLite backend
+  opens the file with **`mode=ro`** (defence-in-depth — even a guard bypass cannot
+  write, verified by a test).
+- **Sandboxed sources.** A `source` is a db file resolved under and confined to a
+  sandbox root (default `paths.data`), mirroring the filesystem plugin; escapes and
+  missing files are an honest `unavailable` outcome.
+- **Honest outcomes (R2/R3).** `query`/`tables`/`schema` each return a structured dict
+  with `outcome` ∈ `ok` | `empty` | `blocked` | `unavailable` | `error` and **never
+  raise**; rows are capped (`max_rows`, `truncated` flagged), with a soft per-query
+  timeout that interrupts the connection.
+- **`SQLPlugin` = the `sql` capability.** Tools `sql.query` (columns + rows + truncated),
+  `sql.tables` (tables/views), `sql.schema` (column defs). Concrete **`SQLCapability`**
+  contract (catalog `CAP_SQL`, since S20).
+- **Planner + assistant + jobs.** New `sql_query` intent (fenced ```` ```sql ````, a
+  bare `SELECT … FROM …`, or "query the database …"; extracts an optional `*.db`
+  source); `AssistantService._do_sql` renders a compact text table and reports
+  blocked/unavailable/error honestly; `JobPlanner` accepts `sql_query`.
+- **Config** `plugins.sql.*` (`root`, `default_source`, `max_rows`, `timeout`) +
+  `sql_plugin` enabled. **Surface:** `POST /v1/db/query`, `GET /v1/db/tables`,
+  `GET /v1/db/schema`; `atlas sql query|tables|schema`.
+
+> **Backend seam:** SQLite is the default because it is stdlib (zero-config, hermetic).
+> A Postgres/other backend drops in behind the same `SQLBackend` protocol later without
+> touching callers — the read-only contract lives in `SQLClient`, not the backend.
+
+**Definition of Done (S20b)** — all met:
+- [x] `atlas/sql/client.py` — `SQLClient` + `SQLBackend`/`SQLiteBackend`; read-only guard + `mode=ro`; sandboxed sources; honest outcomes; row cap + soft timeout.
+- [x] `SQLPlugin` (`sql` cap) with `query`/`tables`/`schema`; `SQLCapability` contract + catalog (`CAP_SQL`, S20).
+- [x] `plugins.sql.*` config + defaults; `sql_plugin` enabled (self-registers, no bootstrap change).
+- [x] Planner `sql_query` intent + `AssistantService._do_sql` (+ `sql` gap fallback) + `JobPlanner` intent/capability.
+- [x] `POST /v1/db/query` + `GET /v1/db/tables|schema` + `atlas sql` CLI.
+- [x] Hermetic tests (guard allow/deny, real-SQLite query/aggregate/view/limit/empty, `mode=ro` write rejection, unavailable/escape/error, tables/schema, fake-backend translation, plugin+registration, planner, assistant, api, cli, caps). **645 tests pass (+47).**
+- [ ] **Next — S20c:** browser automation / OCR / Email/LinkedIn, as needed.
 
 ---
 
@@ -1409,6 +1459,7 @@ repo look like now, and how did it get here?" — without ever mutating a repo.
 
 | Date | Sprint | Notes |
 |------|--------|-------|
+| 2026-07-12 | S20b | **Sprint 20b shipped ✅ — SQL (read-only local databases).** Second Tier-2 tool; Atlas can query structured data, and a computed result set is **L5 evidence** (§5a.6), pairing with the Python sandbox. New `atlas/sql/client.py` **`SQLClient`** runs a *single* statement through an injectable **`SQLBackend`** (default **`SQLiteBackend`**, stdlib). **Read-only by construction** via two layers: (1) a statement **guard** (`is_read_only`: strips comments, one statement only, must start `SELECT`/`WITH`/`EXPLAIN`/`VALUES`, blocks `INSERT`/`UPDATE`/`DELETE`/`DROP`/`ATTACH`/`PRAGMA`/…) and (2) a **`mode=ro`** SQLite connection (defence-in-depth — a guard bypass still can't write, tested). Sources confined to a sandbox root (default `paths.data`). Honest outcomes `ok`/`empty`/`blocked`/`unavailable`/`error`, **never raises**; row cap + `truncated` flag + soft per-query timeout (connection interrupt). **`SQLPlugin`** = `sql` cap (`sql.query`/`sql.tables`/`sql.schema`). Concrete **`SQLCapability`** (`CAP_SQL`, S20). Planner **`sql_query`** intent (fenced ```` ```sql ````, bare `SELECT … FROM`, or "query the database …"; extracts `*.db` source) + `AssistantService._do_sql` (compact table render; blocked/unavailable/error honesty) + `JobPlanner`. `plugins.sql.*` config + `sql_plugin` enabled. `POST /v1/db/query` + `GET /v1/db/tables|schema`; `atlas sql query|tables|schema`. **Backend seam** lets Postgres drop in later. **645 tests pass (+47).** Next: **S20c** (browser/OCR/Email — as needed). |
 | 2026-07-12 | S20a | **Sprint 20a shipped ✅ — Git (read-only local version control).** First Tier-2 tool, chosen because it directly serves the coding-assistant thesis and is fully deterministic + hermetically testable. New `atlas/vcs/git.py` **`GitClient`** shells to `git` through an injectable **`CommandRunner`** (default `SubprocessRunner`, hard per-call timeout) — **read-only by design** (only `status`/`log`/`diff`/`show`/`branch`/`rev-parse`; never fetch/pull/push/commit) and **network-free**. Honest outcomes `ok`/`not_a_repo`/`unavailable`/`error`, **never raises** (R2/R3); pure output parsers. **`GitPlugin`** = `git` cap with six tools (`git.status` branch+ahead/behind+changes+clean, `git.log`, `git.diff` `--stat`+files-changed, `git.show`, `git.branches` list+current, `git.file_history`). Concrete **`GitCapability`** (`CAP_GIT`, S20). Planner **`git_status`** intent + `AssistantService._do_git` (deterministic rendering, `git` gap/blocked honesty) + `JobPlanner` support. `plugins.git.*` config (`git_binary`/`timeout`/`max_log`) + `git_plugin` enabled (self-registers, no bootstrap change). `POST /v1/git` + `atlas git status|log|diff|show|branches|file_history`. Hermetic tests (parsers, all outcomes, plugin+registration, planner, assistant, api, cli, caps) **+ real-repo integration**. **598 tests pass (+25).** S20 split: **S20b** (browser/OCR/DB/Email/LinkedIn) remains as-needed; Browser deliberately late. |
 | 2026-07-11 | — | Stage 2 plan drafted from `stage-2.txt`; gap analysis vs Stage 1; roadmap + open decisions D1–D6 raised for discussion |
 | 2026-07-11 | — | D1–D4 locked (chat-first w/ Job-Engine north star; deterministic planner; new conversation schema; full arc). Sprint 10 detailed in §6a; ready to build |

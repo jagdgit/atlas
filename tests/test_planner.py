@@ -151,6 +151,25 @@ def test_git_branches_and_diff(planner):
     assert planner.plan("git diff for /repo").steps[0].args["action"] == "diff"
 
 
+def test_sql_query_fenced_block(planner):
+    plan = planner.plan("run this:\n```sql\nSELECT * FROM sales\n```")
+    assert plan.intent == Intent.SQL_QUERY
+    assert plan.steps[0].capability == "sql"
+    assert plan.steps[0].args["sql"] == "SELECT * FROM sales"
+
+
+def test_sql_query_bare_select(planner):
+    plan = planner.plan("SELECT product, amount FROM sales ORDER BY id")
+    assert plan.intent == Intent.SQL_QUERY
+    assert "SELECT product" in plan.steps[0].args["sql"]
+
+
+def test_sql_query_extracts_source(planner):
+    plan = planner.plan("query the database shop.db: SELECT 1")
+    assert plan.intent == Intent.SQL_QUERY
+    assert plan.steps[0].args["source"] == "shop.db"
+
+
 def test_ingest_extracts_path(planner):
     plan = planner.plan("ingest /data/atlas_data/documents/report.pdf")
     assert plan.intent == Intent.INGEST_PATH

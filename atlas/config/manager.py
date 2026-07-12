@@ -245,6 +245,13 @@ class GitPluginConfig(BaseModel):
     max_log: int = 50  # default commits returned by log/file_history
 
 
+class SQLPluginConfig(BaseModel):
+    root: str | None = None  # sandbox root for db files; None => paths.data
+    default_source: str | None = None  # default db file if a call omits `source`
+    max_rows: int = 1000  # cap rows returned by a query
+    timeout: float = 15.0  # soft per-query wall-clock (interrupts the connection)
+
+
 class PluginsConfig(BaseModel):
     # Dotted module paths to load; each module exposes build(config) -> Plugin.
     enabled: list[str] = Field(default_factory=list)
@@ -255,6 +262,7 @@ class PluginsConfig(BaseModel):
     scholar: ScholarPluginConfig = ScholarPluginConfig()
     youtube: YouTubePluginConfig = YouTubePluginConfig()
     git: GitPluginConfig = GitPluginConfig()
+    sql: SQLPluginConfig = SQLPluginConfig()
 
 
 class MemoryConfig(BaseModel):

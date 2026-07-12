@@ -201,3 +201,18 @@ def test_git_capability_contract_verified():
     assert reg.verify(CAP_GIT) is True
     assert CAPABILITY_CATALOG[CAP_GIT].contract is GitCapability
     assert CAPABILITY_CATALOG[CAP_GIT].since == "S20"
+
+
+def test_sql_capability_contract_verified(tmp_path):
+    from atlas.capabilities import CAP_SQL, SQLCapability
+    from atlas.plugins.sql_plugin import SQLPlugin
+    from atlas.sql.client import SQLClient, SQLiteBackend
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_SQL, SQLPlugin(SQLClient(SQLiteBackend(tmp_path))),
+        contract=SQLCapability, kind="plugin",
+    )
+    assert reg.verify(CAP_SQL) is True
+    assert CAPABILITY_CATALOG[CAP_SQL].contract is SQLCapability
+    assert CAPABILITY_CATALOG[CAP_SQL].since == "S20"

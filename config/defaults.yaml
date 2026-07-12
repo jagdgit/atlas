@@ -170,6 +170,7 @@ plugins:
     - atlas.plugins.scholar_plugin
     - atlas.plugins.youtube_plugin
     - atlas.plugins.git_plugin
+    - atlas.plugins.sql_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -195,6 +196,11 @@ plugins:
     git_binary: git
     timeout: 15             # hard wall-clock per git invocation
     max_log: 50             # default commits returned by log/file_history
+  sql:                      # S20b: read-only SQL over local databases (SQLite default)
+    root: null              # sandbox root for db files; null => paths.data
+    default_source: null    # default db file when a call omits `source`
+    max_rows: 1000          # cap rows returned by a query
+    timeout: 15             # soft per-query wall-clock
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network

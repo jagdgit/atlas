@@ -88,6 +88,24 @@ def _format_git(action: str, repo: str, data: dict[str, Any]) -> str:
     return f"git {action} on {repo}: {data}"
 
 
+def _format_sql(data: dict[str, Any]) -> str:
+    """Render a small result set as a compact text table (no LLM needed)."""
+    columns = data.get("columns") or []
+    rows = data.get("rows") or []
+    if not rows:
+        return "The query returned no rows."
+    header = " | ".join(columns)
+    lines = [header, "-" * len(header)]
+    for row in rows[:20]:
+        lines.append(" | ".join(str(row.get(c, "")) for c in columns))
+    suffix = ""
+    if data.get("truncated"):
+        suffix = f"\n… (truncated; showing {min(len(rows), 20)} of many rows)"
+    elif len(rows) > 20:
+        suffix = f"\n… ({len(rows)} rows total; showing 20)"
+    return f"{data.get('row_count', len(rows))} row(s):\n" + "\n".join(lines) + suffix
+
+
 @dataclass(frozen=True)
 class ChatTurn:
     session_id: str
@@ -178,6 +196,7 @@ class AssistantService:
         youtube_tool: str = "youtube.transcript",
         python_tool: str = "python.run",
         git_tool_prefix: str = "git",
+        sql_tool: str = "sql.query",
         search_limit: int = 5,
         list_limit: int = 25,
         logger: logging.Logger | None = None,
@@ -197,6 +216,7 @@ class AssistantService:
         self._youtube_tool = youtube_tool
         self._python_tool = python_tool
         self._git_tool_prefix = git_tool_prefix
+        self._sql_tool = sql_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
         self._responder = ResponseBuilder(llm, logger)
@@ -282,6 +302,7 @@ class AssistantService:
             Intent.YOUTUBE_TRANSCRIPT: self._do_youtube,
             Intent.RUN_PYTHON: self._do_run_python,
             Intent.GIT_STATUS: self._do_git,
+            Intent.SQL_QUERY: self._do_sql,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
@@ -624,6 +645,42 @@ class AssistantService:
             return _Outcome(answer=f"git {action} failed: {data.get('reason')}")
         return _Outcome(answer=_format_git(action, repo, data))
 
+    def _do_sql(self, args, context, tool_calls) -> _Outcome:
+        sql = (args.get("sql") or "").strip()
+        if not sql:
+            return _Outcome(answer="What SQL query should I run?")
+        result = self._executor.execute(
+            self._sql_tool,
+            {"sql": sql, "source": args.get("source"), "limit": args.get("limit")},
+        )
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.SQL_QUERY,
+                "action": self._sql_tool,
+                "capability": "sql",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't run that query: {result.error}")
+        if outcome == "blocked":
+            return _Outcome(
+                answer=f"That query was refused: {data.get('reason')}. "
+                "I only run read-only queries (SELECT/WITH/EXPLAIN)."
+            )
+        if outcome == "unavailable":
+            return _Outcome(
+                answer=f"I couldn't reach that database: {data.get('reason')}.",
+                blocked=True,
+                blocked_reason=f"database unavailable: {data.get('reason')}",
+            )
+        if outcome == "error":
+            return _Outcome(answer=f"The query errored: {data.get('reason')}")
+        return _Outcome(answer=_format_sql(data))
+
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
         if self._agent is None:
@@ -681,6 +738,9 @@ class AssistantService:
             f"{self._git_tool_prefix}.status"
         )
 
+    def _has_sql_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._sql_tool)
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -700,6 +760,7 @@ class AssistantService:
             "transcript": self._has_youtube_tool(),
             "python": self._has_python_tool(),
             "git": self._has_git_tool(),
+            "sql": self._has_sql_tool(),
         }.get(capability, True)
 
     def _preflight_gaps(self, plan: Plan) -> list[dict[str, Any]]:

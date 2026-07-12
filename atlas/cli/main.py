@@ -192,6 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_git.add_argument("--max", type=int, default=None, dest="max_count",
                        help="max commits (log/file_history)")
 
+    p_sql = sub.add_parser("sql", help="read-only SQL over a local database (S20b)")
+    p_sql.add_argument("action", choices=["query", "tables", "schema"])
+    p_sql.add_argument("target", nargs="?", default=None,
+                       help="SQL text (query) or table name (schema)")
+    p_sql.add_argument("--source", default=None, help="db file under the sandbox root")
+    p_sql.add_argument("--limit", type=int, default=None, help="max rows (query)")
+
     p_report = sub.add_parser(
         "report", help="generate a scientific-review report from a JSON evidence graph"
     )
@@ -709,6 +716,48 @@ def cmd_git(args: argparse.Namespace, app: "Application | None" = None) -> int:
     return 0
 
 
+def cmd_sql(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    action = args.action
+    if action == "tables":
+        result = app.invoke_tool("sql.tables", source=args.source)
+    elif action == "schema":
+        if not args.target:
+            print("provide a table name", file=sys.stderr)
+            return 2
+        result = app.invoke_tool("sql.schema", table=args.target, source=args.source)
+    else:
+        if not args.target:
+            print("provide a SQL query", file=sys.stderr)
+            return 2
+        result = app.invoke_tool(
+            "sql.query", sql=args.target, source=args.source, limit=args.limit
+        )
+
+    outcome = result.get("outcome")
+    if outcome in ("unavailable", "blocked", "error"):
+        print(f"sql {action} {outcome}: {result.get('reason') or ''}", file=sys.stderr)
+        return 1
+    if action == "tables":
+        for t in result.get("tables", []):
+            print(t)
+    elif action == "schema":
+        for c in result.get("columns", []):
+            pk = " PK" if c.get("pk") else ""
+            null = "" if c.get("notnull") else " NULL"
+            print(f"{c['name']} {c['type']}{null}{pk}")
+    else:
+        columns = result.get("columns", [])
+        rows = result.get("rows", [])
+        if columns:
+            print(" | ".join(columns))
+        for row in rows:
+            print(" | ".join(str(row.get(c, "")) for c in columns))
+        print(f"({result.get('row_count', len(rows))} row(s)"
+              f"{', truncated' if result.get('truncated') else ''})")
+    return 0
+
+
 def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -934,6 +983,7 @@ _HANDLERS = {
     "code": cmd_code,
     "python": cmd_python,
     "git": cmd_git,
+    "sql": cmd_sql,
     "report": cmd_report,
     "verify": cmd_verify,
     "learn": cmd_learn,

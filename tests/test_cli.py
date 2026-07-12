@@ -33,6 +33,7 @@ from atlas.cli.main import (
     cmd_report,
     cmd_scholar,
     cmd_search,
+    cmd_sql,
     cmd_tool,
     cmd_tools,
     cmd_verify,
@@ -279,6 +280,15 @@ class FakeApp:
                 "commits": [{"short": "abc123", "date": "2026-07-01",
                              "author": "Ada", "subject": "init"}],
             }
+        if name == "sql.query":
+            return {
+                "outcome": "ok", "backend": "sqlite", "columns": ["product", "amount"],
+                "rows": [{"product": "a", "amount": 10.0},
+                         {"product": "b", "amount": 20.0}],
+                "row_count": 2, "truncated": False,
+            }
+        if name == "sql.tables":
+            return {"outcome": "ok", "backend": "sqlite", "tables": ["sales", "totals"]}
         return {"tool": name, "args": kwargs}
 
 
@@ -573,6 +583,23 @@ def test_cmd_git_log(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "abc123" in out and "init" in out
+
+
+def test_cmd_sql_query(capsys):
+    args = build_parser().parse_args(["sql", "query", "SELECT * FROM sales", "--source", "shop.db"])
+    rc = cmd_sql(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "product | amount" in out
+    assert "2 row(s)" in out
+
+
+def test_cmd_sql_tables(capsys):
+    args = build_parser().parse_args(["sql", "tables", "--source", "shop.db"])
+    rc = cmd_sql(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "sales" in out and "totals" in out
 
 
 def test_cmd_download_prints_path(capsys):

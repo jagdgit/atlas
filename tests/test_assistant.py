@@ -116,7 +116,7 @@ def _assistant(
     *, memory=None, knowledge=None, agent=None, with_web=True, with_search=True,
     search_result=None, with_python=True, python_result=None, capabilities=None,
     with_scholar=True, scholar_result=None, with_youtube=True, youtube_result=None,
-    with_git=True, git_result=None,
+    with_git=True, git_result=None, with_sql=True, sql_result=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -175,6 +175,14 @@ def _assistant(
                              "author": "Ada", "subject": "init"}],
             },
         )
+    if with_sql:
+        default_sql = {
+            "outcome": "ok", "backend": "sqlite", "columns": ["product", "amount"],
+            "rows": [{"product": "a", "amount": 10.0}], "row_count": 1,
+            "truncated": False,
+        }
+        sql_payload = sql_result if sql_result is not None else default_sql
+        tools.register("sql.query", lambda sql, **kw: sql_payload)
     return AssistantService(
         ConversationService(FakeConvRepo(), memory),
         Planner(),
@@ -394,6 +402,34 @@ def test_git_gap_when_no_tool():
     turn = _assistant(with_git=False).chat("git status /data/atlas")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "git"
+
+
+# --- sql (S20b) -----------------------------------------------------------
+def test_sql_query_renders_rows():
+    turn = _assistant().chat("run this:\n```sql\nSELECT product, amount FROM sales\n```")
+    assert turn.intent == "sql_query"
+    assert "product | amount" in turn.answer
+    assert turn.tool_calls[0]["action"] == "sql.query"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+
+
+def test_sql_blocked_is_honest():
+    blocked = {"outcome": "blocked", "reason": "only read-only statements allowed",
+               "backend": "sqlite"}
+    turn = _assistant(sql_result=blocked).chat("```sql\nDELETE FROM sales\n```")
+    assert "read-only" in turn.answer.lower()
+
+
+def test_sql_unavailable_blocks_step():
+    un = {"outcome": "unavailable", "reason": "database not found: x.db", "backend": "sqlite"}
+    turn = _assistant(sql_result=un).chat("SELECT 1 FROM sales")
+    assert "couldn't reach" in turn.answer.lower()
+
+
+def test_sql_gap_when_no_tool():
+    turn = _assistant(with_sql=False).chat("SELECT * FROM sales")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "sql"
 
 
 def test_ingest_without_path_asks_for_one():

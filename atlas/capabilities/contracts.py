@@ -35,6 +35,7 @@ CAP_PYTHON = "python"
 CAP_LEARNING = "learning"
 CAP_INTELLIGENCE = "intelligence"
 CAP_GIT = "git"
+CAP_SQL = "sql"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -170,6 +171,15 @@ class GitCapability(Protocol):
     def diff(self, repo: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class SQLCapability(Protocol):
+    """Read-only SQL querying over a local database (S20b)."""
+
+    def query(self, sql: str, *args: Any, **kwargs: Any) -> Any: ...
+    def tables(self, *args: Any, **kwargs: Any) -> Any: ...
+    def schema(self, table: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -286,6 +296,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         GitCapability,
         "Read a local repo's status, log, diff, branches and file history.",
         "Version-control awareness for the coding assistant (read-only).",
+        "S20",
+    ),
+    CAP_SQL: CapabilitySpec(
+        CAP_SQL,
+        SQLCapability,
+        "Run a read-only SQL query over a local database; list tables/schema.",
+        "Structured-data analysis (read-only); result sets are L5 evidence.",
         "S20",
     ),
 }

@@ -62,6 +62,7 @@ from atlas.api.schemas import (
     PythonRunRequest,
     ReportRequest,
     ScholarSearchRequest,
+    SQLQueryRequest,
     ToolInfo,
     ToolsResponse,
     VerifyRequest,
@@ -284,6 +285,25 @@ def git(body: GitRequest, request: Request) -> dict:
             max_count=body.max_count,
         )
     return app.invoke_tool("git.status", repo=body.repo)
+
+
+# --- sql (S20b): read-only local database querying ------------------------
+@v1_router.post("/db/query", tags=["sql"])
+def db_query(body: SQLQueryRequest, request: Request) -> dict:
+    return _app(request).invoke_tool(
+        "sql.query", sql=body.sql, source=body.source, params=body.params,
+        limit=body.limit,
+    )
+
+
+@v1_router.get("/db/tables", tags=["sql"])
+def db_tables(request: Request, source: str | None = None) -> dict:
+    return _app(request).invoke_tool("sql.tables", source=source)
+
+
+@v1_router.get("/db/schema", tags=["sql"])
+def db_schema(request: Request, table: str, source: str | None = None) -> dict:
+    return _app(request).invoke_tool("sql.schema", table=table, source=source)
 
 
 # --- code understanding (S14) --------------------------------------------

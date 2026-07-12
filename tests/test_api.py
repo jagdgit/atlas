@@ -342,6 +342,15 @@ class FakeApplication:
                 "commits": [{"short": "abc123", "date": "2026-07-01",
                              "author": "Ada", "subject": "init"}],
             }
+        if name == "sql.query":
+            return {
+                "outcome": "ok", "backend": "sqlite", "source": kwargs.get("source"),
+                "sql": kwargs.get("sql"), "columns": ["product", "amount"],
+                "rows": [{"product": "a", "amount": 10.0}], "row_count": 1,
+                "truncated": False,
+            }
+        if name == "sql.tables":
+            return {"outcome": "ok", "backend": "sqlite", "tables": ["sales", "totals"]}
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
         return {"url": kwargs.get("url"), "status": 200, "text": "hello"}
@@ -670,6 +679,27 @@ def test_git_log_endpoint():
 
 def test_git_endpoint_requires_auth():
     assert _client().post("/v1/git", json={"repo": "/r"}).status_code == 401
+
+
+def test_db_query_endpoint():
+    resp = _client().post(
+        "/v1/db/query", headers=AUTH,
+        json={"sql": "SELECT product, amount FROM sales", "source": "shop.db"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["outcome"] == "ok"
+    assert data["rows"][0]["product"] == "a"
+
+
+def test_db_tables_endpoint():
+    resp = _client().get("/v1/db/tables", headers=AUTH, params={"source": "shop.db"})
+    assert resp.status_code == 200
+    assert "sales" in resp.json()["tables"]
+
+
+def test_db_query_requires_auth():
+    assert _client().post("/v1/db/query", json={"sql": "SELECT 1"}).status_code == 401
 
 
 def test_code_repo_map_endpoint():
