@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from atlas.capabilities.contracts import (
     CAP_AGENT,
+    CAP_BROWSER,
     CAP_CODE,
     CAP_CONVERSATION,
     CAP_DOCUMENT,
@@ -38,6 +39,7 @@ from atlas.capabilities.contracts import (
     CAP_TRANSCRIPT,
     CAP_WEB,
     CAPABILITY_CATALOG,
+    BrowserCapability,
     CapabilitySpec,
     CodeCapability,
     ConversationCapability,
@@ -64,6 +66,7 @@ from atlas.capabilities.contracts import (
 
 __all__ = [
     "CAP_AGENT",
+    "CAP_BROWSER",
     "CAP_CODE",
     "CAP_CONVERSATION",
     "CAP_DOCUMENT",
@@ -82,6 +85,7 @@ __all__ = [
     "CAP_TRANSCRIPT",
     "CAP_WEB",
     "CAPABILITY_CATALOG",
+    "BrowserCapability",
     "CapabilitySpec",
     "CodeCapability",
     "ConversationCapability",

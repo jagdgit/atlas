@@ -28,6 +28,11 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# Headless browser automation (S20e). Heavy + needs `playwright install <browser>`, so
+# it is optional: the browser capability degrades gracefully when it is not installed.
+browser = [
+    "playwright>=1.40",
+]
 
 [project.scripts]
 atlas = "atlas.cli.main:main"

@@ -1,6 +1,6 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a + S20b + S20c(OCR) + S20d(Email) shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a–S20e shipped ✅ (Stage 2 tool arc complete)**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
@@ -8,9 +8,10 @@
 > **Learning Pipeline (Experience store, governed)** +
 > **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)** +
 > **Git (read-only local VCS, S20a)** + **SQL (read-only local databases, S20b)**
-> + **OCR (image → text, S20c)** + **Email (read-only IMAP, S20d)**; 702 tests).
+> + **OCR (image → text, S20c)** + **Email (read-only IMAP, S20d)**
+> + **Browser (headless render, S20e)**; 731 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S20e — Browser automation** (Playwright, deliberately last); LinkedIn folds into it.
+> Next: **Stage 2 wrap-up** — the tool arc (S10–S20) is complete; remaining work is autonomous multi-round research orchestration + hardening.
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -159,6 +160,7 @@ Honest mapping of current assets to Stage 2 needs:
 | SQL | ✅ `sql_plugin` (`sql` cap, S20b: query/tables/schema, SQLite default) | **Read-only** (guard + `mode=ro`), sandboxed sources; Postgres backend swappable later |
 | OCR | ✅ `ocr_plugin` (`ocr` cap, S20c: image→text, Tesseract default) | Injectable engine seam; **degrades gracefully** (unavailable, never raises) if deps/binary missing; sandboxed sources |
 | Email | ✅ `mail_plugin` (`mail` cap, S20d: folders/search/message, IMAP) | **Read-only** (`readonly=True` + `BODY.PEEK`, no write path); injectable backend seam; **degrades gracefully** (unavailable/unauthorized) if unconfigured; password from env (Q7) |
+| Browser | ✅ `browser_plugin` (`browser` cap, S20e: open/screenshot, Playwright) | **Read-only** (navigate + extract only, no click/type/submit); injectable backend seam; **degrades gracefully** (unavailable) if Playwright/browser absent; robots honoured via shared net policy; screenshots sandboxed |
 | Evidence | ✅ RAG citations (per-answer) | No **evidence graph** (claim→sources→confidence) across a job |
 | Human-in-the-loop | ⚠️ scheduler states (pending/claimed/running/…) | No `waiting_for_user` + notify + resume flow |
 | Determinism | ✅ temp=0 defaults, durable ret/recovery | No cross-check / verify pass; no report pipeline |
@@ -697,7 +699,7 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S20b** ✅ | **SQL (read-only)** | `sql` cap over a local database (SQLite default): `query`/`tables`/`schema` via an injectable backend; **read-only by construction** — a statement guard (SELECT/WITH/EXPLAIN/VALUES only, single statement) **plus** a `mode=ro` connection; sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`blocked`/`unavailable`/`error`, never raises); result sets are **L5 evidence** (§5a.6); planner `sql_query` intent; `POST /v1/db/*`, `atlas sql` | structured-data analysis |
 | **S20c** ✅ | **OCR (image → text)** | `ocr` cap: `ocr.image` reads text from a screenshot/photo/scan via an injectable **engine seam** (default Tesseract). **Degrades gracefully** — missing Pillow/pytesseract/`tesseract` binary ⇒ `unavailable`, never raises (R2/R3); sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`unsupported`/`unavailable`/`error`). Planner `ocr_image` intent; `POST /v1/ocr`, `atlas ocr` | completes the Document Reader (reads scanned/pixel text) |
 | **S20d** ✅ | **Email (read-only IMAP)** | `mail` cap: `mail.folders`/`mail.search`/`mail.message` via an injectable **backend seam** (default stdlib IMAP). **Read-only by construction** (`readonly=True` select + `BODY.PEEK` so nothing is marked read; no write path). **Degrades gracefully** — unconfigured/unreachable ⇒ `unavailable`, bad creds ⇒ `unauthorized`, never raises (R2/R3). Password is a **secret** from an env var (Q7). Planner `mail_search` intent; `POST /v1/mail/*`, `atlas mail` | email as a research/assistant source |
-| **S20e** | **Browser automation (as needed)** | Playwright headless — **deliberately last** (heaviest dep + largest safety surface); LinkedIn folds in here | full toolbelt |
+| **S20e** ✅ | **Browser automation (headless)** | `browser` cap: `browser.open` renders a URL (runs JS) → title/text/links; `browser.screenshot` → PNG under a sandbox root. Injectable **backend seam** (default Playwright/Chromium). **Read-only** (navigate + extract only; no click/type/submit). **Degrades gracefully** — missing Playwright/browser ⇒ `unavailable`, never raises (R2/R3). `http(s)`-only, robots honoured via `FetchClient.allowed`, time-bounded, text/links capped. Planner `browse_url` intent (opt-in on a browser keyword + URL, so plain fetch is unaffected); `POST /v1/browser/*`, `atlas browser`. Playwright is an **optional** extra (`pip install -e '.[browser]' && playwright install chromium`); LinkedIn folds in here | full toolbelt — **arc complete** |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
 
 Plugin build order (from the doc, capability-first): Filesystem → Document Reader →
@@ -1517,7 +1519,51 @@ of SQL/OCR, but adds two properties specific to a networked, credentialed servic
 - [x] Planner `mail_search` intent + `AssistantService._do_mail` (+ `mail` gap fallback) + `JobPlanner` intent/capability.
 - [x] `POST /v1/mail/*` + `atlas mail` CLI.
 - [x] Hermetic tests (outcome mapping via fake backend — ok/empty/unavailable/unauthorized/error/crash-safe/max-results/folder; default IMAP offline ⇒ unavailable; pure parsers; plugin delegate+health+registration; planner; assistant; api; cli; caps). **702 tests pass (+31).**
-- [ ] **Next — S20e:** browser automation (Playwright), deliberately last.
+- [x] **Next — S20e:** Browser shipped (§6q) — the Tier-2 tool arc is complete.
+
+---
+
+### 6q. Sprint 20e — Browser automation (headless, read-only) ✅ — *last tool*
+
+**Why last:** deferred deliberately from the start of S20 — it carries the **heaviest
+dependency** (Playwright + a real browser binary) and the **largest safety surface** of
+any tool. Now that the deterministic, hermetic tools (Git/SQL/OCR/Email) are in, the
+browser closes the loop as the **JS-rendering escalation from plain HTTP fetch** (§5c):
+some pages only yield content after JavaScript runs, and this reads them.
+
+**Shape**
+- `atlas/browser/browser.py` — **`BrowserClient`** renders a URL (or screenshots it)
+  through an injectable **`BrowserBackend`** (default **`PlaywrightBackend`**, Chromium).
+  **Read-only by design:** the backend only *navigates and extracts* (title, `body`
+  inner-text, anchor hrefs) — there is **no click/type/submit** path. All Playwright
+  imports are lazy, so a missing package/binary **degrades gracefully** to `unavailable`
+  (never raises, R2/R3).
+- Safety rails: `http(s)`-only; `robots.txt` honoured by reusing the shared net policy
+  (new **`FetchClient.allowed(url)`** — one robots implementation, not a copy); a hard
+  per-navigation timeout (mapped to a `timeout` outcome); rendered text + link list
+  capped; screenshots confined to a sandbox root (default `paths.data/screenshots`).
+- Honest outcomes: `ok` | `empty` (rendered, no text) | `blocked` (robots) | `timeout`
+  | `unavailable` | `error`.
+- **`BrowserPlugin`** = `browser` cap (`browser.open`, `browser.screenshot`);
+  `health_check` reports a missing engine as **degraded, not failed**. Concrete
+  **`BrowserCapability`** (`CAP_BROWSER`, S20). Planner **`browse_url`** intent is
+  **opt-in**: it only fires on a browser keyword (browse/render/headless/screenshot/…)
+  *and* a URL (regex lookahead), so a bare URL still routes to plain `web_fetch`.
+  `AssistantService._do_browse` (title + text preview + top links; `unavailable`/
+  `blocked`→blocked-step; honest `timeout`/`empty`/`error`; `browser` gap fallback) +
+  `JobPlanner`. `plugins.browser.*` config; `browser_plugin` enabled (self-registers).
+  Playwright is an **optional** dependency (`[browser]` extra) — Atlas installs and runs
+  without it. `POST /v1/browser/open|screenshot`; `atlas browser <url> [--screenshot]`.
+
+**Definition of Done (S20e)** — all met:
+- [x] `atlas/browser/browser.py` — `BrowserClient` + `BrowserBackend`/`PlaywrightBackend` seam; read-only; lazy deps → graceful `unavailable`; http(s)-only + robots + timeout + sandboxed screenshots; honest outcomes; never raises.
+- [x] `BrowserPlugin` (`browser` cap) with `open`/`screenshot`; graceful `health_check`; `BrowserCapability` contract + catalog (`CAP_BROWSER`, S20).
+- [x] `FetchClient.allowed(url)` added so the browser reuses one robots policy.
+- [x] `plugins.browser.*` config + defaults; `browser_plugin` enabled; Playwright as an optional `[browser]` extra in `pyproject.toml`.
+- [x] Planner opt-in `browse_url` intent (keyword + URL) + `AssistantService._do_browse` (+ `browser` gap fallback) + `JobPlanner` intent/capability.
+- [x] `POST /v1/browser/*` + `atlas browser` CLI.
+- [x] Hermetic tests (outcome mapping via fake backend — ok/empty/blocked/timeout/unavailable/error/crash-safe; non-http reject; robots gate; text/link caps; screenshot ok/escape/unavailable; default backend offline ⇒ unavailable; plugin delegate+health+registration; planner opt-in vs web_fetch; assistant; api; cli; caps). **731 tests pass (+29).**
+- [x] **Tier-2 tool arc (S10–S20) complete.** Remaining Stage 2 work: autonomous multi-round research orchestration + hardening.
 
 ---
 
@@ -1548,6 +1594,7 @@ of SQL/OCR, but adds two properties specific to a networked, credentialed servic
 
 | Date | Sprint | Notes |
 |------|--------|-------|
+| 2026-07-12 | S20e | **Sprint 20e shipped ✅ — Browser automation (headless, read-only) — the last Tier-2 tool.** Deferred deliberately (heaviest dep + largest safety surface); it's the **JS-rendering escalation** from plain HTTP fetch (§5c). New `atlas/browser/browser.py` **`BrowserClient`** renders/screenshots a URL through an injectable **`BrowserBackend`** (default **`PlaywrightBackend`**, Chromium, all imports lazy). **Read-only by design** — navigate + extract only (title/`body` text/anchor hrefs), **no click/type/submit**. **Degrades gracefully / never raises** (R2/R3): missing Playwright/binary→`unavailable`, robots-disallowed→`blocked`, slow→`timeout`, else `ok`/`empty`/`error`. Safety rails: `http(s)`-only; robots via the shared net policy (new **`FetchClient.allowed(url)`** — one implementation, no copy); hard per-nav timeout; text + link caps; screenshots confined to a sandbox root (`paths.data/screenshots`). **`BrowserPlugin`** = `browser` cap (`browser.open`/`browser.screenshot`), `health_check` treats a missing engine as **degraded not failed**. Concrete **`BrowserCapability`** (`CAP_BROWSER`, S20). Planner **`browse_url`** intent is **opt-in** (browser keyword + URL via regex lookahead) so a bare URL still routes to `web_fetch`; `AssistantService._do_browse` (title + preview + top links; `unavailable`/`blocked`→blocked-step; honest `timeout`/`empty`/`error`; `browser` gap) + `JobPlanner`. `plugins.browser.*` config + `browser_plugin` enabled; **Playwright is an optional `[browser]` extra** (`playwright install chromium`) — Atlas runs fine without it. `POST /v1/browser/open|screenshot`; `atlas browser <url> [--screenshot]`. **731 tests pass (+29).** **The Tier-2 tool arc (S10–S20) is complete** — next: autonomous multi-round research orchestration + hardening. |
 | 2026-07-12 | S20d | **Sprint 20d shipped ✅ — Email (read-only IMAP).** Fourth Tier-2 tool; email becomes a research/assistant source (list folders, search, open a message). New `atlas/mail/client.py` **`MailClient`** works through an injectable **`MailBackend`** (default **`IMAPBackend`**, stdlib `imaplib`+`email`). **Read-only by construction:** mailboxes selected `readonly=True`, bodies fetched with `BODY.PEEK` (opening a mail **never marks it read**), and no STORE/DELETE/EXPUNGE/APPEND path exists. **Degrades gracefully / never raises** (R2/R3): unconfigured/unreachable→`unavailable`, bad creds→`unauthorized`, server error→`error`, no matches→`empty`, else `ok` (a `_guard` maps even unexpected crashes to `error`). Pure helpers for RFC-2047 headers + a text/plain-preferring body extractor (HTML fallback). **`MailPlugin`** = `mail` cap (`mail.search`/`mail.message`/`mail.folders`), `health_check` treats an unconfigured mailbox as **degraded not failed**. Concrete **`MailCapability`** (`CAP_MAIL`, S20). Planner **`mail_search`** intent (`inbox`/`mailbox`, read-verb + "email(s)", or "email … from/about/subject …"; extracts a quoted/`for …` query + optional `in <Folder>`) + `AssistantService._do_mail` (summary list; `unavailable`/`unauthorized`→blocked; honest `empty`/`error`; `mail` gap) + `JobPlanner`. `plugins.mail.*` config + `mail_plugin` enabled; **password is a secret** from `ATLAS_MAIL_PASSWORD` env (never YAML — Q7), `.env.example` updated. `POST /v1/mail/search` + `GET /v1/mail/folders|message`; `atlas mail search|folders|message`. **Backend seam** lets a Gmail-API/JMAP backend drop in later. **702 tests pass (+31).** Next: **S20e** — browser automation (deliberately last). |
 | 2026-07-12 | S20c | **Sprint 20c shipped ✅ — OCR (image → text).** Third Tier-2 tool; completes the **Document Reader** (S13a deferred scanned/pixel text to "future OCR"). New `atlas/ocr/engine.py` **`OCRClient`** reads one image through an injectable **`OCREngine`** (default **`TesseractEngine`** = Pillow + pytesseract + system `tesseract`). Key property vs Git/SQL: the default engine has a *system* dep, so all optional imports are **lazy** and a missing dep/binary **degrades gracefully** → `unavailable` (never raises, app always boots). Sources confined to a sandbox root (default `paths.documents`); per-image byte cap + suffix allow-list. Honest outcomes `ok`/`empty`/`unsupported`/`unavailable`/`error`; even a crashing engine → `error`. **`OCRPlugin`** = `ocr` cap (`ocr.image`), `health_check` reports a missing backend as **degraded not failed**. Concrete **`OCRCapability`** (`CAP_OCR`, S20). Planner **`ocr_image`** intent (`ocr` keyword, "extract/read text from … image/screenshot", or bare `*.png|jpg|…` — no clash with doc-ingest suffixes) + `AssistantService._do_ocr` (renders text; `unavailable`→blocked, honest `unsupported`/`empty`/`error`; `ocr` gap fallback) + `JobPlanner`. `plugins.ocr.*` config + `ocr_plugin` enabled; `pillow`+`pytesseract` added to `pyproject.toml`/`requirements.txt`. `POST /v1/ocr`; `atlas ocr <path> [--lang]`. **Engine seam** lets EasyOCR/cloud OCR drop in later. **671 tests pass (+26).** Next: browser (deliberately last) / Email — as needed. |
 | 2026-07-12 | S20b | **Sprint 20b shipped ✅ — SQL (read-only local databases).** Second Tier-2 tool; Atlas can query structured data, and a computed result set is **L5 evidence** (§5a.6), pairing with the Python sandbox. New `atlas/sql/client.py` **`SQLClient`** runs a *single* statement through an injectable **`SQLBackend`** (default **`SQLiteBackend`**, stdlib). **Read-only by construction** via two layers: (1) a statement **guard** (`is_read_only`: strips comments, one statement only, must start `SELECT`/`WITH`/`EXPLAIN`/`VALUES`, blocks `INSERT`/`UPDATE`/`DELETE`/`DROP`/`ATTACH`/`PRAGMA`/…) and (2) a **`mode=ro`** SQLite connection (defence-in-depth — a guard bypass still can't write, tested). Sources confined to a sandbox root (default `paths.data`). Honest outcomes `ok`/`empty`/`blocked`/`unavailable`/`error`, **never raises**; row cap + `truncated` flag + soft per-query timeout (connection interrupt). **`SQLPlugin`** = `sql` cap (`sql.query`/`sql.tables`/`sql.schema`). Concrete **`SQLCapability`** (`CAP_SQL`, S20). Planner **`sql_query`** intent (fenced ```` ```sql ````, bare `SELECT … FROM`, or "query the database …"; extracts `*.db` source) + `AssistantService._do_sql` (compact table render; blocked/unavailable/error honesty) + `JobPlanner`. `plugins.sql.*` config + `sql_plugin` enabled. `POST /v1/db/query` + `GET /v1/db/tables|schema`; `atlas sql query|tables|schema`. **Backend seam** lets Postgres drop in later. **645 tests pass (+47).** Next: **S20c** (browser/OCR/Email — as needed). |

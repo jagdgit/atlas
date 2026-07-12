@@ -123,6 +123,24 @@ def _format_mail(data: dict[str, Any], query: str) -> str:
     return "\n".join(lines)
 
 
+def _format_browse(data: dict[str, Any]) -> str:
+    """Render a browsed page: title + a text preview + a few links."""
+    title = data.get("title") or "(untitled)"
+    final_url = data.get("final_url") or data.get("url")
+    text = (data.get("text") or "").strip()
+    preview = text[:1500] + ("…" if len(text) > 1500 else "")
+    links = data.get("links") or []
+    lines = [f"{title} — {final_url}",
+             f"({data.get('chars', len(text))} chars rendered)", "", preview]
+    if links:
+        lines.append("")
+        lines.append(f"Links ({len(links)} found):")
+        lines.extend(f"  - {u}" for u in links[:10])
+        if len(links) > 10:
+            lines.append(f"  … ({len(links)} total; showing 10)")
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class ChatTurn:
     session_id: str
@@ -216,6 +234,7 @@ class AssistantService:
         sql_tool: str = "sql.query",
         ocr_tool: str = "ocr.image",
         mail_tool: str = "mail.search",
+        browser_tool: str = "browser.open",
         search_limit: int = 5,
         list_limit: int = 25,
         logger: logging.Logger | None = None,
@@ -238,6 +257,7 @@ class AssistantService:
         self._sql_tool = sql_tool
         self._ocr_tool = ocr_tool
         self._mail_tool = mail_tool
+        self._browser_tool = browser_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
         self._responder = ResponseBuilder(llm, logger)
@@ -326,6 +346,7 @@ class AssistantService:
             Intent.SQL_QUERY: self._do_sql,
             Intent.OCR_IMAGE: self._do_ocr,
             Intent.MAIL_SEARCH: self._do_mail,
+            Intent.BROWSE_URL: self._do_browse,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
@@ -779,6 +800,44 @@ class AssistantService:
             return _Outcome(answer=f"No messages{scope} in {where}.")
         return _Outcome(answer=_format_mail(data, query))
 
+    def _do_browse(self, args, context, tool_calls) -> _Outcome:
+        url = (args.get("url") or "").strip()
+        if not url:
+            return _Outcome(answer="Which URL should I open in the browser?")
+        result = self._executor.execute(self._browser_tool, {"url": url})
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.BROWSE_URL,
+                "action": self._browser_tool,
+                "capability": "browser",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't open the browser: {result.error}")
+        if outcome == "unavailable":
+            return _Outcome(
+                answer=f"The browser isn't available here: {data.get('reason')}.",
+                blocked=True,
+                blocked_reason=f"browser unavailable: {data.get('reason')}",
+            )
+        if outcome == "blocked":
+            return _Outcome(
+                answer=f"I didn't open {url}: {data.get('reason')}.",
+                blocked=True,
+                blocked_reason=f"browser blocked: {data.get('reason')}",
+            )
+        if outcome == "timeout":
+            return _Outcome(answer=f"The page timed out: {data.get('reason')}")
+        if outcome == "error":
+            return _Outcome(answer=f"The browser errored: {data.get('reason')}")
+        if outcome == "empty":
+            return _Outcome(answer=f"I rendered {url} but found no text.")
+        return _Outcome(answer=_format_browse(data))
+
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
         if self._agent is None:
@@ -845,6 +904,9 @@ class AssistantService:
     def _has_mail_tool(self) -> bool:
         return self._tools is not None and self._tools.has(self._mail_tool)
 
+    def _has_browser_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._browser_tool)
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -867,6 +929,7 @@ class AssistantService:
             "sql": self._has_sql_tool(),
             "ocr": self._has_ocr_tool(),
             "mail": self._has_mail_tool(),
+            "browser": self._has_browser_tool(),
         }.get(capability, True)
 
     def _preflight_gaps(self, plan: Plan) -> list[dict[str, Any]]:

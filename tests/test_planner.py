@@ -209,6 +209,26 @@ def test_mail_routes_on_from_phrasing(planner):
     assert plan.steps[0].args["query"] == "alice"
 
 
+def test_browse_routes_on_render_keyword(planner):
+    plan = planner.plan("render https://example.com/app in a headless browser")
+    assert plan.intent == Intent.BROWSE_URL
+    assert plan.steps[0].capability == "browser"
+    assert plan.steps[0].args["url"] == "https://example.com/app"
+    assert plan.steps[0].args["action"] == "open"
+
+
+def test_browse_screenshot_action(planner):
+    plan = planner.plan("take a screenshot of https://example.com")
+    assert plan.intent == Intent.BROWSE_URL
+    assert plan.steps[0].args["action"] == "screenshot"
+
+
+def test_plain_url_still_routes_to_web_fetch(planner):
+    # Without a browser keyword, a bare URL stays plain web_fetch (browser is opt-in).
+    plan = planner.plan("fetch https://example.com")
+    assert plan.intent == Intent.WEB_FETCH
+
+
 def test_ingest_extracts_path(planner):
     plan = planner.plan("ingest /data/atlas_data/documents/report.pdf")
     assert plan.intent == Intent.INGEST_PATH

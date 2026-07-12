@@ -61,9 +61,11 @@ from atlas.api.schemas import (
     RecommendRequest,
     PythonRunRequest,
     ReportRequest,
+    BrowseRequest,
     MailSearchRequest,
     OCRRequest,
     ScholarSearchRequest,
+    ScreenshotRequest,
     SQLQueryRequest,
     ToolInfo,
     ToolsResponse,
@@ -330,6 +332,19 @@ def mail_folders(request: Request) -> dict:
 @v1_router.get("/mail/message", tags=["mail"])
 def mail_message(request: Request, uid: str, folder: str | None = None) -> dict:
     return _app(request).invoke_tool("mail.message", uid=uid, folder=folder)
+
+
+# --- browser (S20e): headless render (read-only) -------------------------
+@v1_router.post("/browser/open", tags=["browser"])
+def browser_open(body: BrowseRequest, request: Request) -> dict:
+    return _app(request).invoke_tool("browser.open", url=body.url)
+
+
+@v1_router.post("/browser/screenshot", tags=["browser"])
+def browser_screenshot(body: ScreenshotRequest, request: Request) -> dict:
+    return _app(request).invoke_tool(
+        "browser.screenshot", url=body.url, path=body.path, full_page=body.full_page
+    )
 
 
 # --- code understanding (S14) --------------------------------------------

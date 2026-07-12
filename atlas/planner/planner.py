@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from atlas.capabilities import (
     CAP_AGENT,
+    CAP_BROWSER,
     CAP_GIT,
     CAP_KNOWLEDGE,
     CAP_LLM,
@@ -47,6 +48,7 @@ class Intent:
     SQL_QUERY = "sql_query"
     OCR_IMAGE = "ocr_image"
     MAIL_SEARCH = "mail_search"
+    BROWSE_URL = "browse_url"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
@@ -229,6 +231,16 @@ _MAIL_FOLDER_RE = re.compile(
     r"\bin\s+(?:the\s+)?(?:folder\s+)?"
     r"(INBOX|Sent|Drafts|Trash|Spam|Junk|Archive|All\s?Mail|[A-Z][\w/]*)\b",
 )
+# An explicit request to render/screenshot a page in a headless browser. Requires a URL
+# to be present (lookahead) so it only wins over plain web_fetch on deliberate escalation.
+_BROWSE_RE = re.compile(
+    r"(?=.*https?://)"
+    r"(?:\b(?:browse|browser|render(?:ed|s)?|headless|screenshot|screen[- ]?grab)\b"
+    r"|\bopen\b[^.?!]{0,20}\bin\b[^.?!]{0,15}\bbrowser\b"
+    r"|\bjavascript[- ]?(?:rendered|heavy)\b"
+    r"|\bdynamic(?:ally)?\b[^.?!]{0,20}\b(?:page|site|content|rendered|loaded)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _url_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -352,6 +364,15 @@ def _mail_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"query": query, "folder": folder}
 
 
+def _browse_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    match = _URL_RE.search(message)
+    url = match.group(0).rstrip(".,);") if match else None
+    action = "screenshot" if re.search(
+        r"\bscreenshot|screen[- ]?grab\b", message, re.IGNORECASE
+    ) else "open"
+    return {"url": url, "action": action}
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -428,6 +449,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         _youtube_args,
     ),
     (
+        Intent.BROWSE_URL,
+        CAP_BROWSER,
+        _BROWSE_RE,
+        _browse_args,
+    ),
+    (
         Intent.WEB_FETCH,
         CAP_WEB,
         _URL_RE,
@@ -494,6 +521,7 @@ _DESCRIPTIONS = {
     Intent.SQL_QUERY: "Run a read-only SQL query on a local database.",
     Intent.OCR_IMAGE: "Extract text from an image via OCR.",
     Intent.MAIL_SEARCH: "Search a mailbox (read-only) for messages.",
+    Intent.BROWSE_URL: "Render a URL in a headless browser (read-only).",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",

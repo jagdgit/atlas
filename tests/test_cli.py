@@ -21,6 +21,7 @@ from atlas.cli.main import (
     cmd_forget,
     cmd_formats,
     cmd_git,
+    cmd_browser,
     cmd_ingest,
     cmd_intel,
     cmd_mail,
@@ -306,6 +307,15 @@ class FakeApp:
             }
         if name == "mail.folders":
             return {"outcome": "ok", "backend": "imap", "folders": ["INBOX", "Sent"]}
+        if name == "browser.open":
+            return {
+                "outcome": "ok", "backend": "playwright", "url": kwargs.get("url"),
+                "final_url": kwargs.get("url"), "status": 200, "title": "Example",
+                "text": "hello rendered", "chars": 14, "links": ["https://ex.com/a"],
+            }
+        if name == "browser.screenshot":
+            return {"outcome": "ok", "backend": "playwright", "url": kwargs.get("url"),
+                    "path": kwargs.get("path")}
         return {"tool": name, "args": kwargs}
 
 
@@ -642,6 +652,24 @@ def test_cmd_mail_folders(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "INBOX" in out and "Sent" in out
+
+
+def test_cmd_browser_open(capsys):
+    args = build_parser().parse_args(["browser", "https://ex.com/page"])
+    rc = cmd_browser(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Example" in out and "hello rendered" in out
+
+
+def test_cmd_browser_screenshot(capsys):
+    args = build_parser().parse_args(
+        ["browser", "https://ex.com", "--screenshot", "shot.png"]
+    )
+    rc = cmd_browser(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "shot.png" in out
 
 
 def test_cmd_download_prints_path(capsys):

@@ -247,3 +247,18 @@ def test_mail_capability_contract_verified():
     assert reg.verify(CAP_MAIL) is True
     assert CAPABILITY_CATALOG[CAP_MAIL].contract is MailCapability
     assert CAPABILITY_CATALOG[CAP_MAIL].since == "S20"
+
+
+def test_browser_capability_contract_verified(tmp_path):
+    from atlas.browser.browser import BrowserClient, PlaywrightBackend
+    from atlas.capabilities import CAP_BROWSER, BrowserCapability
+    from atlas.plugins.browser_plugin import BrowserPlugin
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_BROWSER, BrowserPlugin(BrowserClient(PlaywrightBackend(), tmp_path)),
+        contract=BrowserCapability, kind="plugin",
+    )
+    assert reg.verify(CAP_BROWSER) is True
+    assert CAPABILITY_CATALOG[CAP_BROWSER].contract is BrowserCapability
+    assert CAPABILITY_CATALOG[CAP_BROWSER].since == "S20"

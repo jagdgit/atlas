@@ -118,6 +118,7 @@ def _assistant(
     with_scholar=True, scholar_result=None, with_youtube=True, youtube_result=None,
     with_git=True, git_result=None, with_sql=True, sql_result=None,
     with_ocr=True, ocr_result=None, with_mail=True, mail_result=None,
+    with_browser=True, browser_result=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -200,6 +201,15 @@ def _assistant(
         }
         mail_payload = mail_result if mail_result is not None else default_mail
         tools.register("mail.search", lambda query="", **kw: mail_payload)
+    if with_browser:
+        default_browser = {
+            "outcome": "ok", "backend": "playwright", "url": "https://ex.com",
+            "final_url": "https://ex.com", "status": 200, "title": "Example Domain",
+            "text": "This domain is for use in examples.", "chars": 35,
+            "links": ["https://ex.com/more"],
+        }
+        browser_payload = browser_result if browser_result is not None else default_browser
+        tools.register("browser.open", lambda url, **kw: browser_payload)
     return AssistantService(
         ConversationService(FakeConvRepo(), memory),
         Planner(),
@@ -512,6 +522,35 @@ def test_mail_gap_when_no_tool():
     turn = _assistant(with_mail=False).chat("check my inbox")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "mail"
+
+
+# --- browser (S20e) -------------------------------------------------------
+def test_browse_renders_page():
+    turn = _assistant().chat("render https://ex.com in a headless browser")
+    assert turn.intent == "browse_url"
+    assert "Example Domain" in turn.answer
+    assert turn.tool_calls[0]["action"] == "browser.open"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+
+
+def test_browse_unavailable_blocks_step():
+    un = {"outcome": "unavailable", "reason": "playwright not installed",
+          "backend": "playwright", "url": "https://ex.com"}
+    turn = _assistant(browser_result=un).chat("browse https://ex.com")
+    assert "isn't available" in turn.answer.lower()
+
+
+def test_browse_blocked_by_robots():
+    blk = {"outcome": "blocked", "reason": "robots.txt disallows this URL",
+           "backend": "playwright", "url": "https://ex.com"}
+    turn = _assistant(browser_result=blk).chat("render https://ex.com")
+    assert "robots" in turn.answer.lower()
+
+
+def test_browse_gap_when_no_tool():
+    turn = _assistant(with_browser=False).chat("render https://ex.com in a browser")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "browser"
 
 
 def test_ingest_without_path_asks_for_one():

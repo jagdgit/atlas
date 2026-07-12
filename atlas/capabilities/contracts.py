@@ -38,6 +38,7 @@ CAP_GIT = "git"
 CAP_SQL = "sql"
 CAP_OCR = "ocr"
 CAP_MAIL = "mail"
+CAP_BROWSER = "browser"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -198,6 +199,14 @@ class MailCapability(Protocol):
     def folders(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class BrowserCapability(Protocol):
+    """Read-only headless browser: render a URL / screenshot it (S20e)."""
+
+    def open(self, url: str, *args: Any, **kwargs: Any) -> Any: ...
+    def screenshot(self, url: str, path: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -335,6 +344,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         MailCapability,
         "Read-only email: list folders, search messages, open one message (IMAP).",
         "Email becomes a first-class research/assistant source; read-only, never sends.",
+        "S20",
+    ),
+    CAP_BROWSER: CapabilitySpec(
+        CAP_BROWSER,
+        BrowserCapability,
+        "Render a URL in a headless browser (JS-executed) and extract text/links; screenshot.",
+        "Read JS-rendered pages plain fetch can't; read-only navigation.",
         "S20",
     ),
 }

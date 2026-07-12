@@ -210,6 +210,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_mail.add_argument("--folder", default=None, help="mailbox/folder (default INBOX)")
     p_mail.add_argument("--limit", type=int, default=None, help="max messages (search)")
 
+    p_browser = sub.add_parser("browser", help="headless browser render (S20e)")
+    p_browser.add_argument("url", help="http(s) URL to render")
+    p_browser.add_argument("--screenshot", default=None,
+                           help="save a PNG to this path under the sandbox root")
+
     p_report = sub.add_parser(
         "report", help="generate a scientific-review report from a JSON evidence graph"
     )
@@ -826,6 +831,33 @@ def cmd_mail(args: argparse.Namespace, app: "Application | None" = None) -> int:
     return 0
 
 
+def cmd_browser(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    if args.screenshot:
+        result = app.invoke_tool("browser.screenshot", url=args.url, path=args.screenshot)
+    else:
+        result = app.invoke_tool("browser.open", url=args.url)
+    outcome = result.get("outcome")
+    if outcome not in ("ok", "empty"):
+        print(f"browser {outcome}: {result.get('reason') or ''}", file=sys.stderr)
+        return 1
+    if args.screenshot:
+        print(f"saved screenshot: {result.get('path')}")
+        return 0
+    if outcome == "empty":
+        print(f"(rendered {args.url} but found no text)")
+        return 0
+    print(f"# {result.get('title')} — {result.get('final_url')}"
+          f"  [{result.get('chars')} chars]")
+    print(result.get("text", ""))
+    links = result.get("links", [])
+    if links:
+        print(f"\nLinks ({len(links)}):")
+        for u in links[:20]:
+            print(f"  - {u}")
+    return 0
+
+
 def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -1054,6 +1086,7 @@ _HANDLERS = {
     "sql": cmd_sql,
     "ocr": cmd_ocr,
     "mail": cmd_mail,
+    "browser": cmd_browser,
     "report": cmd_report,
     "verify": cmd_verify,
     "learn": cmd_learn,

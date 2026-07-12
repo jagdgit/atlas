@@ -127,6 +127,21 @@ class FetchClient:
             return client.get(url)
 
     # --- public --------------------------------------------------------
+    def allowed(self, url: str) -> bool:
+        """Whether ``robots.txt`` permits fetching ``url`` for our User-Agent.
+
+        Permissive when robots respect is disabled or robots is unavailable (the same
+        convention as :meth:`get`). Lets non-HTTP clients (e.g. the browser) reuse the
+        one robots policy without duplicating it.
+        """
+        if not self._respect_robots:
+            return True
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return False
+        allowed, _ = self._robots_allows(parsed)
+        return allowed
+
     def get(self, url: str, *, use_cache: bool = True) -> FetchResult:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:

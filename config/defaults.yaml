@@ -173,6 +173,7 @@ plugins:
     - atlas.plugins.sql_plugin
     - atlas.plugins.ocr_plugin
     - atlas.plugins.mail_plugin
+    - atlas.plugins.browser_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -216,6 +217,15 @@ plugins:
     default_folder: INBOX
     max_results: 25         # cap messages returned by a search
     timeout: 20             # socket timeout per IMAP connection
+  browser:                  # S20e: headless browser (degrades if Playwright not installed)
+    browser: chromium       # chromium | firefox | webkit
+    headless: true
+    timeout: 30             # per-navigation wall-clock (seconds)
+    wait_until: load        # load | domcontentloaded | networkidle
+    max_text_chars: 20000   # cap rendered text returned
+    max_links: 100          # cap links returned
+    respect_robots: true    # honour robots.txt via the shared net policy
+    screenshot_root: null    # sandbox for screenshots; null => paths.data/screenshots
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network

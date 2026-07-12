@@ -365,6 +365,12 @@ class FakeApplication:
             }
         if name == "mail.folders":
             return {"outcome": "ok", "backend": "imap", "folders": ["INBOX", "Sent"]}
+        if name == "browser.open":
+            return {
+                "outcome": "ok", "backend": "playwright", "url": kwargs.get("url"),
+                "final_url": kwargs.get("url"), "status": 200, "title": "Example",
+                "text": "hello rendered", "chars": 14, "links": ["https://ex.com/a"],
+            }
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
         return {"url": kwargs.get("url"), "status": 200, "text": "hello"}
@@ -749,6 +755,24 @@ def test_mail_folders_endpoint():
 
 def test_mail_search_requires_auth():
     assert _client().post("/v1/mail/search", json={"query": "x"}).status_code == 401
+
+
+def test_browser_open_endpoint():
+    resp = _client().post("/v1/browser/open", headers=AUTH,
+                          json={"url": "https://ex.com/page"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["outcome"] == "ok"
+    assert data["title"] == "Example"
+
+
+def test_browser_open_requires_url():
+    resp = _client().post("/v1/browser/open", headers=AUTH, json={})
+    assert resp.status_code == 422
+
+
+def test_browser_open_requires_auth():
+    assert _client().post("/v1/browser/open", json={"url": "https://x"}).status_code == 401
 
 
 def test_code_repo_map_endpoint():

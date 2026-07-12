@@ -258,6 +258,19 @@ class OCRPluginConfig(BaseModel):
     max_bytes: int = 10_485_760  # refuse to OCR images larger than this (10 MiB)
 
 
+class BrowserPluginConfig(BaseModel):
+    # Headless browser automation (S20e). Degrades gracefully if Playwright/browser
+    # binary are absent. Read-only: navigate + extract only, robots respected.
+    browser: str = "chromium"  # chromium | firefox | webkit (Playwright launcher)
+    headless: bool = True
+    timeout: float = 30.0  # per-navigation wall-clock (seconds)
+    wait_until: str = "load"  # load | domcontentloaded | networkidle
+    max_text_chars: int = 20_000  # cap rendered text returned
+    max_links: int = 100  # cap links returned
+    respect_robots: bool = True  # honour robots.txt via the shared net policy
+    screenshot_root: str | None = None  # sandbox for screenshots; None => paths.data/screenshots
+
+
 class MailPluginConfig(BaseModel):
     # Read-only IMAP mailbox retrieval (S20d). The password is a *secret*: it is never
     # stored in YAML — it is read from the env var named by `password_env` at build time.
@@ -284,6 +297,7 @@ class PluginsConfig(BaseModel):
     sql: SQLPluginConfig = SQLPluginConfig()
     ocr: OCRPluginConfig = OCRPluginConfig()
     mail: MailPluginConfig = MailPluginConfig()
+    browser: BrowserPluginConfig = BrowserPluginConfig()
 
 
 class MemoryConfig(BaseModel):

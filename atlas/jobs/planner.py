@@ -41,6 +41,7 @@ _VALID_INTENTS = {
     Intent.SQL_QUERY,
     Intent.OCR_IMAGE,
     Intent.MAIL_SEARCH,
+    Intent.BROWSE_URL,
     Intent.LIST_DOCUMENTS,
     Intent.INGEST_PATH,
     Intent.ASK_KNOWLEDGE,
@@ -54,9 +55,9 @@ _DECOMPOSE_SYSTEM = (
     "index of a prerequisite step, or null). "
     "Allowed intents: smalltalk, recall, remember, web_fetch, web_search, "
     "scholar_search, youtube_transcript, run_python, git_status, sql_query, "
-    "ocr_image, mail_search, list_documents, ingest_path, ask_knowledge, react. "
-    "Allowed capabilities: llm, memory, knowledge, web, search, scholar, transcript, "
-    "python, git, sql, ocr, mail, agent, document. "
+    "ocr_image, mail_search, browse_url, list_documents, ingest_path, ask_knowledge, "
+    "react. Allowed capabilities: llm, memory, knowledge, web, search, scholar, "
+    "transcript, python, git, sql, ocr, mail, browser, agent, document. "
     "Prefer 'react' for open-ended reasoning. Keep it to at most 6 steps. "
     "Do not include any prose outside the JSON array."
 )

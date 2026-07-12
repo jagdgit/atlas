@@ -271,6 +271,18 @@ class MailSearchRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=500)
 
 
+class BrowseRequest(BaseModel):
+    # Render a URL in a headless browser (S20e).
+    url: str = Field(min_length=1)
+
+
+class ScreenshotRequest(BaseModel):
+    # Screenshot a URL to a PNG under the sandbox root (S20e).
+    url: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    full_page: bool = True
+
+
 class ReportRequest(BaseModel):
     # Objective + a serialised Evidence Graph → a verified §5a.5 report (S17).
     objective: str = Field(min_length=1)
