@@ -75,3 +75,28 @@ def test_max_steps_caps_decomposition():
     )
     steps = JobPlanner(llm=FakeLLM(f"[{items}]"), max_steps=3).decompose("many")
     assert len(steps) == 3
+
+
+def test_research_first_coerces_bare_react_to_research():
+    # A bare noun-phrase objective would otherwise fall to a lone react step; with
+    # research_first it becomes a research step so the job gathers real evidence.
+    steps = JobPlanner(research_first=True).decompose("Data-driven soiling estimation")
+    assert len(steps) == 1
+    assert steps[0].intent == Intent.RESEARCH
+    assert steps[0].capability == "research"
+    assert steps[0].args == {"objective": "Data-driven soiling estimation"}
+
+
+def test_research_first_leaves_multistep_plans_untouched():
+    payload = """[
+      {"intent": "web_search", "capability": "search", "args": {"query": "x"}},
+      {"intent": "research", "capability": "research", "args": {"objective": "x"}, "depends_on": 0}
+    ]"""
+    steps = JobPlanner(llm=FakeLLM(payload), research_first=True).decompose("x")
+    assert [s.intent for s in steps] == [Intent.WEB_SEARCH, Intent.RESEARCH]
+
+
+def test_research_first_off_keeps_bare_react():
+    steps = JobPlanner(research_first=False).decompose("Data-driven soiling estimation")
+    assert len(steps) == 1
+    assert steps[0].intent == Intent.REACT

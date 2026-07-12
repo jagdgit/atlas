@@ -147,4 +147,9 @@ def create_app(application: "Application") -> FastAPI:
 
     app.include_router(public_router)
     app.include_router(v1_router)
+
+    # Bundled web console (S23): same-origin SPA at /ui, gated by api.ui_enabled.
+    from atlas.web import mount_ui
+
+    mount_ui(app, cfg)
     return app

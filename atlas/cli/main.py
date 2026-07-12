@@ -4,7 +4,7 @@ Single entry point with subcommands, built on stdlib ``argparse`` (zero new deps
 consistent with ``atlas-db``). Commands call the kernel's services in-process via
 the DI container, so they work without a running API server:
 
-    atlas serve                 # run the REST API (uvicorn)
+    atlas serve                 # run the REST API + web console at /ui (uvicorn)
     atlas status                # bootstrap, health-check, print, exit
     atlas doctor [--offline]    # preflight: validate config + probe deps (no workers)
     atlas chat ["message"]      # chat with the assistant (REPL if no message)

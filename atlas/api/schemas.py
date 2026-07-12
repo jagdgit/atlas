@@ -378,6 +378,9 @@ class JobStepOut(BaseModel):
     blocked_reason: str | None = None
     error: str | None = None
     attempts: int = 0
+    result: dict[str, Any] = Field(default_factory=dict)
+    started_at: str | None = None
+    completed_at: str | None = None
 
 
 class JobOut(BaseModel):

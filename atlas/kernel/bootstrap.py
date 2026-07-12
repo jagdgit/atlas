@@ -310,6 +310,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         planner,
         llm_service if cfg.jobs.llm_decompose else None,
         max_steps=cfg.jobs.max_steps,
+        research_first=cfg.jobs.research_first,
         logger=get_logger("atlas.jobs.planner"),
     )
     job_service = JobService(

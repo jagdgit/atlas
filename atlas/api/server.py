@@ -30,4 +30,8 @@ def serve(host: str | None = None, port: int | None = None) -> None:
             "Set ATLAS_API_KEYS to enable access."
         )
     application.logger.info("Atlas API listening on http://%s:%d", bind_host, bind_port)
+    if cfg.api.ui_enabled:
+        application.logger.info(
+            "Atlas Console (web UI) at http://%s:%d/ui/", bind_host, bind_port
+        )
     uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")

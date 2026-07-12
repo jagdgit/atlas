@@ -330,6 +330,11 @@ class JobConfig(BaseModel):
     # Off => deterministic single-step plans only (safe default until models are set).
     llm_decompose: bool = False
     max_steps: int = 6  # cap on decomposed steps per job
+    # When a plan would otherwise be a lone open-ended `react` step, treat the job
+    # objective as a research request instead (gather→verify→report with sources).
+    # Jobs are for deep work, so this avoids a job silently answering from model
+    # memory with no evidence. Chat is unaffected (only the Job Engine uses this).
+    research_first: bool = True
 
 
 class CodeConfig(BaseModel):
@@ -397,6 +402,7 @@ class ApiConfig(BaseModel):
     docs_enabled: bool = True  # serve Swagger/OpenAPI at /docs
     cors_origins: list[str] = Field(default_factory=list)
     metrics_enabled: bool = True  # expose Prometheus /metrics + JSON /v1/metrics
+    ui_enabled: bool = True  # serve the bundled web console (S23) at /ui, same-origin
 
     @field_validator("keys", mode="before")
     @classmethod

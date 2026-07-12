@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Atlas Console</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
+</head>
+<body>
+  <!-- Login gate -->
+  <div id="login" class="login-overlay hidden">
+    <form id="login-form" class="login-card">
+      <h1>Atlas</h1>
+      <p class="muted">Enter your API key to connect to the local Atlas server.</p>
+      <input id="login-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false" />
+      <button type="submit">Connect</button>
+      <p id="login-error" class="login-error hidden"></p>
+    </form>
+  </div>
+
+  <!-- App shell -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand">🜨 <span>Atlas</span></div>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="chat">Chat</button>
+        <button class="nav-btn" data-view="jobs">Jobs</button>
+        <button class="nav-btn" data-view="system">System</button>
+      </nav>
+      <div id="sidebar-extra" class="sidebar-extra"></div>
+      <div class="sidebar-foot">
+        <span id="conn-dot" class="dot" title="connection"></span>
+        <span id="conn-label" class="muted small">connecting…</span>
+        <button id="logout" class="link small" title="Forget API key">sign out</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- Chat -->
+      <section id="view-chat" class="view">
+        <div id="transcript" class="transcript"></div>
+        <form id="composer" class="composer">
+          <textarea id="composer-input" rows="1" placeholder="Ask Atlas anything…  (Enter to send, Shift+Enter for a new line)"></textarea>
+          <button id="composer-send" type="submit">Send</button>
+        </form>
+      </section>
+
+      <!-- Jobs -->
+      <section id="view-jobs" class="view hidden">
+        <div class="panel-head">
+          <h2>Jobs</h2>
+          <button id="jobs-refresh" class="link">refresh</button>
+        </div>
+        <form id="job-form" class="job-form">
+          <input id="job-objective" placeholder="Objective for an async job, e.g. “research grid-scale battery economics”" />
+          <button type="submit">Run job</button>
+        </form>
+        <div class="jobs-layout">
+          <div id="jobs-list" class="jobs-list"></div>
+          <div id="job-detail" class="job-detail"></div>
+        </div>
+      </section>
+
+      <!-- System -->
+      <section id="view-system" class="view hidden">
+        <div class="panel-head">
+          <h2>System</h2>
+          <button id="system-refresh" class="link">refresh</button>
+        </div>
+        <div id="status-cards" class="status-cards"></div>
+        <div id="health-list" class="health-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="./app.js"></script>
+</body>
+</html>

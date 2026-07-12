@@ -29,20 +29,23 @@ llm:
   model: qwen3:4b                 # back-compat scalar; seeds the `chat` role below
   embedding_model: nomic-embed-text   # back-compat scalar; seeds the `embed` role
   temperature: 0
-  timeout: 120
+  timeout: 300                    # CPU inference under memory pressure can exceed 120s
   keep_alive: 5m
-  think: true
+  think: false                   # qwen3 chain-of-thought is very slow on CPU; keep answers direct
   max_concurrency: 1              # R4: single LLM lane on CPU (never two models at once)
   # Role → model registry (D7). Callers ask LLMService for a *role*, never a model.
   # 16 GB now: chat=4b, heavier roles=8b. At 64 GB, bump researcher to a 14b model
   # here (config-only) — no code changes. Pull a model before the sprint that uses it.
+  # NOTE: on this 16 GB box only qwen3:4b, llama3, nomic-embed-text are pulled, so every
+  # role maps to a pulled model (one small resident model at a time). Bump these back to
+  # 8b/14b once you `ollama pull` them and have the RAM (config-only, no code change).
   roles:
     chat:       { provider: ollama, model: qwen3:4b }
-    planner:    { provider: ollama, model: qwen3:8b }
-    researcher: { provider: ollama, model: qwen3:8b }   # 64GB: deepseek-r1:14b / qwen3:14b
-    summarizer: { provider: ollama, model: qwen3:8b }
-    code:       { provider: ollama, model: qwen3-coder }
-    vision:     { provider: ollama, model: gemma3 }
+    planner:    { provider: ollama, model: qwen3:4b }
+    researcher: { provider: ollama, model: qwen3:4b }
+    summarizer: { provider: ollama, model: qwen3:4b }
+    code:       { provider: ollama, model: llama3 }
+    vision:     { provider: ollama, model: gemma3 }   # not pulled; vision paths degrade until `ollama pull gemma3`
     embed:      { provider: ollama, model: nomic-embed-text }
 
 knowledge:
@@ -51,8 +54,8 @@ knowledge:
   embed_batch: 32
 
 react:
-  max_iterations: 6         # cap on reason->act->observe cycles per run
-  reflection: true          # self-review pass before answering
+  max_iterations: 3         # cap on reason->act->observe cycles per run (fewer LLM calls on CPU)
+  reflection: false         # self-review pass adds a whole extra LLM call; too slow on CPU
   max_observation_chars: 2000
   temperature: 0
   think: false              # JSON "thought" field replaces Ollama chain-of-thought (faster)
@@ -94,8 +97,9 @@ jobs:
   max_concurrent: 3           # R1: concurrent jobs (bounded by scheduler.workers)
   step_max_retries: 2         # per-step transient-error retries before `failed`
   retry_delay: 2.0            # seconds before a retried step re-runs
-  llm_decompose: false        # D2c: planner-role LLM decomposition (off => deterministic)
+  llm_decompose: true         # D2c: planner-role LLM decomposition into multiple steps
   max_steps: 6                # cap on decomposed steps per job
+  research_first: true        # lone open-ended objective => research loop (sources), not a bare react answer
 
 net:
   # Resilient/polite HTTP layer (D10 / §5c) shared by every web-facing plugin.
@@ -235,5 +239,6 @@ api:
   docs_enabled: true     # Swagger UI at /docs, OpenAPI at /openapi.json
   cors_origins: []       # e.g. ["http://localhost:5173"] for a local web UI
   metrics_enabled: true  # Prometheus /metrics + JSON /v1/metrics
+  ui_enabled: true       # bundled web console at /ui (same-origin SPA, S23)
   # keys: set via ATLAS_API_KEYS (comma-separated) in .env — never commit secrets.
   #       Empty => the API fails closed (all protected routes return 401).

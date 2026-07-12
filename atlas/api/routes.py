@@ -237,6 +237,9 @@ def _step_out(step) -> JobStepOut:
         blocked_reason=step.blocked_reason,
         error=step.error,
         attempts=step.attempts,
+        result=step.result or {},
+        started_at=step.started_at.isoformat() if step.started_at else None,
+        completed_at=step.completed_at.isoformat() if step.completed_at else None,
     )
 
 

@@ -83,11 +83,13 @@ class JobPlanner:
         llm: "LLMService | None" = None,
         *,
         max_steps: int = 6,
+        research_first: bool = False,
         logger: logging.Logger | None = None,
     ) -> None:
         self._planner = planner or Planner()
         self._llm = llm
         self._max_steps = max_steps
+        self._research_first = research_first
         self._logger = logger or logging.getLogger("atlas.jobs.planner")
 
     def decompose(self, objective: str) -> list[DecomposedStep]:
@@ -96,9 +98,26 @@ class JobPlanner:
             return [DecomposedStep(Intent.REACT, "agent", {"query": ""}, "Reason about the objective.")]
 
         steps = self._llm_decompose(objective) if self._llm is not None else []
-        if steps:
-            return steps
-        return self._deterministic(objective)
+        if not steps:
+            steps = self._deterministic(objective)
+        # A job is for deep work: if the plan collapsed to a single open-ended
+        # `react` step, the objective wasn't recognised as a concrete task, so run
+        # the research loop (gather→verify→report with sources) instead of letting
+        # the job answer from model memory with no evidence.
+        if self._research_first and self._is_bare_react(steps):
+            return [
+                DecomposedStep(
+                    Intent.RESEARCH,
+                    "research",
+                    {"objective": objective},
+                    "Research the objective: gather evidence, verify, and report.",
+                )
+            ]
+        return steps
+
+    @staticmethod
+    def _is_bare_react(steps: list[DecomposedStep]) -> bool:
+        return len(steps) == 1 and steps[0].intent == Intent.REACT
 
     # --- deterministic fallback ----------------------------------------
     def _deterministic(self, objective: str) -> list[DecomposedStep]:
