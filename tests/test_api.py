@@ -331,6 +331,17 @@ class FakeApplication:
                 "title": "How Solar Works", "language": "en",
                 "text": "Solar panels convert sunlight.", "segments": [], "reason": None,
             }
+        if name == "git.status":
+            return {
+                "outcome": "ok", "repo": kwargs.get("repo"), "branch": "main",
+                "ahead": 0, "behind": 0, "changes": [], "clean": True,
+            }
+        if name == "git.log":
+            return {
+                "outcome": "ok", "repo": kwargs.get("repo"),
+                "commits": [{"short": "abc123", "date": "2026-07-01",
+                             "author": "Ada", "subject": "init"}],
+            }
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
         return {"url": kwargs.get("url"), "status": 200, "text": "hello"}
@@ -637,6 +648,28 @@ def test_youtube_transcript_endpoint():
 def test_youtube_transcript_requires_video():
     resp = _client().post("/v1/youtube/transcript", headers=AUTH, json={})
     assert resp.status_code == 422
+
+
+def test_git_status_endpoint():
+    resp = _client().post(
+        "/v1/git", headers=AUTH, json={"action": "status", "repo": "/data/atlas"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["outcome"] == "ok"
+    assert data["branch"] == "main" and data["clean"] is True
+
+
+def test_git_log_endpoint():
+    resp = _client().post(
+        "/v1/git", headers=AUTH, json={"action": "log", "repo": "/r", "max_count": 5}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["commits"][0]["short"] == "abc123"
+
+
+def test_git_endpoint_requires_auth():
+    assert _client().post("/v1/git", json={"repo": "/r"}).status_code == 401
 
 
 def test_code_repo_map_endpoint():

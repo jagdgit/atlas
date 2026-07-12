@@ -116,6 +116,7 @@ def _assistant(
     *, memory=None, knowledge=None, agent=None, with_web=True, with_search=True,
     search_result=None, with_python=True, python_result=None, capabilities=None,
     with_scholar=True, scholar_result=None, with_youtube=True, youtube_result=None,
+    with_git=True, git_result=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -159,6 +160,21 @@ def _assistant(
         }
         py_payload = python_result if python_result is not None else default_py
         tools.register("python.run", lambda code, **kw: py_payload)
+    if with_git:
+        default_git = {
+            "outcome": "ok", "repo": ".", "branch": "main", "ahead": 0, "behind": 0,
+            "changes": [{"status": "M", "path": "a.py"}], "clean": False,
+        }
+        git_payload = git_result if git_result is not None else default_git
+        tools.register("git.status", lambda repo, **kw: git_payload)
+        tools.register(
+            "git.log",
+            lambda repo, **kw: {
+                "outcome": "ok", "repo": repo,
+                "commits": [{"short": "abc123", "date": "2026-07-01",
+                             "author": "Ada", "subject": "init"}],
+            },
+        )
     return AssistantService(
         ConversationService(FakeConvRepo(), memory),
         Planner(),
@@ -351,6 +367,33 @@ def test_python_gap_when_no_python_tool():
     turn = _assistant(with_python=False).chat("run this:\n```python\nprint(1)\n```")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "python"
+
+
+# --- git (S20a) -----------------------------------------------------------
+def test_git_status_reports_branch_and_changes():
+    turn = _assistant().chat("what's the git status of /data/atlas?")
+    assert turn.intent == "git_status"
+    assert "main" in turn.answer
+    assert turn.tool_calls[0]["action"] == "git.status"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+
+
+def test_git_log_lists_commits():
+    turn = _assistant().chat("show recent commits in /data/atlas")
+    assert turn.intent == "git_status"
+    assert "abc123" in turn.answer and "init" in turn.answer
+
+
+def test_git_not_a_repo_is_honest():
+    bad = {"outcome": "not_a_repo", "repo": "/tmp/x", "reason": "not a repo"}
+    turn = _assistant(git_result=bad).chat("git status /tmp/x")
+    assert "isn't a git repository" in turn.answer
+
+
+def test_git_gap_when_no_tool():
+    turn = _assistant(with_git=False).chat("git status /data/atlas")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "git"
 
 
 def test_ingest_without_path_asks_for_one():

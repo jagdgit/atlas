@@ -131,6 +131,26 @@ def test_run_python_fence_wins_over_url_inside_code(planner):
     assert plan.intent == Intent.RUN_PYTHON
 
 
+def test_git_status_routes(planner):
+    plan = planner.plan("what's the git status of /data/atlas?")
+    assert plan.intent == Intent.GIT_STATUS
+    assert plan.steps[0].capability == "git"
+    assert plan.steps[0].args["action"] == "status"
+    assert plan.steps[0].args["repo"] == "/data/atlas"
+
+
+def test_git_log_routes_and_defaults_repo(planner):
+    plan = planner.plan("show recent commits")
+    assert plan.intent == Intent.GIT_STATUS
+    assert plan.steps[0].args["action"] == "log"
+    assert plan.steps[0].args["repo"] == "."
+
+
+def test_git_branches_and_diff(planner):
+    assert planner.plan("git branches in /repo").steps[0].args["action"] == "branches"
+    assert planner.plan("git diff for /repo").steps[0].args["action"] == "diff"
+
+
 def test_ingest_extracts_path(planner):
     plan = planner.plan("ingest /data/atlas_data/documents/report.pdf")
     assert plan.intent == Intent.INGEST_PATH

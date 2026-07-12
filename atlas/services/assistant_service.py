@@ -44,6 +44,50 @@ _WEB_SUMMARY_SYSTEM = (
 )
 
 
+def _format_git(action: str, repo: str, data: dict[str, Any]) -> str:
+    """Deterministic phrasing for a successful git result (no LLM needed)."""
+    if action == "status":
+        branch = data.get("branch") or "(detached)"
+        if data.get("clean"):
+            state = "clean"
+        else:
+            state = f"{len(data.get('changes') or [])} change(s)"
+        ahead, behind = data.get("ahead", 0), data.get("behind", 0)
+        tracking = ""
+        if ahead or behind:
+            tracking = f", ahead {ahead} / behind {behind}"
+        lines = [f"On branch {branch} — working tree {state}{tracking}."]
+        for ch in (data.get("changes") or [])[:20]:
+            lines.append(f"  {ch.get('status'):>2} {ch.get('path')}")
+        return "\n".join(lines)
+    if action in ("log", "file_history"):
+        commits = data.get("commits") or []
+        if not commits:
+            return "No commits found."
+        head = "Recent commits" + (
+            f" touching {data.get('path')}" if action == "file_history" else ""
+        )
+        lines = [f"{head}:"]
+        for c in commits[:20]:
+            lines.append(f"  {c.get('short')} {c.get('date')} {c.get('author')} — {c.get('subject')}")
+        return "\n".join(lines)
+    if action == "diff":
+        stat = data.get("stat") or "(no changes)"
+        return f"{data.get('files_changed', 0)} file(s) changed:\n{stat}"
+    if action == "show":
+        c = data.get("commit") or {}
+        return (
+            f"{c.get('short')} by {c.get('author')} on {c.get('date')}\n"
+            f"{c.get('subject')}\n\n{data.get('stat') or ''}".strip()
+        )
+    if action == "branches":
+        current = data.get("current")
+        branches = data.get("branches") or []
+        marked = [f"* {b}" if b == current else f"  {b}" for b in branches]
+        return "Branches:\n" + "\n".join(marked)
+    return f"git {action} on {repo}: {data}"
+
+
 @dataclass(frozen=True)
 class ChatTurn:
     session_id: str
@@ -133,6 +177,7 @@ class AssistantService:
         scholar_tool: str = "scholar.search",
         youtube_tool: str = "youtube.transcript",
         python_tool: str = "python.run",
+        git_tool_prefix: str = "git",
         search_limit: int = 5,
         list_limit: int = 25,
         logger: logging.Logger | None = None,
@@ -151,6 +196,7 @@ class AssistantService:
         self._scholar_tool = scholar_tool
         self._youtube_tool = youtube_tool
         self._python_tool = python_tool
+        self._git_tool_prefix = git_tool_prefix
         self._search_limit = search_limit
         self._list_limit = list_limit
         self._responder = ResponseBuilder(llm, logger)
@@ -235,6 +281,7 @@ class AssistantService:
             Intent.SCHOLAR_SEARCH: self._do_scholar_search,
             Intent.YOUTUBE_TRANSCRIPT: self._do_youtube,
             Intent.RUN_PYTHON: self._do_run_python,
+            Intent.GIT_STATUS: self._do_git,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
@@ -540,6 +587,43 @@ class AssistantService:
         detail = data.get("error") or (stderr.splitlines()[-1] if stderr else "error")
         return _Outcome(answer=f"The code raised an error: {detail}")
 
+    def _do_git(self, args, context, tool_calls) -> _Outcome:
+        action = (args.get("action") or "status").strip()
+        repo = (args.get("repo") or ".").strip()
+        tool = f"{self._git_tool_prefix}.{action}"
+        params: dict[str, Any] = {"repo": repo}
+        if action == "log":
+            params["max_count"] = args.get("max_count")
+        elif action == "diff":
+            params["ref"] = args.get("ref")
+        elif action == "show":
+            params["ref"] = args.get("ref") or "HEAD"
+        result = self._executor.execute(tool, params)
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.GIT_STATUS,
+                "action": tool,
+                "capability": "git",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't run git: {result.error}")
+        if outcome == "unavailable":
+            return _Outcome(
+                answer="Git isn't available here (the git binary isn't installed).",
+                blocked=True,
+                blocked_reason="git binary not found",
+            )
+        if outcome == "not_a_repo":
+            return _Outcome(answer=f"'{repo}' isn't a git repository.")
+        if outcome != "ok":
+            return _Outcome(answer=f"git {action} failed: {data.get('reason')}")
+        return _Outcome(answer=_format_git(action, repo, data))
+
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
         if self._agent is None:
@@ -592,6 +676,11 @@ class AssistantService:
     def _has_youtube_tool(self) -> bool:
         return self._tools is not None and self._tools.has(self._youtube_tool)
 
+    def _has_git_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(
+            f"{self._git_tool_prefix}.status"
+        )
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -610,6 +699,7 @@ class AssistantService:
             "scholar": self._has_scholar_tool(),
             "transcript": self._has_youtube_tool(),
             "python": self._has_python_tool(),
+            "git": self._has_git_tool(),
         }.get(capability, True)
 
     def _preflight_gaps(self, plan: Plan) -> list[dict[str, Any]]:

@@ -169,6 +169,7 @@ plugins:
     - atlas.plugins.downloader_plugin
     - atlas.plugins.scholar_plugin
     - atlas.plugins.youtube_plugin
+    - atlas.plugins.git_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -190,6 +191,10 @@ plugins:
     semantic_scholar_api_key: ""  # optional; keyless works but is rate-limited
   youtube:                  # S18a: video transcripts (L1 evidence)
     languages: [en]
+  git:                      # S20a: read-only local VCS inspection (network-free)
+    git_binary: git
+    timeout: 15             # hard wall-clock per git invocation
+    max_log: 50             # default commits returned by log/file_history
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network

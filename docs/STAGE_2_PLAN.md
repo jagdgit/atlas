@@ -1,15 +1,16 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–19 shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
 > **Non-blocking HITL & Report Generator** + **Deeper Research: Scholarly + YouTube** +
 > **Learning Pipeline (Experience store, governed)** +
-> **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)**;
-> 573 tests).
+> **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)** +
+> **Git (read-only local VCS, S20a)**;
+> 598 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S20 — Tier 2/3 tools** (browser automation, OCR, Git, DB, Email/LinkedIn — as needed).
+> Next: **S20b — remaining Tier 2/3 tools** (browser automation, OCR, DB, Email/LinkedIn — as needed).
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -154,6 +155,7 @@ Honest mapping of current assets to Stage 2 needs:
 | Knowledge/RAG | ✅ ingest + chunk + embed + cited search | Ingestion limited to txt/md/pdf/html; no structured PDF understanding |
 | Filesystem | ✅ `filesystem_plugin` (`fs.list`, `fs.read`, sandboxed) | Read-only; no write/copy/move/watch-as-tool, no recursive find |
 | Web | ✅ `web_plugin` (`web.fetch` one URL → text) | No **web *search***, no downloader, no scholarly/YouTube |
+| Git | ✅ `git_plugin` (`git` cap, S20a: status/log/diff/show/branches/file_history) | **Read-only** local VCS, network-free; no write/browser/OCR/DB yet |
 | Evidence | ✅ RAG citations (per-answer) | No **evidence graph** (claim→sources→confidence) across a job |
 | Human-in-the-loop | ⚠️ scheduler states (pending/claimed/running/…) | No `waiting_for_user` + notify + resume flow |
 | Determinism | ✅ temp=0 defaults, durable ret/recovery | No cross-check / verify pass; no report pipeline |
@@ -688,7 +690,8 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S18a** ✅ | **Deeper Research Sources** | **Scholarly search** (`scholar` cap: arXiv=L3 + Semantic Scholar=L4, provider fallback) producing **graded evidence Sources** for the Verification Engine (§5a); **YouTube transcripts** (`transcript` cap, L1) over the resilient net layer; planner `scholar_search`/`youtube_transcript` intents; `POST /v1/scholar` + `/v1/youtube/transcript`, `atlas scholar`/`youtube` | higher-quality evidence |
 | **S18b** ✅ | **Learning Pipeline** | **Continuous Learning** (D11, §5d): governed, explainable, **reversible** learning ledger (`learning` cap) — completed jobs → *proposed* `LearningEvent`s (never silent); **Experience store** (problem→diagnosis→actions→mistakes→solution→lessons) with lexical **recall**; `propose→apply→revert` + policy/Learning-Level; migration 0011; `/v1/learning/*`, `atlas learn` | compounding knowledge |
 | **S19** ✅ | **Engineering Intelligence** | `intelligence` cap over the **Code store** (migration 0012): **L2** `learn_repository` (repo map + patterns + symbols → structure, promoted through the S18b ledger via a **store sink** — governed & reversible); **L3** cross-project `search` + `connections` (shared frameworks/langs); **L4** `generalize` (patterns/frameworks/languages you *always* use, prevalence-scored materialised view); **L5** `recommend` + `profile` (the **Personal Coding Assistant**); `/v1/intelligence/*`, `atlas intel` | Atlas learns *you* (L4–L5) |
-| **S20** | **Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, Git, DB, Email/LinkedIn | full toolbelt |
+| **S20a** ✅ | **Git (read-only)** | `git` cap over a local repo: `status`/`log`/`diff`/`show`/`branches`/`file_history` via an injectable command-runner; **read-only by design** (no fetch/pull/push/commit) & network-free; honest outcomes (`ok`/`not_a_repo`/`unavailable`/`error`, never raises); planner `git_status` intent; `POST /v1/git`, `atlas git` | VCS-aware coding assistant |
+| **S20b** | **Remaining Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, DB, Email/LinkedIn | full toolbelt |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
 
 Plugin build order (from the doc, capability-first): Filesystem → Document Reader →
@@ -1329,7 +1332,53 @@ reversible* as everything else.
 - [x] `IntelligenceCapability` contract + catalog (`CAP_INTELLIGENCE`, S19); `intelligence.*` config + defaults; bootstrap wiring + sink registration.
 - [x] `/v1/intelligence/*` endpoints + `atlas intel` CLI.
 - [x] Hermetic tests (L2–L5 ladder, sink routing, repo-fake, code-fake, api, cli, caps). **573 tests pass (+18).**
-- [ ] **Next — S20:** Tier 2/3 tools as needed (browser automation, OCR, Git, DB, Email/LinkedIn).
+- [x] **Next — S20:** Tier 2/3 tools as needed (browser automation, OCR, Git, DB, Email/LinkedIn).
+
+---
+
+## 6m. Sprint 20a — Git (read-only local version control) (✅ DONE)
+
+The first Tier-2 tool, and the one that most directly serves the coding-assistant
+thesis: Atlas can now *read* a local repository's history and working state. It slots
+beneath Code Understanding (S14) and Engineering Intelligence (S19) — "what does this
+repo look like now, and how did it get here?" — without ever mutating a repo.
+
+- **`GitClient` (`atlas/vcs/git.py`)** shells out to `git` through an injectable
+  **`CommandRunner`** (default `SubprocessRunner`, hard per-call timeout). The runner
+  seam keeps the client fully **hermetic** in tests (feed canned output) while the real
+  binary is exercised by one integration test against a temp repo.
+- **Read-only by design.** Only inspection subcommands are ever run
+  (`status`/`log`/`diff`/`show`/`branch`/`rev-parse`); there is **no** code path that
+  fetches, pulls, pushes, commits, or otherwise mutates a repository, and it is
+  **network-free**. This is the safety property, not a convention.
+- **Honest outcomes (R2/R3).** Every operation returns a structured dict with an
+  `outcome` of `ok` | `not_a_repo` (path isn't a work tree) | `unavailable` (no git
+  binary) | `error` (non-zero / timeout) and **never raises** into the caller.
+- **`GitPlugin` = the `git` capability.** Tools `git.status` (branch, ahead/behind,
+  working changes, clean flag), `git.log` (recent commits), `git.diff` (`--stat` +
+  files-changed), `git.show` (one commit + stat), `git.branches` (list + current),
+  `git.file_history` (commits touching a path). Concrete **`GitCapability`** contract
+  (catalog `CAP_GIT`, since S20).
+- **Planner + assistant + jobs.** New deterministic `git_status` intent (routes
+  "git status/log/diff/branches", "recent commits", extracts the repo path); assistant
+  `_do_git` renders results deterministically and reports gaps/blocks honestly;
+  `JobPlanner` accepts `git_status` for multi-step jobs.
+- **Config** `plugins.git.*` (`git_binary`, `timeout`, `max_log`) + `git_plugin` in the
+  enabled list. **Surface:** `POST /v1/git` (`{action, repo, ref?, path?, max_count?}`),
+  `atlas git status|log|diff|show|branches|file_history <repo>`.
+
+> **Scope line:** S20 is split — **S20a = Git** (highest-value, fully deterministic and
+> hermetically testable). Browser automation, OCR, DB and Email/LinkedIn are deferred to
+> **S20b** and remain "as needed"; per the build order, **Browser is deliberately late**.
+
+**Definition of Done (S20a)** — all met:
+- [x] `atlas/vcs/git.py` — `GitClient` + `CommandRunner`/`SubprocessRunner`; read-only, timeout-bounded, honest outcomes, pure parsers.
+- [x] `GitPlugin` (`git` cap) with six read-only tools; `GitCapability` contract + catalog (`CAP_GIT`, S20).
+- [x] `plugins.git.*` config + defaults; `git_plugin` enabled (self-registers, no bootstrap change).
+- [x] Planner `git_status` intent + `AssistantService._do_git` (+ `git` gap fallback) + `JobPlanner` intent/capability.
+- [x] `POST /v1/git` + `atlas git` CLI.
+- [x] Hermetic tests (status/log/diff/branches/file-history parsing, unavailable/not-a-repo/error, plugin+registration, planner, assistant, api, cli, caps) **+ real-repo integration**. **598 tests pass (+25).**
+- [ ] **Next — S20b:** browser automation / OCR / DB / Email/LinkedIn, as needed.
 
 ---
 
@@ -1360,6 +1409,7 @@ reversible* as everything else.
 
 | Date | Sprint | Notes |
 |------|--------|-------|
+| 2026-07-12 | S20a | **Sprint 20a shipped ✅ — Git (read-only local version control).** First Tier-2 tool, chosen because it directly serves the coding-assistant thesis and is fully deterministic + hermetically testable. New `atlas/vcs/git.py` **`GitClient`** shells to `git` through an injectable **`CommandRunner`** (default `SubprocessRunner`, hard per-call timeout) — **read-only by design** (only `status`/`log`/`diff`/`show`/`branch`/`rev-parse`; never fetch/pull/push/commit) and **network-free**. Honest outcomes `ok`/`not_a_repo`/`unavailable`/`error`, **never raises** (R2/R3); pure output parsers. **`GitPlugin`** = `git` cap with six tools (`git.status` branch+ahead/behind+changes+clean, `git.log`, `git.diff` `--stat`+files-changed, `git.show`, `git.branches` list+current, `git.file_history`). Concrete **`GitCapability`** (`CAP_GIT`, S20). Planner **`git_status`** intent + `AssistantService._do_git` (deterministic rendering, `git` gap/blocked honesty) + `JobPlanner` support. `plugins.git.*` config (`git_binary`/`timeout`/`max_log`) + `git_plugin` enabled (self-registers, no bootstrap change). `POST /v1/git` + `atlas git status|log|diff|show|branches|file_history`. Hermetic tests (parsers, all outcomes, plugin+registration, planner, assistant, api, cli, caps) **+ real-repo integration**. **598 tests pass (+25).** S20 split: **S20b** (browser/OCR/DB/Email/LinkedIn) remains as-needed; Browser deliberately late. |
 | 2026-07-11 | — | Stage 2 plan drafted from `stage-2.txt`; gap analysis vs Stage 1; roadmap + open decisions D1–D6 raised for discussion |
 | 2026-07-11 | — | D1–D4 locked (chat-first w/ Job-Engine north star; deterministic planner; new conversation schema; full arc). Sprint 10 detailed in §6a; ready to build |
 | 2026-07-11 | — | Requirements R1 (multiple concurrent jobs), R2 (capability honesty / gap reports), R3 (non-blocking HITL) locked into §1a; Job Engine step-state model + Capability Gap Report added; ambiguities Q1–Q10 catalogued in §4b with defaults |

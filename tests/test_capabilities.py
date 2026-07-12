@@ -187,3 +187,17 @@ def test_intelligence_capability_contract_verified():
     assert reg.verify(CAP_INTELLIGENCE) is True
     assert CAPABILITY_CATALOG[CAP_INTELLIGENCE].contract is IntelligenceCapability
     assert CAPABILITY_CATALOG[CAP_INTELLIGENCE].since == "S19"
+
+
+def test_git_capability_contract_verified():
+    from atlas.capabilities import CAP_GIT, GitCapability
+    from atlas.plugins.git_plugin import GitPlugin
+    from atlas.vcs.git import GitClient
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_GIT, GitPlugin(GitClient(None)), contract=GitCapability, kind="plugin"
+    )
+    assert reg.verify(CAP_GIT) is True
+    assert CAPABILITY_CATALOG[CAP_GIT].contract is GitCapability
+    assert CAPABILITY_CATALOG[CAP_GIT].since == "S20"

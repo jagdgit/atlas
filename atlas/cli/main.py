@@ -181,6 +181,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_py.add_argument("-f", "--file", default=None, help="run a .py file instead")
     p_py.add_argument("--timeout", type=float, default=None, help="wall-clock seconds")
 
+    p_git = sub.add_parser("git", help="read-only local git inspection (S20a)")
+    p_git.add_argument(
+        "action",
+        choices=["status", "log", "diff", "show", "branches", "file_history"],
+    )
+    p_git.add_argument("repo", nargs="?", default=".", help="repository path")
+    p_git.add_argument("--ref", default=None, help="commit/range (diff/show)")
+    p_git.add_argument("--path", default=None, help="file path (file_history)")
+    p_git.add_argument("--max", type=int, default=None, dest="max_count",
+                       help="max commits (log/file_history)")
+
     p_report = sub.add_parser(
         "report", help="generate a scientific-review report from a JSON evidence graph"
     )
@@ -651,6 +662,53 @@ def cmd_python(args: argparse.Namespace, app: "Application | None" = None) -> in
     return 0 if result["outcome"] == "ok" else 1
 
 
+def cmd_git(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    action = args.action
+    if action == "log":
+        result = app.invoke_tool("git.log", repo=args.repo, max_count=args.max_count)
+    elif action == "diff":
+        result = app.invoke_tool("git.diff", repo=args.repo, ref=args.ref)
+    elif action == "show":
+        result = app.invoke_tool("git.show", repo=args.repo, ref=args.ref or "HEAD")
+    elif action == "branches":
+        result = app.invoke_tool("git.branches", repo=args.repo)
+    elif action == "file_history":
+        result = app.invoke_tool(
+            "git.file_history", repo=args.repo, path=args.path or "",
+            max_count=args.max_count,
+        )
+    else:
+        result = app.invoke_tool("git.status", repo=args.repo)
+
+    outcome = result.get("outcome")
+    if outcome != "ok":
+        print(f"git {action} {outcome}: {result.get('reason') or ''}", file=sys.stderr)
+        return 1
+    if action == "status":
+        print(f"branch {result.get('branch')}  "
+              f"ahead {result.get('ahead')} / behind {result.get('behind')}  "
+              f"{'clean' if result.get('clean') else 'dirty'}")
+        for ch in result.get("changes", []):
+            print(f"  {ch['status']:>2} {ch['path']}")
+    elif action in ("log", "file_history"):
+        for c in result.get("commits", []):
+            print(f"{c['short']} {c['date']} {c['author']} — {c['subject']}")
+    elif action == "diff":
+        print(f"{result.get('files_changed', 0)} file(s) changed")
+        if result.get("stat"):
+            print(result["stat"])
+    elif action == "show":
+        c = result.get("commit", {})
+        print(f"{c.get('short')} {c.get('date')} {c.get('author')} — {c.get('subject')}")
+        if result.get("stat"):
+            print(result["stat"])
+    elif action == "branches":
+        for b in result.get("branches", []):
+            print(("* " if b == result.get("current") else "  ") + b)
+    return 0
+
+
 def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -875,6 +933,7 @@ _HANDLERS = {
     "youtube": cmd_youtube,
     "code": cmd_code,
     "python": cmd_python,
+    "git": cmd_git,
     "report": cmd_report,
     "verify": cmd_verify,
     "learn": cmd_learn,

@@ -34,6 +34,7 @@ CAP_CODE = "code"
 CAP_PYTHON = "python"
 CAP_LEARNING = "learning"
 CAP_INTELLIGENCE = "intelligence"
+CAP_GIT = "git"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -160,6 +161,15 @@ class IntelligenceCapability(Protocol):
     def search(self, query: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class GitCapability(Protocol):
+    """Read-only local version-control inspection (S20a)."""
+
+    def status(self, repo: str, *args: Any, **kwargs: Any) -> Any: ...
+    def log(self, repo: str, *args: Any, **kwargs: Any) -> Any: ...
+    def diff(self, repo: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -270,6 +280,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Learn repos (L2), connect (L3), generalize patterns (L4), recommend (L5).",
         "Engineering Intelligence: Atlas learns *you* — the Personal Coding Assistant.",
         "S19",
+    ),
+    CAP_GIT: CapabilitySpec(
+        CAP_GIT,
+        GitCapability,
+        "Read a local repo's status, log, diff, branches and file history.",
+        "Version-control awareness for the coding assistant (read-only).",
+        "S20",
     ),
 }
 

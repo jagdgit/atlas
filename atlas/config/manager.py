@@ -239,6 +239,12 @@ class YouTubePluginConfig(BaseModel):
     languages: list[str] = Field(default_factory=lambda: ["en"])
 
 
+class GitPluginConfig(BaseModel):
+    git_binary: str = "git"
+    timeout: float = 15.0  # hard wall-clock per git invocation
+    max_log: int = 50  # default commits returned by log/file_history
+
+
 class PluginsConfig(BaseModel):
     # Dotted module paths to load; each module exposes build(config) -> Plugin.
     enabled: list[str] = Field(default_factory=list)
@@ -248,6 +254,7 @@ class PluginsConfig(BaseModel):
     downloader: DownloaderPluginConfig = DownloaderPluginConfig()
     scholar: ScholarPluginConfig = ScholarPluginConfig()
     youtube: YouTubePluginConfig = YouTubePluginConfig()
+    git: GitPluginConfig = GitPluginConfig()
 
 
 class MemoryConfig(BaseModel):

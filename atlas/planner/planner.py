@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from atlas.capabilities import (
     CAP_AGENT,
+    CAP_GIT,
     CAP_KNOWLEDGE,
     CAP_LLM,
     CAP_MEMORY,
@@ -39,6 +40,7 @@ class Intent:
     SCHOLAR_SEARCH = "scholar_search"
     YOUTUBE_TRANSCRIPT = "youtube_transcript"
     RUN_PYTHON = "run_python"
+    GIT_STATUS = "git_status"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
@@ -152,6 +154,17 @@ _PYTHON_RE = re.compile(
     r"(?:python|py|code|script)\b",
     re.IGNORECASE,
 )
+# Explicit git inspection request: "git status/log/diff/branches" or "recent commits".
+_GIT_RE = re.compile(
+    r"\bgit\s+(?:status|log|diff|show|branch(?:es)?|history)\b"
+    r"|\b(?:recent\s+commits?|commit\s+history|git\s+history|"
+    r"uncommitted\s+changes|working\s+tree\s+changes?)\b",
+    re.IGNORECASE,
+)
+# A directory-ish path token (quoted, or starting with ~ / . / /), for the repo arg.
+_GIT_DIR_RE = re.compile(
+    r"(?:\"([^\"]+)\"|'([^']+)'|((?:~|\.{1,2})?/[\w./\-]+))"
+)
 
 
 def _url_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -210,6 +223,25 @@ def _python_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"code": code}
 
 
+def _git_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    low = message.lower()
+    if re.search(r"\b(log|commits?|history)\b", low):
+        action = "log"
+    elif "diff" in low or "uncommitted" in low or "working tree" in low:
+        action = "diff"
+    elif "branch" in low:
+        action = "branches"
+    elif "show" in low:
+        action = "show"
+    else:
+        action = "status"
+    repo = "."
+    match = _GIT_DIR_RE.search(message)
+    if match:
+        repo = next((g for g in match.groups() if g), ".")
+    return {"action": action, "repo": repo}
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -254,6 +286,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         CAP_PYTHON,
         _PYTHON_RE,
         _python_args,
+    ),
+    (
+        Intent.GIT_STATUS,
+        CAP_GIT,
+        _GIT_RE,
+        _git_args,
     ),
     (
         Intent.YOUTUBE_TRANSCRIPT,
@@ -324,6 +362,7 @@ _DESCRIPTIONS = {
     Intent.SCHOLAR_SEARCH: "Search academic sources (arXiv, Semantic Scholar).",
     Intent.YOUTUBE_TRANSCRIPT: "Fetch a YouTube video transcript.",
     Intent.RUN_PYTHON: "Run Python code in the sandbox.",
+    Intent.GIT_STATUS: "Inspect a local git repository (read-only).",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",

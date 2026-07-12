@@ -55,6 +55,7 @@ from atlas.api.schemas import (
     CodeRepoRequest,
     CodeSymbolsRequest,
     ExperienceRequest,
+    GitRequest,
     LearningApplyRequest,
     LearnRepositoryRequest,
     RecommendRequest,
@@ -262,6 +263,27 @@ def scholar_search(body: ScholarSearchRequest, request: Request) -> dict:
 @v1_router.post("/youtube/transcript", tags=["research"])
 def youtube_transcript(body: YouTubeTranscriptRequest, request: Request) -> dict:
     return _app(request).invoke_tool("youtube.transcript", video=body.video)
+
+
+# --- git (S20a): read-only local version-control inspection ---------------
+@v1_router.post("/git", tags=["git"])
+def git(body: GitRequest, request: Request) -> dict:
+    app = _app(request)
+    action = body.action
+    if action == "log":
+        return app.invoke_tool("git.log", repo=body.repo, max_count=body.max_count)
+    if action == "diff":
+        return app.invoke_tool("git.diff", repo=body.repo, ref=body.ref)
+    if action == "show":
+        return app.invoke_tool("git.show", repo=body.repo, ref=body.ref or "HEAD")
+    if action == "branches":
+        return app.invoke_tool("git.branches", repo=body.repo)
+    if action == "file_history":
+        return app.invoke_tool(
+            "git.file_history", repo=body.repo, path=body.path or "",
+            max_count=body.max_count,
+        )
+    return app.invoke_tool("git.status", repo=body.repo)
 
 
 # --- code understanding (S14) --------------------------------------------

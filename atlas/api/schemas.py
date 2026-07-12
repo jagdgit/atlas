@@ -241,6 +241,15 @@ class YouTubeTranscriptRequest(BaseModel):
     video: str = Field(min_length=1)  # YouTube URL or 11-char video id
 
 
+class GitRequest(BaseModel):
+    # Read-only local git inspection (S20a). `action` selects the operation.
+    action: str = Field(default="status")  # status|log|diff|show|branches|file_history
+    repo: str = Field(min_length=1)
+    ref: str | None = None
+    path: str | None = None  # required for file_history
+    max_count: int | None = Field(default=None, ge=1, le=1000)
+
+
 class ReportRequest(BaseModel):
     # Objective + a serialised Evidence Graph → a verified §5a.5 report (S17).
     objective: str = Field(min_length=1)

@@ -20,6 +20,7 @@ from atlas.cli.main import (
     cmd_download,
     cmd_forget,
     cmd_formats,
+    cmd_git,
     cmd_ingest,
     cmd_intel,
     cmd_job,
@@ -265,6 +266,18 @@ class FakeApp:
                 "video_id": "abcdefghijk", "url": kwargs.get("video"), "outcome": "ok",
                 "title": "How Solar Works", "language": "en",
                 "text": "Solar panels convert sunlight into electricity.", "segments": [],
+            }
+        if name == "git.status":
+            return {
+                "outcome": "ok", "repo": kwargs.get("repo"), "branch": "main",
+                "ahead": 1, "behind": 0,
+                "changes": [{"status": "M", "path": "a.py"}], "clean": False,
+            }
+        if name == "git.log":
+            return {
+                "outcome": "ok", "repo": kwargs.get("repo"),
+                "commits": [{"short": "abc123", "date": "2026-07-01",
+                             "author": "Ada", "subject": "init"}],
             }
         return {"tool": name, "args": kwargs}
 
@@ -543,6 +556,23 @@ def test_cmd_youtube_prints_transcript(capsys):
     out = capsys.readouterr().out
     assert "How Solar Works" in out
     assert "Solar panels convert sunlight" in out
+
+
+def test_cmd_git_status(capsys):
+    args = build_parser().parse_args(["git", "status", "/data/atlas"])
+    rc = cmd_git(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "branch main" in out
+    assert "M a.py" in out
+
+
+def test_cmd_git_log(capsys):
+    args = build_parser().parse_args(["git", "log", "/repo", "--max", "5"])
+    rc = cmd_git(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "abc123" in out and "init" in out
 
 
 def test_cmd_download_prints_path(capsys):
