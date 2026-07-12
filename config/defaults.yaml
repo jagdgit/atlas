@@ -171,6 +171,7 @@ plugins:
     - atlas.plugins.youtube_plugin
     - atlas.plugins.git_plugin
     - atlas.plugins.sql_plugin
+    - atlas.plugins.ocr_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -201,6 +202,10 @@ plugins:
     default_source: null    # default db file when a call omits `source`
     max_rows: 1000          # cap rows returned by a query
     timeout: 15             # soft per-query wall-clock
+  ocr:                      # S20c: image → text (Tesseract; degrades if not installed)
+    root: null              # sandbox root for images; null => paths.documents
+    lang: eng               # default tesseract language code
+    max_bytes: 10485760     # 10 MiB per-image cap
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network

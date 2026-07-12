@@ -1,16 +1,16 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a + S20b shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a + S20b + S20c(OCR) shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
 > **Non-blocking HITL & Report Generator** + **Deeper Research: Scholarly + YouTube** +
 > **Learning Pipeline (Experience store, governed)** +
 > **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)** +
-> **Git (read-only local VCS, S20a)** + **SQL (read-only local databases, S20b)**;
-> 645 tests).
+> **Git (read-only local VCS, S20a)** + **SQL (read-only local databases, S20b)**
+> + **OCR (image → text, S20c)**; 671 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S20c — remaining Tier 2/3 tools** (browser automation, OCR, Email/LinkedIn — as needed).
+> Next: **S20c cont. — remaining Tier 2/3 tools** (browser automation, Email/LinkedIn — as needed; Browser deliberately last).
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -157,6 +157,7 @@ Honest mapping of current assets to Stage 2 needs:
 | Web | ✅ `web_plugin` (`web.fetch` one URL → text) | No **web *search***, no downloader, no scholarly/YouTube |
 | Git | ✅ `git_plugin` (`git` cap, S20a: status/log/diff/show/branches/file_history) | **Read-only** local VCS, network-free |
 | SQL | ✅ `sql_plugin` (`sql` cap, S20b: query/tables/schema, SQLite default) | **Read-only** (guard + `mode=ro`), sandboxed sources; Postgres backend swappable later |
+| OCR | ✅ `ocr_plugin` (`ocr` cap, S20c: image→text, Tesseract default) | Injectable engine seam; **degrades gracefully** (unavailable, never raises) if deps/binary missing; sandboxed sources |
 | Evidence | ✅ RAG citations (per-answer) | No **evidence graph** (claim→sources→confidence) across a job |
 | Human-in-the-loop | ⚠️ scheduler states (pending/claimed/running/…) | No `waiting_for_user` + notify + resume flow |
 | Determinism | ✅ temp=0 defaults, durable ret/recovery | No cross-check / verify pass; no report pipeline |
@@ -693,7 +694,8 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S19** ✅ | **Engineering Intelligence** | `intelligence` cap over the **Code store** (migration 0012): **L2** `learn_repository` (repo map + patterns + symbols → structure, promoted through the S18b ledger via a **store sink** — governed & reversible); **L3** cross-project `search` + `connections` (shared frameworks/langs); **L4** `generalize` (patterns/frameworks/languages you *always* use, prevalence-scored materialised view); **L5** `recommend` + `profile` (the **Personal Coding Assistant**); `/v1/intelligence/*`, `atlas intel` | Atlas learns *you* (L4–L5) |
 | **S20a** ✅ | **Git (read-only)** | `git` cap over a local repo: `status`/`log`/`diff`/`show`/`branches`/`file_history` via an injectable command-runner; **read-only by design** (no fetch/pull/push/commit) & network-free; honest outcomes (`ok`/`not_a_repo`/`unavailable`/`error`, never raises); planner `git_status` intent; `POST /v1/git`, `atlas git` | VCS-aware coding assistant |
 | **S20b** ✅ | **SQL (read-only)** | `sql` cap over a local database (SQLite default): `query`/`tables`/`schema` via an injectable backend; **read-only by construction** — a statement guard (SELECT/WITH/EXPLAIN/VALUES only, single statement) **plus** a `mode=ro` connection; sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`blocked`/`unavailable`/`error`, never raises); result sets are **L5 evidence** (§5a.6); planner `sql_query` intent; `POST /v1/db/*`, `atlas sql` | structured-data analysis |
-| **S20c** | **Remaining Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, Email/LinkedIn | full toolbelt |
+| **S20c** ✅ | **OCR (image → text)** | `ocr` cap: `ocr.image` reads text from a screenshot/photo/scan via an injectable **engine seam** (default Tesseract). **Degrades gracefully** — missing Pillow/pytesseract/`tesseract` binary ⇒ `unavailable`, never raises (R2/R3); sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`unsupported`/`unavailable`/`error`). Planner `ocr_image` intent; `POST /v1/ocr`, `atlas ocr` | completes the Document Reader (reads scanned/pixel text) |
+| **S20c** cont. | **Remaining Tier 2/3 tools (as needed)** | Browser automation (Playwright), Email/LinkedIn — **Browser deliberately last** | full toolbelt |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
 
 Plugin build order (from the doc, capability-first): Filesystem → Document Reader →
@@ -1428,7 +1430,47 @@ honest outcomes, hermetic tests.
 - [x] Planner `sql_query` intent + `AssistantService._do_sql` (+ `sql` gap fallback) + `JobPlanner` intent/capability.
 - [x] `POST /v1/db/query` + `GET /v1/db/tables|schema` + `atlas sql` CLI.
 - [x] Hermetic tests (guard allow/deny, real-SQLite query/aggregate/view/limit/empty, `mode=ro` write rejection, unavailable/escape/error, tables/schema, fake-backend translation, plugin+registration, planner, assistant, api, cli, caps). **645 tests pass (+47).**
-- [ ] **Next — S20c:** browser automation / OCR / Email/LinkedIn, as needed.
+- [x] **Next — S20c:** OCR shipped (§6o); browser / Email remain as-needed.
+
+---
+
+### 6o. Sprint 20c — OCR (image → text) ✅
+
+**Why now:** the third Tier-2 tool and the natural completion of the **Document Reader**
+(S13a explicitly deferred scanned/pixel text to "future OCR"). Same safety shape as
+Git/SQL — an **injectable engine seam** with sandboxed sources and honest, never-raising
+outcomes — but with one extra property: because the default engine has a *system*
+dependency (the `tesseract` binary), it must **degrade gracefully** when that dep is
+absent rather than break the app. Browser/Email stay deferred (per build order, Browser
+is deliberately last).
+
+**Shape**
+- `atlas/ocr/engine.py` — **`OCRClient`** reads one image through an injectable
+  **`OCREngine`** (default **`TesseractEngine`** = Pillow + pytesseract + `tesseract`).
+  All optional imports are **lazy**; a missing dep/binary surfaces as `unavailable`
+  (via `engine.available()` / typed `OCRUnavailable`) — the module always imports and
+  the app always boots. Sources resolved under and confined to a sandbox root
+  (default `paths.documents`); per-image byte cap; suffix allow-list.
+- Honest outcomes, **never raises** (R2/R3): `ok` | `empty` (no text found) |
+  `unsupported` (not a readable image / too large) | `unavailable` (engine/deps missing)
+  | `error`. Even a crashing engine is caught and mapped to `error`.
+- **`OCRPlugin`** = `ocr` cap, tool `ocr.image(path, lang=?)`. `health_check` reports
+  `healthy=True` with `available` in `data` — a missing OCR backend is a **degraded**,
+  not failed, state.
+- Concrete **`OCRCapability`** (`CAP_OCR`, S20). Planner **`ocr_image`** intent (keyword
+  `ocr`, "extract/read text from … image/screenshot", or a bare `*.png|jpg|…` path —
+  which doesn't collide with the doc-ingest suffix set) + `AssistantService._do_ocr`
+  (renders text; `unavailable`→blocked, `unsupported`/`empty`/`error` honesty; `ocr`
+  gap fallback) + `JobPlanner`. `POST /v1/ocr`; `atlas ocr <path> [--lang]`.
+
+**Definition of Done (S20c/OCR)** — all met:
+- [x] `atlas/ocr/engine.py` — `OCRClient` + `OCREngine`/`TesseractEngine` seam; lazy deps; sandboxed sources; byte cap; honest outcomes; never raises.
+- [x] `OCRPlugin` (`ocr` cap) with `ocr.image`; graceful `health_check`; `OCRCapability` contract + catalog (`CAP_OCR`, S20).
+- [x] `plugins.ocr.*` config + defaults; `ocr_plugin` enabled (self-registers). `pillow` + `pytesseract` added to `pyproject.toml`/`requirements.txt`.
+- [x] Planner `ocr_image` intent + `AssistantService._do_ocr` (+ `ocr` gap fallback) + `JobPlanner` intent/capability.
+- [x] `POST /v1/ocr` + `atlas ocr` CLI.
+- [x] Hermetic tests (outcome mapping via fake engine — ok/empty/unsupported/unavailable/error/escape/too-large/crash-safe/lang; plugin delegate+health+registration; default engine degrades-or-reads with skip-guard; planner; assistant; api; cli; caps). **671 tests pass (+26).**
+- [ ] **Next — S20c cont.:** browser automation (Playwright, deliberately last) / Email/LinkedIn, as needed.
 
 ---
 
@@ -1459,6 +1501,7 @@ honest outcomes, hermetic tests.
 
 | Date | Sprint | Notes |
 |------|--------|-------|
+| 2026-07-12 | S20c | **Sprint 20c shipped ✅ — OCR (image → text).** Third Tier-2 tool; completes the **Document Reader** (S13a deferred scanned/pixel text to "future OCR"). New `atlas/ocr/engine.py` **`OCRClient`** reads one image through an injectable **`OCREngine`** (default **`TesseractEngine`** = Pillow + pytesseract + system `tesseract`). Key property vs Git/SQL: the default engine has a *system* dep, so all optional imports are **lazy** and a missing dep/binary **degrades gracefully** → `unavailable` (never raises, app always boots). Sources confined to a sandbox root (default `paths.documents`); per-image byte cap + suffix allow-list. Honest outcomes `ok`/`empty`/`unsupported`/`unavailable`/`error`; even a crashing engine → `error`. **`OCRPlugin`** = `ocr` cap (`ocr.image`), `health_check` reports a missing backend as **degraded not failed**. Concrete **`OCRCapability`** (`CAP_OCR`, S20). Planner **`ocr_image`** intent (`ocr` keyword, "extract/read text from … image/screenshot", or bare `*.png|jpg|…` — no clash with doc-ingest suffixes) + `AssistantService._do_ocr` (renders text; `unavailable`→blocked, honest `unsupported`/`empty`/`error`; `ocr` gap fallback) + `JobPlanner`. `plugins.ocr.*` config + `ocr_plugin` enabled; `pillow`+`pytesseract` added to `pyproject.toml`/`requirements.txt`. `POST /v1/ocr`; `atlas ocr <path> [--lang]`. **Engine seam** lets EasyOCR/cloud OCR drop in later. **671 tests pass (+26).** Next: browser (deliberately last) / Email — as needed. |
 | 2026-07-12 | S20b | **Sprint 20b shipped ✅ — SQL (read-only local databases).** Second Tier-2 tool; Atlas can query structured data, and a computed result set is **L5 evidence** (§5a.6), pairing with the Python sandbox. New `atlas/sql/client.py` **`SQLClient`** runs a *single* statement through an injectable **`SQLBackend`** (default **`SQLiteBackend`**, stdlib). **Read-only by construction** via two layers: (1) a statement **guard** (`is_read_only`: strips comments, one statement only, must start `SELECT`/`WITH`/`EXPLAIN`/`VALUES`, blocks `INSERT`/`UPDATE`/`DELETE`/`DROP`/`ATTACH`/`PRAGMA`/…) and (2) a **`mode=ro`** SQLite connection (defence-in-depth — a guard bypass still can't write, tested). Sources confined to a sandbox root (default `paths.data`). Honest outcomes `ok`/`empty`/`blocked`/`unavailable`/`error`, **never raises**; row cap + `truncated` flag + soft per-query timeout (connection interrupt). **`SQLPlugin`** = `sql` cap (`sql.query`/`sql.tables`/`sql.schema`). Concrete **`SQLCapability`** (`CAP_SQL`, S20). Planner **`sql_query`** intent (fenced ```` ```sql ````, bare `SELECT … FROM`, or "query the database …"; extracts `*.db` source) + `AssistantService._do_sql` (compact table render; blocked/unavailable/error honesty) + `JobPlanner`. `plugins.sql.*` config + `sql_plugin` enabled. `POST /v1/db/query` + `GET /v1/db/tables|schema`; `atlas sql query|tables|schema`. **Backend seam** lets Postgres drop in later. **645 tests pass (+47).** Next: **S20c** (browser/OCR/Email — as needed). |
 | 2026-07-12 | S20a | **Sprint 20a shipped ✅ — Git (read-only local version control).** First Tier-2 tool, chosen because it directly serves the coding-assistant thesis and is fully deterministic + hermetically testable. New `atlas/vcs/git.py` **`GitClient`** shells to `git` through an injectable **`CommandRunner`** (default `SubprocessRunner`, hard per-call timeout) — **read-only by design** (only `status`/`log`/`diff`/`show`/`branch`/`rev-parse`; never fetch/pull/push/commit) and **network-free**. Honest outcomes `ok`/`not_a_repo`/`unavailable`/`error`, **never raises** (R2/R3); pure output parsers. **`GitPlugin`** = `git` cap with six tools (`git.status` branch+ahead/behind+changes+clean, `git.log`, `git.diff` `--stat`+files-changed, `git.show`, `git.branches` list+current, `git.file_history`). Concrete **`GitCapability`** (`CAP_GIT`, S20). Planner **`git_status`** intent + `AssistantService._do_git` (deterministic rendering, `git` gap/blocked honesty) + `JobPlanner` support. `plugins.git.*` config (`git_binary`/`timeout`/`max_log`) + `git_plugin` enabled (self-registers, no bootstrap change). `POST /v1/git` + `atlas git status|log|diff|show|branches|file_history`. Hermetic tests (parsers, all outcomes, plugin+registration, planner, assistant, api, cli, caps) **+ real-repo integration**. **598 tests pass (+25).** S20 split: **S20b** (browser/OCR/DB/Email/LinkedIn) remains as-needed; Browser deliberately late. |
 | 2026-07-11 | — | Stage 2 plan drafted from `stage-2.txt`; gap analysis vs Stage 1; roadmap + open decisions D1–D6 raised for discussion |

@@ -216,3 +216,18 @@ def test_sql_capability_contract_verified(tmp_path):
     assert reg.verify(CAP_SQL) is True
     assert CAPABILITY_CATALOG[CAP_SQL].contract is SQLCapability
     assert CAPABILITY_CATALOG[CAP_SQL].since == "S20"
+
+
+def test_ocr_capability_contract_verified(tmp_path):
+    from atlas.capabilities import CAP_OCR, OCRCapability
+    from atlas.ocr.engine import OCRClient, TesseractEngine
+    from atlas.plugins.ocr_plugin import OCRPlugin
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_OCR, OCRPlugin(OCRClient(TesseractEngine(), tmp_path)),
+        contract=OCRCapability, kind="plugin",
+    )
+    assert reg.verify(CAP_OCR) is True
+    assert CAPABILITY_CATALOG[CAP_OCR].contract is OCRCapability
+    assert CAPABILITY_CATALOG[CAP_OCR].since == "S20"

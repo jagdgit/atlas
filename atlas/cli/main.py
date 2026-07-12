@@ -199,6 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_sql.add_argument("--source", default=None, help="db file under the sandbox root")
     p_sql.add_argument("--limit", type=int, default=None, help="max rows (query)")
 
+    p_ocr = sub.add_parser("ocr", help="extract text from an image via OCR (S20c)")
+    p_ocr.add_argument("path", help="image path under the OCR sandbox root")
+    p_ocr.add_argument("--lang", default=None, help="tesseract language (default eng)")
+
     p_report = sub.add_parser(
         "report", help="generate a scientific-review report from a JSON evidence graph"
     )
@@ -758,6 +762,21 @@ def cmd_sql(args: argparse.Namespace, app: "Application | None" = None) -> int:
     return 0
 
 
+def cmd_ocr(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    result = app.invoke_tool("ocr.image", path=args.path, lang=args.lang)
+    outcome = result.get("outcome")
+    if outcome not in ("ok", "empty"):
+        print(f"ocr {outcome}: {result.get('reason') or ''}", file=sys.stderr)
+        return 1
+    if outcome == "empty":
+        print("(no readable text found)")
+        return 0
+    print(f"# {args.path}  [{result.get('lang')}, {result.get('chars')} chars]")
+    print(result.get("text", ""))
+    return 0
+
+
 def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -984,6 +1003,7 @@ _HANDLERS = {
     "python": cmd_python,
     "git": cmd_git,
     "sql": cmd_sql,
+    "ocr": cmd_ocr,
     "report": cmd_report,
     "verify": cmd_verify,
     "learn": cmd_learn,

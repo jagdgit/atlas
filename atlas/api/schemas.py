@@ -258,6 +258,12 @@ class SQLQueryRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=100_000)
 
 
+class OCRRequest(BaseModel):
+    # Extract text from an image (S20c).
+    path: str = Field(min_length=1)  # image path under the OCR sandbox root
+    lang: str | None = None  # tesseract language code (default 'eng')
+
+
 class ReportRequest(BaseModel):
     # Objective + a serialised Evidence Graph → a verified §5a.5 report (S17).
     objective: str = Field(min_length=1)

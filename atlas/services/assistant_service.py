@@ -197,6 +197,7 @@ class AssistantService:
         python_tool: str = "python.run",
         git_tool_prefix: str = "git",
         sql_tool: str = "sql.query",
+        ocr_tool: str = "ocr.image",
         search_limit: int = 5,
         list_limit: int = 25,
         logger: logging.Logger | None = None,
@@ -217,6 +218,7 @@ class AssistantService:
         self._python_tool = python_tool
         self._git_tool_prefix = git_tool_prefix
         self._sql_tool = sql_tool
+        self._ocr_tool = ocr_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
         self._responder = ResponseBuilder(llm, logger)
@@ -303,6 +305,7 @@ class AssistantService:
             Intent.RUN_PYTHON: self._do_run_python,
             Intent.GIT_STATUS: self._do_git,
             Intent.SQL_QUERY: self._do_sql,
+            Intent.OCR_IMAGE: self._do_ocr,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
@@ -681,6 +684,43 @@ class AssistantService:
             return _Outcome(answer=f"The query errored: {data.get('reason')}")
         return _Outcome(answer=_format_sql(data))
 
+    def _do_ocr(self, args, context, tool_calls) -> _Outcome:
+        path = (args.get("path") or "").strip()
+        if not path:
+            return _Outcome(answer="Which image should I read? Give me an image path.")
+        result = self._executor.execute(
+            self._ocr_tool, {"path": path, "lang": args.get("lang")}
+        )
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.OCR_IMAGE,
+                "action": self._ocr_tool,
+                "capability": "ocr",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't run OCR: {result.error}")
+        if outcome == "unavailable":
+            return _Outcome(
+                answer=f"OCR isn't available here: {data.get('reason')}.",
+                blocked=True,
+                blocked_reason=f"ocr unavailable: {data.get('reason')}",
+            )
+        if outcome == "unsupported":
+            return _Outcome(answer=f"I can't OCR that file: {data.get('reason')}.")
+        if outcome == "error":
+            return _Outcome(answer=f"OCR failed: {data.get('reason')}")
+        if outcome == "empty":
+            return _Outcome(answer=f"I found no readable text in {path}.")
+        text = (data.get("text") or "").strip()
+        return _Outcome(
+            answer=f"Extracted {data.get('chars', len(text))} characters from {path}:\n\n{text}"
+        )
+
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
         if self._agent is None:
@@ -741,6 +781,9 @@ class AssistantService:
     def _has_sql_tool(self) -> bool:
         return self._tools is not None and self._tools.has(self._sql_tool)
 
+    def _has_ocr_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._ocr_tool)
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -761,6 +804,7 @@ class AssistantService:
             "python": self._has_python_tool(),
             "git": self._has_git_tool(),
             "sql": self._has_sql_tool(),
+            "ocr": self._has_ocr_tool(),
         }.get(capability, True)
 
     def _preflight_gaps(self, plan: Plan) -> list[dict[str, Any]]:

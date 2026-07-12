@@ -23,6 +23,7 @@ from atlas.cli.main import (
     cmd_git,
     cmd_ingest,
     cmd_intel,
+    cmd_ocr,
     cmd_job,
     cmd_jobs,
     cmd_learn,
@@ -289,6 +290,12 @@ class FakeApp:
             }
         if name == "sql.tables":
             return {"outcome": "ok", "backend": "sqlite", "tables": ["sales", "totals"]}
+        if name == "ocr.image":
+            return {
+                "outcome": "ok", "path": kwargs.get("path"),
+                "lang": kwargs.get("lang") or "eng", "engine": "tesseract",
+                "text": "INVOICE 42", "chars": 10,
+            }
         return {"tool": name, "args": kwargs}
 
 
@@ -600,6 +607,15 @@ def test_cmd_sql_tables(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "sales" in out and "totals" in out
+
+
+def test_cmd_ocr(capsys):
+    args = build_parser().parse_args(["ocr", "scan.png"])
+    rc = cmd_ocr(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "INVOICE 42" in out
+    assert "scan.png" in out
 
 
 def test_cmd_download_prints_path(capsys):

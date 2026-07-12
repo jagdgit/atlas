@@ -61,6 +61,7 @@ from atlas.api.schemas import (
     RecommendRequest,
     PythonRunRequest,
     ReportRequest,
+    OCRRequest,
     ScholarSearchRequest,
     SQLQueryRequest,
     ToolInfo,
@@ -304,6 +305,12 @@ def db_tables(request: Request, source: str | None = None) -> dict:
 @v1_router.get("/db/schema", tags=["sql"])
 def db_schema(request: Request, table: str, source: str | None = None) -> dict:
     return _app(request).invoke_tool("sql.schema", table=table, source=source)
+
+
+# --- ocr (S20c): image → text --------------------------------------------
+@v1_router.post("/ocr", tags=["ocr"])
+def ocr(body: OCRRequest, request: Request) -> dict:
+    return _app(request).invoke_tool("ocr.image", path=body.path, lang=body.lang)
 
 
 # --- code understanding (S14) --------------------------------------------

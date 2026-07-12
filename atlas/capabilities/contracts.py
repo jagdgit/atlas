@@ -36,6 +36,7 @@ CAP_LEARNING = "learning"
 CAP_INTELLIGENCE = "intelligence"
 CAP_GIT = "git"
 CAP_SQL = "sql"
+CAP_OCR = "ocr"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -180,6 +181,13 @@ class SQLCapability(Protocol):
     def schema(self, table: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class OCRCapability(Protocol):
+    """Extract text from an image via OCR (S20c)."""
+
+    def image(self, path: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -303,6 +311,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         SQLCapability,
         "Run a read-only SQL query over a local database; list tables/schema.",
         "Structured-data analysis (read-only); result sets are L5 evidence.",
+        "S20",
+    ),
+    CAP_OCR: CapabilitySpec(
+        CAP_OCR,
+        OCRCapability,
+        "Extract text from an image file (screenshot, photo, scan).",
+        "Read pixels Atlas otherwise can't — completes the Document Reader.",
         "S20",
     ),
 }

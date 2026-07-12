@@ -351,6 +351,11 @@ class FakeApplication:
             }
         if name == "sql.tables":
             return {"outcome": "ok", "backend": "sqlite", "tables": ["sales", "totals"]}
+        if name == "ocr.image":
+            return {
+                "outcome": "ok", "path": kwargs.get("path"), "lang": kwargs.get("lang") or "eng",
+                "engine": "tesseract", "text": "INVOICE 42", "chars": 10,
+            }
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
         return {"url": kwargs.get("url"), "status": 200, "text": "hello"}
@@ -700,6 +705,23 @@ def test_db_tables_endpoint():
 
 def test_db_query_requires_auth():
     assert _client().post("/v1/db/query", json={"sql": "SELECT 1"}).status_code == 401
+
+
+def test_ocr_endpoint():
+    resp = _client().post("/v1/ocr", headers=AUTH, json={"path": "scan.png"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["outcome"] == "ok"
+    assert data["text"] == "INVOICE 42"
+
+
+def test_ocr_endpoint_requires_path():
+    resp = _client().post("/v1/ocr", headers=AUTH, json={})
+    assert resp.status_code == 422
+
+
+def test_ocr_endpoint_requires_auth():
+    assert _client().post("/v1/ocr", json={"path": "x.png"}).status_code == 401
 
 
 def test_code_repo_map_endpoint():

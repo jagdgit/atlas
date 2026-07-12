@@ -170,6 +170,25 @@ def test_sql_query_extracts_source(planner):
     assert plan.steps[0].args["source"] == "shop.db"
 
 
+def test_ocr_routes_on_keyword(planner):
+    plan = planner.plan("run ocr on receipt.png")
+    assert plan.intent == Intent.OCR_IMAGE
+    assert plan.steps[0].capability == "ocr"
+    assert plan.steps[0].args["path"] == "receipt.png"
+
+
+def test_ocr_routes_on_extract_text_phrasing(planner):
+    plan = planner.plan("extract the text from this screenshot shot.jpg please")
+    assert plan.intent == Intent.OCR_IMAGE
+    assert plan.steps[0].args["path"] == "shot.jpg"
+
+
+def test_ocr_beats_ingest_for_image_path(planner):
+    # An image path is OCR's, not the (doc) ingest path (which handles pdf/txt/…).
+    plan = planner.plan("photos/diagram.png")
+    assert plan.intent == Intent.OCR_IMAGE
+
+
 def test_ingest_extracts_path(planner):
     plan = planner.plan("ingest /data/atlas_data/documents/report.pdf")
     assert plan.intent == Intent.INGEST_PATH

@@ -252,6 +252,12 @@ class SQLPluginConfig(BaseModel):
     timeout: float = 15.0  # soft per-query wall-clock (interrupts the connection)
 
 
+class OCRPluginConfig(BaseModel):
+    root: str | None = None  # sandbox root for images; None => paths.documents
+    lang: str = "eng"  # default tesseract language code
+    max_bytes: int = 10_485_760  # refuse to OCR images larger than this (10 MiB)
+
+
 class PluginsConfig(BaseModel):
     # Dotted module paths to load; each module exposes build(config) -> Plugin.
     enabled: list[str] = Field(default_factory=list)
@@ -263,6 +269,7 @@ class PluginsConfig(BaseModel):
     youtube: YouTubePluginConfig = YouTubePluginConfig()
     git: GitPluginConfig = GitPluginConfig()
     sql: SQLPluginConfig = SQLPluginConfig()
+    ocr: OCRPluginConfig = OCRPluginConfig()
 
 
 class MemoryConfig(BaseModel):

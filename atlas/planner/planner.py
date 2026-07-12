@@ -23,6 +23,7 @@ from atlas.capabilities import (
     CAP_KNOWLEDGE,
     CAP_LLM,
     CAP_MEMORY,
+    CAP_OCR,
     CAP_PYTHON,
     CAP_SCHOLAR,
     CAP_SEARCH,
@@ -43,6 +44,7 @@ class Intent:
     RUN_PYTHON = "run_python"
     GIT_STATUS = "git_status"
     SQL_QUERY = "sql_query"
+    OCR_IMAGE = "ocr_image"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
@@ -189,6 +191,22 @@ _SQL_SOURCE_RE = re.compile(
     r"|([\w./\-]+\.(?:db|sqlite3?|s3db)))",
     re.IGNORECASE,
 )
+# An image path token (quoted or bare) with a known raster suffix.
+_IMAGE_RE = re.compile(
+    r"(?:\"([^\"]+\.(?:png|jpe?g|gif|bmp|tiff?|webp))\""
+    r"|'([^']+\.(?:png|jpe?g|gif|bmp|tiff?|webp))'"
+    r"|([\w./\-]+\.(?:png|jpe?g|gif|bmp|tiff?|webp)))",
+    re.IGNORECASE,
+)
+# An explicit OCR request, or an image path paired with a "read/extract text" verb.
+_OCR_RE = re.compile(
+    r"\bocr\b"
+    r"|\b(?:extract|read|get|pull|transcribe)\b[^.?!]{0,40}"
+    r"\b(?:text|words?|writing)\b[^.?!]{0,40}"
+    r"\b(?:image|photo|picture|screenshot|scan|png|jpe?g)\b"
+    r"|\b[\w./\-]+\.(?:png|jpe?g|gif|bmp|tiff?|webp)\b",
+    re.IGNORECASE,
+)
 
 
 def _url_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -289,6 +307,14 @@ def _sql_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"sql": body, "source": source}
 
 
+def _ocr_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    match = _IMAGE_RE.search(message)
+    path = None
+    if match:
+        path = next((g for g in match.groups() if g), None)
+    return {"path": path}
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -345,6 +371,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         CAP_SQL,
         _SQL_RE,
         _sql_args,
+    ),
+    (
+        Intent.OCR_IMAGE,
+        CAP_OCR,
+        _OCR_RE,
+        _ocr_args,
     ),
     (
         Intent.YOUTUBE_TRANSCRIPT,
@@ -417,6 +449,7 @@ _DESCRIPTIONS = {
     Intent.RUN_PYTHON: "Run Python code in the sandbox.",
     Intent.GIT_STATUS: "Inspect a local git repository (read-only).",
     Intent.SQL_QUERY: "Run a read-only SQL query on a local database.",
+    Intent.OCR_IMAGE: "Extract text from an image via OCR.",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",

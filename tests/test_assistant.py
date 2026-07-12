@@ -117,6 +117,7 @@ def _assistant(
     search_result=None, with_python=True, python_result=None, capabilities=None,
     with_scholar=True, scholar_result=None, with_youtube=True, youtube_result=None,
     with_git=True, git_result=None, with_sql=True, sql_result=None,
+    with_ocr=True, ocr_result=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -183,6 +184,13 @@ def _assistant(
         }
         sql_payload = sql_result if sql_result is not None else default_sql
         tools.register("sql.query", lambda sql, **kw: sql_payload)
+    if with_ocr:
+        default_ocr = {
+            "outcome": "ok", "path": "scan.png", "lang": "eng", "engine": "tesseract",
+            "text": "INVOICE 42", "chars": 10,
+        }
+        ocr_payload = ocr_result if ocr_result is not None else default_ocr
+        tools.register("ocr.image", lambda path, **kw: ocr_payload)
     return AssistantService(
         ConversationService(FakeConvRepo(), memory),
         Planner(),
@@ -430,6 +438,35 @@ def test_sql_gap_when_no_tool():
     turn = _assistant(with_sql=False).chat("SELECT * FROM sales")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "sql"
+
+
+# --- ocr (S20c) -----------------------------------------------------------
+def test_ocr_returns_text():
+    turn = _assistant().chat("run ocr on scan.png")
+    assert turn.intent == "ocr_image"
+    assert "INVOICE 42" in turn.answer
+    assert turn.tool_calls[0]["action"] == "ocr.image"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+
+
+def test_ocr_unavailable_blocks_step():
+    un = {"outcome": "unavailable", "reason": "tesseract not installed",
+          "path": "scan.png", "engine": "tesseract"}
+    turn = _assistant(ocr_result=un).chat("ocr scan.png")
+    assert "isn't available" in turn.answer.lower()
+
+
+def test_ocr_empty_is_honest():
+    empty = {"outcome": "empty", "path": "scan.png", "text": "", "chars": 0,
+             "engine": "tesseract", "lang": "eng"}
+    turn = _assistant(ocr_result=empty).chat("extract text from scan.png")
+    assert "no readable text" in turn.answer.lower()
+
+
+def test_ocr_gap_when_no_tool():
+    turn = _assistant(with_ocr=False).chat("run ocr on scan.png")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "ocr"
 
 
 def test_ingest_without_path_asks_for_one():
