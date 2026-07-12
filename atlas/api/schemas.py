@@ -264,6 +264,13 @@ class OCRRequest(BaseModel):
     lang: str | None = None  # tesseract language code (default 'eng')
 
 
+class MailSearchRequest(BaseModel):
+    # Read-only mailbox search (S20d).
+    query: str = ""  # empty => most recent messages
+    folder: str | None = None  # mailbox/folder (default INBOX)
+    limit: int | None = Field(default=None, ge=1, le=500)
+
+
 class ReportRequest(BaseModel):
     # Objective + a serialised Evidence Graph → a verified §5a.5 report (S17).
     objective: str = Field(min_length=1)

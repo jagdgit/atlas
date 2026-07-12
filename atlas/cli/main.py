@@ -203,6 +203,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ocr.add_argument("path", help="image path under the OCR sandbox root")
     p_ocr.add_argument("--lang", default=None, help="tesseract language (default eng)")
 
+    p_mail = sub.add_parser("mail", help="read-only email over IMAP (S20d)")
+    p_mail.add_argument("action", choices=["search", "folders", "message"])
+    p_mail.add_argument("target", nargs="?", default=None,
+                        help="search query, or message uid (message)")
+    p_mail.add_argument("--folder", default=None, help="mailbox/folder (default INBOX)")
+    p_mail.add_argument("--limit", type=int, default=None, help="max messages (search)")
+
     p_report = sub.add_parser(
         "report", help="generate a scientific-review report from a JSON evidence graph"
     )
@@ -777,6 +784,48 @@ def cmd_ocr(args: argparse.Namespace, app: "Application | None" = None) -> int:
     return 0
 
 
+def cmd_mail(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    if args.action == "folders":
+        result = app.invoke_tool("mail.folders")
+    elif args.action == "message":
+        if not args.target:
+            print("mail message: a uid is required", file=sys.stderr)
+            return 2
+        result = app.invoke_tool("mail.message", uid=args.target, folder=args.folder)
+    else:
+        result = app.invoke_tool(
+            "mail.search", query=args.target or "", folder=args.folder, limit=args.limit
+        )
+    outcome = result.get("outcome")
+    if outcome not in ("ok", "empty"):
+        print(f"mail {outcome}: {result.get('reason') or ''}", file=sys.stderr)
+        return 1
+    if args.action == "folders":
+        for name in result.get("folders", []):
+            print(name)
+    elif args.action == "message":
+        msg = result.get("message") or {}
+        if not msg:
+            print("(no such message)")
+            return 0
+        print(f"From:    {msg.get('from')}")
+        print(f"To:      {msg.get('to')}")
+        print(f"Date:    {msg.get('date')}")
+        print(f"Subject: {msg.get('subject')}")
+        print()
+        print(msg.get("body", ""))
+    else:
+        messages = result.get("messages", [])
+        if not messages:
+            print("(no messages)")
+            return 0
+        for m in messages:
+            print(f"[{m.get('uid')}] {m.get('subject') or '(no subject)'}"
+                  f" — {m.get('from') or ''}  {m.get('date') or ''}")
+    return 0
+
+
 def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -1004,6 +1053,7 @@ _HANDLERS = {
     "git": cmd_git,
     "sql": cmd_sql,
     "ocr": cmd_ocr,
+    "mail": cmd_mail,
     "report": cmd_report,
     "verify": cmd_verify,
     "learn": cmd_learn,

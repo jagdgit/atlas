@@ -22,6 +22,7 @@ from atlas.capabilities import (
     CAP_GIT,
     CAP_KNOWLEDGE,
     CAP_LLM,
+    CAP_MAIL,
     CAP_MEMORY,
     CAP_OCR,
     CAP_PYTHON,
@@ -45,6 +46,7 @@ class Intent:
     GIT_STATUS = "git_status"
     SQL_QUERY = "sql_query"
     OCR_IMAGE = "ocr_image"
+    MAIL_SEARCH = "mail_search"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
@@ -207,6 +209,26 @@ _OCR_RE = re.compile(
     r"|\b[\w./\-]+\.(?:png|jpe?g|gif|bmp|tiff?|webp)\b",
     re.IGNORECASE,
 )
+# A read-only email request: "inbox"/"mailbox", or a read verb near "email(s)", or an
+# email paired with from/about/subject. We never *send* — this routes to read-only search.
+_MAIL_RE = re.compile(
+    r"\b(?:inbox|mailbox)\b"
+    r"|\b(?:check|search|find|read|show|list|any|recent|latest|unread|scan)\b"
+    r"[^.?!]{0,30}\be-?mails?\b"
+    r"|\be-?mails?\b[^.?!]{0,30}\b(?:from|about|regarding|subject|containing)\b",
+    re.IGNORECASE,
+)
+# Query text: a quoted phrase, or whatever follows for/about/regarding/… .
+_MAIL_QUERY_RE = re.compile(
+    r"(?:\"([^\"]+)\"|'([^']+)'"
+    r"|\b(?:for|about|regarding|containing|mentioning|with subject|from)\s+(.+))",
+    re.IGNORECASE,
+)
+# An optional named folder (a trailing "in <Folder>").
+_MAIL_FOLDER_RE = re.compile(
+    r"\bin\s+(?:the\s+)?(?:folder\s+)?"
+    r"(INBOX|Sent|Drafts|Trash|Spam|Junk|Archive|All\s?Mail|[A-Z][\w/]*)\b",
+)
 
 
 def _url_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -315,6 +337,21 @@ def _ocr_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"path": path}
 
 
+def _mail_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    folder = None
+    fmatch = _MAIL_FOLDER_RE.search(message)
+    if fmatch:
+        folder = fmatch.group(1).strip()
+    query = ""
+    qmatch = _MAIL_QUERY_RE.search(message)
+    if qmatch:
+        query = next((g for g in qmatch.groups() if g), "") or ""
+        # Trim a trailing "in <folder>" that leaked into the query tail.
+        query = re.sub(r"\s+in\s+(?:the\s+)?(?:folder\s+)?\S+\s*$", "", query).strip()
+        query = query.rstrip("?.! ").strip().strip("\"'").strip()
+    return {"query": query, "folder": folder}
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -377,6 +414,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         CAP_OCR,
         _OCR_RE,
         _ocr_args,
+    ),
+    (
+        Intent.MAIL_SEARCH,
+        CAP_MAIL,
+        _MAIL_RE,
+        _mail_args,
     ),
     (
         Intent.YOUTUBE_TRANSCRIPT,
@@ -450,6 +493,7 @@ _DESCRIPTIONS = {
     Intent.GIT_STATUS: "Inspect a local git repository (read-only).",
     Intent.SQL_QUERY: "Run a read-only SQL query on a local database.",
     Intent.OCR_IMAGE: "Extract text from an image via OCR.",
+    Intent.MAIL_SEARCH: "Search a mailbox (read-only) for messages.",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",

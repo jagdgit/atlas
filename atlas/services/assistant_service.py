@@ -106,6 +106,23 @@ def _format_sql(data: dict[str, Any]) -> str:
     return f"{data.get('row_count', len(rows))} row(s):\n" + "\n".join(lines) + suffix
 
 
+def _format_mail(data: dict[str, Any], query: str) -> str:
+    """Render a mailbox search as a compact list of message summaries."""
+    messages = data.get("messages") or []
+    folder = data.get("folder", "INBOX")
+    scope = f" matching {query!r}" if query else ""
+    lines = [f"{len(messages)} message(s){scope} in {folder}:"]
+    for m in messages[:20]:
+        subject = m.get("subject") or "(no subject)"
+        sender = m.get("from") or "(unknown sender)"
+        date = m.get("date") or ""
+        lines.append(f"  [{m.get('uid')}] {subject} — {sender}"
+                     + (f"  ({date})" if date else ""))
+    if len(messages) > 20:
+        lines.append(f"  … ({len(messages)} total; showing 20)")
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class ChatTurn:
     session_id: str
@@ -198,6 +215,7 @@ class AssistantService:
         git_tool_prefix: str = "git",
         sql_tool: str = "sql.query",
         ocr_tool: str = "ocr.image",
+        mail_tool: str = "mail.search",
         search_limit: int = 5,
         list_limit: int = 25,
         logger: logging.Logger | None = None,
@@ -219,6 +237,7 @@ class AssistantService:
         self._git_tool_prefix = git_tool_prefix
         self._sql_tool = sql_tool
         self._ocr_tool = ocr_tool
+        self._mail_tool = mail_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
         self._responder = ResponseBuilder(llm, logger)
@@ -306,6 +325,7 @@ class AssistantService:
             Intent.GIT_STATUS: self._do_git,
             Intent.SQL_QUERY: self._do_sql,
             Intent.OCR_IMAGE: self._do_ocr,
+            Intent.MAIL_SEARCH: self._do_mail,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
@@ -721,6 +741,44 @@ class AssistantService:
             answer=f"Extracted {data.get('chars', len(text))} characters from {path}:\n\n{text}"
         )
 
+    def _do_mail(self, args, context, tool_calls) -> _Outcome:
+        query = (args.get("query") or "").strip()
+        result = self._executor.execute(
+            self._mail_tool, {"query": query, "folder": args.get("folder")}
+        )
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.MAIL_SEARCH,
+                "action": self._mail_tool,
+                "capability": "mail",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't search email: {result.error}")
+        if outcome == "unauthorized":
+            return _Outcome(
+                answer=f"Email rejected the credentials: {data.get('reason')}.",
+                blocked=True,
+                blocked_reason=f"mail unauthorized: {data.get('reason')}",
+            )
+        if outcome == "unavailable":
+            return _Outcome(
+                answer=f"Email isn't available: {data.get('reason')}.",
+                blocked=True,
+                blocked_reason=f"mail unavailable: {data.get('reason')}",
+            )
+        if outcome == "error":
+            return _Outcome(answer=f"The email search errored: {data.get('reason')}")
+        if outcome == "empty":
+            where = data.get("folder", "INBOX")
+            scope = f" matching {query!r}" if query else ""
+            return _Outcome(answer=f"No messages{scope} in {where}.")
+        return _Outcome(answer=_format_mail(data, query))
+
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
         if self._agent is None:
@@ -784,6 +842,9 @@ class AssistantService:
     def _has_ocr_tool(self) -> bool:
         return self._tools is not None and self._tools.has(self._ocr_tool)
 
+    def _has_mail_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._mail_tool)
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -805,6 +866,7 @@ class AssistantService:
             "git": self._has_git_tool(),
             "sql": self._has_sql_tool(),
             "ocr": self._has_ocr_tool(),
+            "mail": self._has_mail_tool(),
         }.get(capability, True)
 
     def _preflight_gaps(self, plan: Plan) -> list[dict[str, Any]]:

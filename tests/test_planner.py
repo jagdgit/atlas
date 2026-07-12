@@ -189,6 +189,26 @@ def test_ocr_beats_ingest_for_image_path(planner):
     assert plan.intent == Intent.OCR_IMAGE
 
 
+def test_mail_routes_on_inbox(planner):
+    plan = planner.plan("check my inbox")
+    assert plan.intent == Intent.MAIL_SEARCH
+    assert plan.steps[0].capability == "mail"
+    assert plan.steps[0].args["query"] == ""
+
+
+def test_mail_extracts_query_and_folder(planner):
+    plan = planner.plan('search my email for "quarterly report" in Archive')
+    assert plan.intent == Intent.MAIL_SEARCH
+    assert plan.steps[0].args["query"] == "quarterly report"
+    assert plan.steps[0].args["folder"] == "Archive"
+
+
+def test_mail_routes_on_from_phrasing(planner):
+    plan = planner.plan("find emails from alice")
+    assert plan.intent == Intent.MAIL_SEARCH
+    assert plan.steps[0].args["query"] == "alice"
+
+
 def test_ingest_extracts_path(planner):
     plan = planner.plan("ingest /data/atlas_data/documents/report.pdf")
     assert plan.intent == Intent.INGEST_PATH

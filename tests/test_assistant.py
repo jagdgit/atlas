@@ -117,7 +117,7 @@ def _assistant(
     search_result=None, with_python=True, python_result=None, capabilities=None,
     with_scholar=True, scholar_result=None, with_youtube=True, youtube_result=None,
     with_git=True, git_result=None, with_sql=True, sql_result=None,
-    with_ocr=True, ocr_result=None,
+    with_ocr=True, ocr_result=None, with_mail=True, mail_result=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -191,6 +191,15 @@ def _assistant(
         }
         ocr_payload = ocr_result if ocr_result is not None else default_ocr
         tools.register("ocr.image", lambda path, **kw: ocr_payload)
+    if with_mail:
+        default_mail = {
+            "outcome": "ok", "backend": "imap", "folder": "INBOX", "query": "",
+            "count": 1,
+            "messages": [{"uid": "7", "subject": "Invoice", "from": "a@x.com",
+                          "to": "me@x.com", "date": "Mon"}],
+        }
+        mail_payload = mail_result if mail_result is not None else default_mail
+        tools.register("mail.search", lambda query="", **kw: mail_payload)
     return AssistantService(
         ConversationService(FakeConvRepo(), memory),
         Planner(),
@@ -467,6 +476,42 @@ def test_ocr_gap_when_no_tool():
     turn = _assistant(with_ocr=False).chat("run ocr on scan.png")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "ocr"
+
+
+# --- mail (S20d) ----------------------------------------------------------
+def test_mail_lists_messages():
+    turn = _assistant().chat("check my inbox")
+    assert turn.intent == "mail_search"
+    assert "Invoice" in turn.answer
+    assert turn.tool_calls[0]["action"] == "mail.search"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+
+
+def test_mail_unavailable_blocks_step():
+    un = {"outcome": "unavailable", "reason": "email is not configured",
+          "backend": "imap", "folder": "INBOX", "query": ""}
+    turn = _assistant(mail_result=un).chat("search my email for invoices")
+    assert "isn't available" in turn.answer.lower()
+
+
+def test_mail_unauthorized_blocks_step():
+    un = {"outcome": "unauthorized", "reason": "IMAP login failed",
+          "backend": "imap", "folder": "INBOX", "query": ""}
+    turn = _assistant(mail_result=un).chat("check my inbox")
+    assert "credentials" in turn.answer.lower()
+
+
+def test_mail_empty_is_honest():
+    empty = {"outcome": "empty", "backend": "imap", "folder": "INBOX",
+             "query": "", "count": 0, "messages": []}
+    turn = _assistant(mail_result=empty).chat("check my inbox")
+    assert "no messages" in turn.answer.lower()
+
+
+def test_mail_gap_when_no_tool():
+    turn = _assistant(with_mail=False).chat("check my inbox")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "mail"
 
 
 def test_ingest_without_path_asks_for_one():

@@ -231,3 +231,19 @@ def test_ocr_capability_contract_verified(tmp_path):
     assert reg.verify(CAP_OCR) is True
     assert CAPABILITY_CATALOG[CAP_OCR].contract is OCRCapability
     assert CAPABILITY_CATALOG[CAP_OCR].since == "S20"
+
+
+def test_mail_capability_contract_verified():
+    from atlas.capabilities import CAP_MAIL, MailCapability
+    from atlas.mail.client import IMAPBackend, MailClient
+    from atlas.plugins.mail_plugin import MailPlugin
+
+    reg = CapabilityRegistry()
+    backend = IMAPBackend(host="", port=993, username="", password="")
+    reg.register(
+        CAP_MAIL, MailPlugin(MailClient(backend)),
+        contract=MailCapability, kind="plugin",
+    )
+    assert reg.verify(CAP_MAIL) is True
+    assert CAPABILITY_CATALOG[CAP_MAIL].contract is MailCapability
+    assert CAPABILITY_CATALOG[CAP_MAIL].since == "S20"

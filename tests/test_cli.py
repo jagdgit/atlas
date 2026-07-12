@@ -23,6 +23,7 @@ from atlas.cli.main import (
     cmd_git,
     cmd_ingest,
     cmd_intel,
+    cmd_mail,
     cmd_ocr,
     cmd_job,
     cmd_jobs,
@@ -296,6 +297,15 @@ class FakeApp:
                 "lang": kwargs.get("lang") or "eng", "engine": "tesseract",
                 "text": "INVOICE 42", "chars": 10,
             }
+        if name == "mail.search":
+            return {
+                "outcome": "ok", "backend": "imap", "folder": kwargs.get("folder") or "INBOX",
+                "query": kwargs.get("query"), "count": 1,
+                "messages": [{"uid": "7", "subject": "Invoice", "from": "a@x.com",
+                              "to": "me@x.com", "date": "Mon"}],
+            }
+        if name == "mail.folders":
+            return {"outcome": "ok", "backend": "imap", "folders": ["INBOX", "Sent"]}
         return {"tool": name, "args": kwargs}
 
 
@@ -616,6 +626,22 @@ def test_cmd_ocr(capsys):
     out = capsys.readouterr().out
     assert "INVOICE 42" in out
     assert "scan.png" in out
+
+
+def test_cmd_mail_search(capsys):
+    args = build_parser().parse_args(["mail", "search", "invoice"])
+    rc = cmd_mail(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Invoice" in out and "a@x.com" in out
+
+
+def test_cmd_mail_folders(capsys):
+    args = build_parser().parse_args(["mail", "folders"])
+    rc = cmd_mail(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "INBOX" in out and "Sent" in out
 
 
 def test_cmd_download_prints_path(capsys):

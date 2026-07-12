@@ -61,6 +61,7 @@ from atlas.api.schemas import (
     RecommendRequest,
     PythonRunRequest,
     ReportRequest,
+    MailSearchRequest,
     OCRRequest,
     ScholarSearchRequest,
     SQLQueryRequest,
@@ -311,6 +312,24 @@ def db_schema(request: Request, table: str, source: str | None = None) -> dict:
 @v1_router.post("/ocr", tags=["ocr"])
 def ocr(body: OCRRequest, request: Request) -> dict:
     return _app(request).invoke_tool("ocr.image", path=body.path, lang=body.lang)
+
+
+# --- mail (S20d): read-only email ----------------------------------------
+@v1_router.post("/mail/search", tags=["mail"])
+def mail_search(body: MailSearchRequest, request: Request) -> dict:
+    return _app(request).invoke_tool(
+        "mail.search", query=body.query, folder=body.folder, limit=body.limit
+    )
+
+
+@v1_router.get("/mail/folders", tags=["mail"])
+def mail_folders(request: Request) -> dict:
+    return _app(request).invoke_tool("mail.folders")
+
+
+@v1_router.get("/mail/message", tags=["mail"])
+def mail_message(request: Request, uid: str, folder: str | None = None) -> dict:
+    return _app(request).invoke_tool("mail.message", uid=uid, folder=folder)
 
 
 # --- code understanding (S14) --------------------------------------------

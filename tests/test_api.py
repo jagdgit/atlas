@@ -356,6 +356,15 @@ class FakeApplication:
                 "outcome": "ok", "path": kwargs.get("path"), "lang": kwargs.get("lang") or "eng",
                 "engine": "tesseract", "text": "INVOICE 42", "chars": 10,
             }
+        if name == "mail.search":
+            return {
+                "outcome": "ok", "backend": "imap", "folder": kwargs.get("folder") or "INBOX",
+                "query": kwargs.get("query"), "count": 1,
+                "messages": [{"uid": "7", "subject": "Invoice", "from": "a@x.com",
+                              "to": "me@x.com", "date": "Mon"}],
+            }
+        if name == "mail.folders":
+            return {"outcome": "ok", "backend": "imap", "folders": ["INBOX", "Sent"]}
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
         return {"url": kwargs.get("url"), "status": 200, "text": "hello"}
@@ -722,6 +731,24 @@ def test_ocr_endpoint_requires_path():
 
 def test_ocr_endpoint_requires_auth():
     assert _client().post("/v1/ocr", json={"path": "x.png"}).status_code == 401
+
+
+def test_mail_search_endpoint():
+    resp = _client().post("/v1/mail/search", headers=AUTH, json={"query": "invoice"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["outcome"] == "ok"
+    assert data["messages"][0]["subject"] == "Invoice"
+
+
+def test_mail_folders_endpoint():
+    resp = _client().get("/v1/mail/folders", headers=AUTH)
+    assert resp.status_code == 200
+    assert "INBOX" in resp.json()["folders"]
+
+
+def test_mail_search_requires_auth():
+    assert _client().post("/v1/mail/search", json={"query": "x"}).status_code == 401
 
 
 def test_code_repo_map_endpoint():

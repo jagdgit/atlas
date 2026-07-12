@@ -1,6 +1,6 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a + S20b + S20c(OCR) shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a + S20b + S20c(OCR) + S20d(Email) shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
@@ -8,9 +8,9 @@
 > **Learning Pipeline (Experience store, governed)** +
 > **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)** +
 > **Git (read-only local VCS, S20a)** + **SQL (read-only local databases, S20b)**
-> + **OCR (image → text, S20c)**; 671 tests).
+> + **OCR (image → text, S20c)** + **Email (read-only IMAP, S20d)**; 702 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S20c cont. — remaining Tier 2/3 tools** (browser automation, Email/LinkedIn — as needed; Browser deliberately last).
+> Next: **S20e — Browser automation** (Playwright, deliberately last); LinkedIn folds into it.
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -158,6 +158,7 @@ Honest mapping of current assets to Stage 2 needs:
 | Git | ✅ `git_plugin` (`git` cap, S20a: status/log/diff/show/branches/file_history) | **Read-only** local VCS, network-free |
 | SQL | ✅ `sql_plugin` (`sql` cap, S20b: query/tables/schema, SQLite default) | **Read-only** (guard + `mode=ro`), sandboxed sources; Postgres backend swappable later |
 | OCR | ✅ `ocr_plugin` (`ocr` cap, S20c: image→text, Tesseract default) | Injectable engine seam; **degrades gracefully** (unavailable, never raises) if deps/binary missing; sandboxed sources |
+| Email | ✅ `mail_plugin` (`mail` cap, S20d: folders/search/message, IMAP) | **Read-only** (`readonly=True` + `BODY.PEEK`, no write path); injectable backend seam; **degrades gracefully** (unavailable/unauthorized) if unconfigured; password from env (Q7) |
 | Evidence | ✅ RAG citations (per-answer) | No **evidence graph** (claim→sources→confidence) across a job |
 | Human-in-the-loop | ⚠️ scheduler states (pending/claimed/running/…) | No `waiting_for_user` + notify + resume flow |
 | Determinism | ✅ temp=0 defaults, durable ret/recovery | No cross-check / verify pass; no report pipeline |
@@ -695,7 +696,8 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S20a** ✅ | **Git (read-only)** | `git` cap over a local repo: `status`/`log`/`diff`/`show`/`branches`/`file_history` via an injectable command-runner; **read-only by design** (no fetch/pull/push/commit) & network-free; honest outcomes (`ok`/`not_a_repo`/`unavailable`/`error`, never raises); planner `git_status` intent; `POST /v1/git`, `atlas git` | VCS-aware coding assistant |
 | **S20b** ✅ | **SQL (read-only)** | `sql` cap over a local database (SQLite default): `query`/`tables`/`schema` via an injectable backend; **read-only by construction** — a statement guard (SELECT/WITH/EXPLAIN/VALUES only, single statement) **plus** a `mode=ro` connection; sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`blocked`/`unavailable`/`error`, never raises); result sets are **L5 evidence** (§5a.6); planner `sql_query` intent; `POST /v1/db/*`, `atlas sql` | structured-data analysis |
 | **S20c** ✅ | **OCR (image → text)** | `ocr` cap: `ocr.image` reads text from a screenshot/photo/scan via an injectable **engine seam** (default Tesseract). **Degrades gracefully** — missing Pillow/pytesseract/`tesseract` binary ⇒ `unavailable`, never raises (R2/R3); sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`unsupported`/`unavailable`/`error`). Planner `ocr_image` intent; `POST /v1/ocr`, `atlas ocr` | completes the Document Reader (reads scanned/pixel text) |
-| **S20c** cont. | **Remaining Tier 2/3 tools (as needed)** | Browser automation (Playwright), Email/LinkedIn — **Browser deliberately last** | full toolbelt |
+| **S20d** ✅ | **Email (read-only IMAP)** | `mail` cap: `mail.folders`/`mail.search`/`mail.message` via an injectable **backend seam** (default stdlib IMAP). **Read-only by construction** (`readonly=True` select + `BODY.PEEK` so nothing is marked read; no write path). **Degrades gracefully** — unconfigured/unreachable ⇒ `unavailable`, bad creds ⇒ `unauthorized`, never raises (R2/R3). Password is a **secret** from an env var (Q7). Planner `mail_search` intent; `POST /v1/mail/*`, `atlas mail` | email as a research/assistant source |
+| **S20e** | **Browser automation (as needed)** | Playwright headless — **deliberately last** (heaviest dep + largest safety surface); LinkedIn folds in here | full toolbelt |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
 
 Plugin build order (from the doc, capability-first): Filesystem → Document Reader →
@@ -1470,7 +1472,52 @@ is deliberately last).
 - [x] Planner `ocr_image` intent + `AssistantService._do_ocr` (+ `ocr` gap fallback) + `JobPlanner` intent/capability.
 - [x] `POST /v1/ocr` + `atlas ocr` CLI.
 - [x] Hermetic tests (outcome mapping via fake engine — ok/empty/unsupported/unavailable/error/escape/too-large/crash-safe/lang; plugin delegate+health+registration; default engine degrades-or-reads with skip-guard; planner; assistant; api; cli; caps). **671 tests pass (+26).**
-- [ ] **Next — S20c cont.:** browser automation (Playwright, deliberately last) / Email/LinkedIn, as needed.
+- [x] **Next — S20d:** Email shipped (§6p); Browser (S20e) remains, deliberately last.
+
+---
+
+### 6p. Sprint 20d — Email (read-only IMAP) ✅
+
+**Why now:** the fourth Tier-2 tool makes **email a first-class research/assistant
+source** alongside the web — Atlas can list folders, search a mailbox, and open one
+message. It reuses the injectable-backend + graceful-degradation + honest-outcomes shape
+of SQL/OCR, but adds two properties specific to a networked, credentialed service:
+(1) **read-only by construction** at the protocol level, and (2) **secrets discipline**
+(Q7) — the password comes from an env var, never YAML/DB/logs. Browser (S20e) stays last
+(heaviest dependency + largest safety surface); LinkedIn folds into it.
+
+**Shape**
+- `atlas/mail/client.py` — **`MailClient`** does `folders()`/`search()`/`message()`
+  through an injectable **`MailBackend`** (default **`IMAPBackend`**, stdlib `imaplib` +
+  `email`). **Read-only by construction:** mailboxes are selected `readonly=True` (the
+  server rejects writes), bodies are fetched with `BODY.PEEK[...]` so opening a mail
+  **never sets `\Seen`**, and there is simply no STORE/DELETE/EXPUNGE/APPEND path.
+- **Degrades gracefully / never raises** (R2/R3): unconfigured or unreachable ⇒
+  `unavailable`, rejected credentials ⇒ `unauthorized`, server error ⇒ `error`, no
+  matches ⇒ `empty`, else `ok`. A `_guard` wraps every backend call so even an
+  unexpected crash maps to `error`.
+- Pure helpers: RFC-2047 header decoding, a text/plain-preferring body extractor (falls
+  back to stripped HTML), body length cap.
+- **`MailPlugin`** = `mail` cap with `mail.search`/`mail.message`/`mail.folders`;
+  `health_check` reports an **unconfigured mailbox as degraded, not failed**.
+- Concrete **`MailCapability`** (`CAP_MAIL`, S20). Planner **`mail_search`** intent
+  (`inbox`/`mailbox`, a read verb near "email(s)", or "email … from/about/subject …";
+  extracts a quoted/`for … about …` query + an optional `in <Folder>`) +
+  `AssistantService._do_mail` (compact summary list; `unavailable`/`unauthorized`→blocked,
+  honest `empty`/`error`; `mail` gap fallback) + `JobPlanner`. Config `plugins.mail.*`
+  (host/port/username/`password_env`/ssl/default_folder/max_results/timeout);
+  `mail_plugin` enabled (self-registers). Password via `ATLAS_MAIL_PASSWORD` env
+  (`.env.example` updated). `POST /v1/mail/search` + `GET /v1/mail/folders|message`;
+  `atlas mail search|folders|message`.
+
+**Definition of Done (S20d)** — all met:
+- [x] `atlas/mail/client.py` — `MailClient` + `MailBackend`/`IMAPBackend` seam; read-only (`readonly=True` + `BODY.PEEK`, no write path); honest outcomes; never raises; pure header/body parsers.
+- [x] `MailPlugin` (`mail` cap) with `search`/`message`/`folders`; graceful `health_check`; `MailCapability` contract + catalog (`CAP_MAIL`, S20).
+- [x] `plugins.mail.*` config + defaults; `mail_plugin` enabled; password from `ATLAS_MAIL_PASSWORD` env (secret, never YAML — Q7); `.env.example` updated.
+- [x] Planner `mail_search` intent + `AssistantService._do_mail` (+ `mail` gap fallback) + `JobPlanner` intent/capability.
+- [x] `POST /v1/mail/*` + `atlas mail` CLI.
+- [x] Hermetic tests (outcome mapping via fake backend — ok/empty/unavailable/unauthorized/error/crash-safe/max-results/folder; default IMAP offline ⇒ unavailable; pure parsers; plugin delegate+health+registration; planner; assistant; api; cli; caps). **702 tests pass (+31).**
+- [ ] **Next — S20e:** browser automation (Playwright), deliberately last.
 
 ---
 
@@ -1501,6 +1548,7 @@ is deliberately last).
 
 | Date | Sprint | Notes |
 |------|--------|-------|
+| 2026-07-12 | S20d | **Sprint 20d shipped ✅ — Email (read-only IMAP).** Fourth Tier-2 tool; email becomes a research/assistant source (list folders, search, open a message). New `atlas/mail/client.py` **`MailClient`** works through an injectable **`MailBackend`** (default **`IMAPBackend`**, stdlib `imaplib`+`email`). **Read-only by construction:** mailboxes selected `readonly=True`, bodies fetched with `BODY.PEEK` (opening a mail **never marks it read**), and no STORE/DELETE/EXPUNGE/APPEND path exists. **Degrades gracefully / never raises** (R2/R3): unconfigured/unreachable→`unavailable`, bad creds→`unauthorized`, server error→`error`, no matches→`empty`, else `ok` (a `_guard` maps even unexpected crashes to `error`). Pure helpers for RFC-2047 headers + a text/plain-preferring body extractor (HTML fallback). **`MailPlugin`** = `mail` cap (`mail.search`/`mail.message`/`mail.folders`), `health_check` treats an unconfigured mailbox as **degraded not failed**. Concrete **`MailCapability`** (`CAP_MAIL`, S20). Planner **`mail_search`** intent (`inbox`/`mailbox`, read-verb + "email(s)", or "email … from/about/subject …"; extracts a quoted/`for …` query + optional `in <Folder>`) + `AssistantService._do_mail` (summary list; `unavailable`/`unauthorized`→blocked; honest `empty`/`error`; `mail` gap) + `JobPlanner`. `plugins.mail.*` config + `mail_plugin` enabled; **password is a secret** from `ATLAS_MAIL_PASSWORD` env (never YAML — Q7), `.env.example` updated. `POST /v1/mail/search` + `GET /v1/mail/folders|message`; `atlas mail search|folders|message`. **Backend seam** lets a Gmail-API/JMAP backend drop in later. **702 tests pass (+31).** Next: **S20e** — browser automation (deliberately last). |
 | 2026-07-12 | S20c | **Sprint 20c shipped ✅ — OCR (image → text).** Third Tier-2 tool; completes the **Document Reader** (S13a deferred scanned/pixel text to "future OCR"). New `atlas/ocr/engine.py` **`OCRClient`** reads one image through an injectable **`OCREngine`** (default **`TesseractEngine`** = Pillow + pytesseract + system `tesseract`). Key property vs Git/SQL: the default engine has a *system* dep, so all optional imports are **lazy** and a missing dep/binary **degrades gracefully** → `unavailable` (never raises, app always boots). Sources confined to a sandbox root (default `paths.documents`); per-image byte cap + suffix allow-list. Honest outcomes `ok`/`empty`/`unsupported`/`unavailable`/`error`; even a crashing engine → `error`. **`OCRPlugin`** = `ocr` cap (`ocr.image`), `health_check` reports a missing backend as **degraded not failed**. Concrete **`OCRCapability`** (`CAP_OCR`, S20). Planner **`ocr_image`** intent (`ocr` keyword, "extract/read text from … image/screenshot", or bare `*.png|jpg|…` — no clash with doc-ingest suffixes) + `AssistantService._do_ocr` (renders text; `unavailable`→blocked, honest `unsupported`/`empty`/`error`; `ocr` gap fallback) + `JobPlanner`. `plugins.ocr.*` config + `ocr_plugin` enabled; `pillow`+`pytesseract` added to `pyproject.toml`/`requirements.txt`. `POST /v1/ocr`; `atlas ocr <path> [--lang]`. **Engine seam** lets EasyOCR/cloud OCR drop in later. **671 tests pass (+26).** Next: browser (deliberately last) / Email — as needed. |
 | 2026-07-12 | S20b | **Sprint 20b shipped ✅ — SQL (read-only local databases).** Second Tier-2 tool; Atlas can query structured data, and a computed result set is **L5 evidence** (§5a.6), pairing with the Python sandbox. New `atlas/sql/client.py` **`SQLClient`** runs a *single* statement through an injectable **`SQLBackend`** (default **`SQLiteBackend`**, stdlib). **Read-only by construction** via two layers: (1) a statement **guard** (`is_read_only`: strips comments, one statement only, must start `SELECT`/`WITH`/`EXPLAIN`/`VALUES`, blocks `INSERT`/`UPDATE`/`DELETE`/`DROP`/`ATTACH`/`PRAGMA`/…) and (2) a **`mode=ro`** SQLite connection (defence-in-depth — a guard bypass still can't write, tested). Sources confined to a sandbox root (default `paths.data`). Honest outcomes `ok`/`empty`/`blocked`/`unavailable`/`error`, **never raises**; row cap + `truncated` flag + soft per-query timeout (connection interrupt). **`SQLPlugin`** = `sql` cap (`sql.query`/`sql.tables`/`sql.schema`). Concrete **`SQLCapability`** (`CAP_SQL`, S20). Planner **`sql_query`** intent (fenced ```` ```sql ````, bare `SELECT … FROM`, or "query the database …"; extracts `*.db` source) + `AssistantService._do_sql` (compact table render; blocked/unavailable/error honesty) + `JobPlanner`. `plugins.sql.*` config + `sql_plugin` enabled. `POST /v1/db/query` + `GET /v1/db/tables|schema`; `atlas sql query|tables|schema`. **Backend seam** lets Postgres drop in later. **645 tests pass (+47).** Next: **S20c** (browser/OCR/Email — as needed). |
 | 2026-07-12 | S20a | **Sprint 20a shipped ✅ — Git (read-only local version control).** First Tier-2 tool, chosen because it directly serves the coding-assistant thesis and is fully deterministic + hermetically testable. New `atlas/vcs/git.py` **`GitClient`** shells to `git` through an injectable **`CommandRunner`** (default `SubprocessRunner`, hard per-call timeout) — **read-only by design** (only `status`/`log`/`diff`/`show`/`branch`/`rev-parse`; never fetch/pull/push/commit) and **network-free**. Honest outcomes `ok`/`not_a_repo`/`unavailable`/`error`, **never raises** (R2/R3); pure output parsers. **`GitPlugin`** = `git` cap with six tools (`git.status` branch+ahead/behind+changes+clean, `git.log`, `git.diff` `--stat`+files-changed, `git.show`, `git.branches` list+current, `git.file_history`). Concrete **`GitCapability`** (`CAP_GIT`, S20). Planner **`git_status`** intent + `AssistantService._do_git` (deterministic rendering, `git` gap/blocked honesty) + `JobPlanner` support. `plugins.git.*` config (`git_binary`/`timeout`/`max_log`) + `git_plugin` enabled (self-registers, no bootstrap change). `POST /v1/git` + `atlas git status|log|diff|show|branches|file_history`. Hermetic tests (parsers, all outcomes, plugin+registration, planner, assistant, api, cli, caps) **+ real-repo integration**. **598 tests pass (+25).** S20 split: **S20b** (browser/OCR/DB/Email/LinkedIn) remains as-needed; Browser deliberately late. |

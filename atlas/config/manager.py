@@ -258,6 +258,19 @@ class OCRPluginConfig(BaseModel):
     max_bytes: int = 10_485_760  # refuse to OCR images larger than this (10 MiB)
 
 
+class MailPluginConfig(BaseModel):
+    # Read-only IMAP mailbox retrieval (S20d). The password is a *secret*: it is never
+    # stored in YAML — it is read from the env var named by `password_env` at build time.
+    host: str = ""  # IMAP server host; empty => capability reports "unavailable"
+    port: int = 993
+    username: str = ""
+    password_env: str = "ATLAS_MAIL_PASSWORD"  # env var holding the password
+    use_ssl: bool = True
+    default_folder: str = "INBOX"
+    max_results: int = 25  # cap messages returned by a search
+    timeout: float = 20.0  # socket timeout per IMAP connection
+
+
 class PluginsConfig(BaseModel):
     # Dotted module paths to load; each module exposes build(config) -> Plugin.
     enabled: list[str] = Field(default_factory=list)
@@ -270,6 +283,7 @@ class PluginsConfig(BaseModel):
     git: GitPluginConfig = GitPluginConfig()
     sql: SQLPluginConfig = SQLPluginConfig()
     ocr: OCRPluginConfig = OCRPluginConfig()
+    mail: MailPluginConfig = MailPluginConfig()
 
 
 class MemoryConfig(BaseModel):

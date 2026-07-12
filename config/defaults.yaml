@@ -172,6 +172,7 @@ plugins:
     - atlas.plugins.git_plugin
     - atlas.plugins.sql_plugin
     - atlas.plugins.ocr_plugin
+    - atlas.plugins.mail_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -206,6 +207,15 @@ plugins:
     root: null              # sandbox root for images; null => paths.documents
     lang: eng               # default tesseract language code
     max_bytes: 10485760     # 10 MiB per-image cap
+  mail:                     # S20d: read-only IMAP mailbox (degrades if unconfigured)
+    host: ""                # IMAP host; empty => capability reports "unavailable"
+    port: 993
+    username: ""
+    password_env: ATLAS_MAIL_PASSWORD  # env var holding the password (secret; not YAML)
+    use_ssl: true
+    default_folder: INBOX
+    max_results: 25         # cap messages returned by a search
+    timeout: 20             # socket timeout per IMAP connection
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network

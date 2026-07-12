@@ -37,6 +37,7 @@ CAP_INTELLIGENCE = "intelligence"
 CAP_GIT = "git"
 CAP_SQL = "sql"
 CAP_OCR = "ocr"
+CAP_MAIL = "mail"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -188,6 +189,15 @@ class OCRCapability(Protocol):
     def image(self, path: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class MailCapability(Protocol):
+    """Read-only email retrieval over IMAP (S20d)."""
+
+    def search(self, *args: Any, **kwargs: Any) -> Any: ...
+    def message(self, uid: str, *args: Any, **kwargs: Any) -> Any: ...
+    def folders(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -318,6 +328,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         OCRCapability,
         "Extract text from an image file (screenshot, photo, scan).",
         "Read pixels Atlas otherwise can't — completes the Document Reader.",
+        "S20",
+    ),
+    CAP_MAIL: CapabilitySpec(
+        CAP_MAIL,
+        MailCapability,
+        "Read-only email: list folders, search messages, open one message (IMAP).",
+        "Email becomes a first-class research/assistant source; read-only, never sends.",
         "S20",
     ),
 }
