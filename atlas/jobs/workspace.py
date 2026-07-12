@@ -100,6 +100,10 @@ class JobWorkspace:
     def manifest_path(self) -> Path:
         return self.root / "manifest.json"
 
+    @property
+    def activity_path(self) -> Path:
+        return self.root / "activity.jsonl"
+
     # --- lifecycle ------------------------------------------------------
     def ensure(self) -> "JobWorkspace":
         """Create the directory tree (idempotent)."""
@@ -139,6 +143,32 @@ class JobWorkspace:
         with self.notes_path.open("a", encoding="utf-8") as fh:
             fh.write(line)
         return self.notes_path
+
+    def append_activity(self, event: dict[str, Any]) -> Path:
+        """Append one progress event to ``activity.jsonl`` (the live feed, RL/§5a)."""
+        self._ensure_once()
+        with self.activity_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+        return self.activity_path
+
+    def read_activity(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Return activity events (chronological); the last ``limit`` if given."""
+        path = self.activity_path
+        if not path.is_file():
+            return []
+        events: list[dict[str, Any]] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    continue
+        except OSError:
+            return []
+        return events[-limit:] if limit else events
 
     def download_path(self, filename: str) -> Path:
         """A path inside ``downloads/`` for an acquired file (name made safe)."""

@@ -574,9 +574,15 @@ keeps the full suite green and adds a real-run acceptance check.
    counts) is wired into `JobService` (manifest at creation, `report.md`+`result.json`+notes on
    finalize; best-effort, never fails a job). Deterministic + fully offline. Full suite green
    (818 passed; +33 tests).
-2. **Live activity feed** (C0 / RL) — per-job progress events → workspace + event bus; Console
-   renders a live feed for running jobs (poll-based). Landed early so we can *watch* the rest
-   of Stage 3 build itself out.
+2. **Live activity feed** (C0 / RL) — ✅ **SHIPPED (2026-07-12).** New `atlas/jobs/activity.py`
+   (`ActivityRecorder`: writes human-readable events to the workspace `activity.jsonl` **and**
+   emits `job.activity` on the event bus; phase-tagged; best-effort/never-raises; reusable by the
+   research pipeline in later steps). Wired into `JobService` (job created/finalized + per-step
+   running/done/blocked/error). `job_detail` now returns an `activity` tail, exposed via the
+   existing `GET /v1/jobs/{id}` (new `activity` field in `JobDetailResponse` — no new endpoint).
+   The Console renders a live, phase-coloured feed with a pulsing "running" dot, refreshed by the
+   existing 2s poll. Landed early so we can *watch* the rest of Stage 3 build itself out. Full
+   suite green (824 passed).
 3. **Acquisition + Reader, tiered** (C1 / D3.1 Tier 1→2, D3.3) — wire `web.download` +
    `extract()`/OCR/transcript; **abstract/metadata first**, full text when open-access;
    **pause & ask** on login walls (you provide the doc or skip); artifacts to the workspace.

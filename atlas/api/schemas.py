@@ -405,6 +405,8 @@ class JobDetailResponse(BaseModel):
     steps: list[JobStepOut]
     progress: dict[str, int]
     blocked: list[dict[str, Any]] = Field(default_factory=list)
+    # Live "watch it work" feed (RL/C0): recent human-readable progress events.
+    activity: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CapabilityInfo(BaseModel):

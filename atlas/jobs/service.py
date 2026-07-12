@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from atlas.conversation.service import ConversationContext
+from atlas.jobs.activity import (
+    PHASE_LIFECYCLE,
+    PHASE_STEP,
+    ActivityRecorder,
+)
 from atlas.jobs.workspace import JobWorkspace
 from atlas.models.job import (
     JOB_CANCELLED,
@@ -114,6 +119,12 @@ class JobService:
                 ws.append_note(f"job created ({len(steps)} step(s)): {objective[:120]}")
             except Exception:  # noqa: BLE001 - workspace I/O must never fail a job
                 self._logger.debug("job %s workspace init failed", job.id)
+        self._recorder(job.id).record(
+            PHASE_LIFECYCLE,
+            f"Job created — planned {len(steps)} step(s).",
+            steps=len(steps),
+            objective=objective[:200],
+        )
         self._enqueue_advance(job.id)
         return self.job_detail(job.id)
 
@@ -127,7 +138,18 @@ class JobService:
             "steps": steps,
             "progress": self._progress(steps),
             "blocked": [self._blocked_view(s) for s in steps if s.status == STEP_BLOCKED],
+            "activity": self._activity_tail(job_id),
         }
+
+    def _activity_tail(self, job_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        """Recent progress events for the live feed (RL/C0). Empty without a workspace."""
+        ws = self._workspace(job_id)
+        if ws is None:
+            return []
+        try:
+            return ws.read_activity(limit=limit)
+        except Exception:  # noqa: BLE001 - feed is best-effort
+            return []
 
     def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[Job]:
         return self._repo.list_jobs(status=status, limit=limit)
@@ -229,6 +251,15 @@ class JobService:
         self._repo.set_step_status(step.id, STEP_RUNNING)
 
     def _run_one(self, job: Job, step: JobStep) -> None:
+        recorder = self._recorder(job.id)
+        recorder.record(
+            PHASE_STEP,
+            f"Step {step.ordinal + 1}: {step.description or step.intent}",
+            ordinal=step.ordinal,
+            intent=step.intent,
+            capability=step.capability,
+            state="running",
+        )
         context = self._build_context(job)
         tool_calls: list[dict[str, Any]] = []
         try:
@@ -240,6 +271,12 @@ class JobService:
                 capability=step.capability,
             )
         except Exception as exc:  # noqa: BLE001 - a bad step must not kill the job
+            recorder.record(
+                PHASE_STEP,
+                f"Step {step.ordinal + 1} errored: {type(exc).__name__}",
+                ordinal=step.ordinal,
+                state="error",
+            )
             self._on_step_error(step, f"{type(exc).__name__}: {exc}")
             return
 
@@ -252,6 +289,14 @@ class JobService:
                 bump_attempts=True,
             )
             self._logger.info("job %s step %s blocked: %s", job.id, step.ordinal, outcome.blocked_reason)
+            recorder.record(
+                PHASE_STEP,
+                f"Step {step.ordinal + 1} blocked — needs you: "
+                f"{outcome.blocked_reason or 'input required'}",
+                ordinal=step.ordinal,
+                state="blocked",
+                needs=outcome.blocked_reason,
+            )
             self._notify(
                 "job.step_blocked",
                 {
@@ -263,6 +308,13 @@ class JobService:
             )
             return
 
+        recorder.record(
+            PHASE_STEP,
+            f"Step {step.ordinal + 1} completed.",
+            ordinal=step.ordinal,
+            state="done",
+            tools=[tc.get("action") or tc.get("intent") for tc in tool_calls],
+        )
         self._repo.set_step_status(
             step.id,
             STEP_DONE,
@@ -311,6 +363,13 @@ class JobService:
         self._persist_workspace(job_id, status, result)
         self._repo.set_job_status(job_id, status, result=result)
         self._logger.info("job %s finalized: %s", job_id, status)
+        self._recorder(job_id).record(
+            PHASE_LIFECYCLE,
+            f"Job {status.replace('_', ' ')} — {result['progress'].get('done', 0)}"
+            f"/{result['progress'].get('total', 0)} step(s) done.",
+            status=status,
+            progress=result["progress"],
+        )
         self._observe_learning(job_id, steps, result)
         self._notify(
             "job.finalized",
@@ -368,6 +427,16 @@ class JobService:
         if self._workspace_root is None:
             return None
         return JobWorkspace.for_job(self._workspace_root, str(job_id))
+
+    def _recorder(self, job_id: str) -> ActivityRecorder:
+        """An activity recorder for a job (RL/C0): writes to the workspace feed and
+        emits ``job.activity`` on the event bus. Safe even without a workspace."""
+        return ActivityRecorder(
+            str(job_id),
+            workspace=self._workspace(job_id),
+            events=self._events,
+            logger=self._logger,
+        )
 
     def _persist_workspace(
         self, job_id: str, status: str, result: dict[str, Any]

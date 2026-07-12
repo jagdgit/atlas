@@ -171,6 +171,20 @@ button { cursor: pointer; font: inherit; }
 .job-actions button:hover { border-color: var(--accent); }
 .report { margin-top: 16px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; max-height: 340px; overflow: auto; }
 
+/* live "watch it work" activity feed (RL/C0) */
+.activity .feed { display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); max-height: 260px; overflow: auto; }
+.feed-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.feed-row:last-child { border-bottom: none; }
+.feed-row:first-child { background: var(--bg-elev2); }
+.feed-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.feed-phase { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; white-space: nowrap; background: var(--bg-elev2); color: var(--muted); }
+.feed-msg { flex: 1; }
+.phase-lifecycle { background: rgba(79,157,255,.16); color: var(--accent); }
+.phase-verify, .phase-report { background: rgba(63,185,80,.16); color: var(--ok); }
+.phase-search, .phase-acquire, .phase-read, .phase-extract { background: rgba(210,153,34,.16); color: var(--warn); }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
 /* status badges */
 .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
 .badge.ok, .badge.completed, .badge.done { background: rgba(63,185,80,.16); color: var(--ok); }

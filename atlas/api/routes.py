@@ -249,6 +249,7 @@ def _job_detail(detail) -> JobDetailResponse:
         steps=[_step_out(s) for s in detail["steps"]],
         progress=detail["progress"],
         blocked=detail["blocked"],
+        activity=detail.get("activity", []),
     )
 
 

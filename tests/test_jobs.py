@@ -216,6 +216,30 @@ def test_workspace_created_and_report_persisted(tmp_path):
     assert ws.read_json("result.json")["status"] == JOB_COMPLETED
 
 
+def test_activity_feed_recorded_and_exposed(tmp_path):
+    # RL/C0: a job emits progress events to the workspace feed and the event bus,
+    # and job_detail exposes the tail for the live Console view.
+    steps = [DecomposedStep("react", "agent", {}, "reason about it")]
+    events = FakeEvents()
+    repo, service, log = _make(
+        steps, ScriptedRunner(), events=events, workspace_root=tmp_path
+    )
+    detail = service.create_job("watch me")
+    jid = detail["job"].id
+    # creation already logged a lifecycle event, visible in the detail feed
+    assert any(a["phase"] == "lifecycle" for a in detail["activity"])
+
+    _drive(service, jid, log)
+    final = service.job_detail(jid)
+    phases = [a["phase"] for a in final["activity"]]
+    messages = " ".join(a["message"] for a in final["activity"])
+    assert "lifecycle" in phases and "step" in phases
+    assert "Job created" in messages
+    assert "completed" in messages.lower()
+    # the same events were pushed live on the bus
+    assert any(e[0] == "job.activity" for e in events.events)
+
+
 def test_job_runs_to_completion():
     steps = [
         DecomposedStep("react", "agent", {}, "a"),

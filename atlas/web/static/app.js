@@ -292,6 +292,33 @@ function stepDuration(s) {
   return ms < 1000 ? `${ms}ms` : ms < 90000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 60000)}m`;
 }
 
+function clockTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+/* Live "watch it work" feed (RL/C0): the newest events, most-recent first. */
+function renderActivityFeed(activity, running) {
+  const wrap = el("div", { class: "activity" });
+  const head = el("h3", { class: "section-h", text: `Live activity (${activity.length})` });
+  if (running) head.append(el("span", { class: "live-dot", title: "running" }));
+  wrap.append(head);
+  const feed = el("div", { class: "feed" });
+  const recent = activity.slice(-40).reverse();
+  for (const ev of recent) {
+    const phase = ev.phase || "step";
+    const row = el("div", { class: "feed-row" },
+      el("span", { class: "feed-time muted small", text: clockTime(ev.ts) }),
+      el("span", { class: "feed-phase phase-" + phase, text: phase }),
+      el("span", { class: "feed-msg", text: ev.message || "" }),
+    );
+    feed.append(row);
+  }
+  wrap.append(feed);
+  return wrap;
+}
+
 /* One expandable step: header (intent/capability/status) + a detail panel showing
    the tools it ran, the text it produced, and any sources it gathered. */
 function renderStepCard(s) {
@@ -364,6 +391,11 @@ function renderJobDetail(d) {
       + (d.progress.blocked ? ` · ${d.progress.blocked} blocked` : "")
       + (d.progress.failed ? ` · ${d.progress.failed} failed` : "") }),
   ));
+
+  const running = ["queued", "running"].includes(job.status);
+  if ((d.activity || []).length) {
+    box.append(renderActivityFeed(d.activity, running));
+  }
 
   box.append(el("h3", { class: "section-h", text: `Steps executed (${d.steps.length})` }));
   const steps = el("div", { class: "steps" });
