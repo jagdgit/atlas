@@ -229,6 +229,33 @@ def test_plain_url_still_routes_to_web_fetch(planner):
     assert plan.intent == Intent.WEB_FETCH
 
 
+def test_research_routes_on_research_verb(planner):
+    plan = planner.plan("research solar panel soiling losses")
+    assert plan.intent == Intent.RESEARCH
+    assert plan.steps[0].capability == "research"
+    assert plan.steps[0].args["objective"] == "solar panel soiling losses"
+
+
+def test_research_routes_on_investigate_and_deep_dive(planner):
+    for msg, obj in [
+        ("investigate whether heat pumps beat gas boilers",
+         "heat pumps beat gas boilers"),
+        ("do a deep dive on grid-scale battery economics",
+         "grid-scale battery economics"),
+        ("what does the evidence say about intermittent fasting",
+         "intermittent fasting"),
+    ]:
+        plan = planner.plan(msg)
+        assert plan.intent == Intent.RESEARCH, msg
+        assert plan.steps[0].args["objective"] == obj, msg
+
+
+def test_bare_search_does_not_route_to_research(planner):
+    # A plain web search must not be captured by the research loop.
+    plan = planner.plan("search the web for solar panels")
+    assert plan.intent == Intent.WEB_SEARCH
+
+
 def test_ingest_extracts_path(planner):
     plan = planner.plan("ingest /data/atlas_data/documents/report.pdf")
     assert plan.intent == Intent.INGEST_PATH

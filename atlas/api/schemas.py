@@ -19,11 +19,23 @@ class HealthResponse(BaseModel):
 class ServiceHealth(BaseModel):
     healthy: bool
     detail: str
+    severity: str = "ok"  # ok | degraded | failed (S22)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class DetailedHealthResponse(BaseModel):
     healthy: bool
+    degraded: bool = False
     services: dict[str, ServiceHealth]
+
+
+class StatusResponse(BaseModel):
+    version: str
+    uptime_seconds: float | None = None
+    healthy: bool
+    degraded: bool = False
+    services_total: int
+    severity_counts: dict[str, int]
 
 
 class AgentsResponse(BaseModel):
@@ -269,6 +281,12 @@ class MailSearchRequest(BaseModel):
     query: str = ""  # empty => most recent messages
     folder: str | None = None  # mailbox/folder (default INBOX)
     limit: int | None = Field(default=None, ge=1, le=500)
+
+
+class ResearchRequest(BaseModel):
+    # Autonomous gather→verify→decide research loop (S21).
+    objective: str = Field(min_length=1)
+    max_iterations: int | None = Field(default=None, ge=1, le=100)
 
 
 class BrowseRequest(BaseModel):

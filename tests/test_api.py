@@ -371,12 +371,48 @@ class FakeApplication:
                 "final_url": kwargs.get("url"), "status": 200, "title": "Example",
                 "text": "hello rendered", "chars": 14, "links": ["https://ex.com/a"],
             }
+        if name == "research.run":
+            return {
+                "outcome": "ok", "objective": kwargs.get("objective"), "iterations": 2,
+                "stopped": {"decision": "stop", "convergence": 0.92,
+                            "reasons": ["all budget criteria met"]},
+                "claim": {"confidence": "HIGH", "confidence_score": 0.86,
+                          "convergence": 0.92},
+                "graph": {"sources": [{"id": "10.1/x", "title": "Paper A",
+                                       "url": "https://s2.org/1", "evidence_level": 4}],
+                          "claims": []},
+                "verification": {}, "report": {"markdown": "# R", "sections": {}},
+                "log": [],
+            }
+        if name == "boom":
+            raise ValueError("kaboom")  # untyped error -> generic 500 handler
+        if name == "dberr":
+            from atlas.exceptions import DatabaseError
+
+            raise DatabaseError("datastore down")  # -> 503
         if name != "web.fetch":
             raise ToolNotFoundError(f"no tool named '{name}'", tool=name)
         return {"url": kwargs.get("url"), "status": 200, "text": "hello"}
 
     def health(self):
-        return {"database": HealthStatus.ok("reachable")}
+        return {
+            "database": HealthStatus.ok("reachable"),
+            "llm": HealthStatus.degraded_status("chat up; embed not pulled"),
+        }
+
+    def status(self):
+        report = self.health()
+        counts = {"ok": 0, "degraded": 0, "failed": 0}
+        for s in report.values():
+            counts[s.level] += 1
+        return {
+            "version": self.config.system.version,
+            "uptime_seconds": 1.5,
+            "healthy": all(s.healthy for s in report.values()),
+            "degraded": counts["degraded"] > 0,
+            "services_total": len(report),
+            "severity_counts": counts,
+        }
 
 
 def _client(keys=(API_KEY,)) -> TestClient:
@@ -775,6 +811,25 @@ def test_browser_open_requires_auth():
     assert _client().post("/v1/browser/open", json={"url": "https://x"}).status_code == 401
 
 
+def test_research_endpoint():
+    resp = _client().post("/v1/research", headers=AUTH,
+                          json={"objective": "solar soiling losses"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["outcome"] == "ok"
+    assert data["claim"]["confidence"] == "HIGH"
+    assert data["iterations"] == 2
+
+
+def test_research_requires_objective():
+    resp = _client().post("/v1/research", headers=AUTH, json={})
+    assert resp.status_code == 422
+
+
+def test_research_requires_auth():
+    assert _client().post("/v1/research", json={"objective": "x"}).status_code == 401
+
+
 def test_code_repo_map_endpoint():
     resp = _client().post("/v1/code/repo-map", headers=AUTH, json={"root": "/x"})
     assert resp.status_code == 200
@@ -1020,6 +1075,69 @@ def test_detailed_health_authed():
     body = resp.json()
     assert body["healthy"] is True
     assert body["services"]["database"]["healthy"] is True
+
+
+def test_detailed_health_reports_degraded_tier():
+    resp = _client().get("/v1/health", headers=AUTH)
+    body = resp.json()
+    # A degraded service keeps the system healthy but flags the degraded roll-up (S22).
+    assert body["healthy"] is True
+    assert body["degraded"] is True
+    assert body["services"]["llm"]["severity"] == "degraded"
+    assert body["services"]["database"]["severity"] == "ok"
+
+
+def test_status_endpoint_summary():
+    resp = _client().get("/v1/status", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["version"]
+    assert body["degraded"] is True
+    assert body["severity_counts"] == {"ok": 1, "degraded": 1, "failed": 0}
+
+
+def test_status_requires_auth():
+    assert _client().get("/v1/status").status_code == 401
+
+
+def test_request_id_header_present():
+    resp = _client().get("/health")
+    assert resp.headers.get("X-Request-ID")
+
+
+def test_request_id_is_echoed_from_client():
+    resp = _client().get("/health", headers={"X-Request-ID": "trace-123"})
+    assert resp.headers["X-Request-ID"] == "trace-123"
+
+
+def test_untyped_error_returns_structured_500():
+    # raise_server_exceptions=False so the TestClient returns the handler's response
+    # instead of re-raising (uvicorn returns it to the client either way).
+    client = TestClient(
+        create_app(FakeApplication((API_KEY,))), raise_server_exceptions=False
+    )
+    resp = client.post("/v1/tools/boom/invoke", headers=AUTH, json={"args": {}})
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["error"] == "ValueError"
+    assert body["detail"] == "kaboom"
+    assert body["request_id"]  # correlation id surfaced to the client
+
+
+def test_database_error_maps_to_503():
+    resp = _client().post("/v1/tools/dberr/invoke", headers=AUTH, json={"args": {}})
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "DatabaseError"
+
+
+def test_http_metrics_recorded():
+    from atlas.telemetry import get_metrics
+
+    client = _client()
+    client.get("/health")
+    snap = get_metrics().snapshot()
+    assert any(k.startswith("http.requests") for k in snap["counters"])
+    assert any("http.request.duration_ms" in k for k in snap["histograms"])
 
 
 def test_openapi_docs_served():

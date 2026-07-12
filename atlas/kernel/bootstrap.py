@@ -31,6 +31,7 @@ from atlas.sandbox.backends import create_backend
 from atlas.sandbox.service import PythonSandboxService
 from atlas.reports.generator import ReportGenerator
 from atlas.reports.service import ReportService
+from atlas.research.service import ResearchService
 from atlas.verification.engine import EvidenceBudget, VerificationEngine
 from atlas.verification.service import VerificationService
 from atlas.documents.service import DocumentService
@@ -190,6 +191,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         workers=cfg.scheduler.workers,
         poll_interval=cfg.scheduler.poll_interval,
         backoff_base=cfg.scheduler.backoff_base,
+        drain_timeout=cfg.scheduler.drain_timeout,
         logger=get_logger("atlas.scheduler"),
     )
 
@@ -274,6 +276,27 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         ReportGenerator(llm=llm_service, logger=get_logger("atlas.reports")),
         logger=get_logger("atlas.reports"),
     )
+    # Autonomous Research Orchestration (Sprint 21, D8/§5a): the gather→verify→decide
+    # loop. Resolves the scholar/search capabilities lazily (they register later as
+    # plugins) so a disabled provider degrades to `unavailable` rather than crashing.
+    research_service = ResearchService(
+        verification_service,
+        report_service,
+        capabilities=capabilities,  # shared by ref; scholar/search plugins register later
+        per_query=cfg.research.per_query,
+        logger=get_logger("atlas.research"),
+    )
+    tools.register(
+        "research.run", research_service.research,
+        description="Run an autonomous gather→verify→decide research loop and return a "
+        "verified report.",
+        params={
+            "objective": "the research question or topic",
+            "max_iterations": "optional cap on search rounds",
+        },
+        plugin="research",
+    )
+
     # Continuous Learning (Sprint 18b, D11/§5d): governed, reversible promotion of
     # completed activities into the five stores; seeds the Experience store.
     learning_service = LearningService(
@@ -417,6 +440,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("python", python_service)
     container.register_instance("verification", verification_service)
     container.register_instance("reports", report_service)
+    container.register_instance("research", research_service)
     container.register_instance("learning", learning_service)
     container.register_instance("intelligence", intelligence_service)
     container.register_instance("ingestion", ingestion_source)
@@ -456,6 +480,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register("verification", verification_service, kind="service")
     capabilities.register("reports", report_service, kind="service")
     capabilities.register(
+        "research", research_service, contract=caps.ResearchCapability, kind="service"
+    )
+    capabilities.register(
         "learning", learning_service, contract=caps.LearningCapability, kind="service"
     )
     capabilities.register(
@@ -479,6 +506,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(python_service)
     registry.register(verification_service)
     registry.register(report_service)
+    registry.register(research_service)
     registry.register(learning_service)
     registry.register(intelligence_service)
     registry.register(ingestion_source)

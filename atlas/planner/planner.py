@@ -27,6 +27,7 @@ from atlas.capabilities import (
     CAP_MEMORY,
     CAP_OCR,
     CAP_PYTHON,
+    CAP_RESEARCH,
     CAP_SCHOLAR,
     CAP_SEARCH,
     CAP_SQL,
@@ -49,6 +50,7 @@ class Intent:
     OCR_IMAGE = "ocr_image"
     MAIL_SEARCH = "mail_search"
     BROWSE_URL = "browse_url"
+    RESEARCH = "research"
     LIST_DOCUMENTS = "list_documents"
     INGEST_PATH = "ingest_path"
     ASK_KNOWLEDGE = "ask_knowledge"
@@ -231,6 +233,21 @@ _MAIL_FOLDER_RE = re.compile(
     r"\bin\s+(?:the\s+)?(?:folder\s+)?"
     r"(INBOX|Sent|Drafts|Trash|Spam|Junk|Archive|All\s?Mail|[A-Z][\w/]*)\b",
 )
+# An autonomous research request: a research verb, or "what does the evidence say".
+_RESEARCH_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:do\s+(?:a|an)\s+)?"
+    r"(?:deep[\s-]?dive|research|investigate|gather\s+evidence|find\s+evidence)\b"
+    r"|\bwhat\s+does\s+the\s+(?:evidence|research|literature)\s+say\b"
+    r"|\bresearch\s+(?:whether|if|how|why|what|the\s+topic)\b",
+    re.IGNORECASE,
+)
+_RESEARCH_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:do\s+(?:a|an)\s+)?(?:deep[\s-]?dive|research|investigate|"
+    r"look\s+into|gather\s+evidence|find\s+evidence|find\s+out)\b"
+    r"\s*(?:on|about|into|for|regarding|whether|if|the\s+topic\s+of)?\s*[:,-]?\s*"
+    r"|^\s*what\s+does\s+the\s+(?:evidence|research|literature)\s+say\s+(?:about|on)?\s*",
+    re.IGNORECASE,
+)
 # An explicit request to render/screenshot a page in a headless browser. Requires a URL
 # to be present (lookahead) so it only wins over plain web_fetch on deliberate escalation.
 _BROWSE_RE = re.compile(
@@ -373,6 +390,11 @@ def _browse_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"url": url, "action": action}
 
 
+def _research_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    objective = _RESEARCH_PREFIX_RE.sub("", message).strip(" :,-").strip()
+    return {"objective": objective or message.strip()}
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -449,6 +471,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         _youtube_args,
     ),
     (
+        Intent.RESEARCH,
+        CAP_RESEARCH,
+        _RESEARCH_RE,
+        _research_args,
+    ),
+    (
         Intent.BROWSE_URL,
         CAP_BROWSER,
         _BROWSE_RE,
@@ -522,6 +550,7 @@ _DESCRIPTIONS = {
     Intent.OCR_IMAGE: "Extract text from an image via OCR.",
     Intent.MAIL_SEARCH: "Search a mailbox (read-only) for messages.",
     Intent.BROWSE_URL: "Render a URL in a headless browser (read-only).",
+    Intent.RESEARCH: "Run an autonomous gather→verify→decide research loop.",
     Intent.LIST_DOCUMENTS: "List known documents.",
     Intent.INGEST_PATH: "Ingest a file into the knowledge base.",
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",

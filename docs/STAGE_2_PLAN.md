@@ -1,6 +1,6 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a–S20e shipped ✅ (Stage 2 tool arc complete)**
+> **Status:** 🟢 BUILDING — **Sprints 10–19 + S20a–S20e + S21 + S22 shipped ✅ (Stage 2 complete: tool arc + research loop + hardening)**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
@@ -9,9 +9,13 @@
 > **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)** +
 > **Git (read-only local VCS, S20a)** + **SQL (read-only local databases, S20b)**
 > + **OCR (image → text, S20c)** + **Email (read-only IMAP, S20d)**
-> + **Browser (headless render, S20e)**; 731 tests).
+> + **Browser (headless render, S20e)**
+> + **Autonomous Research Orchestration (gather→verify→decide loop, S21)**
+> + **Hardening & Operability (health tiers, `atlas doctor`, graceful drain, request
+>   observability, e2e test, S22)**; 773 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **Stage 2 wrap-up** — the tool arc (S10–S20) is complete; remaining work is autonomous multi-round research orchestration + hardening.
+> Next: **Stage 2 is complete.** Optional follow-ons only: the Web UI, and deeper
+> operability (JSON logs, key scopes, rate limiting) if/when Atlas is exposed beyond localhost.
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -161,6 +165,7 @@ Honest mapping of current assets to Stage 2 needs:
 | OCR | ✅ `ocr_plugin` (`ocr` cap, S20c: image→text, Tesseract default) | Injectable engine seam; **degrades gracefully** (unavailable, never raises) if deps/binary missing; sandboxed sources |
 | Email | ✅ `mail_plugin` (`mail` cap, S20d: folders/search/message, IMAP) | **Read-only** (`readonly=True` + `BODY.PEEK`, no write path); injectable backend seam; **degrades gracefully** (unavailable/unauthorized) if unconfigured; password from env (Q7) |
 | Browser | ✅ `browser_plugin` (`browser` cap, S20e: open/screenshot, Playwright) | **Read-only** (navigate + extract only, no click/type/submit); injectable backend seam; **degrades gracefully** (unavailable) if Playwright/browser absent; robots honoured via shared net policy; screenshots sandboxed |
+| Research loop | ✅ `research` cap (S21: `research.run`) | Autonomous **gather→verify→decide** loop over one Evidence Graph claim; providers (scholar/search) resolved lazily → `unavailable` when absent; stops on the Evidence Budget (convergence, not count); emits a verified report |
 | Evidence | ✅ RAG citations (per-answer) | No **evidence graph** (claim→sources→confidence) across a job |
 | Human-in-the-loop | ⚠️ scheduler states (pending/claimed/running/…) | No `waiting_for_user` + notify + resume flow |
 | Determinism | ✅ temp=0 defaults, durable ret/recovery | No cross-check / verify pass; no report pipeline |
@@ -700,6 +705,8 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S20c** ✅ | **OCR (image → text)** | `ocr` cap: `ocr.image` reads text from a screenshot/photo/scan via an injectable **engine seam** (default Tesseract). **Degrades gracefully** — missing Pillow/pytesseract/`tesseract` binary ⇒ `unavailable`, never raises (R2/R3); sources confined to a sandbox root; honest outcomes (`ok`/`empty`/`unsupported`/`unavailable`/`error`). Planner `ocr_image` intent; `POST /v1/ocr`, `atlas ocr` | completes the Document Reader (reads scanned/pixel text) |
 | **S20d** ✅ | **Email (read-only IMAP)** | `mail` cap: `mail.folders`/`mail.search`/`mail.message` via an injectable **backend seam** (default stdlib IMAP). **Read-only by construction** (`readonly=True` select + `BODY.PEEK` so nothing is marked read; no write path). **Degrades gracefully** — unconfigured/unreachable ⇒ `unavailable`, bad creds ⇒ `unauthorized`, never raises (R2/R3). Password is a **secret** from an env var (Q7). Planner `mail_search` intent; `POST /v1/mail/*`, `atlas mail` | email as a research/assistant source |
 | **S20e** ✅ | **Browser automation (headless)** | `browser` cap: `browser.open` renders a URL (runs JS) → title/text/links; `browser.screenshot` → PNG under a sandbox root. Injectable **backend seam** (default Playwright/Chromium). **Read-only** (navigate + extract only; no click/type/submit). **Degrades gracefully** — missing Playwright/browser ⇒ `unavailable`, never raises (R2/R3). `http(s)`-only, robots honoured via `FetchClient.allowed`, time-bounded, text/links capped. Planner `browse_url` intent (opt-in on a browser keyword + URL, so plain fetch is unaffected); `POST /v1/browser/*`, `atlas browser`. Playwright is an **optional** extra (`pip install -e '.[browser]' && playwright install chromium`); LinkedIn folds in here | full toolbelt — **arc complete** |
+| **S21** ✅ | **Autonomous research orchestration** | `research` cap (`research.run`): the live **gather→verify→decide** loop that finally wires the tools + Verification Engine + Evidence Graph + Report Generator together. Given an objective it plans queries (scholar first, then web), folds each source into a single Evidence Graph claim, re-runs `verify_claim` (calculated confidence + numeric convergence), and consults the **Evidence Budget** each round — **stops on convergence, not a fixed count** — then emits a verified §5a.5 report. Deterministic core (pure `query_plan`/`extract_value`), hermetic tests; providers resolved lazily so a disabled scholar/search ⇒ `unavailable` (R2/R3). Planner `research` intent, `AssistantService._do_research`, job-step intent, `POST /v1/research`, `atlas research` | closes the §5a research spine |
+| **S22** ✅ | **Hardening & Operability** | Production-readiness pass over the finished feature set (no new capabilities): **health tiers** — `HealthStatus` gains a `degraded` middle tier (up but below full capability; back-compat via a derived `level`), scheduler/LLM report it, `Application.status()` rolls up ok/degraded/failed + uptime, new `GET /v1/status` + enriched `GET /v1/health` (severity+data); **`atlas doctor`** — offline config preflight (API keys, worker/job sizing, writable paths, sandbox backend, backup tooling) + optional DB/LLM probes *without* starting workers (`--offline`); **graceful shutdown drain** — `SchedulerService.stop()` stops claiming new work then gives in-flight tasks a bounded `drain_timeout` to finish before abandoning (recovered on next boot); **request observability** — access-log + HTTP metrics (`http.requests`, `http.request.duration_ms`) + `X-Request-ID` middleware; **API resilience** — generic `Exception` handler (structured 500 + request id, never a bare stack) and `DatabaseError`→503 / `ConfigError`→500 mappings; **first true end-to-end test** — objective → Job Engine → assistant dispatch → real research loop → verification → report, hermetic. 773 tests. **Stage 2 complete.** | operable & defensible |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
 
 Plugin build order (from the doc, capability-first): Filesystem → Document Reader →
@@ -1520,6 +1527,7 @@ of SQL/OCR, but adds two properties specific to a networked, credentialed servic
 - [x] `POST /v1/mail/*` + `atlas mail` CLI.
 - [x] Hermetic tests (outcome mapping via fake backend — ok/empty/unavailable/unauthorized/error/crash-safe/max-results/folder; default IMAP offline ⇒ unavailable; pure parsers; plugin delegate+health+registration; planner; assistant; api; cli; caps). **702 tests pass (+31).**
 - [x] **Next — S20e:** Browser shipped (§6q) — the Tier-2 tool arc is complete.
+- [x] **Then — S21:** Autonomous research orchestration shipped (§6r) — the §5a research spine is complete.
 
 ---
 
@@ -1567,6 +1575,95 @@ some pages only yield content after JavaScript runs, and this reads them.
 
 ---
 
+### 6r. Sprint 21 — Autonomous research orchestration (gather→verify→decide) ✅
+
+**Why now:** the tools (S13–S18a), the Verification Engine + Evidence Graph (S15) and the
+Report Generator (S17) all existed, but *nothing drove them in a loop*. S21 is the
+capstone that finally closes the §5a research spine: a self-directing loop that gathers
+evidence, verifies a claim, and consults the Evidence Budget to decide whether to keep
+searching — **the stopping rule is convergence, not a fixed paper count** (§5a.4).
+
+**Shape**
+- `atlas/research/service.py` — **`ResearchService`** (`research` cap). `research(objective)`
+  runs:
+  1. **plan** — deterministic `query_plan` (scholar first, then web, over query variants),
+     filtered to the providers actually present and capped at `max_search_iterations`;
+  2. **gather** — call the resolved `scholar`/`search` capability; fold each result into
+     one `EvidenceGraph` `Claim` as a graded `EvidenceItem` (papers keep their L3/L4 level
+     + `as_source()`; web hits are L2), extracting a numeric value per source (pure
+     `extract_value`, years skipped) so convergence is meaningful;
+  3. **verify** — `VerificationEngine.verify_claim` recomputes calculated confidence +
+     numeric convergence;
+  4. **decide** — `verify.decide(claim, iteration, budget)` → `stop`/`continue`; loop
+     until stop (budget met, convergence reached, or the iteration cap);
+  5. **report** — `ReportService.report(objective, graph, budget)` → verified §5a.5 report.
+- **Providers resolved lazily** through the capability registry (or injected directly for
+  tests), so a disabled scholar/search degrades to an **`unavailable`** outcome and a
+  provider that raises is skipped — the loop never crashes the caller (R2/R3). Sources are
+  de-duplicated by id across rounds. Honest outcomes: `ok` | `empty` (no evidence) |
+  `unavailable` (no providers) | `error`.
+- Wiring: planner **`research`** intent (research/investigate/deep-dive/"what does the
+  evidence say" verbs, distinct from plain `web_search`); `AssistantService._do_research`
+  (verdict + confidence + top sources → citations; `unavailable`→blocked-step; `research`
+  gap fallback); `JobPlanner` intent/capability (a job step can be a full research loop —
+  it flows real claims into the job report, closing the `_build_report` `claims=[]` gap);
+  `research.per_query` config; `POST /v1/research`; `atlas research <objective>
+  [--max-iterations]`.
+
+**Definition of Done (S21)** — all met:
+- [x] `atlas/research/service.py` — `ResearchService` gather→verify→decide loop; pure `query_plan`/`extract_value`/`clean_objective`; lazy provider resolution; dedupe; honest outcomes; never raises.
+- [x] `ResearchCapability` contract + catalog (`CAP_RESEARCH`, S21); `research.per_query` config + default.
+- [x] Bootstrap constructs + registers the `research` service (instance + capability + `research.run` tool), resolving scholar/search by reference (they register later as plugins).
+- [x] Planner `research` intent + `AssistantService._do_research` (+ `research` gap fallback) + `JobPlanner` intent/capability.
+- [x] `POST /v1/research` + `atlas research` CLI.
+- [x] Hermetic tests (loop with fake providers over real `Paper`/`SearchHit` + real Verification/Report: converge-stop, iteration-cap continue, unavailable, empty, provider-error skipped, dedupe, registry resolution, health; pure helpers; assistant; api; cli; caps). **755 tests pass (+24).**
+- [x] **§5a research spine complete.** Remaining Stage 2 work: hardening + operability.
+
+### 6s. Sprint 22 — Hardening & Operability ✅
+
+The features were all there; S22 makes them **operable and defensible in production**
+without adding a single new capability. It closes the top gaps from a readiness audit
+(health/observability/lifecycle/preflight/test/error-handling).
+
+**What shipped**
+- **Health tiers (degraded).** `HealthStatus` gains a `degraded` middle tier — *up but
+  below full capability* (e.g. the embedding model isn't pulled, some workers died) —
+  distinct from hard `failed`. It stays back-compatible: `healthy` is unchanged and a
+  derived `level` (`ok`/`degraded`/`failed`) is used where the tier matters. The
+  scheduler (partial workers) and LLM service (embedding not pulled) now report it.
+- **`Application.status()` + `/v1/status`.** A one-shot roll-up: version, uptime, and
+  counts of ok/degraded/failed services. `GET /v1/health` is enriched with `severity`
+  + per-service `data`; `atlas status` prints the tiered summary.
+- **`atlas doctor` (preflight).** Validates config **offline** (API keys set, `workers ≥
+  jobs.max_concurrent`, writable paths, valid sandbox backend, backup tooling present)
+  and — unless `--offline` — probes the real DB + LLM *without starting worker threads*.
+  Exits non-zero only on a hard failure (`atlas/kernel/preflight.py`).
+- **Graceful shutdown drain.** `SchedulerService.stop()` sets the stop flag (no new
+  tasks are claimed) and gives in-flight tasks a bounded `scheduler.drain_timeout` to
+  finish before abandoning them (abandoned tasks stay `running` and recover on next
+  boot) — instead of the old fixed 5s join-then-drop.
+- **Request observability.** An HTTP middleware records an access log, `http.requests`
+  (by method/route/status) + `http.request.duration_ms` metrics, and an `X-Request-ID`
+  (honoured from the client or generated) echoed on every response.
+- **API resilience.** A generic `Exception` handler returns the *same* structured body
+  as typed errors (plus the request id) instead of a bare stack trace; `DatabaseError`
+  now maps to **503** (retryable) and `ConfigError` to 500.
+- **First true end-to-end test.** `tests/test_integration.py` drives an objective through
+  the **real** Job Engine → assistant dispatch → research gather→verify→decide loop →
+  Verification Engine → Report Generator, faking only the external scholar/search edges
+  (no DB, no network, no LLM) — proving the Stage-2 components compose.
+
+**Definition of Done (S22)** — all met:
+- [x] `HealthStatus` degraded tier (`level`/`degraded`, `degraded_status()`), back-compat; scheduler + LLM report degraded.
+- [x] `Application.status()`/`uptime_seconds()`; `GET /v1/status` + enriched `GET /v1/health` (severity+data); `atlas status` tiered output.
+- [x] `atlas/kernel/preflight.py` (`check_config`/`probe_dependencies`/`worst_status`) + `atlas doctor [--offline]`.
+- [x] `SchedulerService` graceful drain + `scheduler.drain_timeout` config + default.
+- [x] Request-logging/metrics + `X-Request-ID` middleware; generic `Exception` handler; `DatabaseError`→503 / `ConfigError`→500.
+- [x] Hermetic **end-to-end** integration test (objective→job→tools→verify→report) + preflight/health/middleware/exception/drain/doctor tests. **773 tests pass (+18).**
+- [x] **Stage 2 complete.** Optional follow-ons only (Web UI; JSON logs / key scopes / rate limiting if exposed beyond localhost).
+
+---
+
 ## 7. Decision log (append-only)
 
 | # | Date | Decision | Status |
@@ -1594,6 +1691,8 @@ some pages only yield content after JavaScript runs, and this reads them.
 
 | Date | Sprint | Notes |
 |------|--------|-------|
+| 2026-07-12 | S22 | **Sprint 22 shipped ✅ — Hardening & Operability (Stage 2 wrap-up).** No new capabilities; a production-readiness pass over the finished system, closing the top gaps from a readiness audit. **Health tiers:** `HealthStatus` gains a `degraded` middle tier (*up but below full capability*), back-compatible via a derived `level` (`ok`/`degraded`/`failed`) while `healthy` is unchanged — the scheduler (partial workers) and LLM (embedding not pulled) now report it; new **`Application.status()`** rolls up version/uptime/severity counts behind **`GET /v1/status`**, and `GET /v1/health` is enriched with `severity` + per-service `data`. **`atlas doctor`** (`atlas/kernel/preflight.py`): offline config preflight (API keys, `workers ≥ jobs.max_concurrent`, writable paths, valid sandbox backend, backup tooling) + optional real DB/LLM probes **without starting worker threads** (`--offline`); exits non-zero only on a hard failure. **Graceful shutdown drain:** `SchedulerService.stop()` stops claiming immediately, then gives in-flight tasks a bounded **`scheduler.drain_timeout`** to finish before abandoning them (abandoned tasks stay `running` and recover on next boot) — replacing the old fixed 5s join-then-drop. **Request observability:** an HTTP middleware adds an access log, `http.requests` (method/route/status) + `http.request.duration_ms` metrics, and an **`X-Request-ID`** echoed on every response. **API resilience:** a generic `Exception` handler returns the *same* structured body as typed errors (+ request id) instead of a bare stack, and `DatabaseError`→**503** / `ConfigError`→500 are mapped. **First true end-to-end test** (`tests/test_integration.py`): drives an objective through the **real** Job Engine → assistant dispatch → research gather→verify→decide loop → Verification Engine → Report Generator, faking only the external scholar/search edges (no DB/network/LLM). **773 tests pass (+18).** **Stage 2 is complete** — remaining work is optional (Web UI; JSON logs / API key scopes / rate limiting when exposed beyond localhost). |
+| 2026-07-12 | S21 | **Sprint 21 shipped ✅ — Autonomous research orchestration (gather→verify→decide).** The capstone that finally *drives the loop*: the tools (S13–S18a) + Verification Engine/Evidence Graph (S15) + Report Generator (S17) existed, but nothing wired them into an iterative researcher until now. New `atlas/research/service.py` **`ResearchService`** (`research` cap, `research.run`): given an objective it (1) plans queries via a deterministic **`query_plan`** (scholar first, then web, over variants), filtered to the providers actually present and capped at `max_search_iterations`; (2) **gathers** — folds each source into one `EvidenceGraph` `Claim` as a graded `EvidenceItem` (papers keep L3/L4 + `as_source()`, web hits L2), extracting a numeric value per source via pure **`extract_value`** (bare years skipped) so convergence is meaningful; (3) **verifies** with `verify_claim` (calculated confidence + numeric convergence); (4) **decides** with `decide(claim, iteration, budget)` and loops until stop — **convergence, not a fixed count** (§5a.4); (5) renders a verified §5a.5 **report**. Providers resolved **lazily** through the capability registry (injected directly in tests) → a disabled scholar/search degrades to **`unavailable`**, a raising provider is skipped, sources de-duped by id; honest `ok`/`empty`/`unavailable`/`error`, **never raises** (R2/R3). Planner **`research`** intent (research/investigate/deep-dive/"what does the evidence say", distinct from plain `web_search`) + `AssistantService._do_research` (verdict + confidence + top sources→citations; `unavailable`→blocked-step; `research` gap) + `JobPlanner` (a research job step flows **real claims** into the job report — closes the `_build_report` `claims=[]` gap). `research.per_query` config; `POST /v1/research`; `atlas research <objective> [--max-iterations]`. Hermetic tests over real `Paper`/`SearchHit` + real Verification/Report (converge-stop, iteration-cap, unavailable, empty, provider-error-skipped, dedupe, registry resolution, health; pure helpers; assistant; api; cli; caps). **755 tests pass (+24).** **The §5a research spine is complete** — next: hardening + operability. |
 | 2026-07-12 | S20e | **Sprint 20e shipped ✅ — Browser automation (headless, read-only) — the last Tier-2 tool.** Deferred deliberately (heaviest dep + largest safety surface); it's the **JS-rendering escalation** from plain HTTP fetch (§5c). New `atlas/browser/browser.py` **`BrowserClient`** renders/screenshots a URL through an injectable **`BrowserBackend`** (default **`PlaywrightBackend`**, Chromium, all imports lazy). **Read-only by design** — navigate + extract only (title/`body` text/anchor hrefs), **no click/type/submit**. **Degrades gracefully / never raises** (R2/R3): missing Playwright/binary→`unavailable`, robots-disallowed→`blocked`, slow→`timeout`, else `ok`/`empty`/`error`. Safety rails: `http(s)`-only; robots via the shared net policy (new **`FetchClient.allowed(url)`** — one implementation, no copy); hard per-nav timeout; text + link caps; screenshots confined to a sandbox root (`paths.data/screenshots`). **`BrowserPlugin`** = `browser` cap (`browser.open`/`browser.screenshot`), `health_check` treats a missing engine as **degraded not failed**. Concrete **`BrowserCapability`** (`CAP_BROWSER`, S20). Planner **`browse_url`** intent is **opt-in** (browser keyword + URL via regex lookahead) so a bare URL still routes to `web_fetch`; `AssistantService._do_browse` (title + preview + top links; `unavailable`/`blocked`→blocked-step; honest `timeout`/`empty`/`error`; `browser` gap) + `JobPlanner`. `plugins.browser.*` config + `browser_plugin` enabled; **Playwright is an optional `[browser]` extra** (`playwright install chromium`) — Atlas runs fine without it. `POST /v1/browser/open|screenshot`; `atlas browser <url> [--screenshot]`. **731 tests pass (+29).** **The Tier-2 tool arc (S10–S20) is complete** — next: autonomous multi-round research orchestration + hardening. |
 | 2026-07-12 | S20d | **Sprint 20d shipped ✅ — Email (read-only IMAP).** Fourth Tier-2 tool; email becomes a research/assistant source (list folders, search, open a message). New `atlas/mail/client.py` **`MailClient`** works through an injectable **`MailBackend`** (default **`IMAPBackend`**, stdlib `imaplib`+`email`). **Read-only by construction:** mailboxes selected `readonly=True`, bodies fetched with `BODY.PEEK` (opening a mail **never marks it read**), and no STORE/DELETE/EXPUNGE/APPEND path exists. **Degrades gracefully / never raises** (R2/R3): unconfigured/unreachable→`unavailable`, bad creds→`unauthorized`, server error→`error`, no matches→`empty`, else `ok` (a `_guard` maps even unexpected crashes to `error`). Pure helpers for RFC-2047 headers + a text/plain-preferring body extractor (HTML fallback). **`MailPlugin`** = `mail` cap (`mail.search`/`mail.message`/`mail.folders`), `health_check` treats an unconfigured mailbox as **degraded not failed**. Concrete **`MailCapability`** (`CAP_MAIL`, S20). Planner **`mail_search`** intent (`inbox`/`mailbox`, read-verb + "email(s)", or "email … from/about/subject …"; extracts a quoted/`for …` query + optional `in <Folder>`) + `AssistantService._do_mail` (summary list; `unavailable`/`unauthorized`→blocked; honest `empty`/`error`; `mail` gap) + `JobPlanner`. `plugins.mail.*` config + `mail_plugin` enabled; **password is a secret** from `ATLAS_MAIL_PASSWORD` env (never YAML — Q7), `.env.example` updated. `POST /v1/mail/search` + `GET /v1/mail/folders|message`; `atlas mail search|folders|message`. **Backend seam** lets a Gmail-API/JMAP backend drop in later. **702 tests pass (+31).** Next: **S20e** — browser automation (deliberately last). |
 | 2026-07-12 | S20c | **Sprint 20c shipped ✅ — OCR (image → text).** Third Tier-2 tool; completes the **Document Reader** (S13a deferred scanned/pixel text to "future OCR"). New `atlas/ocr/engine.py` **`OCRClient`** reads one image through an injectable **`OCREngine`** (default **`TesseractEngine`** = Pillow + pytesseract + system `tesseract`). Key property vs Git/SQL: the default engine has a *system* dep, so all optional imports are **lazy** and a missing dep/binary **degrades gracefully** → `unavailable` (never raises, app always boots). Sources confined to a sandbox root (default `paths.documents`); per-image byte cap + suffix allow-list. Honest outcomes `ok`/`empty`/`unsupported`/`unavailable`/`error`; even a crashing engine → `error`. **`OCRPlugin`** = `ocr` cap (`ocr.image`), `health_check` reports a missing backend as **degraded not failed**. Concrete **`OCRCapability`** (`CAP_OCR`, S20). Planner **`ocr_image`** intent (`ocr` keyword, "extract/read text from … image/screenshot", or bare `*.png|jpg|…` — no clash with doc-ingest suffixes) + `AssistantService._do_ocr` (renders text; `unavailable`→blocked, honest `unsupported`/`empty`/`error`; `ocr` gap fallback) + `JobPlanner`. `plugins.ocr.*` config + `ocr_plugin` enabled; `pillow`+`pytesseract` added to `pyproject.toml`/`requirements.txt`. `POST /v1/ocr`; `atlas ocr <path> [--lang]`. **Engine seam** lets EasyOCR/cloud OCR drop in later. **671 tests pass (+26).** Next: browser (deliberately last) / Email — as needed. |

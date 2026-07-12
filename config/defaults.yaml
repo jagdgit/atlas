@@ -61,6 +61,7 @@ scheduler:
   workers: 3                # ≥ jobs.max_concurrent so 3 jobs can advance at once (R1)
   checkpoint_interval: 60
   max_retries: 3
+  drain_timeout: 30.0       # graceful shutdown: seconds to finish in-flight work (S22)
 
 logging:
   level: INFO
@@ -138,6 +139,7 @@ research:
   convergence: 0.90         # numeric agreement threshold to stop
   max_search_iterations: 20
   numeric_tolerance: 0.15   # relative window within which values "agree"
+  per_query: 5              # sources gathered per search in the research loop (S21)
 
 learning:
   # Continuous Learning (S18b, D11/§5d). Atlas never silently learns: completed

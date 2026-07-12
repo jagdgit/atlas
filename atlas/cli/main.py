@@ -6,6 +6,7 @@ the DI container, so they work without a running API server:
 
     atlas serve                 # run the REST API (uvicorn)
     atlas status                # bootstrap, health-check, print, exit
+    atlas doctor [--offline]    # preflight: validate config + probe deps (no workers)
     atlas chat ["message"]      # chat with the assistant (REPL if no message)
     atlas jobs                  # list jobs
     atlas job start "objective" # create + run an async job (Job Engine)
@@ -67,6 +68,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--port", type=int, default=None, help="bind port")
 
     sub.add_parser("status", help="bootstrap, run health checks, print status, exit")
+
+    p_doctor = sub.add_parser(
+        "doctor", help="preflight: validate config + probe dependencies (no workers)"
+    )
+    p_doctor.add_argument(
+        "--offline", action="store_true",
+        help="config checks only; skip database/LLM probes",
+    )
 
     p_chat = sub.add_parser(
         "chat", help="chat with the assistant (interactive REPL or one-shot)"
@@ -215,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_browser.add_argument("--screenshot", default=None,
                            help="save a PNG to this path under the sandbox root")
 
+    p_research = sub.add_parser("research", help="autonomous research loop (S21)")
+    p_research.add_argument("objective", help="the research question or topic")
+    p_research.add_argument("--max-iterations", type=int, default=None,
+                            help="cap on search rounds")
+
     p_report = sub.add_parser(
         "report", help="generate a scientific-review report from a JSON evidence graph"
     )
@@ -271,17 +285,54 @@ def cmd_serve(args: argparse.Namespace, app: "Application | None" = None) -> int
     return 0
 
 
+_STATUS_FLAG = {"ok": "OK", "degraded": "WARN", "failed": "FAIL"}
+
+
 def cmd_status(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     app.start()
     try:
         report = app.health()
         for name, status in report.items():
-            flag = "OK" if status.healthy else "FAIL"
-            print(f"  [{flag}] {name}: {status.detail}")
+            flag = _STATUS_FLAG.get(status.level, "OK")
+            print(f"  [{flag:4}] {name}: {status.detail}")
+        summary = app.status()
+        counts = summary["severity_counts"]
+        print(
+            f"\nAtlas {summary['version']} — "
+            f"{counts['ok']} ok, {counts['degraded']} degraded, "
+            f"{counts['failed']} failed "
+            f"(uptime {summary['uptime_seconds']}s)"
+        )
         return 0 if app.healthy() else 1
     finally:
         app.stop()
+
+
+_DOCTOR_FLAG = {"ok": "OK", "warn": "WARN", "fail": "FAIL"}
+
+
+def cmd_doctor(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    from atlas.config import get_config
+    from atlas.kernel.preflight import CHECK_FAIL, check_config, probe_dependencies, worst_status
+
+    cfg = get_config()
+    checks = check_config(cfg)
+    if not args.offline:
+        try:
+            app = app or build_application()
+            checks.extend(probe_dependencies(app))
+        except Exception as exc:  # noqa: BLE001 - report, don't crash the doctor
+            print(f"  [FAIL] bootstrap: could not build application: {exc}",
+                  file=sys.stderr)
+            return 1
+    for check in checks:
+        flag = _DOCTOR_FLAG.get(check.status, "OK")
+        print(f"  [{flag:4}] {check.name}: {check.detail}")
+    overall = worst_status(checks)
+    print(f"\npreflight: {overall.upper()}"
+          + (" (offline — dependencies not probed)" if args.offline else ""))
+    return 1 if overall == CHECK_FAIL else 0
 
 
 def cmd_chat(args: argparse.Namespace, app: "Application | None" = None) -> int:
@@ -858,6 +909,30 @@ def cmd_browser(args: argparse.Namespace, app: "Application | None" = None) -> i
     return 0
 
 
+def cmd_research(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    result = app.invoke_tool(
+        "research.run", objective=args.objective, max_iterations=args.max_iterations
+    )
+    outcome = result.get("outcome")
+    if outcome not in ("ok",):
+        print(f"research {outcome}: {result.get('reason') or ''}", file=sys.stderr)
+        return 1
+    claim = result.get("claim") or {}
+    stopped = result.get("stopped") or {}
+    print(f"# Research: {result.get('objective')}")
+    print(f"confidence: {claim.get('confidence')} "
+          f"(score {claim.get('confidence_score')}, "
+          f"convergence {claim.get('convergence')})")
+    print(f"rounds: {result.get('iterations')}; "
+          f"stopped: {'; '.join(stopped.get('reasons', [])) or 'n/a'}")
+    report = result.get("report") or {}
+    if report.get("markdown"):
+        print()
+        print(report["markdown"])
+    return 0
+
+
 def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> int:
     import json
     from pathlib import Path
@@ -1061,6 +1136,7 @@ def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> in
 _HANDLERS = {
     "serve": cmd_serve,
     "status": cmd_status,
+    "doctor": cmd_doctor,
     "chat": cmd_chat,
     "agents": cmd_agents,
     "ask": cmd_ask,
@@ -1087,6 +1163,7 @@ _HANDLERS = {
     "ocr": cmd_ocr,
     "mail": cmd_mail,
     "browser": cmd_browser,
+    "research": cmd_research,
     "report": cmd_report,
     "verify": cmd_verify,
     "learn": cmd_learn,

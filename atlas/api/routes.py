@@ -50,6 +50,7 @@ from atlas.api.schemas import (
     ServiceHealth,
     SessionOut,
     SessionsResponse,
+    StatusResponse,
     CodeExplainRequest,
     CodeParseRequest,
     CodeRepoRequest,
@@ -64,6 +65,7 @@ from atlas.api.schemas import (
     BrowseRequest,
     MailSearchRequest,
     OCRRequest,
+    ResearchRequest,
     ScholarSearchRequest,
     ScreenshotRequest,
     SQLQueryRequest,
@@ -131,11 +133,20 @@ def metrics_json(request: Request) -> dict:
 def detailed_health(request: Request) -> DetailedHealthResponse:
     report = _app(request).health()
     services = {
-        name: ServiceHealth(healthy=s.healthy, detail=s.detail)
+        name: ServiceHealth(
+            healthy=s.healthy, detail=s.detail, severity=s.level, data=s.data
+        )
         for name, s in report.items()
     }
-    healthy = all(s.healthy for s in services.values())
-    return DetailedHealthResponse(healthy=healthy, services=services)
+    healthy = all(s.healthy for s in report.values())
+    degraded = any(s.degraded for s in report.values())
+    return DetailedHealthResponse(healthy=healthy, degraded=degraded, services=services)
+
+
+@v1_router.get("/status", response_model=StatusResponse, tags=["health"])
+def status(request: Request) -> StatusResponse:
+    """Operability summary (S22): version, uptime, and a severity roll-up."""
+    return StatusResponse(**_app(request).status())
 
 
 @v1_router.get("/agents", response_model=AgentsResponse, tags=["agents"])
@@ -344,6 +355,14 @@ def browser_open(body: BrowseRequest, request: Request) -> dict:
 def browser_screenshot(body: ScreenshotRequest, request: Request) -> dict:
     return _app(request).invoke_tool(
         "browser.screenshot", url=body.url, path=body.path, full_page=body.full_page
+    )
+
+
+# --- research (S21): autonomous gather→verify→decide loop -----------------
+@v1_router.post("/research", tags=["research"])
+def research(body: ResearchRequest, request: Request) -> dict:
+    return _app(request).invoke_tool(
+        "research.run", objective=body.objective, max_iterations=body.max_iterations
     )
 
 

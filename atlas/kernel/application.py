@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import signal
 import threading
+import time
 
 from atlas.config import AtlasConfig
 from atlas.events.dispatcher import EventDispatcher
@@ -44,6 +45,7 @@ class Application:
         self.capabilities = capabilities or CapabilityRegistry()
         self.tools = tools or ToolRegistry()
         self._stop_event = threading.Event()
+        self._started_at: float | None = None
 
     # --- Kernel APIs -----------------------------------------------------
     def service(self, name: str) -> Service:
@@ -66,6 +68,7 @@ class Application:
             "Atlas %s starting...", self.config.system.version
         )
         self.lifecycle.start_all()
+        self._started_at = time.monotonic()
         self.events.emit("KernelStarted", source="kernel")
         self.logger.info("Atlas is ready.")
 
@@ -79,6 +82,29 @@ class Application:
 
     def healthy(self) -> bool:
         return all(status.healthy for status in self.health().values())
+
+    def uptime_seconds(self) -> float | None:
+        """Seconds since the kernel started, or None if not started."""
+        if self._started_at is None:
+            return None
+        return round(time.monotonic() - self._started_at, 3)
+
+    def status(self) -> dict:
+        """A one-shot operability summary (S22): version, uptime, and a severity
+        roll-up over all services (ok / degraded / failed) — used by ``/v1/status``
+        and ``atlas status``."""
+        report = self.health()
+        by_severity: dict[str, int] = {"ok": 0, "degraded": 0, "failed": 0}
+        for status in report.values():
+            by_severity[status.level] = by_severity.get(status.level, 0) + 1
+        return {
+            "version": self.config.system.version,
+            "uptime_seconds": self.uptime_seconds(),
+            "healthy": all(s.healthy for s in report.values()),
+            "degraded": by_severity["degraded"] > 0,
+            "services_total": len(report),
+            "severity_counts": by_severity,
+        }
 
     # --- Blocking run ----------------------------------------------------
     def run_forever(self) -> None:

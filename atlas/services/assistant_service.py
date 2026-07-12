@@ -123,6 +123,48 @@ def _format_mail(data: dict[str, Any], query: str) -> str:
     return "\n".join(lines)
 
 
+def _format_research(data: dict[str, Any]) -> str:
+    """Render the research result: verdict + confidence + top sources + trail."""
+    claim = data.get("claim") or {}
+    report = data.get("report") or {}
+    sections = report.get("sections") or {}
+    confidence = claim.get("confidence", "UNVERIFIED")
+    score = claim.get("confidence_score")
+    conv = claim.get("convergence")
+    stopped = data.get("stopped") or {}
+    lines = [
+        f"Research on: {data.get('objective')}",
+        f"Confidence: {confidence}"
+        + (f" (score {score}" if score is not None else "")
+        + (f", convergence {conv:.0%})" if isinstance(conv, (int, float)) else
+           ")" if score is not None else ""),
+        f"Rounds: {data.get('iterations', 0)}; stopped because: "
+        f"{'; '.join(stopped.get('reasons', [])) or 'n/a'}",
+    ]
+    summary = sections.get("executive_summary")
+    if summary:
+        lines += ["", summary if isinstance(summary, str) else str(summary)]
+    sources = (data.get("graph") or {}).get("sources") or []
+    if sources:
+        lines += ["", f"Sources ({len(sources)}):"]
+        for s in sources[:8]:
+            lvl = s.get("level_name") or f"L{s.get('evidence_level', '?')}"
+            lines.append(f"  - [{lvl}] {s.get('title') or s.get('id')}"
+                         + (f" — {s.get('url')}" if s.get("url") else ""))
+        if len(sources) > 8:
+            lines.append(f"  … ({len(sources)} total; showing 8)")
+    return "\n".join(lines)
+
+
+def _research_citations(data: dict[str, Any]) -> list[dict[str, Any]]:
+    sources = (data.get("graph") or {}).get("sources") or []
+    return [
+        {"source_id": s.get("id"), "title": s.get("title"), "url": s.get("url"),
+         "evidence_level": s.get("evidence_level")}
+        for s in sources
+    ]
+
+
 def _format_browse(data: dict[str, Any]) -> str:
     """Render a browsed page: title + a text preview + a few links."""
     title = data.get("title") or "(untitled)"
@@ -235,6 +277,7 @@ class AssistantService:
         ocr_tool: str = "ocr.image",
         mail_tool: str = "mail.search",
         browser_tool: str = "browser.open",
+        research_tool: str = "research.run",
         search_limit: int = 5,
         list_limit: int = 25,
         logger: logging.Logger | None = None,
@@ -258,6 +301,7 @@ class AssistantService:
         self._ocr_tool = ocr_tool
         self._mail_tool = mail_tool
         self._browser_tool = browser_tool
+        self._research_tool = research_tool
         self._search_limit = search_limit
         self._list_limit = list_limit
         self._responder = ResponseBuilder(llm, logger)
@@ -347,6 +391,7 @@ class AssistantService:
             Intent.OCR_IMAGE: self._do_ocr,
             Intent.MAIL_SEARCH: self._do_mail,
             Intent.BROWSE_URL: self._do_browse,
+            Intent.RESEARCH: self._do_research,
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.REACT: self._do_react,
         }.get(intent, self._do_react)
@@ -838,6 +883,43 @@ class AssistantService:
             return _Outcome(answer=f"I rendered {url} but found no text.")
         return _Outcome(answer=_format_browse(data))
 
+    def _do_research(self, args, context, tool_calls) -> _Outcome:
+        objective = (args.get("objective") or "").strip()
+        if not objective:
+            return _Outcome(answer="What would you like me to research?")
+        payload = {"objective": objective}
+        if args.get("max_iterations") is not None:
+            payload["max_iterations"] = args["max_iterations"]
+        result = self._executor.execute(self._research_tool, payload)
+        data = result.data if isinstance(result.data, dict) else {}
+        outcome = data.get("outcome")
+        tool_calls.append(
+            {
+                "intent": Intent.RESEARCH,
+                "action": self._research_tool,
+                "capability": "research",
+                "ok": result.ok,
+                "outcome": outcome,
+            }
+        )
+        if not result.ok:
+            return _Outcome(answer=f"I couldn't run the research loop: {result.error}")
+        if outcome == "unavailable":
+            return _Outcome(
+                answer=f"I can't research that here: {data.get('reason')}.",
+                blocked=True,
+                blocked_reason=f"research unavailable: {data.get('reason')}",
+            )
+        if outcome == "error":
+            return _Outcome(answer=f"The research loop errored: {data.get('reason')}")
+        if outcome == "empty":
+            return _Outcome(
+                answer=f"I searched but gathered no usable evidence on {objective!r} "
+                f"after {data.get('iterations', 0)} round(s)."
+            )
+        citations = _research_citations(data)
+        return _Outcome(answer=_format_research(data), citations=citations)
+
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
         if self._agent is None:
@@ -907,6 +989,9 @@ class AssistantService:
     def _has_browser_tool(self) -> bool:
         return self._tools is not None and self._tools.has(self._browser_tool)
 
+    def _has_research_tool(self) -> bool:
+        return self._tools is not None and self._tools.has(self._research_tool)
+
     def _capability_available(self, capability: str) -> bool:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
@@ -930,6 +1015,7 @@ class AssistantService:
             "ocr": self._has_ocr_tool(),
             "mail": self._has_mail_tool(),
             "browser": self._has_browser_tool(),
+            "research": self._has_research_tool(),
         }.get(capability, True)
 
     def _preflight_gaps(self, plan: Plan) -> list[dict[str, Any]]:

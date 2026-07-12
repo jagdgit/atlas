@@ -120,6 +120,10 @@ class SchedulerConfig(BaseModel):
     max_retries: int = 3
     poll_interval: float = 1.0  # seconds a worker waits when no task is available
     backoff_base: float = 2.0  # retry delay = backoff_base * 2**retry_count seconds
+    # Graceful shutdown (S22): on stop, workers stop claiming new tasks and get up to
+    # this many seconds (total) to finish the in-flight task before being abandoned
+    # (abandoned tasks stay `running` and are recovered on the next boot).
+    drain_timeout: float = 30.0
 
 
 class LoggingConfig(BaseModel):
@@ -356,6 +360,7 @@ class ResearchConfig(BaseModel):
     convergence: float = 0.90        # numeric agreement threshold to stop
     max_search_iterations: int = 20
     numeric_tolerance: float = 0.15  # relative window for "values agree"
+    per_query: int = 5               # sources gathered per search in the research loop
 
 
 class LearningConfig(BaseModel):

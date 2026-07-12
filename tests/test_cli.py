@@ -22,6 +22,8 @@ from atlas.cli.main import (
     cmd_formats,
     cmd_git,
     cmd_browser,
+    cmd_doctor,
+    cmd_research,
     cmd_ingest,
     cmd_intel,
     cmd_mail,
@@ -316,6 +318,18 @@ class FakeApp:
         if name == "browser.screenshot":
             return {"outcome": "ok", "backend": "playwright", "url": kwargs.get("url"),
                     "path": kwargs.get("path")}
+        if name == "research.run":
+            return {
+                "outcome": "ok", "objective": kwargs.get("objective"), "iterations": 3,
+                "stopped": {"decision": "stop", "convergence": 0.91,
+                            "reasons": ["all budget criteria met"]},
+                "claim": {"confidence": "HIGH", "confidence_score": 0.87,
+                          "convergence": 0.91},
+                "graph": {"sources": [], "claims": []},
+                "verification": {},
+                "report": {"markdown": "# Research Report\n\nFindings converge."},
+                "log": [],
+            }
         return {"tool": name, "args": kwargs}
 
 
@@ -670,6 +684,36 @@ def test_cmd_browser_screenshot(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "shot.png" in out
+
+
+def test_cmd_doctor_offline(capsys):
+    args = build_parser().parse_args(["doctor", "--offline"])
+    rc = cmd_doctor(args)
+    out = capsys.readouterr().out
+    assert "api.keys" in out
+    assert "sandbox.backend" in out
+    assert "preflight:" in out
+    assert "offline" in out
+    assert rc in (0, 1)  # 0 unless the local config has a hard failure
+
+
+def test_cmd_research_prints_report(capsys):
+    args = build_parser().parse_args(["research", "solar soiling losses"])
+    rc = cmd_research(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "solar soiling losses" in out
+    assert "HIGH" in out
+    assert "Research Report" in out
+
+
+def test_cmd_research_max_iterations(capsys):
+    args = build_parser().parse_args(
+        ["research", "battery degradation", "--max-iterations", "5"]
+    )
+    assert args.max_iterations == 5
+    rc = cmd_research(args, app=FakeApp())
+    assert rc == 0
 
 
 def test_cmd_download_prints_path(capsys):

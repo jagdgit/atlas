@@ -119,6 +119,7 @@ def _assistant(
     with_git=True, git_result=None, with_sql=True, sql_result=None,
     with_ocr=True, ocr_result=None, with_mail=True, mail_result=None,
     with_browser=True, browser_result=None,
+    with_research=True, research_result=None,
 ):
     tools = ToolRegistry()
     if with_web:
@@ -210,6 +211,22 @@ def _assistant(
         }
         browser_payload = browser_result if browser_result is not None else default_browser
         tools.register("browser.open", lambda url, **kw: browser_payload)
+    if with_research:
+        default_research = {
+            "outcome": "ok", "objective": "solar soiling losses", "iterations": 1,
+            "stopped": {"decision": "stop", "convergence": 0.95,
+                        "reasons": ["all budget criteria met"]},
+            "claim": {"confidence": "HIGH", "confidence_score": 0.88, "convergence": 0.95},
+            "graph": {"sources": [
+                {"id": "10.1/x", "title": "PV Soiling", "url": "https://s2.org/1",
+                 "evidence_level": 4, "level_name": "L4 peer-reviewed"}
+            ], "claims": []},
+            "verification": {}, "report": {"markdown": "# Report", "sections": {
+                "executive_summary": "Soiling losses cluster near 5%/yr."}},
+            "log": [],
+        }
+        research_payload = research_result if research_result is not None else default_research
+        tools.register("research.run", lambda objective, **kw: research_payload)
     return AssistantService(
         ConversationService(FakeConvRepo(), memory),
         Planner(),
@@ -551,6 +568,38 @@ def test_browse_gap_when_no_tool():
     turn = _assistant(with_browser=False).chat("render https://ex.com in a browser")
     assert turn.capability_gaps
     assert turn.capability_gaps[0]["missing_capability"] == "browser"
+
+
+# --- research (S21) -------------------------------------------------------
+def test_research_runs_loop_and_reports():
+    turn = _assistant().chat("research solar panel soiling losses")
+    assert turn.intent == "research"
+    assert turn.tool_calls[0]["action"] == "research.run"
+    assert turn.tool_calls[0]["outcome"] == "ok"
+    assert "HIGH" in turn.answer
+    assert "PV Soiling" in turn.answer
+    # sources surface as citations
+    assert any(c.get("url") == "https://s2.org/1" for c in turn.citations)
+
+
+def test_research_unavailable_blocks_step():
+    un = {"outcome": "unavailable", "objective": "x",
+          "reason": "no research providers available (need scholar and/or search)"}
+    turn = _assistant(research_result=un).chat("investigate battery degradation rates")
+    assert "can't research" in turn.answer.lower()
+
+
+def test_research_empty_reports_no_evidence():
+    empty = {"outcome": "empty", "objective": "x", "iterations": 2,
+             "reason": "no evidence gathered"}
+    turn = _assistant(research_result=empty).chat("research an obscure topic")
+    assert "no usable evidence" in turn.answer.lower()
+
+
+def test_research_gap_when_no_tool():
+    turn = _assistant(with_research=False).chat("research grid-scale storage economics")
+    assert turn.capability_gaps
+    assert turn.capability_gaps[0]["missing_capability"] == "research"
 
 
 def test_ingest_without_path_asks_for_one():

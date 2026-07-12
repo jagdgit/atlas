@@ -39,6 +39,7 @@ CAP_SQL = "sql"
 CAP_OCR = "ocr"
 CAP_MAIL = "mail"
 CAP_BROWSER = "browser"
+CAP_RESEARCH = "research"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -207,6 +208,13 @@ class BrowserCapability(Protocol):
     def screenshot(self, url: str, path: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class ResearchCapability(Protocol):
+    """Autonomous gather → verify → decide research loop (S21)."""
+
+    def research(self, objective: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -352,6 +360,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Render a URL in a headless browser (JS-executed) and extract text/links; screenshot.",
         "Read JS-rendered pages plain fetch can't; read-only navigation.",
         "S20",
+    ),
+    CAP_RESEARCH: CapabilitySpec(
+        CAP_RESEARCH,
+        ResearchCapability,
+        "Run an autonomous gather→verify→decide research loop and emit a verified report.",
+        "Turns the tools + Verification Engine into a self-directing researcher.",
+        "S21",
     ),
 }
 

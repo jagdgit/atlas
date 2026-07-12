@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, TYPE_CHECKING
 
 from atlas.scheduler.handlers import HandlerRegistry, TaskHandler
@@ -39,6 +40,7 @@ class SchedulerService:
         workers: int = 2,
         poll_interval: float = 1.0,
         backoff_base: float = 2.0,
+        drain_timeout: float = 30.0,
         logger: logging.Logger | None = None,
     ) -> None:
         self._repo = task_repo
@@ -47,6 +49,7 @@ class SchedulerService:
         self._workers = workers
         self._poll_interval = poll_interval
         self._backoff_base = backoff_base
+        self._drain_timeout = drain_timeout
         self._logger = logger or logging.getLogger("atlas.scheduler")
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -93,16 +96,36 @@ class SchedulerService:
             self._threads.append(thread)
 
     def stop(self) -> None:
+        """Graceful drain (S22): stop claiming new tasks immediately, then give the
+        in-flight task on each worker up to ``drain_timeout`` (total budget) to
+        finish before abandoning it. A worker only claims new work when ``_stop`` is
+        clear, so setting it here guarantees no new task starts during the drain.
+        """
         self._stop.set()
+        deadline = time.monotonic() + self._drain_timeout
         for thread in self._threads:
-            thread.join(timeout=5)
+            remaining = max(0.0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
+        abandoned = [t for t in self._threads if t.is_alive()]
+        if abandoned:
+            # In-flight tasks stay `running` in the DB and are recovered on next boot.
+            self._logger.warning(
+                "drain timeout (%.0fs): %d task(s) still running, abandoning "
+                "(will recover on restart)",
+                self._drain_timeout, len(abandoned),
+            )
         self._threads.clear()
 
     def health_check(self) -> HealthStatus:
         alive = sum(1 for t in self._threads if t.is_alive())
-        healthy = alive == self._workers
         detail = f"{alive}/{self._workers} workers alive"
-        return HealthStatus(healthy=healthy, detail=detail, data={"workers": alive})
+        data = {"workers": alive, "configured": self._workers}
+        if alive == self._workers:
+            return HealthStatus.ok(detail, **data)
+        if alive > 0:
+            # Some workers died but the pool still drains tasks — degraded, not down.
+            return HealthStatus.degraded_status(detail, **data)
+        return HealthStatus.fail(detail, **data)
 
     # --- internals ------------------------------------------------------
     def _worker_loop(self, worker_id: str) -> None:

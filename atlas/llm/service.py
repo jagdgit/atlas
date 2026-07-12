@@ -175,18 +175,21 @@ class LLMService:
             role: self._model_available(name, models)
             for role, name in sorted(self._roles.items())
         }
-        return HealthStatus(
-            healthy=chat_ok,
-            detail=detail,
-            data={
-                "models": models,
-                "chat_model_ready": chat_ok,
-                "embedding_model_ready": embed_ok,
-                "roles": self._roles,
-                "roles_ready": role_status,
-                "max_concurrency": self._max_concurrency,
-            },
-        )
+        data = {
+            "models": models,
+            "chat_model_ready": chat_ok,
+            "embedding_model_ready": embed_ok,
+            "roles": self._roles,
+            "roles_ready": role_status,
+            "max_concurrency": self._max_concurrency,
+        }
+        # Chat missing ⇒ can't do the main job (failed). Chat present but embedding
+        # not pulled ⇒ up but below full capability (degraded, S22), not a failure.
+        if not chat_ok:
+            return HealthStatus.fail(detail, **data)
+        if not embed_ok:
+            return HealthStatus.degraded_status(detail, **data)
+        return HealthStatus.ok(detail, **data)
 
     # --- internals ------------------------------------------------------
     @staticmethod

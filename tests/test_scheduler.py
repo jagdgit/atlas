@@ -143,6 +143,74 @@ def test_backoff_grows_exponentially():
     assert delays == [2.0, 16.0]  # 2*2^0, 2*2^3
 
 
+# --- graceful drain (S22, real worker threads, no DB) --------------------
+class DrainRepo(FakeRepo):
+    """Serves exactly one task, then None — so a worker runs it once and idles."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._served = False
+
+    def recover_interrupted(self) -> int:
+        return 0
+
+    def claim_next(self, worker_id):
+        if self._served:
+            return None
+        self._served = True
+        return _task(task_type="slow")
+
+
+def test_stop_drains_inflight_task():
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+    repo = DrainRepo()
+    handlers = HandlerRegistry()
+
+    def _slow(_payload):
+        started.set()
+        release.wait(timeout=5)
+        return {"done": True}
+
+    handlers.register("slow", _slow)
+    svc = SchedulerService(repo, handlers, events=None, workers=1,
+                           poll_interval=0.02, drain_timeout=5.0)
+    svc.start()
+    assert started.wait(timeout=2), "worker never picked up the task"
+    release.set()  # let the in-flight task finish during the drain window
+    svc.stop()
+    # Drain waited for completion rather than abandoning it.
+    assert repo.completed, "in-flight task was not allowed to finish"
+
+
+def test_stop_abandons_after_drain_timeout():
+    import threading
+
+    started = threading.Event()
+    never = threading.Event()  # never set → the task blocks past the drain budget
+    repo = DrainRepo()
+    handlers = HandlerRegistry()
+
+    def _stuck(_payload):
+        started.set()
+        never.wait(timeout=5)
+        return {"done": True}
+
+    handlers.register("slow", _stuck)
+    svc = SchedulerService(repo, handlers, events=None, workers=1,
+                           poll_interval=0.02, drain_timeout=0.2)
+    svc.start()
+    assert started.wait(timeout=2)
+    t0 = time.time()
+    svc.stop()  # should give up after ~drain_timeout, not hang
+    elapsed = time.time() - t0
+    assert elapsed < 2.0
+    assert not repo.completed  # task was abandoned (recovered on next boot)
+    never.set()  # unblock the abandoned thread so it can exit cleanly
+
+
 # --- integration (real DB) ----------------------------------------------
 def _db_or_skip() -> DatabaseManager:
     # Fast probe (2s) so the suite doesn't hang on the pool's 30s timeout

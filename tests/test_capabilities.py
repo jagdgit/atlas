@@ -262,3 +262,22 @@ def test_browser_capability_contract_verified(tmp_path):
     assert reg.verify(CAP_BROWSER) is True
     assert CAPABILITY_CATALOG[CAP_BROWSER].contract is BrowserCapability
     assert CAPABILITY_CATALOG[CAP_BROWSER].since == "S20"
+
+
+def test_research_capability_contract_verified():
+    from atlas.capabilities import CAP_RESEARCH, ResearchCapability
+    from atlas.reports.generator import ReportGenerator
+    from atlas.reports.service import ReportService
+    from atlas.research.service import ResearchService
+    from atlas.verification.engine import VerificationEngine
+    from atlas.verification.service import VerificationService
+
+    verification = VerificationService(VerificationEngine())
+    service = ResearchService(verification, ReportService(verification, ReportGenerator()))
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_RESEARCH, service, contract=ResearchCapability, kind="service",
+    )
+    assert reg.verify(CAP_RESEARCH) is True
+    assert CAPABILITY_CATALOG[CAP_RESEARCH].contract is ResearchCapability
+    assert CAPABILITY_CATALOG[CAP_RESEARCH].since == "S21"
