@@ -370,6 +370,10 @@ class ResearchConfig(BaseModel):
     max_search_iterations: int = 20
     numeric_tolerance: float = 0.15  # relative window for "values agree"
     per_query: int = 5               # sources gathered per search in the research loop
+    # Stage 3 (D3.2): hard cap on documents actually acquired + read per job. When the
+    # cap is hit with an unmet evidence gap, Atlas *recommends* further reading (C5)
+    # rather than reading unboundedly on CPU-only hardware.
+    max_documents: int = 12
 
 
 class LearningConfig(BaseModel):

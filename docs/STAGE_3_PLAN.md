@@ -583,9 +583,17 @@ keeps the full suite green and adds a real-run acceptance check.
    The Console renders a live, phase-coloured feed with a pulsing "running" dot, refreshed by the
    existing 2s poll. Landed early so we can *watch* the rest of Stage 3 build itself out. Full
    suite green (824 passed).
-3. **Acquisition + Reader, tiered** (C1 / D3.1 Tier 1→2, D3.3) — wire `web.download` +
-   `extract()`/OCR/transcript; **abstract/metadata first**, full text when open-access;
-   **pause & ask** on login walls (you provide the doc or skip); artifacts to the workspace.
+3. **Acquisition + Reader, tiered** (C1 / D3.1 Tier 1→2, D3.3) — ✅ **SHIPPED (2026-07-12).**
+   New `atlas/research/reader.py` (`Document` — one source-agnostic shape: text + labeled
+   `sections[]` via a deterministic `split_sections` heuristic for Step-4 section scoping —
+   reusing the existing `extract()` extractors + HTML fallback; `Reader.read_path`/`read_text`).
+   New `atlas/research/acquire.py` (`Librarian`: classify → prioritize **open-access first, then
+   by evidence level** → fetch via the resilient `net.FetchClient` → save to `downloads/` →
+   normalize → write `documents/` → record manifest + activity feed). **Paywall/login → blocked**
+   with an honest reason (never fabricated), video skipped, per-run **document cap** (D3.2,
+   `research.max_documents=12`). Wired into bootstrap + registered as `librarian` for the Step-5
+   loop rebuild. Full suite green (842 passed; +18 tests). *(Tier-1 abstract-first already comes
+   from scholar metadata; live use in the loop lands with Step 5 per A1=(C).)*
 4. **Claim Extraction** (C2 / D3.1) — the hybrid extractor (deterministic + bounded LLM),
    section-scoped, run as **queued per-document steps** (progress + resumable). Biggest new
    subsystem.

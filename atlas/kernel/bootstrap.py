@@ -280,6 +280,31 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # Autonomous Research Orchestration (Sprint 21, D8/§5a): the gather→verify→decide
     # loop. Resolves the scholar/search capabilities lazily (they register later as
     # plugins) so a disabled provider degrades to `unavailable` rather than crashing.
+    # Acquisition + Reader (Stage 3, Step 3 / §5d–5e, C1): fetch + read the top
+    # sources into normalized Documents using the resilient net layer. Registered in
+    # the container so the research loop (Step 5) can acquire real full text — not just
+    # search snippets — with open-access-first + honest paywall blocking (D3.3).
+    from atlas.net import FetchClient
+    from atlas.research.acquire import Librarian
+
+    fetch_client = FetchClient(
+        user_agent=cfg.net.user_agent,
+        timeout=cfg.net.timeout,
+        max_bytes=cfg.net.max_bytes,
+        per_domain_delay=cfg.net.per_domain_delay,
+        max_retries=cfg.net.max_retries,
+        backoff_base=cfg.net.backoff_base,
+        backoff_cap=cfg.net.backoff_cap,
+        jitter=cfg.net.jitter,
+        respect_robots=cfg.net.respect_robots,
+        cache_ttl=cfg.net.cache_ttl,
+    )
+    librarian = Librarian(
+        fetch_client,
+        max_documents=cfg.research.max_documents,
+        logger=get_logger("atlas.research.acquire"),
+    )
+
     research_service = ResearchService(
         verification_service,
         report_service,
@@ -444,6 +469,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("verification", verification_service)
     container.register_instance("reports", report_service)
     container.register_instance("research", research_service)
+    container.register_instance("librarian", librarian)
     container.register_instance("learning", learning_service)
     container.register_instance("intelligence", intelligence_service)
     container.register_instance("ingestion", ingestion_source)

@@ -145,6 +145,7 @@ research:
   max_search_iterations: 20
   numeric_tolerance: 0.15   # relative window within which values "agree"
   per_query: 5              # sources gathered per search in the research loop (S21)
+  max_documents: 12         # Stage 3 (D3.2): cap on documents acquired + read per job
 
 learning:
   # Continuous Learning (S18b, D11/§5d). Atlas never silently learns: completed
