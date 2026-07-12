@@ -33,6 +33,7 @@ CAP_TRANSCRIPT = "transcript"
 CAP_CODE = "code"
 CAP_PYTHON = "python"
 CAP_LEARNING = "learning"
+CAP_INTELLIGENCE = "intelligence"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -148,6 +149,17 @@ class LearningCapability(Protocol):
     def recall(self, query: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class IntelligenceCapability(Protocol):
+    """Engineering Intelligence: learn repos (L2), connect/search (L3), generalize
+    patterns (L4) and recommend (L5) over the Code store (S19, §5d)."""
+
+    def learn_repository(self, root: str, *args: Any, **kwargs: Any) -> Any: ...
+    def generalize(self, *args: Any, **kwargs: Any) -> Any: ...
+    def recommend(self, *args: Any, **kwargs: Any) -> Any: ...
+    def search(self, query: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -251,6 +263,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Promote completed activities into the five stores, governed & reversible.",
         "Continuous learning: Atlas compounds over time (§5d); Experience store.",
         "S18",
+    ),
+    CAP_INTELLIGENCE: CapabilitySpec(
+        CAP_INTELLIGENCE,
+        IntelligenceCapability,
+        "Learn repos (L2), connect (L3), generalize patterns (L4), recommend (L5).",
+        "Engineering Intelligence: Atlas learns *you* — the Personal Coding Assistant.",
+        "S19",
     ),
 }
 

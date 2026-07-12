@@ -56,6 +56,8 @@ from atlas.api.schemas import (
     CodeSymbolsRequest,
     ExperienceRequest,
     LearningApplyRequest,
+    LearnRepositoryRequest,
+    RecommendRequest,
     PythonRunRequest,
     ReportRequest,
     ScholarSearchRequest,
@@ -368,6 +370,63 @@ def learning_experiences(request: Request, q: str | None = None, limit: int = 50
 def learning_remember(body: ExperienceRequest, request: Request) -> dict:
     learning = _app(request).container.resolve("learning")
     return learning.remember_experience(**body.model_dump(exclude_none=True))
+
+
+@v1_router.post("/intelligence/repositories", tags=["intelligence"])
+def intel_learn(body: LearnRepositoryRequest, request: Request) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return intel.learn_repository(body.root, policy=body.policy, apply=body.apply)
+
+
+@v1_router.get("/intelligence/repositories", tags=["intelligence"])
+def intel_repositories(request: Request, limit: int = 100) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return {"repositories": intel.list_repositories(limit=limit)}
+
+
+@v1_router.get("/intelligence/repositories/{repo_id}", tags=["intelligence"])
+def intel_repository(repo_id: str, request: Request) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    rec = intel.get_repository(repo_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="repository not found")
+    return rec
+
+
+@v1_router.get("/intelligence/search", tags=["intelligence"])
+def intel_search(request: Request, q: str = "", limit: int = 20) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return intel.search(q, limit=limit)
+
+
+@v1_router.get("/intelligence/connections", tags=["intelligence"])
+def intel_connections(request: Request) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return intel.connections()
+
+
+@v1_router.post("/intelligence/generalize", tags=["intelligence"])
+def intel_generalize(request: Request) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return intel.generalize()
+
+
+@v1_router.get("/intelligence/patterns", tags=["intelligence"])
+def intel_patterns(request: Request, limit: int = 100) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return {"patterns": intel.patterns(limit=limit)}
+
+
+@v1_router.post("/intelligence/recommend", tags=["intelligence"])
+def intel_recommend(body: RecommendRequest, request: Request) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return intel.recommend(body.context, limit=body.limit)
+
+
+@v1_router.get("/intelligence/profile", tags=["intelligence"])
+def intel_profile(request: Request) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return intel.profile()
 
 
 @v1_router.post("/verify", response_model=VerifyResponse, tags=["verification"])

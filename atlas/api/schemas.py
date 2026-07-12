@@ -269,6 +269,19 @@ class ExperienceRequest(BaseModel):
     policy: str | None = None
 
 
+class LearnRepositoryRequest(BaseModel):
+    # Learn a repository into the Code store (S19, L2).
+    root: str = Field(min_length=1)
+    policy: str | None = None
+    apply: bool = True
+
+
+class RecommendRequest(BaseModel):
+    # Personal Coding Assistant recommendations (S19, L5).
+    context: str = ""
+    limit: int | None = Field(default=None, ge=1, le=50)
+
+
 class PythonRunRequest(BaseModel):
     code: str = Field(min_length=1)
     timeout: float | None = Field(default=None, gt=0)

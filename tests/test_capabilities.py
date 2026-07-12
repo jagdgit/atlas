@@ -170,3 +170,20 @@ def test_learning_capability_contract_verified():
     assert reg.verify(CAP_LEARNING) is True
     assert CAPABILITY_CATALOG[CAP_LEARNING].contract is LearningCapability
     assert CAPABILITY_CATALOG[CAP_LEARNING].since == "S18"
+
+
+def test_intelligence_capability_contract_verified():
+    from atlas.capabilities import CAP_INTELLIGENCE, IntelligenceCapability
+    from atlas.intelligence.service import IntelligenceService
+    from atlas.services.learning_service import LearningService
+    from tests.test_intelligence import FakeCodeService, FakeIntelRepo
+    from tests.test_learning import FakeLearningRepo
+
+    svc = IntelligenceService(
+        FakeCodeService(), FakeIntelRepo(), LearningService(FakeLearningRepo())
+    )
+    reg = CapabilityRegistry()
+    reg.register(CAP_INTELLIGENCE, svc, contract=IntelligenceCapability, kind="service")
+    assert reg.verify(CAP_INTELLIGENCE) is True
+    assert CAPABILITY_CATALOG[CAP_INTELLIGENCE].contract is IntelligenceCapability
+    assert CAPABILITY_CATALOG[CAP_INTELLIGENCE].since == "S19"

@@ -25,6 +25,8 @@ from atlas.events.handlers import WILDCARD, LoggingHandler
 from atlas.execution.executor import ToolExecutor
 from atlas.code.parser import CodeParser
 from atlas.code.service import CodeService
+from atlas.intelligence.service import CodeStoreSink, IntelligenceService
+from atlas.models.learning import STORE_CODE
 from atlas.sandbox.backends import create_backend
 from atlas.sandbox.service import PythonSandboxService
 from atlas.reports.generator import ReportGenerator
@@ -53,6 +55,7 @@ from atlas.repositories.conversation_repo import ConversationRepository
 from atlas.repositories.document_repo import DocumentRepository
 from atlas.repositories.embedding_repo import EmbeddingRepository
 from atlas.repositories.health_repo import HealthRepository
+from atlas.repositories.intelligence_repo import IntelligenceRepository
 from atlas.repositories.job_repo import JobRepository
 from atlas.repositories.learning_repo import LearningRepository
 from atlas.repositories.memory_repo import MemoryRepository
@@ -345,6 +348,20 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         params={"root": "path to a repository root"}, plugin="code",
     )
 
+    # Engineering Intelligence (Sprint 19, D11/§5d): higher-order learners over the
+    # Code store — learn repos (L2), connect/search (L3), generalize patterns (L4),
+    # recommend (L5). Repository learning is promoted through the S18b ledger via a
+    # store sink registered on the learning service ("adds sinks, not schema").
+    intelligence_repo = IntelligenceRepository(db_manager)
+    intelligence_service = IntelligenceService(
+        code_service,
+        intelligence_repo,
+        learning_service,
+        cfg.intelligence,
+        logger=get_logger("atlas.intelligence"),
+    )
+    learning_service.register_sink(STORE_CODE, CodeStoreSink(intelligence_repo))
+
     # Python Execution Sandbox (Sprint 16, D6 — hybrid): run analysis code in a
     # resource-limited child interpreter (subprocess default; docker swappable) with
     # network disabled by default; computed results can become L5 evidence (§5a.6).
@@ -401,6 +418,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("verification", verification_service)
     container.register_instance("reports", report_service)
     container.register_instance("learning", learning_service)
+    container.register_instance("intelligence", intelligence_service)
     container.register_instance("ingestion", ingestion_source)
 
     # Advertise capabilities so agents can query the kernel instead of importing
@@ -440,6 +458,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register(
         "learning", learning_service, contract=caps.LearningCapability, kind="service"
     )
+    capabilities.register(
+        "intelligence", intelligence_service,
+        contract=caps.IntelligenceCapability, kind="service",
+    )
     capabilities.register("ingestion", ingestion_source, kind="service")
 
     # 6. Core services (registration order = start order)
@@ -458,6 +480,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(verification_service)
     registry.register(report_service)
     registry.register(learning_service)
+    registry.register(intelligence_service)
     registry.register(ingestion_source)
 
     # 7. Application object — holds the shared registries by reference, so it can

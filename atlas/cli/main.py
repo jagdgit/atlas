@@ -210,6 +210,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_learn.add_argument("--level", type=int, help="Learning Level (1-5) when applying")
     p_learn.add_argument("--limit", type=int, default=20)
 
+    p_intel = sub.add_parser(
+        "intel", help="engineering intelligence: learn repos, generalize, recommend (S19)"
+    )
+    p_intel.add_argument(
+        "action",
+        choices=["learn", "repos", "search", "connections", "generalize",
+                 "patterns", "recommend", "profile"],
+        help="learn <path>|repos|search <q>|connections|generalize|patterns|"
+             "recommend [context]|profile",
+    )
+    p_intel.add_argument("target", nargs="?", help="repo path, query, or context")
+    p_intel.add_argument("--policy", help="policy for learned repo (default: project)")
+    p_intel.add_argument("--limit", type=int, default=20)
+
     sub.add_parser("backup", help="run an on-demand database backup (pg_dump)")
 
     return parser
@@ -751,6 +765,84 @@ def cmd_learn(args: argparse.Namespace, app: "Application | None" = None) -> int
     return 2
 
 
+def cmd_intel(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    intel = app.container.resolve("intelligence")
+    action = args.action
+
+    if action == "learn":
+        if not args.target:
+            print("usage: atlas intel learn <repo_path>")
+            return 2
+        result = intel.learn_repository(args.target, policy=args.policy)
+        if result.get("outcome") != "ok":
+            print(f"error: {result.get('reason')}")
+            return 1
+        repo = result.get("repository") or {}
+        print(f"learned {repo.get('name', args.target)}: "
+              f"{repo.get('file_count', 0)} files, {repo.get('symbol_count', 0)} symbols")
+        print(f"  {repo.get('summary', '')}")
+        return 0
+
+    if action == "repos":
+        repos = intel.list_repositories(limit=args.limit)
+        if not repos:
+            print("no repositories learned yet")
+            return 0
+        for r in repos:
+            print(f"{r['id']}  {r['name']}  ({r['file_count']} files) "
+                  f"{', '.join(r['frameworks'][:3])}")
+        return 0
+
+    if action == "search":
+        out = intel.search(args.target or "", limit=args.limit)
+        for r in out["repositories"]:
+            print(f"{r['name']}  {', '.join(r['frameworks'][:3])}")
+        for e in out["connections"]:
+            print(f"  ~ {e['a']} <-> {e['b']}: {', '.join(e['shared_frameworks'] or e['shared_languages'])}")
+        return 0
+
+    if action == "connections":
+        for e in intel.connections()["connections"]:
+            print(f"{e['a']} <-> {e['b']}: {', '.join(e['shared_frameworks'] or e['shared_languages'])}")
+        return 0
+
+    if action == "generalize":
+        out = intel.generalize()
+        if out.get("outcome") != "ok":
+            print(f"need at least {out.get('min_repos')} repos "
+                  f"(have {out.get('total_repos')})")
+            return 0
+        for p in out["patterns"]:
+            print(f"{p['prevalence']:.0%}  {p['name']} ({p['category']}) "
+                  f"— {p['repo_count']}/{p['total_repos']}")
+        return 0
+
+    if action == "patterns":
+        for p in intel.patterns(limit=args.limit):
+            print(f"{p['prevalence']:.0%}  {p['name']} ({p['category']})")
+        return 0
+
+    if action == "recommend":
+        out = intel.recommend(args.target or "", limit=args.limit)
+        if not out["recommendations"]:
+            print("no recommendations yet — learn and generalize some repos first")
+            return 0
+        for r in out["recommendations"]:
+            print(f"- {r['recommendation']}")
+        return 0
+
+    if action == "profile":
+        p = intel.profile()
+        print(p["summary"])
+        print(f"  repositories: {p['repositories']}")
+        print(f"  languages: {', '.join(p['languages'])}")
+        print(f"  frameworks: {', '.join(p['frameworks'])}")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     backup = app.container.resolve("backup")
@@ -786,6 +878,7 @@ _HANDLERS = {
     "report": cmd_report,
     "verify": cmd_verify,
     "learn": cmd_learn,
+    "intel": cmd_intel,
     "backup": cmd_backup,
 }
 

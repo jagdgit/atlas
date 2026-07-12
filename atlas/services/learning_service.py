@@ -59,6 +59,15 @@ class LearningService:
         self._default_level = getattr(config, "default_level", 1)
         self._recall_k = getattr(config, "recall_k", 5)
         self._logger = logger or logging.getLogger("atlas.learning")
+        # Store sinks (S19): a sink knows how to materialise/deactivate a record in a
+        # non-Experience store (e.g. the Code store). Registering one is how "promotion
+        # into the other stores" happens through this single governed ledger — the
+        # schema stays fixed; S19+ "adds sinks, not schema".
+        self._sinks: dict[str, Any] = {}
+
+    def register_sink(self, store: str, sink: Any) -> None:
+        """Attach a store sink with ``apply(payload) -> ref_id`` + ``revert(ref_id)``."""
+        self._sinks[store] = sink
 
     # --- observing completed activity ----------------------------------
     def observe_job(self, detail: dict[str, Any]) -> dict[str, Any] | None:
@@ -93,6 +102,29 @@ class LearningService:
             return None
 
     # --- proposals & governance ----------------------------------------
+    def propose(
+        self,
+        source_type: str,
+        store: str,
+        *,
+        summary: str,
+        reason: str,
+        origin: str,
+        payload: dict[str, Any],
+        source_id: str | None = None,
+        policy: str | None = None,
+        level: int | None = None,
+        project: str | None = None,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Public entry for other learners (e.g. Engineering Intelligence) to record a
+        governed learning event. ``apply=True`` promotes it at once (an explicit act)."""
+        return self._propose(
+            source_type, store, source_id=source_id, summary=summary, reason=reason,
+            origin=origin, payload=payload, policy=policy, level=level, project=project,
+            force_apply=apply,
+        )
+
     def _propose(
         self,
         source_type: str,
@@ -106,6 +138,7 @@ class LearningService:
         policy: str | None = None,
         level: int | None = None,
         project: str | None = None,
+        force_apply: bool = False,
     ) -> dict[str, Any]:
         event = self._repo.record_event(
             source_type,
@@ -120,7 +153,7 @@ class LearningService:
             project=project,
             metadata={"payload": payload},
         )
-        if self._auto_apply:
+        if self._auto_apply or force_apply:
             return self.apply(event.id)
         return {"event": event.as_dict(), "applied": False}
 
@@ -141,8 +174,8 @@ class LearningService:
             raise ValueError(f"unknown policy '{policy}'")
 
         ref_id = None
+        payload = (event.metadata or {}).get("payload", {})
         if event.store == STORE_EXPERIENCE:
-            payload = (event.metadata or {}).get("payload", {})
             exp = self._repo.add_experience(
                 title=payload.get("title", ""),
                 problem=payload.get("problem", ""),
@@ -156,12 +189,14 @@ class LearningService:
                 policy=policy or event.policy,
             )
             ref_id = exp.id
+        elif event.store in self._sinks:
+            # A registered store sink (e.g. the S19 Code store) materialises the record
+            # and returns its id, so promotion stays governed through this one ledger.
+            ref_id = self._sinks[event.store].apply(payload, policy=policy or event.policy)
         else:
-            # Other stores (knowledge/code/memory graphs) are wired in S19; the
-            # ledger records the applied decision so it stays explainable/reversible.
-            self._logger.info(
-                "applied learning to store '%s' (no concrete sink yet, S19)", event.store
-            )
+            # No concrete sink for this store yet; the ledger still records the applied
+            # decision so it stays explainable/reversible.
+            self._logger.info("applied learning to store '%s' (no sink)", event.store)
 
         self._repo.set_event_status(
             event.id, EVENT_APPLIED, policy=policy, level=level, ref_id=ref_id
@@ -177,6 +212,8 @@ class LearningService:
         if event.status == EVENT_APPLIED and event.ref_id:
             if event.store == STORE_EXPERIENCE:
                 self._repo.set_experience_status(event.ref_id, EXP_REVERTED)
+            elif event.store in self._sinks:
+                self._sinks[event.store].revert(event.ref_id)
         self._repo.set_event_status(event.id, EVENT_REVERTED, reviewed=True)
         reverted = self._repo.get_event(event.id)
         return {"event": reverted.as_dict() if reverted else None, "reverted": True}

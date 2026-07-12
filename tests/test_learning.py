@@ -268,6 +268,40 @@ def test_health_reports_counts():
     assert "experience" in status.detail
 
 
+# --- store sinks (S19: promotion into other stores, governed) ------------
+class _RecordingSink:
+    def __init__(self):
+        self.records = {}
+        self._seq = 0
+        self.reverted = []
+
+    def apply(self, payload, *, policy=None):
+        self._seq += 1
+        rid = f"rec-{self._seq}"
+        self.records[rid] = {"payload": payload, "policy": policy}
+        return rid
+
+    def revert(self, ref_id):
+        self.reverted.append(ref_id)
+
+
+def test_sink_routes_apply_and_revert_for_nonexperience_store():
+    repo, svc = _svc()
+    sink = _RecordingSink()
+    svc.register_sink("code", sink)
+    result = svc.propose(
+        "repo", "code", summary="learn X", reason="r", origin="/x",
+        payload={"name": "X"}, level=2, apply=True,
+    )
+    assert result["applied"] is True
+    event = result["event"]
+    assert event["store"] == "code"
+    assert event["ref_id"] in sink.records
+    # revert calls the sink
+    svc.revert(event["id"])
+    assert sink.reverted == [event["ref_id"]]
+
+
 # --- pure extractor ------------------------------------------------------
 def test_experience_from_job_partitions_actions_and_mistakes():
     payload = _experience_from_job(

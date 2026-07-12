@@ -1,14 +1,15 @@
 # Atlas — Stage 2 Plan & Discussion (Research, Execution & Continuous Learning System)
 
-> **Status:** 🟢 BUILDING — **Sprints 10–18b shipped ✅**
+> **Status:** 🟢 BUILDING — **Sprints 10–19 shipped ✅**
 > (Chat-Mode spine + capability contracts + **Job Engine** + **Document Reader** +
 > **resilient net layer** + **Web Search + Downloader** + **Code Understanding** +
 > **Verification Engine + Evidence Graph** + **Python Execution Sandbox** +
 > **Non-blocking HITL & Report Generator** + **Deeper Research: Scholarly + YouTube** +
-> **Learning Pipeline (Experience store, governed)**;
-> 555 tests).
+> **Learning Pipeline (Experience store, governed)** +
+> **Engineering Intelligence (Code store L2–L5, Personal Coding Assistant)**;
+> 573 tests).
 > Plan finalized (D1–D13, R1–R4; Q1–Q10 resolved).
-> Next: **S19 — Engineering Intelligence** (D11/§5d: Learning Levels L2–L5, promotion into the other stores).
+> Next: **S20 — Tier 2/3 tools** (browser automation, OCR, Git, DB, Email/LinkedIn — as needed).
 > **Started:** 2026-07-11
 > **Source vision:** `docs/stage-2.txt` (the "inflection point" discussion) +
 > the Continuous-Learning extension (§1b, D11).
@@ -157,9 +158,9 @@ Honest mapping of current assets to Stage 2 needs:
 | Human-in-the-loop | ⚠️ scheduler states (pending/claimed/running/…) | No `waiting_for_user` + notify + resume flow |
 | Determinism | ✅ temp=0 defaults, durable ret/recovery | No cross-check / verify pass; no report pipeline |
 | Conversation | ✅ `conversation.*` (S10: sessions/messages, context) | (store #5 of 5; see §5d) |
-| **Code store** | ⚠️ none yet | `CodeCapability` structure/graph (S14) → a queryable code store (§5d) |
-| **Experience store** | ⚠️ none yet | The missing store: problem→diagnosis→commands→mistakes→solution→lessons (S18+, §5d) |
-| **Learning** | ⚠️ none yet | `LearningCapability` + pipeline + governance; promote activities into the 5 stores (S18–S19, §5d) |
+| **Code store** | ✅ `intelligence` cap (S19: `learning.repositories`/`patterns`) | Learned-repo structure + generalized patterns; graph-level connect deepens later |
+| **Experience store** | ✅ `learning.experiences` (S18b) | problem→diagnosis→commands→mistakes→solution→lessons, lexical recall |
+| **Learning** | ✅ `learning` + `intelligence` caps (S18b/S19, §5d) | Governed ledger + Experience & Code stores; knowledge/memory sinks land as needed |
 | API/CLI/auth/telemetry | ✅ | Add job + conversation endpoints as those land |
 
 **Takeaway:** Stage 2 is mostly **new orchestration on top of solid substrate**, not
@@ -686,7 +687,7 @@ experience store). Every earlier sprint is designed to *feed* these (see the roa
 | **S17** ✅ | **Non-blocking HITL & Reports** | `blocked`-step queue (`list_blocked`/`GET /v1/jobs/blocked`/`atlas jobs --blocked`) + event notifications on block/finalize + `atlas job resume` **(R3, never stalls the job)**; **Report Generator** (scientific-review structure, §5a.5) auto-attached on job finalize; `reports` capability, `POST /v1/report`, `atlas report` | usable research jobs |
 | **S18a** ✅ | **Deeper Research Sources** | **Scholarly search** (`scholar` cap: arXiv=L3 + Semantic Scholar=L4, provider fallback) producing **graded evidence Sources** for the Verification Engine (§5a); **YouTube transcripts** (`transcript` cap, L1) over the resilient net layer; planner `scholar_search`/`youtube_transcript` intents; `POST /v1/scholar` + `/v1/youtube/transcript`, `atlas scholar`/`youtube` | higher-quality evidence |
 | **S18b** ✅ | **Learning Pipeline** | **Continuous Learning** (D11, §5d): governed, explainable, **reversible** learning ledger (`learning` cap) — completed jobs → *proposed* `LearningEvent`s (never silent); **Experience store** (problem→diagnosis→actions→mistakes→solution→lessons) with lexical **recall**; `propose→apply→revert` + policy/Learning-Level; migration 0011; `/v1/learning/*`, `atlas learn` | compounding knowledge |
-| **S19** | **Engineering Intelligence** *(NEW)* | Repository Learning, Code-Style Learning, Architecture Learning, **Engineering Pattern Extraction** (§5b.1 layer 6), Project Knowledge Graph, Cross-project Search, **Personal Coding Assistant**, **Engineering Experience Store** (D11, §5d) | Atlas learns *you* (L4–L5) |
+| **S19** ✅ | **Engineering Intelligence** | `intelligence` cap over the **Code store** (migration 0012): **L2** `learn_repository` (repo map + patterns + symbols → structure, promoted through the S18b ledger via a **store sink** — governed & reversible); **L3** cross-project `search` + `connections` (shared frameworks/langs); **L4** `generalize` (patterns/frameworks/languages you *always* use, prevalence-scored materialised view); **L5** `recommend` + `profile` (the **Personal Coding Assistant**); `/v1/intelligence/*`, `atlas intel` | Atlas learns *you* (L4–L5) |
 | **S20** | **Tier 2/3 tools (as needed)** | Browser automation (Playwright), OCR, Git, DB, Email/LinkedIn | full toolbelt |
 | **Web UI** | **Conversational frontend** | local frontend over REST (auth/CORS ready); can be pulled forward after S10 if a visual chat surface is wanted sooner | — |
 
@@ -1271,7 +1272,64 @@ and *learning is governed*.
 - [x] Bootstrap wiring + `JobService.observe_job` on finalize; `LearningConfig` + `learning:` defaults.
 - [x] `/v1/learning/*` endpoints + `atlas learn` CLI.
 - [x] Hermetic tests (service governance/apply/revert/recall/explain, repo-fake, job-observe, api, cli, caps). **555 tests pass (+23).**
-- [ ] **Next — S19:** **Engineering Intelligence** — promote into the other stores + Learning Levels L2–L5 (Understand/Connect/Generalize/Recommend).
+- [x] **Done → S19:** **Engineering Intelligence** (§6l).
+
+---
+
+## 6l. Sprint 19 — Engineering Intelligence (the Personal Coding Assistant) (✅ DONE)
+
+Atlas climbs the Learning-Level ladder (§5d.6) over the **Code store** — from merely
+*storing* repositories to *understanding*, *connecting*, *generalizing*, and finally
+*recommending*. The headline architectural move realises the S18b promise literally:
+**"add sinks, not schema."** The one governed ledger (`learning.events`) gains a
+pluggable **store sink**, and the Code store becomes the first non-Experience store
+promoted through it — so repository learning is as *governed, explainable and
+reversible* as everything else.
+
+- **Store sinks on `LearningService`.** `register_sink(store, sink)` attaches a
+  materialiser with `apply(payload) -> ref_id` + `revert(ref_id)`. `apply`/`revert`
+  now route non-Experience stores through their sink; the Experience store stays the
+  built-in one. `propose(..., apply=True)` is the public entry other learners use to
+  record a governed event and (for an explicit act) promote it at once.
+- **The Code store (migration 0012).** `learning.repositories` (L2 — a repo distilled
+  to languages/frameworks/entry points/dependencies/graph size/**per-repo patterns**;
+  re-learning a root replaces its active row) and `learning.patterns` (L4 — patterns
+  **generalized across** repos, prevalence-scored; a recomputable materialised view).
+- **`IntelligenceService` = the `intelligence` capability**, over `CodeCapability`
+  (S14) artifacts:
+  - **L2 Understand** — `learn_repository(root)` parses via `CodeService`
+    (`repo_map`+`patterns`+`search_symbols`), builds the structure payload, and
+    promotes it through the ledger (`CodeStoreSink`). Explicit ⇒ applied; still a
+    reversible ledger event. Parsing errors are an `error` outcome, never an exception.
+  - **L3 Connect** — `search(query)` (cross-project retrieval) + `connections()` (link
+    repos sharing frameworks/languages).
+  - **L4 Generalize** — `generalize()` mines the prevalence of each pattern/framework/
+    language across learned repos, keeping those ≥ `generalize_min_prevalence`
+    ("you *always* use the Repository pattern"); persisted via `replace_patterns`.
+  - **L5 Recommend** — `recommend(context)` turns generalizations into proactive advice
+    (auto-generalizing if needed); `profile()` summarises "who you are as an engineer".
+- **Config** `intelligence.*` (`enabled`, `default_policy=project`,
+  `generalize_min_repos`, `generalize_min_prevalence`, `recommend_top_k`). Concrete
+  **`IntelligenceCapability`** contract (catalog `CAP_INTELLIGENCE`, since S19).
+  **Surface:** `POST /v1/intelligence/repositories`, `GET .../repositories[/{id}]`,
+  `GET .../search`, `.../connections`, `POST .../generalize`, `GET .../patterns`,
+  `POST .../recommend`, `GET .../profile`; `atlas intel
+  learn|repos|search|connections|generalize|patterns|recommend|profile`.
+
+> **Design line:** what is *learned* (governed, reversible) is the **repository (L2)**;
+> L3/L4/L5 are **inferences** over that governed data, so they are recomputed views
+> rather than separately-governed truths. This keeps the governance model coherent
+> while still delivering the full "Atlas learns *you*" story.
+
+**Definition of Done (S19)** — all met:
+- [x] Migration 0012 Code store (`learning.repositories` + `learning.patterns`, status-checked, unique-active-root).
+- [x] `LearnedRepository` + `EngineeringPattern` models; `IntelligenceRepository` (repo CRUD + search, pattern replace/list, counts).
+- [x] `LearningService` **store-sink registry** (`register_sink`/`propose`) — governed promotion into non-Experience stores; `CodeStoreSink`.
+- [x] `IntelligenceService` (`intelligence` cap): L2 `learn_repository` / L3 `search`+`connections` / L4 `generalize` / L5 `recommend`+`profile`; honest outcomes.
+- [x] `IntelligenceCapability` contract + catalog (`CAP_INTELLIGENCE`, S19); `intelligence.*` config + defaults; bootstrap wiring + sink registration.
+- [x] `/v1/intelligence/*` endpoints + `atlas intel` CLI.
+- [x] Hermetic tests (L2–L5 ladder, sink routing, repo-fake, code-fake, api, cli, caps). **573 tests pass (+18).**
+- [ ] **Next — S20:** Tier 2/3 tools as needed (browser automation, OCR, Git, DB, Email/LinkedIn).
 
 ---
 
@@ -1317,6 +1375,7 @@ and *learning is governed*.
 | 2026-07-11 | S14 | **Sprint 14 shipped ✅ — Code Understanding (`CodeCapability`, Tier B, D9).** New `atlas/code/`: **Python parsed via stdlib `ast`** (symbols/imports/**call sites**, full fidelity) + **tree-sitter** (`tree-sitter-language-pack`) for JS/TS/TSX/C/C++/Rust/Go/Java/Bash/SQL (symbols+imports); honest per-file outcomes (`ok`/`shallow`/`unsupported`/`error`, R2). **Repo map** (manifests → deps/frameworks/entry points), **symbol index**, **import + cross-file call graph** (Python-first, conservative resolution — builtins ignored, ambiguous counted not guessed), **pattern mining** (Repository/Service/Registry/pytest/Docker/Postgres/UUID/dataclasses/async/framework, evidence-backed → feeds S19). **`CodeService`** = `code` capability: `parse`/`repo_map`/`index`/`search_symbols`/`graph`/`patterns`/`explain`; **code-aware chunking → knowledge** (one chunk per symbol) and **`code`-role LLM `explain`** grounded on structure. Concrete **`CodeCapability`** contract (catalog `CAP_CODE` now provided). `POST /v1/code/*` + `atlas code …`; `code.*` config. Deps `tree-sitter`+`tree-sitter-language-pack`. **421 tests pass (+51).** Next: **S15 Verification & Evidence Graph (D8)**. |
 | 2026-07-11 | S16 | **Sprint 16 shipped ✅ — Python Execution Sandbox (D6, *hybrid*).** New `atlas/sandbox/`: a `SandboxBackend` swap point — **`SubprocessBackend`** (default) runs `python -I -B` in a child with a POSIX `preexec_fn` applying **rlimits** (CPU/`RLIMIT_AS` memory/file size/no-core), a **hard wall-clock timeout** that kills the whole **process group** (`start_new_session`+`killpg`), a **scratch workdir**, a **stripped env**, and (default) an in-interpreter **network block**; **`DockerBackend`** = selectable placeholder that honestly reports unavailable (R2) so stronger isolation drops in later via `sandbox.backend`. `ExecutionResult` (`ok`/`error`/`timeout`/`blocked`, stdout/stderr truncation, `duration_ms`, structured `result` from `result.json`, artifacts) — **never raises** (R2/R3). **`PythonSandboxService`** = `python` capability (`run`/`run_file`, per-run uuid workdir under `paths.data/sandbox`). Planner `run_python` intent (fenced code / "run python…") + `AssistantService._do_run_python` (honest output/error/timeout/blocked) + `JobPlanner` support. Concrete **`PythonExecutionCapability`** (`CAP_PYTHON`, S16). `sandbox.*` config; `POST /v1/python/run` + `atlas python`. **478 tests pass (+34).** Next: **S17 research loop + HITL & reports**. |
 | 2026-07-11 | S15 | **Sprint 15 shipped ✅ — Verification Engine + Evidence Graph (D8/§5a), *the differentiator*.** New `atlas/evidence/` (serialisable **Evidence Graph**: `Source`/`EvidenceItem`/`ClaimValue`/`Claim`/`EvidenceGraph` — claims are persistent + **re-verifiable**) and `atlas/verification/` (pure, no LLM/I/O): **Evidence Levels L1–L5** (quality not count); `convergence()` = largest-cluster agreement ∈ [0,1] (`3.7/3.9/4.0/3.8`→1.0, `2/11/6/4`→low); **calculated confidence** HIGH/MEDIUM/LOW/INSUFFICIENT (0.6·convergence + 0.4·quality, contradiction penalty; single/low-level source never HIGH) with a human `reasoning_trace`; **Evidence Budget** + `decide()` continue/stop w/ explicit unmet criteria (stop on *convergence*, not paper count). **`VerificationService`** = `verification` capability (`verify(graph, budget?)` → per-claim decision), wired in bootstrap; `research.*` config (`ResearchConfig`). `POST /v1/verify` + `atlas verify graph.json`. Scope = engine/graph/budget primitives; live gather→verify→decide loop + scientific-review Report Generator land **S17**, Python results become **L5** at **S16**. **444 tests pass (+23).** Next: **S16 Python Execution Sandbox**. |
+| 2026-07-12 | S19 | **Sprint 19 shipped ✅ — Engineering Intelligence (the Personal Coding Assistant; D11/§5d).** Atlas climbs the Learning Levels over the **Code store**. Headline: **"add sinks, not schema"** made literal — `LearningService` gains a **store-sink registry** (`register_sink`/`propose`); `apply`/`revert` route non-Experience stores through their sink, so the **Code store** is promoted through the *same* governed, reversible ledger as the Experience store. Migration **0012**: `learning.repositories` (L2 — repo distilled to languages/frameworks/entry-points/deps/graph-size/per-repo patterns; unique active root) + `learning.patterns` (L4 — patterns generalized across repos, prevalence-scored view). New `LearnedRepository`/`EngineeringPattern` models + `IntelligenceRepository`. **`IntelligenceService`** = `intelligence` cap over `CodeService` (S14): **L2** `learn_repository` (parse→structure→promote via `CodeStoreSink`; explicit⇒applied, reversible; errors are outcomes not exceptions), **L3** `search`+`connections` (link repos sharing frameworks/langs), **L4** `generalize` (prevalence of patterns/frameworks/languages ≥ threshold — "you *always* use X"), **L5** `recommend`+`profile` (proactive advice + engineer profile). Concrete **`IntelligenceCapability`** (`CAP_INTELLIGENCE`, S19); `intelligence.*` config + defaults; bootstrap wiring + sink registration. `/v1/intelligence/*` (`repositories`/`search`/`connections`/`generalize`/`patterns`/`recommend`/`profile`); `atlas intel …`. Design: the governed/reversible unit is the **repository (L2)**; L3–L5 are recomputed inferences over it. **573 tests pass (+18).** Next: **S20 Tier 2/3 tools**. |
 | 2026-07-12 | S18b | **Sprint 18b shipped ✅ — Learning Pipeline (Continuous Learning, the third pillar; D11/§5d).** Atlas stops being amnesiac, *without* silently learning. New migration **0011** `learning` schema: **`learning.events`** = the governed ledger (what=`summary`/why=`reason`/from-where=`origin`, `policy` temporary/project/personal/verified, `level` L1–L5, `status` **proposed→applied→reverted**) and **`learning.experiences`** = the **Experience store** (problem→diagnosis→actions→mistakes→solution→lessons; `reverted` hides w/o deleting). New `LearningEvent`/`Experience` models + `LearningRepository` (CRUD + lexical `search_experiences`). **`LearningService`** = concrete `learning` cap: `observe_job` distils a finished job into a **proposed** Experience (never silent; `auto_apply` off by default, best-effort, never fails a job); `apply(policy?,level?)` creates the store record + stamps the event; `revert` deactivates it (reversible); `remember_experience` (manual→applied) + `recall` (lexical) + `explain` (what/why/where). Concrete **`LearningCapability`** contract replaces the S18 catalog placeholder. `JobService._finalize` observes after the report (guarded); `LearningConfig` (`enabled/observe_jobs/auto_apply/default_policy/default_level/recall_k`, conservative defaults) + `learning:` YAML; bootstrap container/caps/lifecycle. `GET/POST /v1/learning/*`; `atlas learn events|show|apply|revert|experiences|recall`. Scope = ledger + Experience store + job observation + review/apply/revert/recall; promotion into the other stores + Learning Levels L2–L5 = **S19** (ledger already models `store`/`level`). **555 tests pass (+23).** Next: **S19 Engineering Intelligence**. |
 | 2026-07-11 | S18a | **Sprint 18a shipped ✅ — Deeper Research Sources (Scholarly + YouTube).** New `atlas/search/scholarly.py`: a `ScholarlyProvider` protocol → `Paper` (title/authors/year/venue/abstract/DOI/citations) + `as_source()` in the Evidence-Graph shape, graded on the **Evidence Level** scale (§5a.2). **`ArxivProvider`** (arXiv Atom, keyless; preprints ⇒ **L3**) + **`SemanticScholarProvider`** (Graph API, keyless/optional-key; published ⇒ **L4**), both over the resilient net layer (translate outcomes, never raise). **`ScholarPlugin`** = `scholar` cap (tool `scholar.search`) with **provider fallback**; output carries `results` + graded `sources`. New `atlas/transcripts/`: **`YouTubeTranscriptProvider`** (watch-page `captionTracks` → timedtext XML → decoded cues; **L1** evidence; outcomes not exceptions) + **`YouTubePlugin`** = `transcript` cap (tool `youtube.transcript`). Planner **`scholar_search`** (ahead of web search) + **`youtube_transcript`** (ahead of web fetch) intents + `AssistantService` handlers + `JobPlanner` support. `ScholarCapability`/`TranscriptCapability` contracts (`CAP_SCHOLAR`/`CAP_TRANSCRIPT`, S18). `plugins.scholar`/`plugins.youtube` config; both enabled. `POST /v1/scholar` + `/v1/youtube/transcript`; `atlas scholar`/`youtube`. **532 tests pass (+35).** Split from the Learning Pipeline (S18b next). |
 | 2026-07-11 | S17 | **Sprint 17 shipped ✅ — Non-blocking HITL & Report Generator (§5a.5).** New `atlas/reports/`: **`ReportGenerator`** = pure/deterministic assembly of the nine scientific-review sections (Exec Summary→Answer→Confidence→Methodology→Evidence→References→Conflicting Views→Limitations→Next Research) from *verified* claim dicts + sources; **overall confidence derived** (most-common, tie→conservative), conflicting-views auto-flag (contradictions/weak), next-research from low-confidence/non-converged claims, optional `summarizer`-LLM polish (deterministic fallback), Markdown render. **`ReportService`** = `reports` capability: `report()` verify→render pipeline (Verification Engine) + `render()` direct. **Job Engine**: report auto-attached on finalize (`result.report`/`report_sections`/`overall_confidence`, best-effort, never fails the job); **`list_blocked()`** HITL queue across jobs; **`job.step_blocked`/`job.finalized`** event notifications (Q2). Surface `POST /v1/report` + `GET /v1/jobs/blocked`; `atlas report` + `atlas jobs --blocked`. **497 tests pass (+19).** Autonomous multi-round research orchestration deferred to **S18**. Next: **S18 Deeper Research + Learning Pipeline (D11)**. |

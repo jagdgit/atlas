@@ -149,6 +149,16 @@ learning:
   default_level: 1         # Learning Level L1 (Store)
   recall_k: 5
 
+intelligence:
+  # Engineering Intelligence (S19, D11/§5d): higher-order learners over the Code
+  # store — learn repos (L2), connect/search (L3), generalize patterns (L4),
+  # recommend (L5). Repository learning is governed through the S18b ledger.
+  enabled: true
+  default_policy: project
+  generalize_min_repos: 2
+  generalize_min_prevalence: 0.6
+  recommend_top_k: 5
+
 plugins:
   # Dotted module paths; each exposes build(config) -> Plugin. Only listed
   # plugins load (fail-closed). Add github/database/email modules here later.

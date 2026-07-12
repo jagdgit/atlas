@@ -21,6 +21,7 @@ from atlas.cli.main import (
     cmd_forget,
     cmd_formats,
     cmd_ingest,
+    cmd_intel,
     cmd_job,
     cmd_jobs,
     cmd_learn,
@@ -227,6 +228,7 @@ class FakeApp:
                 "verification": VerificationService(),
                 "reports": ReportService(VerificationService()),
                 "learning": _fake_learning(),
+                "intelligence": _fake_intelligence(),
             }
         )
 
@@ -272,6 +274,22 @@ def _fake_learning():
     from tests.test_learning import FakeLearningRepo
 
     return LearningService(FakeLearningRepo())
+
+
+def _fake_intelligence():
+    from atlas.intelligence.service import CodeStoreSink, IntelligenceService
+    from atlas.services.learning_service import LearningService
+    from tests.test_intelligence import FakeCodeService, FakeIntelRepo, _repo_fixture
+    from tests.test_learning import FakeLearningRepo
+
+    code = FakeCodeService({
+        "/repos/a": _repo_fixture("a", ["FastAPI"], {"python": 10}, ["Repository pattern"]),
+        "/repos/b": _repo_fixture("b", ["FastAPI"], {"python": 8}, ["Repository pattern"]),
+    })
+    intel_repo = FakeIntelRepo()
+    learning = LearningService(FakeLearningRepo())
+    learning.register_sink("code", CodeStoreSink(intel_repo))
+    return IntelligenceService(code, intel_repo, learning)
 
 
 class _Container:
@@ -668,6 +686,39 @@ def test_cmd_learn_show_unknown_returns_1(capsys):
     rc = cmd_learn(args, app=FakeApp())
     assert rc == 1
     assert "not found" in capsys.readouterr().out
+
+
+# --- intel (S19) ----------------------------------------------------------
+def test_cmd_intel_learn_and_repos(capsys):
+    app = FakeApp()
+    args = build_parser().parse_args(["intel", "learn", "/repos/a"])
+    rc = cmd_intel(args, app=app)
+    assert rc == 0
+    assert "learned a" in capsys.readouterr().out
+    args = build_parser().parse_args(["intel", "repos"])
+    rc = cmd_intel(args, app=app)
+    assert rc == 0
+    assert "FastAPI" in capsys.readouterr().out
+
+
+def test_cmd_intel_generalize_and_recommend(capsys):
+    app = FakeApp()
+    for path in ("/repos/a", "/repos/b"):
+        cmd_intel(build_parser().parse_args(["intel", "learn", path]), app=app)
+    capsys.readouterr()
+    rc = cmd_intel(build_parser().parse_args(["intel", "generalize"]), app=app)
+    assert rc == 0
+    assert "Repository pattern" in capsys.readouterr().out
+    rc = cmd_intel(build_parser().parse_args(["intel", "recommend"]), app=app)
+    assert rc == 0
+    assert "consider it here" in capsys.readouterr().out
+
+
+def test_cmd_intel_learn_bad_path(capsys):
+    args = build_parser().parse_args(["intel", "learn", "/nope"])
+    rc = cmd_intel(args, app=FakeApp())
+    assert rc == 1
+    assert "error" in capsys.readouterr().out
 
 
 # --- verify (S15) ---------------------------------------------------------

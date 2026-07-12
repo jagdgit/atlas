@@ -321,6 +321,17 @@ class LearningConfig(BaseModel):
     recall_k: int = 5          # experiences returned per recall
 
 
+class IntelligenceConfig(BaseModel):
+    """Engineering Intelligence (S19, D11/§5d). Higher-order learners over the Code
+    store — climb the Learning Levels (L2 Understand → L5 Recommend)."""
+
+    enabled: bool = True
+    default_policy: str = "project"      # repos are project-scoped by default (§5d.5)
+    generalize_min_repos: int = 2        # need ≥N learned repos before generalizing
+    generalize_min_prevalence: float = 0.6  # "you *always* use X" threshold (L4)
+    recommend_top_k: int = 5
+
+
 class ApiConfig(BaseModel):
     host: str = "127.0.0.1"  # bind localhost by default (personal, self-hosted)
     port: int = 8000
@@ -363,6 +374,7 @@ class AtlasConfig(BaseModel):
     sandbox: SandboxConfig = SandboxConfig()
     research: ResearchConfig = ResearchConfig()
     learning: LearningConfig = LearningConfig()
+    intelligence: IntelligenceConfig = IntelligenceConfig()
     plugins: PluginsConfig = PluginsConfig()
     api: ApiConfig = ApiConfig()
 

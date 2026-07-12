@@ -256,6 +256,21 @@ def _fake_learning():
     return LearningService(FakeLearningRepo())
 
 
+def _fake_intelligence():
+    from atlas.intelligence.service import CodeStoreSink, IntelligenceService
+    from atlas.services.learning_service import LearningService
+    from tests.test_intelligence import FakeCodeService, FakeIntelRepo, _repo_fixture
+    from tests.test_learning import FakeLearningRepo
+
+    code = FakeCodeService({"/repos/api": _repo_fixture(
+        "api", ["FastAPI"], {"python": 10}, ["Repository pattern"]
+    )})
+    intel_repo = FakeIntelRepo()
+    learning = LearningService(FakeLearningRepo())
+    learning.register_sink("code", CodeStoreSink(intel_repo))
+    return IntelligenceService(code, intel_repo, learning)
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -285,6 +300,7 @@ class FakeApplication:
                 "verification": VerificationService(),
                 "reports": ReportService(VerificationService()),
                 "learning": _fake_learning(),
+                "intelligence": _fake_intelligence(),
                 "plugins": FakePluginManager(),
             }
         )
@@ -800,6 +816,35 @@ def test_learning_apply_unknown_event_404():
 
 def test_learning_requires_auth():
     assert _client().get("/v1/learning/events").status_code == 401
+
+
+def test_intelligence_learn_and_recommend_flow():
+    c = _client()
+    learn = c.post(
+        "/v1/intelligence/repositories", headers=AUTH, json={"root": "/repos/api"}
+    )
+    assert learn.status_code == 200
+    assert learn.json()["outcome"] == "ok"
+    assert learn.json()["repository"]["name"] == "api"
+    repos = c.get("/v1/intelligence/repositories", headers=AUTH).json()["repositories"]
+    assert len(repos) == 1
+    gen = c.post("/v1/intelligence/generalize", headers=AUTH)
+    assert gen.status_code == 200
+    prof = c.get("/v1/intelligence/profile", headers=AUTH)
+    assert prof.status_code == 200
+    assert prof.json()["repositories"] == 1
+
+
+def test_intelligence_learn_bad_path():
+    resp = _client().post(
+        "/v1/intelligence/repositories", headers=AUTH, json={"root": "/nope"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["outcome"] == "error"
+
+
+def test_intelligence_requires_auth():
+    assert _client().get("/v1/intelligence/repositories").status_code == 401
 
 
 def test_blocked_jobs_endpoint():
