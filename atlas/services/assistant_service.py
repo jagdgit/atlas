@@ -933,9 +933,16 @@ class AssistantService:
         objective = (args.get("objective") or "").strip()
         if not objective:
             return _Outcome(answer="What would you like me to research?")
-        payload = {"objective": objective}
+        payload: dict[str, Any] = {"objective": objective}
         if args.get("max_iterations") is not None:
             payload["max_iterations"] = args["max_iterations"]
+        # Stage 3 (C0/RL): jobs attach the live recorder + workspace on context so
+        # the deep research loop streams phases into activity.jsonl and writes
+        # claims/evidence into the job workspace (Step 5 fast-follow).
+        if getattr(context, "activity", None) is not None:
+            payload["activity"] = context.activity
+        if getattr(context, "workspace", None) is not None:
+            payload["workspace"] = context.workspace
         result = self._executor.execute(self._research_tool, payload)
         data = result.data if isinstance(result.data, dict) else {}
         outcome = data.get("outcome")

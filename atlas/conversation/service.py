@@ -27,11 +27,19 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ConversationContext:
-    """Assembled context for one turn: recent transcript + relevant memories."""
+    """Assembled context for one turn: recent transcript + relevant memories.
+
+    Optional ``job_id`` / ``activity`` / ``workspace`` are set by the Job Engine
+    (Stage 3, Step 5 fast-follow) so a research step can stream into the live
+    activity feed and write artifacts into the per-job workspace.
+    """
 
     session_id: str
     recent: "list[ConversationMessage]" = field(default_factory=list)
     memories: "list[MemoryItem]" = field(default_factory=list)
+    job_id: str | None = None
+    activity: Any = None
+    workspace: Any = None
 
     def as_chat_messages(self) -> list[ChatMessage]:
         """Recent transcript as LLM chat messages (oldest→newest)."""

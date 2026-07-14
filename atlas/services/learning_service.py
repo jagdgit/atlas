@@ -293,6 +293,9 @@ class LearningService:
 
 
 # --- experience extraction (pure helper) ---------------------------------
+_CONFIDENCE_OK = {"HIGH", "MEDIUM"}
+
+
 def _experience_from_job(
     objective: str,
     steps: list[Any],
@@ -319,6 +322,12 @@ def _experience_from_job(
         lessons_bits.append(f"Limitations: {sections['limitations']}")
     if sections.get("next_research"):
         lessons_bits.append(f"Next: {sections['next_research']}")
+    # Stage 3 A6/C6: always tag domain=experience; flag provisional when
+    # overall confidence is below MEDIUM so weak runs don't silently harden.
+    tags = ["job", "experience"]
+    confidence = (result.get("overall_confidence") or "").upper()
+    if confidence and confidence not in _CONFIDENCE_OK:
+        tags.append("provisional")
     return {
         "title": objective[:120],
         "problem": objective,
@@ -327,5 +336,8 @@ def _experience_from_job(
         "mistakes": "; ".join(mistakes),
         "solution": solution,
         "lessons": " ".join(lessons_bits),
-        "tags": ["job"],
+        "tags": tags,
+        "domain": "experience",
+        "provisional": "provisional" in tags,
+        "overall_confidence": confidence or None,
     }

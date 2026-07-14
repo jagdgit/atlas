@@ -594,18 +594,53 @@ keeps the full suite green and adds a real-run acceptance check.
    `research.max_documents=12`). Wired into bootstrap + registered as `librarian` for the Step-5
    loop rebuild. Full suite green (842 passed; +18 tests). *(Tier-1 abstract-first already comes
    from scholar metadata; live use in the loop lands with Step 5 per A1=(C).)*
-4. **Claim Extraction** (C2 / D3.1) — the hybrid extractor (deterministic + bounded LLM),
-   section-scoped, run as **queued per-document steps** (progress + resumable). Biggest new
-   subsystem.
-5. **Evidence wiring + per-claim Verification + Report** (C4) — feed **claims, not URLs**, to
-   the engine; per-claim confidence; artifact manifest (found/downloaded/read/extracted/verified).
-6. **Gap-driven iteration + recommend-more** (C5 / D3.2) — replace synonym cross-product with
-   evidence-gap targeting; at the doc cap, surface ranked *"recommended further reading."*
-7. **Self-aware learning, domain-tagged** (C6 / RS / D3.13) — ingest read docs into Knowledge
-   (`domain=external`) + verified claims/graph (`domain=research`) + a governed Experience
-   (`domain=experience`); make retrieval domain-scoped so the Researcher stays in its universe.
-   Atlas can report what it has done/learned/read. (Learning is on from step 1's jobs onward,
-   wired fully here. `code`/`personal`/`professional` domains are Stage 4–5.)
+4. **Claim Extraction** (C2 / D3.1) — ✅ **SHIPPED (2026-07-12).** New
+   `atlas/research/extract.py` (`ClaimExtractor` → `ExtractionResult`): the **hybrid** extractor
+   turning a read `Document` into structured `evidence.models.Claim`s, each carrying a **single**
+   `EvidenceItem` (source + evidence level + value/unit + locator + `support` stance) — grouping
+   across sources is Step 5. **Deterministic first** — `_NUM_UNIT_RE` pulls quantitative claims
+   (number + unit/percent) from section-scoped sentences, with year-filtering, unit
+   normalization, and `kind` inference (rmse/soiling_loss/efficiency/…). **Bounded LLM prose
+   pass (optional)** — the `researcher` role extracts a few prose claims from **abstract +
+   conclusions** as strict JSON (A5/D3.9); capped to remaining budget, validated, and it can only
+   *add* — a bad/absent/failing LLM degrades cleanly to deterministic-only. Per-doc cap
+   (`max_claims_per_doc=15`, A5) + intra-doc dedup. Registered as `claim_extractor` in bootstrap
+   for the Step-5 loop rebuild. Full suite green (852 passed; +10 tests).
+5. **Evidence wiring + per-claim Verification + Report** (C4) — ✅ **SHIPPED (2026-07-12).**
+   `ResearchService` rebuilt into the real pipeline: **search → acquire (Librarian) → read
+   (Tier-2 full text where open, Tier-1 abstracts always) → extract (ClaimExtractor) → group
+   across sources → verify per-claim → report**. New `atlas/research/grouping.py`
+   (`group_claims`, A2/D3.7): quantitative claims merge deterministically by `(kind, unit)` with
+   value-clustering (agreeing sources → one multi-`EvidenceItem` claim; the minority value →
+   `contradict` evidence so confidence honestly erodes); prose claims merge by a deterministic
+   token-Jaccard proxy (embedding-cosine is the planned upgrade). The engine now scores **claims
+   with real multi-source support**, not URLs, so reports show per-claim `HIGH/MEDIUM/LOW` with
+   real citations from content Atlas read — the "_No verified claims._" failure is gone whenever
+   relevant papers are readable. Result carries a `pipeline` manifest
+   (found/acquired/read/extracted/claims/verified/rejected/blocked). The old snippet loop remains
+   as a Tier-0 fallback when no extractor is wired (all legacy tests green). Wired in bootstrap
+   (`ResearchService(librarian=…, extractor=…)`). Full suite green (864 passed; +12 tests).
+   ✅ **Activity/workspace threading fast-follow (2026-07-14):** `ConversationContext` carries
+   optional `job_id`/`activity`/`workspace`; `JobService._build_context` attaches the live
+   recorder + workspace; `_do_research` forwards them into `research.run`; deep research
+   persists `claims.json`/`evidence.json`/manifest counts into the workspace so the live feed
+   streams search/extract/verify on real jobs.
+6. **Gap-driven iteration + recommend-more** (C5 / D3.2) — ✅ **SHIPPED (2026-07-14).** New
+   `atlas/research/gaps.py` (`analyze_gaps`, `gap_queries`, `recommend_reading`): after each
+   verify pass the loop names unmet Evidence-Budget gaps (sources / peer-reviewed / government /
+   convergence) and issues **targeted** follow-up queries (e.g. `site:nrel.gov`, IEEE/peer-
+   reviewed) instead of synonym cycling. When the document cap is hit with unmet gaps, Atlas
+   surfaces a ranked *"Recommended Further Reading"* list (title + why) in the result and report
+   markdown. Deep loop is now multi-round and gap-driven.
+7. **Self-aware learning, domain-tagged** (C6 / RS / D3.13) — ✅ **SHIPPED (2026-07-14).**
+   Knowledge Domains (`atlas/knowledge/domains.py`) + migration `0013_knowledge_domains.sql`
+   (`knowledge.documents.domain`, default `external`). `KnowledgeService.ingest_text` /
+   `search(..., domains=…)` are domain-aware. New `atlas/research/learn.py`
+   (`promote_research`): on job finalize, read docs → Knowledge `domain=external`; claims +
+   evidence graph → Knowledge `domain=research` + a governed Learning propose; Experience via
+   `observe_job` now tagged `experience` and flagged `provisional` when overall confidence <
+   MEDIUM (A6). Researcher retrieval defaults to `{external, research, experience}`.
+   `code`/`personal`/`professional` remain Stage 4–5.
 
 ---
 

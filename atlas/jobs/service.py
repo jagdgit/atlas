@@ -70,6 +70,7 @@ class JobService:
         reports: Any = None,
         events: Any = None,
         learning: Any = None,
+        knowledge: Any = None,
         workspace_root: str | Path | None = None,
         step_max_retries: int = 2,
         retry_delay: float = 2.0,
@@ -83,6 +84,8 @@ class JobService:
         self._reports = reports
         self._events = events
         self._learning = learning
+        # Stage 3 C6: knowledge sink for domain-tagged promotion of read docs + claims.
+        self._knowledge = knowledge
         # Per-job on-disk workspace root (§5a, C3). When set (``<data>``), each job
         # gets ``<data>/jobs/job_<id>/`` with a manifest, notes, and final report —
         # so work is durable and inspectable ("open the workspace"). Best-effort:
@@ -360,6 +363,9 @@ class JobService:
             result["report"] = report.get("markdown", "")
             result["report_sections"] = report.get("sections", {})
             result["overall_confidence"] = report.get("overall_confidence")
+        # Prefer research-pipeline confidence from workspace evidence when present
+        # (C4/C6) — the scientific report written during the research step.
+        self._enrich_from_research(job_id, result)
         self._persist_workspace(job_id, status, result)
         self._repo.set_job_status(job_id, status, result=result)
         self._logger.info("job %s finalized: %s", job_id, status)
@@ -384,15 +390,53 @@ class JobService:
     def _observe_learning(
         self, job_id: str, steps: list[JobStep], result: dict[str, Any]
     ) -> None:
-        """Propose an Experience from the finished job (S18b, §5d). Governed and
-        best-effort: never auto-verifies and never fails the job."""
-        if self._learning is None:
+        """Propose Experience + promote research artifacts (S18b + Stage 3 C6/A6).
+
+        Governed and best-effort: never auto-verifies and never fails the job.
+        """
+        if self._learning is None and self._knowledge is None:
             return
         try:
             job = self._repo.get_job(job_id)
-            self._learning.observe_job({"job": job, "steps": steps, "result": result})
+            if self._learning is not None:
+                self._learning.observe_job(
+                    {"job": job, "steps": steps, "result": result}
+                )
+            # Domain-tagged Knowledge promotion from the research workspace (A6).
+            from atlas.research.learn import promote_research
+
+            ws = self._workspace(job_id)
+            promote_research(
+                knowledge=self._knowledge,
+                learning=self._learning,
+                workspace=ws,
+                job_id=str(job_id),
+                objective=getattr(job, "objective", "") if job else "",
+                embed=False,  # embeddings deferred — avoid blocking finalize
+            )
         except Exception:  # noqa: BLE001 - learning must never break finalization
             self._logger.debug("job %s learning observation failed", job_id)
+
+    def _enrich_from_research(self, job_id: str, result: dict[str, Any]) -> None:
+        """Pull overall confidence / claims counts from the research workspace."""
+        ws = self._workspace(job_id)
+        if ws is None:
+            return
+        try:
+            claims = ws.read_json("claims.json") or []
+            if claims and not result.get("overall_confidence"):
+                # Most common confidence among verified claims.
+                from collections import Counter
+                counts = Counter(
+                    (c.get("confidence") or "UNVERIFIED") for c in claims
+                    if isinstance(c, dict)
+                )
+                if counts:
+                    result["overall_confidence"] = counts.most_common(1)[0][0]
+            if claims:
+                result["research_claims"] = len(claims)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _build_report(self, job_id: str, steps: list[JobStep]) -> dict[str, Any] | None:
         """Attach a scientific-review report (§5a.5) to the finished job (S17)."""
@@ -516,12 +560,30 @@ class JobService:
         return "\n\n".join(a for a in answers if a)
 
     def _build_context(self, job: Job) -> ConversationContext:
+        # Stage 3 (C0/RL + C4): attach the live activity recorder + workspace so
+        # deep research (and later learners) can stream progress into the feed
+        # and persist claims/evidence on disk during the step.
+        activity = self._recorder(job.id)
+        workspace = self._workspace(job.id)
         if job.session_id and self._conversation is not None:
             try:
-                return self._conversation.build_context(job.session_id, job.objective)
+                ctx = self._conversation.build_context(job.session_id, job.objective)
+                return ConversationContext(
+                    session_id=ctx.session_id,
+                    recent=list(ctx.recent),
+                    memories=list(ctx.memories),
+                    job_id=str(job.id),
+                    activity=activity,
+                    workspace=workspace,
+                )
             except Exception:  # noqa: BLE001 - context is best-effort
                 self._logger.exception("failed to build job context")
-        return ConversationContext(session_id=job.session_id or f"job:{job.id}")
+        return ConversationContext(
+            session_id=job.session_id or f"job:{job.id}",
+            job_id=str(job.id),
+            activity=activity,
+            workspace=workspace,
+        )
 
     def _enqueue_advance(self, job_id: str) -> None:
         if self._enqueue is None:

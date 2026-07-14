@@ -304,12 +304,24 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         max_documents=cfg.research.max_documents,
         logger=get_logger("atlas.research.acquire"),
     )
+    # Claim Extraction (Stage 3, Step 4 / §5f, C2): read Document → structured claims.
+    # Hybrid (D3.1): deterministic numeric extraction + a bounded, section-scoped LLM
+    # prose pass on the `researcher` role. Registered for the Step-5 loop rebuild.
+    from atlas.research.extract import ClaimExtractor
+
+    claim_extractor = ClaimExtractor(
+        llm_service,
+        logger=get_logger("atlas.research.extract"),
+    )
 
     research_service = ResearchService(
         verification_service,
         report_service,
         capabilities=capabilities,  # shared by ref; scholar/search plugins register later
+        librarian=librarian,        # Stage 3, Step 5 (C4): acquire + read real documents
+        extractor=claim_extractor,  # …then extract structured claims (not score URLs)
         per_query=cfg.research.per_query,
+        max_documents=cfg.research.max_documents,
         logger=get_logger("atlas.research"),
     )
     tools.register(
@@ -348,6 +360,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         reports=report_service,
         events=events,
         learning=learning_service,
+        knowledge=knowledge_service,
         workspace_root=cfg.paths.data,  # §5a/C3: per-job on-disk workspaces
         step_max_retries=cfg.jobs.step_max_retries,
         retry_delay=cfg.jobs.retry_delay,
@@ -470,6 +483,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("reports", report_service)
     container.register_instance("research", research_service)
     container.register_instance("librarian", librarian)
+    container.register_instance("claim_extractor", claim_extractor)
     container.register_instance("learning", learning_service)
     container.register_instance("intelligence", intelligence_service)
     container.register_instance("ingestion", ingestion_source)

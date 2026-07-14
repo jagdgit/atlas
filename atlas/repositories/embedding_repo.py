@@ -53,9 +53,31 @@ class EmbeddingRepository(BaseRepository):
         model: str,
         *,
         limit: int = 5,
+        domains: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the most similar chunks to ``query_vector`` (cosine distance)."""
+        """Return the most similar chunks to ``query_vector`` (cosine distance).
+
+        Optional ``domains`` filters to knowledge-universe tags (Stage 3 / D3.13).
+        """
         literal = to_pgvector(query_vector)
+        if domains:
+            return self.fetch_all(
+                """
+                SELECT c.id AS chunk_id,
+                       c.document_id,
+                       c.ordinal,
+                       c.content,
+                       e.embedding <=> %s::vector AS distance
+                FROM knowledge.embeddings e
+                JOIN knowledge.chunks c ON c.id = e.chunk_id
+                JOIN knowledge.documents d ON d.id = c.document_id
+                WHERE e.model = %s
+                  AND d.domain = ANY(%s)
+                ORDER BY e.embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (literal, model, list(domains), literal, limit),
+            )
         return self.fetch_all(
             """
             SELECT c.id AS chunk_id,

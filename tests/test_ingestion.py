@@ -99,11 +99,12 @@ class FakeKnowledge:
         self._n = 0
 
     def ingest_text(self, source, content, *, uri=None, title=None,
-                    content_type="text/plain", metadata=None, embed=True):
+                    content_type="text/plain", metadata=None, embed=True,
+                    domain="external"):
         import hashlib
 
         digest = hashlib.sha256(content.encode()).hexdigest()
-        self.ingests.append({"uri": uri, "content_type": content_type})
+        self.ingests.append({"uri": uri, "content_type": content_type, "domain": domain})
         if digest in self._by_checksum:
             return self._by_checksum[digest]
         self._n += 1

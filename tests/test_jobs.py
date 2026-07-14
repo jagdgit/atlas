@@ -240,6 +240,20 @@ def test_activity_feed_recorded_and_exposed(tmp_path):
     assert any(e[0] == "job.activity" for e in events.events)
 
 
+def test_job_context_carries_activity_and_workspace(tmp_path):
+    # Stage 3 fast-follow: JobService attaches the recorder + workspace to the
+    # ConversationContext so research (and later learners) can stream live.
+    steps = [DecomposedStep("research", "research", {"objective": "x"}, "research it")]
+    repo, service, log = _make(steps, ScriptedRunner(), workspace_root=tmp_path)
+    detail = service.create_job("deep research")
+    job = repo.get_job(detail["job"].id)
+    ctx = service._build_context(job)
+    assert ctx.job_id == str(job.id)
+    assert ctx.activity is not None
+    assert ctx.workspace is not None
+    assert "job_" in str(ctx.workspace.root)
+
+
 def test_job_runs_to_completion():
     steps = [
         DecomposedStep("react", "agent", {}, "a"),

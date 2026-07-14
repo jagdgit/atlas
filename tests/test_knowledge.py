@@ -59,7 +59,7 @@ class FakeDocRepo:
         self._n = 0
 
     def create(self, source, content, *, uri=None, title=None,
-               content_type="text/plain", metadata=None):
+               content_type="text/plain", metadata=None, domain="external"):
         import hashlib
 
         digest = hashlib.sha256(content.encode()).hexdigest()
@@ -72,6 +72,10 @@ class FakeDocRepo:
             content=content,
             checksum=digest,
             status="pending",
+            domain=domain,
+            title=title,
+            uri=uri,
+            metadata=metadata or {},
         )
         self.by_id[doc.id] = doc
         self.by_checksum[digest] = doc
@@ -119,6 +123,7 @@ class FakeEmbeddingRepo:
     def __init__(self):
         self.vectors = {}  # (chunk_id, model) -> vector
         self.chunk_meta = {}  # chunk_id -> (document_id, ordinal, content)
+        self.doc_domains = {}  # document_id -> domain
 
     def upsert(self, chunk_id, model, vector):
         self.vectors[(str(chunk_id), model)] = list(vector)
@@ -127,12 +132,19 @@ class FakeEmbeddingRepo:
     def register_chunk(self, chunk_id, document_id, ordinal, content):
         self.chunk_meta[chunk_id] = (document_id, ordinal, content)
 
-    def search(self, query_vector, model, *, limit=5):
+    def search(self, query_vector, model, *, limit=5, domains=None):
         rows = []
         for (chunk_id, m), vec in self.vectors.items():
             if m != model:
                 continue
+            if chunk_id not in self.chunk_meta:
+                continue
             doc_id, ordinal, content = self.chunk_meta[chunk_id]
+            if domains is not None:
+                # Look up domain from a side map populated by tests (optional).
+                domain = self.doc_domains.get(str(doc_id), "external")
+                if domain not in domains:
+                    continue
             rows.append(
                 {
                     "chunk_id": chunk_id,

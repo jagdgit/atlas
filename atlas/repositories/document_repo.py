@@ -32,17 +32,19 @@ class DocumentRepository(BaseRepository):
         title: str | None = None,
         content_type: str = "text/plain",
         metadata: dict[str, Any] | None = None,
+        domain: str = "external",
     ) -> Document:
         """Insert a document, or return the existing one with the same content.
 
         Dedup is by checksum; identical content never creates a duplicate.
+        ``domain`` tags the knowledge universe (Stage 3 / D3.13).
         """
         digest = checksum_of(content)
         row = self.fetch_one(
             """
             INSERT INTO knowledge.documents
-                (source, uri, title, content_type, content, checksum, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (source, uri, title, content_type, content, checksum, metadata, domain)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (checksum) DO NOTHING
             RETURNING *
             """,
@@ -54,6 +56,7 @@ class DocumentRepository(BaseRepository):
                 content,
                 digest,
                 Jsonb(metadata or {}),
+                domain or "external",
             ),
         )
         if row is None:  # already present

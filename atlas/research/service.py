@@ -26,13 +26,20 @@ from dataclasses import dataclass
 from typing import Any
 
 from atlas.evidence.models import (
+    CONFIDENCE_INSUFFICIENT,
     Claim,
     EvidenceGraph,
     EvidenceItem,
     Source,
 )
 from atlas.research.classifier import classify
+from atlas.research.grouping import group_claims
+from atlas.research.reader import Reader
 from atlas.verification.engine import EvidenceBudget
+
+# A candidate's abstract/snippet must have at least this much text before we treat it as
+# a Tier-1 "document" worth extracting from — a 10-word web snippet is not a paper.
+_MIN_TIER1_CHARS = 80
 
 RESEARCH_OK = "ok"
 RESEARCH_EMPTY = "empty"
@@ -89,6 +96,7 @@ class _Gathered:
     source: Source
     value: float | None
     snippet: str
+    full_text: str = ""  # abstract (scholar) or snippet (web); used by the deep READ path
 
 
 class ResearchService:
@@ -102,7 +110,11 @@ class ResearchService:
         capabilities=None,
         scholar=None,
         search=None,
+        librarian=None,
+        extractor=None,
+        reader: Reader | None = None,
         per_query: int = 5,
+        max_documents: int = 12,
         logger: logging.Logger | None = None,
     ) -> None:
         self._verification = verification
@@ -110,7 +122,15 @@ class ResearchService:
         self._capabilities = capabilities
         self._scholar = scholar
         self._search = search
+        # Stage 3, Step 5 (C4): when a Librarian (acquire+read) and a ClaimExtractor are
+        # wired, research runs the real Acquire→Read→Extract→Group→Verify pipeline on
+        # structured claims. Without them it degrades to the Tier-0 snippet loop (below),
+        # so the class stays usable — and every legacy test — with no extra collaborators.
+        self._librarian = librarian
+        self._extractor = extractor
+        self._reader = reader or Reader()
         self._per_query = per_query
+        self._max_documents = max_documents
         self._logger = logger or logging.getLogger("atlas.research")
 
     # --- capability -----------------------------------------------------
@@ -121,6 +141,8 @@ class ResearchService:
         budget: dict[str, Any] | None = None,
         max_iterations: int | None = None,
         per_query: int | None = None,
+        activity: Any = None,
+        workspace: Any = None,
     ) -> dict[str, Any]:
         objective = (objective or "").strip()
         if not objective:
@@ -137,6 +159,16 @@ class ResearchService:
 
         eb = self._budget(budget, max_iterations)
         n = per_query or self._per_query
+
+        # Deep pipeline (C4): read documents and extract structured claims instead of
+        # scoring URLs. Requires a ClaimExtractor; the Librarian is optional (abstracts
+        # alone still yield Tier-1 claims), which keeps it working when fetch is offline.
+        if self._extractor is not None:
+            return self._research_deep(
+                objective, eb, n, scholar, search,
+                activity=activity, workspace=workspace,
+            )
+
         graph = EvidenceGraph()
         claim = Claim(id="c1", statement=objective)
         graph.add_claim(claim)
@@ -195,6 +227,340 @@ class ResearchService:
             "log": log,
         }
 
+    # --- deep pipeline (Stage 3, Steps 5–6 / §5d–5i, C4/C5) -------------
+    def _research_deep(
+        self, objective: str, eb: EvidenceBudget, n: int, scholar, search,
+        *, activity: Any, workspace: Any,
+    ) -> dict[str, Any]:
+        """Search → acquire → read → extract → group → verify, gap-driven (C5)."""
+        from atlas.research.gaps import (
+            analyze_gaps,
+            gap_queries,
+            recommend_reading,
+        )
+
+        base = clean_objective(objective)
+        graph = EvidenceGraph()
+        candidates: dict[str, _Gathered] = {}
+        documents: dict[str, Any] = {}
+        blocked: list[dict[str, Any]] = []
+        raw: list[Claim] = []
+        rounds_log: list[dict[str, Any]] = []
+        recommendations: list[dict[str, Any]] = []
+        status = None
+        acquired_full = 0
+
+        # Seed the first round with the base objective (scholar then web).
+        pending_plan: list[tuple[str, str]] = []
+        if scholar is not None:
+            pending_plan.append(("scholar", base))
+        if search is not None:
+            pending_plan.append(("web", base))
+
+        for round_i in range(1, eb.max_search_iterations + 1):
+            # 1) Gather any pending gap-/seed-targeted queries.
+            if pending_plan:
+                before = len(candidates)
+                self._absorb_candidates(
+                    pending_plan, candidates, n, scholar, search, activity
+                )
+                rounds_log.append({
+                    "round": round_i,
+                    "queries": list(pending_plan),
+                    "new_candidates": len(candidates) - before,
+                    "total_candidates": len(candidates),
+                })
+                pending_plan = []
+
+            if not candidates and not documents:
+                break
+
+            # Register sources on the graph.
+            for g in candidates.values():
+                if g.source.id not in graph.sources:
+                    graph.add_source(g.source)
+
+            # 2) Acquire remaining capacity (open-access first).
+            remaining = max(0, self._max_documents - len(documents))
+            unread = [
+                g.source for sid, g in candidates.items() if sid not in documents
+            ]
+            if remaining > 0 and unread:
+                new_docs, new_blocked, n_full = self._acquire_unread(
+                    unread, remaining, workspace, activity
+                )
+                documents.update(new_docs)
+                blocked.extend(new_blocked)
+                acquired_full += n_full
+                # Tier-1 fallback for anything still unread with a usable abstract.
+                for sid, g in candidates.items():
+                    if sid in documents or len(documents) >= self._max_documents:
+                        continue
+                    text = (g.full_text or "").strip()
+                    if len(text) >= _MIN_TIER1_CHARS:
+                        documents[sid] = self._reader.read_text(
+                            text, source_id=sid, title=g.source.title, url=g.source.url,
+                        )
+
+            # 3) Extract claims from newly-read docs not yet extracted.
+            extracted_ids = {c.evidence[0].source_id for c in raw if c.evidence}
+            for sid, doc in documents.items():
+                if sid in extracted_ids:
+                    continue
+                level = graph.sources[sid].evidence_level if sid in graph.sources else None
+                try:
+                    res = self._extractor.extract(
+                        doc, evidence_level=level, activity=activity
+                    )
+                    raw.extend(res.claims)
+                except Exception:  # noqa: BLE001
+                    self._logger.exception("claim extraction failed for %s", sid)
+
+            # 4) Group + verify (fresh each round — merging is cheap and deterministic).
+            grouped = group_claims(raw)
+            graph.claims.clear()
+            for claim in grouped:
+                graph.add_claim(claim)
+                self._verification.verify_claim(claim)
+
+            status = analyze_gaps(graph, eb)
+            self._record(
+                activity, "verify",
+                f"Round {round_i}: {len(grouped)} claim(s) from {len(documents)} "
+                f"doc(s); gaps: "
+                + (", ".join(g.kind for g in status.gaps) or "none"),
+            )
+            if rounds_log:
+                rounds_log[-1]["gaps"] = [g.kind for g in status.gaps]
+                rounds_log[-1]["claims"] = len(grouped)
+
+            # 5) Stop if budget satisfied.
+            if not status.has_gaps:
+                self._record(activity, "lifecycle", "Evidence budget satisfied.")
+                break
+
+            # 6) Doc-cap hit with remaining gaps → recommend further reading & stop.
+            if len(documents) >= self._max_documents:
+                still_unread = [
+                    g.source for sid, g in candidates.items() if sid not in documents
+                ]
+                recommendations = recommend_reading(still_unread, status.gaps)
+                self._record(
+                    activity, "lifecycle",
+                    f"Document cap ({self._max_documents}) reached with unmet gaps; "
+                    f"recommending {len(recommendations)} further source(s).",
+                )
+                break
+
+            # 7) Plan the next round from named gaps (C5) — not synonym cycling.
+            pending_plan = [
+                (mode, q) for mode, q in gap_queries(objective, status.gaps, base=base)
+                if (mode == "scholar" and scholar is not None)
+                or (mode == "web" and search is not None)
+            ]
+            # Drop queries we've already tried this run.
+            tried = {(m, q) for entry in rounds_log for m, q in entry.get("queries", [])}
+            pending_plan = [(m, q) for m, q in pending_plan if (m, q) not in tried]
+            if not pending_plan:
+                self._record(
+                    activity, "lifecycle",
+                    "No further gap-targeted queries available; stopping.",
+                )
+                break
+
+        if not candidates and not documents:
+            return {
+                "outcome": RESEARCH_EMPTY,
+                "objective": objective,
+                "iterations": 0,
+                "reason": "no candidate sources gathered from the available providers",
+                "log": rounds_log,
+            }
+
+        grouped = list(graph.claims.values())
+        verified = sum(1 for c in grouped if c.confidence != CONFIDENCE_INSUFFICIENT)
+        pipeline = {
+            "found": len(candidates),
+            "acquired": acquired_full,
+            "read": len(documents),
+            "extracted": len(raw),
+            "claims": len(grouped),
+            "verified": verified,
+            "rejected": len(grouped) - verified,
+            "blocked": len(blocked),
+            "rounds": len(rounds_log),
+        }
+        gap_note = ""
+        if status is not None and status.has_gaps:
+            gap_note = " Unmet gaps: " + "; ".join(g.reason for g in status.gaps) + "."
+        notes = (
+            f"Pipeline: found {pipeline['found']} sources → acquired {pipeline['acquired']} "
+            f"full-text → read {pipeline['read']} → extracted {pipeline['extracted']} claims "
+            f"→ verified {pipeline['verified']} (rejected {pipeline['rejected']}) "
+            f"over {pipeline['rounds']} round(s)."
+            + gap_note
+        )
+        self._persist_artifacts(workspace, graph, pipeline, notes)
+        report_bundle = self._render(objective, graph, eb, notes=notes)
+        report = report_bundle.get("report") or {}
+        # Surface recommendations inside the report's next_research when present.
+        if recommendations and report.get("sections"):
+            rec_lines = [
+                f"- {r['title']}" + (f" — {r['url']}" if r.get("url") else "")
+                + f" ({r['why']})"
+                for r in recommendations
+            ]
+            existing = report["sections"].get("next_research") or ""
+            report["sections"]["next_research"] = (
+                (existing.rstrip() + "\n\n" if existing else "")
+                + "Recommended further reading:\n" + "\n".join(rec_lines)
+            )
+            if report.get("markdown"):
+                report["markdown"] = report["markdown"].rstrip() + (
+                    "\n\n## Recommended Further Reading\n"
+                    + "\n".join(rec_lines) + "\n"
+                )
+        overall = report.get("overall_confidence", CONFIDENCE_INSUFFICIENT)
+        stopped_reasons = (
+            ["all budget criteria met"]
+            if status is not None and not status.has_gaps
+            else ([g.reason for g in status.gaps] if status else [])
+        )
+        if recommendations:
+            stopped_reasons = stopped_reasons + [
+                f"document cap ({self._max_documents}) reached; "
+                f"{len(recommendations)} further source(s) recommended"
+            ]
+        return {
+            "outcome": RESEARCH_OK,
+            "objective": objective,
+            "iterations": pipeline["rounds"],
+            "claim": {"confidence": overall, "confidence_score": None, "convergence":
+                      status.convergence if status else None},
+            "stopped": {
+                "decision": "stop",
+                "reasons": stopped_reasons or [notes],
+                "convergence": status.convergence if status else None,
+                "met": status.met if status else {},
+            },
+            "graph": graph.as_dict(),
+            "verification": report_bundle.get("verification"),
+            "report": report,
+            "pipeline": pipeline,
+            "blocked": blocked,
+            "gaps": status.as_dict() if status else {},
+            "recommendations": recommendations,
+            "log": rounds_log,
+        }
+
+    def _absorb_candidates(
+        self,
+        plan: list[tuple[str, str]],
+        candidates: dict[str, _Gathered],
+        n: int,
+        scholar,
+        search,
+        activity: Any,
+    ) -> None:
+        for mode, query in plan:
+            provider = scholar if mode == "scholar" else search
+            if provider is None:
+                continue
+            self._record(activity, "search", f"Searching {mode}: {query!r}")
+            for g in self._gather(mode, provider, query, n):
+                candidates.setdefault(g.source.id, g)
+        self._record(
+            activity, "search", f"Candidate pool now {len(candidates)} source(s)."
+        )
+
+    def _acquire_unread(
+        self,
+        unread: list[Source],
+        remaining: int,
+        workspace: Any,
+        activity: Any,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+        """Acquire up to ``remaining`` unread sources. Returns (docs, blocked, n_full)."""
+        documents: dict[str, Any] = {}
+        blocked: list[dict[str, Any]] = []
+        acquired_full = 0
+        if self._librarian is None or remaining <= 0:
+            return documents, blocked, acquired_full
+        try:
+            acq = self._librarian.acquire(
+                unread,
+                workspace=workspace,
+                activity=activity,
+                top_k=remaining,
+            )
+            for doc in acq.documents:
+                documents[doc.source_id] = doc
+            blocked = list(getattr(acq, "blocked", []) or [])
+            acquired_full = len(documents)
+        except Exception:  # noqa: BLE001
+            self._logger.exception("acquisition failed; falling back to abstracts")
+        return documents, blocked, acquired_full
+
+    def _collect_candidates(
+        self, objective: str, eb: EvidenceBudget, n: int, scholar, search, activity: Any,
+    ) -> dict[str, _Gathered]:
+        """Legacy one-shot gather (kept for the Tier-0 snippet loop helpers)."""
+        full_plan = query_plan(objective, max_iterations=len(_VARIANTS) * 2)
+        plan = [
+            (mode, query) for mode, query in full_plan
+            if (mode == "scholar" and scholar is not None)
+            or (mode == "web" and search is not None)
+        ][: eb.max_search_iterations]
+        target = max(self._max_documents * 2, self._max_documents + 5)
+        candidates: dict[str, _Gathered] = {}
+        for mode, query in plan:
+            provider = scholar if mode == "scholar" else search
+            self._record(activity, "search", f"Searching {mode}: {query!r}")
+            for g in self._gather(mode, provider, query, n):
+                candidates.setdefault(g.source.id, g)
+            if len(candidates) >= target:
+                break
+        self._record(activity, "search",
+                     f"Gathered {len(candidates)} candidate source(s).")
+        return candidates
+
+    @staticmethod
+    def _record(activity: Any, phase: str, message: str) -> None:
+        if activity is None:
+            return
+        try:
+            activity.record(phase, message)
+        except Exception:  # noqa: BLE001 - the feed is best-effort, never fatal
+            pass
+
+    @staticmethod
+    def _persist_artifacts(
+        workspace: Any, graph: EvidenceGraph, pipeline: dict[str, Any], notes: str,
+    ) -> None:
+        """Write claims/evidence/manifest into the job workspace (best-effort)."""
+        if workspace is None:
+            return
+        try:
+            workspace.write_json("claims.json", [c.as_dict() for c in graph.claims.values()])
+            workspace.write_json("evidence.json", graph.as_dict())
+            workspace.append_note(notes)
+            if hasattr(workspace, "load_manifest") and hasattr(workspace, "write_json"):
+                manifest = workspace.load_manifest()
+                counts = manifest.setdefault("counts", {})
+                for key, field in (
+                    ("found", "found"),
+                    ("acquired", "downloaded"),
+                    ("read", "read"),
+                    ("extracted", "extracted"),
+                    ("verified", "verified"),
+                ):
+                    counts[field] = max(int(counts.get(field, 0)), int(pipeline.get(key, 0)))
+                from datetime import datetime, timezone
+                manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+                workspace.write_json("manifest.json", manifest)
+        except Exception:  # noqa: BLE001 - workspace I/O must never fail research
+            pass
+
     # --- gather ---------------------------------------------------------
     def _gather(self, mode: str, provider, query: str, n: int) -> list[_Gathered]:
         try:
@@ -206,7 +572,7 @@ class ResearchService:
                 for paper in getattr(resp, "papers", []):
                     src = Source.from_dict(paper.as_source())
                     text = getattr(paper, "abstract", "") or getattr(paper, "title", "")
-                    out.append(_Gathered(src, extract_value(text), text[:300]))
+                    out.append(_Gathered(src, extract_value(text), text[:300], full_text=text))
                 return out
             resp = provider.search_web(query, max_results=n)
             if getattr(resp, "outcome", None) != "ok":
@@ -226,7 +592,7 @@ class ResearchService:
                     evidence_level=cls.evidence_level, kind=cls.kind,
                 )
                 snippet = getattr(hit, "snippet", "") or ""
-                out.append(_Gathered(src, extract_value(snippet), snippet[:300]))
+                out.append(_Gathered(src, extract_value(snippet), snippet[:300], full_text=snippet))
             return out
         except Exception:  # noqa: BLE001 - a bad provider must not crash the loop (R3)
             self._logger.exception("research provider %s failed", mode)
@@ -251,9 +617,13 @@ class ResearchService:
             added += 1
         return added
 
-    def _render(self, objective: str, graph: EvidenceGraph, eb: EvidenceBudget) -> dict[str, Any]:
+    def _render(
+        self, objective: str, graph: EvidenceGraph, eb: EvidenceBudget, *, notes: str = "",
+    ) -> dict[str, Any]:
         try:
-            return self._reports.report(objective, graph.as_dict(), budget=eb.as_dict())
+            return self._reports.report(
+                objective, graph.as_dict(), budget=eb.as_dict(), notes=notes
+            )
         except Exception:  # noqa: BLE001 - a report must never fail the research result
             self._logger.exception("report generation failed")
             return {}

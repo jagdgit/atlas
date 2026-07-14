@@ -592,6 +592,50 @@ def test_research_runs_loop_and_reports():
     assert any(c.get("url") == "https://s2.org/1" for c in turn.citations)
 
 
+def test_research_forwards_activity_and_workspace_from_context():
+    # Stage 3 fast-follow: a job's ConversationContext carries activity + workspace;
+    # the research handler must pass them into research.run so the deep loop streams.
+    from atlas.conversation.service import ConversationContext
+
+    seen: dict[str, object] = {}
+
+    def capture(objective, **kw):
+        seen["objective"] = objective
+        seen.update(kw)
+        return {
+            "outcome": "ok", "objective": objective, "iterations": 1,
+            "stopped": {"decision": "stop", "reasons": ["ok"]},
+            "claim": {"confidence": "MEDIUM", "confidence_score": 0.6},
+            "graph": {"sources": [], "claims": []},
+            "verification": {}, "report": {"markdown": "# R", "sections": {}},
+            "log": [],
+        }
+
+    tools = ToolRegistry()
+    tools.register("research.run", capture)
+    svc = AssistantService(
+        ConversationService(FakeConvRepo()),
+        Planner(),
+        ToolExecutor(tools, retry_base=0.0),
+        knowledge=FakeKnowledge(),
+        memory=FakeMemory(),
+        agent=FakeAgent(),
+        llm=FakeLLM(),
+        tools=tools,
+    )
+    activity, workspace = object(), object()
+    ctx = ConversationContext(
+        session_id="job:1", job_id="1", activity=activity, workspace=workspace
+    )
+    outcome = svc.run_step(
+        "research", {"objective": "soiling"}, context=ctx, capability="research"
+    )
+    assert outcome.answer
+    assert seen["activity"] is activity
+    assert seen["workspace"] is workspace
+
+
+
 def test_research_unavailable_blocks_step():
     un = {"outcome": "unavailable", "objective": "x",
           "reason": "no research providers available (need scholar and/or search)"}
