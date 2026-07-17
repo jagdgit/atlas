@@ -27,8 +27,10 @@ GAP_SOURCES = "sources"
 GAP_PEER_REVIEWED = "peer_reviewed"
 GAP_GOVERNMENT = "government"
 GAP_CONVERGENCE = "convergence"
+GAP_CLAIMS = "claims"  # inventory ok but extraction produced nothing
 
 # Deterministic query refinements per named gap (mode, suffix/site hint).
+# ``claims`` has no search query — extraction failed; more IEEE won't help.
 _GAP_QUERIES: dict[str, list[tuple[str, str]]] = {
     GAP_PEER_REVIEWED: [
         ("scholar", "peer reviewed"),
@@ -97,68 +99,69 @@ def analyze_gaps(
     *,
     claims: list[Claim] | None = None,
 ) -> GapStatus:
-    """Named evidence gaps across the whole graph (unique supporting sources)."""
+    """Named evidence gaps.
+
+    Inventory gaps (peer-reviewed / government) use **classified sources on the
+    graph** — an IEEE URL Atlas found counts as L4 even if extraction failed.
+    Claim-backed gaps still need extracted evidence. Otherwise a broken extractor
+    falsely demands "more peer-reviewed" forever (live soiling run, 2026-07-14).
+    """
     claims = claims if claims is not None else list(graph.claims.values())
-    # Unique supporting source ids across all claims (quality by graph.sources level).
+
+    inv_levels = [s.evidence_level for s in graph.sources.values()]
+    inv_n = len(inv_levels)
+    inv_peer = sum(1 for lvl in inv_levels if lvl >= LEVEL_PEER_REVIEWED)
+    inv_gov = sum(1 for lvl in inv_levels if lvl == LEVEL_GOVERNMENT)
+
     supporting_ids: set[str] = set()
     for claim in claims:
         for ev in claim.supporting:
             supporting_ids.add(ev.source_id)
-
-    levels = []
-    for sid in supporting_ids:
-        src = graph.sources.get(sid)
-        if src is not None:
-            levels.append(src.evidence_level)
-        else:
-            # Fall back to the level attached to an evidence item.
-            for claim in claims:
-                for ev in claim.supporting:
-                    if ev.source_id == sid:
-                        levels.append(ev.evidence_level)
-                        break
-
-    n = len(supporting_ids)
-    n_peer = sum(1 for lvl in levels if lvl >= LEVEL_PEER_REVIEWED)
-    n_gov = sum(1 for lvl in levels if lvl == LEVEL_GOVERNMENT)
-    # Best numeric convergence among claims (0 if none have ≥2 values).
+    claim_n = len(supporting_ids)
     conv = 0.0
     for claim in claims:
         values = claim.supporting_values()
         if len(values) >= 2:
-            # Local agreement: largest cluster / n within 15% window.
             conv = max(conv, _local_convergence(values))
 
     met = {
-        GAP_SOURCES: n >= budget.min_sources,
-        GAP_PEER_REVIEWED: n_peer >= budget.min_peer_reviewed,
-        GAP_GOVERNMENT: n_gov >= budget.min_government,
+        GAP_PEER_REVIEWED: inv_peer >= budget.min_peer_reviewed,
+        GAP_GOVERNMENT: inv_gov >= budget.min_government,
+        GAP_SOURCES: claim_n >= budget.min_sources,
         GAP_CONVERGENCE: conv >= budget.convergence,
+        GAP_CLAIMS: claim_n > 0 or inv_n == 0,
     }
     gaps: list[Gap] = []
-    if not met[GAP_SOURCES]:
-        gaps.append(Gap(
-            GAP_SOURCES, budget.min_sources, n,
-            f"need ≥{budget.min_sources} supporting sources (have {n})",
-        ))
     if not met[GAP_PEER_REVIEWED]:
         gaps.append(Gap(
-            GAP_PEER_REVIEWED, budget.min_peer_reviewed, n_peer,
-            f"need ≥{budget.min_peer_reviewed} peer-reviewed (have {n_peer})",
+            GAP_PEER_REVIEWED, budget.min_peer_reviewed, inv_peer,
+            f"need ≥{budget.min_peer_reviewed} peer-reviewed sources in inventory "
+            f"(have {inv_peer})",
         ))
     if not met[GAP_GOVERNMENT]:
         gaps.append(Gap(
-            GAP_GOVERNMENT, budget.min_government, n_gov,
-            f"need ≥{budget.min_government} government/lab (have {n_gov})",
+            GAP_GOVERNMENT, budget.min_government, inv_gov,
+            f"need ≥{budget.min_government} government/lab sources in inventory "
+            f"(have {inv_gov})",
         ))
-    if not met[GAP_CONVERGENCE]:
+    if inv_n > 0 and claim_n == 0:
+        gaps.append(Gap(
+            GAP_CLAIMS, 1, 0,
+            f"read/acquired {inv_n} source(s) but extracted 0 supporting claims",
+        ))
+    elif not met[GAP_SOURCES]:
+        gaps.append(Gap(
+            GAP_SOURCES, budget.min_sources, claim_n,
+            f"need ≥{budget.min_sources} claim-backed sources (have {claim_n})",
+        ))
+    if claim_n > 0 and not met[GAP_CONVERGENCE]:
         gaps.append(Gap(
             GAP_CONVERGENCE, 1, 0 if conv < budget.convergence else 1,
             f"convergence {conv:.0%} < {budget.convergence:.0%} threshold",
         ))
     return GapStatus(
         gaps=gaps, met=met, convergence=conv,
-        n_sources=n, n_peer=n_peer, n_gov=n_gov,
+        n_sources=claim_n, n_peer=inv_peer, n_gov=inv_gov,
     )
 
 

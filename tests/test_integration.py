@@ -59,9 +59,14 @@ class InMemoryJobRepo:
         self._jobs: dict[str, Job] = {}
         self._steps: dict[str, JobStep] = {}
 
-    def create_job(self, objective, *, session_id=None) -> Job:
-        job = Job(id=str(uuid.uuid4()), objective=objective, status=JOB_QUEUED,
-                  session_id=session_id)
+    def create_job(self, objective, *, session_id=None, metadata=None) -> Job:
+        job = Job(
+            id=str(uuid.uuid4()),
+            objective=objective,
+            status=JOB_QUEUED,
+            session_id=session_id,
+            metadata=dict(metadata or {}),
+        )
         self._jobs[job.id] = job
         return job
 
@@ -109,6 +114,13 @@ class InMemoryJobRepo:
             changes["result"] = result
         self._jobs[job_id] = dataclasses.replace(job, **changes)
 
+    def merge_job_metadata(self, job_id, patch) -> bool:
+        job = self._jobs[job_id]
+        meta = dict(job.metadata or {})
+        meta.update(patch)
+        self._jobs[job_id] = dataclasses.replace(job, metadata=meta)
+        return True
+
     def count_jobs(self, *, status=None) -> int:
         return len(self.list_jobs(status=status, limit=10_000))
 
@@ -140,12 +152,20 @@ def _assistant_with_research(tools: ToolRegistry) -> AssistantService:
 
 
 def _drain(job_service: JobService, pending: list) -> None:
-    # Synchronous scheduler stand-in: keep advancing until the job is terminal.
+    # Synchronous scheduler stand-in: drain plan_job + advance_job until terminal.
     guard = 0
     while pending:
         guard += 1
         assert guard < 50, "job did not converge to a terminal state"
-        job_service.advance_job_task(pending.pop(0))
+        item = pending.pop(0)
+        if isinstance(item, tuple):
+            task_type, payload = item
+        else:
+            task_type, payload = "advance_job", item
+        if task_type == "plan_job":
+            job_service.plan_job_task(payload)
+        else:
+            job_service.advance_job_task(payload)
 
 
 def test_research_job_runs_end_to_end_and_reports():
@@ -159,12 +179,14 @@ def test_research_job_runs_end_to_end_and_reports():
         repo,
         JobPlanner(Planner(), None),  # deterministic decomposition (no LLM)
         assistant,
-        enqueue=lambda task_type, payload: pending.append(payload),
+        enqueue=lambda task_type, payload: pending.append((task_type, payload)),
         reports=reports,
     )
 
     detail = job_service.create_job("research the value of X")
     job_id = detail["job"].id
+    assert detail["phase"] == "planning_queued"
+    assert detail["progress"]["total"] == 0
     _drain(job_service, pending)
 
     job = repo.get_job(job_id)
@@ -184,9 +206,11 @@ def test_research_job_decomposes_to_research_capability():
     pending: list = []
     job_service = JobService(
         repo, JobPlanner(Planner(), None), assistant,
-        enqueue=lambda task_type, payload: pending.append(payload),
+        enqueue=lambda task_type, payload: pending.append((task_type, payload)),
     )
-    job_service.create_job("investigate the value of Y with evidence")
+    detail = job_service.create_job("investigate the value of Y with evidence")
+    assert detail["progress"]["total"] == 0
+    job_service.plan_job_task(pending.pop(0)[1])
     job = repo.list_jobs()[0]
     steps = repo.list_steps(job.id)
     assert steps and steps[0].capability == "research"

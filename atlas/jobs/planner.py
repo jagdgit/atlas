@@ -84,21 +84,36 @@ class JobPlanner:
         *,
         max_steps: int = 6,
         research_first: bool = False,
+        timeout: float | None = 60.0,
+        num_predict: int | None = 512,
         logger: logging.Logger | None = None,
     ) -> None:
         self._planner = planner or Planner()
         self._llm = llm
         self._max_steps = max_steps
         self._research_first = research_first
+        self._timeout = timeout
+        self._num_predict = num_predict
         self._logger = logger or logging.getLogger("atlas.jobs.planner")
+        # Provenance of the most recent decompose() call: llm | fallback | deterministic
+        self.last_source: str = "deterministic"
 
     def decompose(self, objective: str) -> list[DecomposedStep]:
         objective = (objective or "").strip()
         if not objective:
+            self.last_source = "deterministic"
             return [DecomposedStep(Intent.REACT, "agent", {"query": ""}, "Reason about the objective.")]
 
-        steps = self._llm_decompose(objective) if self._llm is not None else []
-        if not steps:
+        steps: list[DecomposedStep] = []
+        if self._llm is not None:
+            steps = self._llm_decompose(objective)
+            if steps:
+                self.last_source = "llm"
+            else:
+                self.last_source = "fallback"
+                steps = self._deterministic(objective)
+        else:
+            self.last_source = "deterministic"
             steps = self._deterministic(objective)
         # The fast single-call `answer` fallback is a chat-responsiveness optimization
         # (RC/D3.12); a background job is for deep work, so a bare `answer` step is
@@ -154,12 +169,19 @@ class JobPlanner:
     def _llm_decompose(self, objective: str) -> list[DecomposedStep]:
         from atlas.llm.provider import ChatMessage
 
+        options: dict[str, Any] = {"think": False}
+        if self._timeout is not None:
+            options["timeout"] = float(self._timeout)
+        if self._num_predict is not None:
+            options["num_predict"] = int(self._num_predict)
+
         try:
             resp = self._llm.for_role("planner").chat(
                 [
                     ChatMessage("system", _DECOMPOSE_SYSTEM),
                     ChatMessage("user", objective),
-                ]
+                ],
+                **options,
             )
             raw = (resp.text or "").strip()
         except Exception:  # noqa: BLE001 - LLM failure must fall back, never crash

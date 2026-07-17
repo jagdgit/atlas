@@ -642,6 +642,46 @@ keeps the full suite green and adds a real-run acceptance check.
    MEDIUM (A6). Researcher retrieval defaults to `{external, research, experience}`.
    `code`/`personal`/`professional` remain Stage 4–5.
 
+### 8a. Stage 3.1 — live-run hardening (post-M1 critique, 2026-07-14 → 2026-07-17)
+
+A real soiling job proved the **pipeline architecture is correct** and Atlas was
+**honest** (`INSUFFICIENT` instead of fabricating). It also exposed cognition bugs:
+
+| # | Live-run failure | Stage 3.1 fix |
+|---|------------------|---------------|
+| 1 | **0 claims from every paper** (incl. a full ar5iv PV paper) | Extractor: include `methods`, **body fallback** when preferred sections are prose-only; normalize ar5iv/LaTeX `%` + European decimals; **45s LLM timeout** so prose pass can't burn ~5 min/doc |
+| 2 | **Topic drift** ("solar" → astronomy / Solar Orbiter) | New `atlas/research/relevance.py` — deterministic relevance gate **before acquire**; drops astronomy/space-weather when objective is PV/soiling |
+| 3 | Report said **"0 peer-reviewed"** despite IEEE inventory | Gaps: peer/gov counted from **classified source inventory**; new `claims` gap when inventory exists but extraction yielded nothing (don't keep searching for more IEEE) |
+| 4 | Doc-cap consumed by off-topic papers | Relevance filter + prefer on-topic / higher-level sources when filling the cap |
+
+**Still deferred (agree with the review — not Stage 3.1):**
+- Subquestion decomposition / research notebook / society-of-workers → **Stage 4** research cognition
+- Richer paper structure store (tables/equations/datasets as first-class) → fast-follow after claims work
+- Browser full-text for paywalls → still deferred (D3.3c)
+- Fixed multi-step job table (A1 model A) → still fast-follow
+
+**Verdict to preserve:** kernel / job engine / workspace / evidence graph / event bus stay;
+fix the *researcher*, not the operating system.
+
+### 8b. Stage 3.1 product follow-ups — mid-job input + data usage (2026-07-17)
+
+Two product asks after Stage 3.1 hardening; both ✅ **SHIPPED**.
+
+| # | Ask | What shipped |
+|---|-----|--------------|
+| 1 | **Steer a job while it runs** | `POST /v1/jobs/{id}/input` + Console **Add guidance**. Queued in `inputs.jsonl` (+ `notes.md` / activity). Deep research **drains pending inputs at the start of each round** and turns them into extra scholar/web queries. Does **not** interrupt mid-document acquire/extract. Blocked steps still use Resume (HITL). |
+| 2 | **Data size on every job result** | Workspace `usage_stats()` → `job.result.usage` + report/answer **Data usage** footer (text read ≈ chars across docs, downloads bytes, workspace total). Live approximate usage also on `GET /v1/jobs/{id}` while running. This is **job workspace / artifact size**, not a full DB dump. |
+
+**Files:** `atlas/jobs/workspace.py` (`append_user_input` / `pending_user_inputs` / `usage_stats`), `atlas/jobs/service.py` (`add_job_input`, finalize usage), `atlas/research/service.py` (`_absorb_user_inputs`), `atlas/api/routes.py` + schemas, Console `app.js`.
+
+**Still not in scope:** live hot-injection into an in-flight LLM extract of a single page; Postgres row-byte accounting per job.
+
+### 8c. Next — Stage 3.2 (**FINALIZED**)
+
+See **`docs/STAGE_3_2_PLAN.md`**. Order: **3.2a readers → 3.2b concurrent docs → 3.2c
+kernel Resource Manager → 3.2d Execution Planner + predictive resource refinement → 3.2e
+async Job Planner + create visibility**. **3.2a–e shipped.**
+
 ---
 
 ## 9. Non-goals for Stage 3 (explicit)
@@ -694,6 +734,9 @@ keeps the full suite green and adds a real-run acceptance check.
 - *Still OPEN (non-gating, decide as we reach them): D3.4 (classifier mechanism — shipping
   static map first), D3.5 (workspace retention), D3.6 (typed steps vs full DSL), D3.7
   (qualitative claim agreement).*
+- **2026-07-17 — Stage 3.1 product follow-ups SHIPPED (§8b):** mid-job user input
+  (`/v1/jobs/{id}/input`, drained between research rounds) + approximate data-usage footer
+  on every job result (workspace / text-read / downloads).
 
 ---
 

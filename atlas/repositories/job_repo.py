@@ -113,6 +113,25 @@ class JobRepository(BaseRepository):
             > 0
         )
 
+    def merge_job_metadata(
+        self, job_id: UUID | str, patch: dict[str, Any]
+    ) -> bool:
+        """Shallow-merge keys into ``job.jobs.metadata`` (3.2e planning phase)."""
+        if not patch:
+            return False
+        return (
+            self.execute(
+                """
+                UPDATE job.jobs
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (Jsonb(patch), str(job_id)),
+            )
+            > 0
+        )
+
     def count_jobs(self, *, status: str | None = None) -> int:
         if status:
             return (

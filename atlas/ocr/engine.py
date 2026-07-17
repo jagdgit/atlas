@@ -131,6 +131,15 @@ class OCRClient:
         if size > self._max_bytes:
             return {**base, "outcome": OCR_UNSUPPORTED,
                     "reason": f"image too large ({size} > {self._max_bytes} bytes)"}
+        # The concrete default engine can cheaply prove its dependencies are
+        # missing. Injectable engines may deliberately report degraded health
+        # while still serving a call, so preserve that seam.
+        if isinstance(self._engine, TesseractEngine) and not self._engine.available():
+            return {
+                **base,
+                "outcome": OCR_UNAVAILABLE,
+                "reason": f"{self._engine.name} engine unavailable",
+            }
         try:
             text = self._engine.image_to_text(str(target), lang=lang)
         except OCRUnavailable as exc:

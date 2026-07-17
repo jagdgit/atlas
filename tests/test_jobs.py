@@ -1,4 +1,4 @@
-"""Tests for the Job Engine service (S12): advance loop, blocking, resume, recovery.
+"""Tests for the Job Engine service (S12 + 3.2e): plan, advance, block, resume, recovery.
 
 Hermetic: an in-memory JobRepository stand-in and a scripted step runner drive the
 service without a database or LLM.
@@ -7,15 +7,19 @@ service without a database or LLM.
 from __future__ import annotations
 
 import dataclasses
+import time
 
-from atlas.jobs.planner import DecomposedStep
-from atlas.jobs.service import JobService
+from atlas.jobs.planner import DecomposedStep, JobPlanner
+from atlas.jobs.service import ADVANCE_TASK, PLAN_TASK, JobService
 from atlas.models.job import (
     JOB_CANCELLED,
     JOB_COMPLETED,
     JOB_COMPLETED_WITH_BLOCKS,
+    JOB_PHASE_KEY,
     JOB_QUEUED,
     JOB_RUNNING,
+    PHASE_PLANNING_QUEUED,
+    PHASE_READY,
     STEP_BLOCKED,
     STEP_DONE,
     STEP_PENDING,
@@ -37,7 +41,12 @@ class FakeJobRepo:
 
     def create_job(self, objective, *, session_id=None, metadata=None):
         jid = self._id("job")
-        job = Job(id=jid, objective=objective, session_id=session_id)
+        job = Job(
+            id=jid,
+            objective=objective,
+            session_id=session_id,
+            metadata=dict(metadata or {}),
+        )
         self._jobs[jid] = job
         return job
 
@@ -58,6 +67,13 @@ class FakeJobRepo:
         if error is not None:
             changes["error"] = error
         self._jobs[str(job_id)] = dataclasses.replace(job, **changes)
+        return True
+
+    def merge_job_metadata(self, job_id, patch):
+        job = self._jobs[str(job_id)]
+        meta = dict(job.metadata or {})
+        meta.update(patch)
+        self._jobs[str(job_id)] = dataclasses.replace(job, metadata=meta)
         return True
 
     def count_jobs(self, *, status=None):
@@ -138,19 +154,28 @@ class ScriptedRunner:
 class FakePlanner:
     def __init__(self, steps):
         self._steps = steps
+        self.last_source = "deterministic"
 
     def decompose(self, objective):
+        self.last_source = "deterministic"
         return list(self._steps)
 
 
 def _drive(service, job_id, enqueue_log, limit=50):
-    """Simulate the scheduler: advance while the job re-enqueues itself."""
-    enqueue_log.clear()
-    enqueue_log.append(job_id)
+    """Simulate the scheduler: drain plan_job + advance_job for this job."""
     seen = 0
     while enqueue_log and seen < limit:
-        enqueue_log.pop(0)
-        service.advance_job_task({"job_id": job_id})
+        item = enqueue_log.pop(0)
+        if isinstance(item, tuple):
+            task_type, jid = item
+        else:
+            task_type, jid = ADVANCE_TASK, item
+        if jid != job_id:
+            continue
+        if task_type == PLAN_TASK:
+            service.plan_job_task({"job_id": job_id})
+        else:
+            service.advance_job_task({"job_id": job_id})
         seen += 1
 
 
@@ -172,27 +197,81 @@ class FakeLearning:
 
 
 def _make(planner_steps, runner, *, reports=None, events=None, learning=None,
-          workspace_root=None):
+          workspace_root=None, planner=None):
     repo = FakeJobRepo()
     enqueue_log = []
 
     def enqueue(task_type, payload):
-        enqueue_log.append(payload["job_id"])
+        enqueue_log.append((task_type, payload["job_id"]))
 
     service = JobService(
-        repo, FakePlanner(planner_steps), runner,
+        repo, planner or FakePlanner(planner_steps), runner,
         enqueue=enqueue, reports=reports, events=events, learning=learning,
         workspace_root=workspace_root,
     )
     return repo, service, enqueue_log
 
 
-def test_create_job_persists_steps_and_enqueues():
+def test_create_job_queues_planning_without_steps():
     steps = [DecomposedStep("react", "agent", {"query": "x"}, "reason")]
     repo, service, log = _make(steps, ScriptedRunner())
     detail = service.create_job("do x")
-    assert detail["progress"]["total"] == 1
-    assert len(log) == 1  # advance enqueued once
+    assert detail["phase"] == PHASE_PLANNING_QUEUED
+    assert detail["progress"]["total"] == 0
+    assert detail["steps"] == []
+    assert log == [(PLAN_TASK, detail["job"].id)]
+    assert detail["job"].metadata.get(JOB_PHASE_KEY) == PHASE_PLANNING_QUEUED
+
+
+def test_plan_job_persists_steps_and_enqueues_advance():
+    steps = [DecomposedStep("react", "agent", {"query": "x"}, "reason")]
+    repo, service, log = _make(steps, ScriptedRunner())
+    detail = service.create_job("do x")
+    jid = detail["job"].id
+    out = service.plan_job_task({"job_id": jid})
+    assert out["status"] == "planned"
+    assert out["steps"] == 1
+    planned = service.job_detail(jid)
+    assert planned["phase"] == PHASE_READY
+    assert planned["progress"]["total"] == 1
+    assert (ADVANCE_TASK, jid) in log
+
+
+def test_create_returns_fast_with_slow_llm_planner(tmp_path):
+    """3.2e: HTTP create must not wait on a slow/stuck planner LLM."""
+
+    class SlowRole:
+        def chat(self, messages, **options):
+            time.sleep(0.35)
+            raise TimeoutError("simulated planner timeout")
+
+    class SlowLLM:
+        def for_role(self, role):
+            return SlowRole()
+
+    planner = JobPlanner(llm=SlowLLM(), timeout=0.05, research_first=True)
+    repo, service, log = _make(
+        [], ScriptedRunner(), planner=planner, workspace_root=tmp_path
+    )
+
+    t0 = time.perf_counter()
+    detail = service.create_job("Research soiling estimation")
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 0.2  # must not wait on the slow LLM
+    assert detail["phase"] == PHASE_PLANNING_QUEUED
+    assert detail["progress"]["total"] == 0
+
+    service.plan_job_task({"job_id": detail["job"].id})
+    assert planner.last_source == "fallback"
+    planned = service.job_detail(detail["job"].id)
+    assert planned["progress"]["total"] == 1
+    assert planned["phase"] == PHASE_READY
+    assert any(
+        (a.get("data") or {}).get("fallback")
+        or "deterministic" in a["message"].lower()
+        for a in planned["activity"]
+        if a["phase"] == "planning"
+    )
 
 
 def test_workspace_created_and_report_persisted(tmp_path):
@@ -212,7 +291,9 @@ def test_workspace_created_and_report_persisted(tmp_path):
     _drive(service, jid, log)
     assert repo.get_job(jid).status == JOB_COMPLETED
     # notes.md records the lifecycle; report.md/result.json exist after finalize.
-    assert "job created" in ws.notes_path.read_text(encoding="utf-8")
+    notes = ws.notes_path.read_text(encoding="utf-8")
+    assert "job created" in notes
+    assert "planning" in notes.lower() or "planned" in notes.lower()
     assert ws.read_json("result.json")["status"] == JOB_COMPLETED
 
 
@@ -226,15 +307,17 @@ def test_activity_feed_recorded_and_exposed(tmp_path):
     )
     detail = service.create_job("watch me")
     jid = detail["job"].id
-    # creation already logged a lifecycle event, visible in the detail feed
-    assert any(a["phase"] == "lifecycle" for a in detail["activity"])
+    # creation already logged lifecycle + planning events
+    phases = [a["phase"] for a in detail["activity"]]
+    assert "lifecycle" in phases and "planning" in phases
+    assert any("planning queued" in a["message"].lower() for a in detail["activity"])
 
     _drive(service, jid, log)
     final = service.job_detail(jid)
     phases = [a["phase"] for a in final["activity"]]
     messages = " ".join(a["message"] for a in final["activity"])
-    assert "lifecycle" in phases and "step" in phases
-    assert "Job created" in messages
+    assert "lifecycle" in phases and "step" in phases and "planning" in phases
+    assert "submitted" in messages.lower() or "planning" in messages.lower()
     assert "completed" in messages.lower()
     # the same events were pushed live on the bus
     assert any(e[0] == "job.activity" for e in events.events)
@@ -325,7 +408,8 @@ def test_cancel_marks_job_cancelled_and_stops_advance():
     jid = detail["job"].id
     service.cancel_job(jid)
     assert repo.get_job(jid).status == JOB_CANCELLED
-    # advancing a cancelled job is a no-op
+    # advancing / planning a cancelled job is a no-op
+    assert service.plan_job_task({"job_id": jid})["status"] == JOB_CANCELLED
     service.advance_job_task({"job_id": jid})
     assert repo.get_job(jid).status == JOB_CANCELLED
 
@@ -335,6 +419,7 @@ def test_recovery_reenqueues_unfinished_and_resets_running_steps():
     repo, service, log = _make(steps, ScriptedRunner())
     detail = service.create_job("recover me")
     jid = detail["job"].id
+    service.plan_job_task({"job_id": jid})
     # simulate a crash mid-step
     repo.set_job_status(jid, JOB_RUNNING)
     step = repo.list_steps(jid)[0]
@@ -343,12 +428,23 @@ def test_recovery_reenqueues_unfinished_and_resets_running_steps():
 
     service.start()
     assert repo.list_steps(jid)[0].status == STEP_PENDING
-    assert jid in log  # re-enqueued
+    assert (ADVANCE_TASK, jid) in log
+
+
+def test_recovery_reenqueues_planning_without_steps():
+    steps = [DecomposedStep("react", "agent", {}, "a")]
+    repo, service, log = _make(steps, ScriptedRunner())
+    detail = service.create_job("still planning")
+    jid = detail["job"].id
+    log.clear()
+    service.start()
+    assert (PLAN_TASK, jid) in log
 
 
 def test_advance_unknown_job_is_safe():
     repo, service, log = _make([], ScriptedRunner())
     assert service.advance_job_task({"job_id": "nope"})["status"] == "unknown_job"
+    assert service.plan_job_task({"job_id": "nope"})["status"] == "unknown_job"
 
 
 # --- S17: report on finalize + notifications + blocked queue --------------
@@ -404,3 +500,84 @@ def test_list_blocked_aggregates_across_jobs():
     assert blocked[0]["job_id"] == jid
     assert blocked[0]["capability"] == "web"
     assert blocked[0]["objective"] == "needs web"
+
+
+def test_add_job_input_queues_for_workspace(tmp_path):
+    steps = [DecomposedStep("react", "agent", {}, "a")]
+    repo, service, log = _make(steps, ScriptedRunner(), workspace_root=tmp_path)
+    jid = service.create_job("study soiling")["job"].id
+    detail = service.add_job_input(jid, "prefer peer-reviewed soiling loss %")
+    assert any("User input" in a["message"] for a in detail["activity"])
+    from atlas.jobs.workspace import JobWorkspace
+
+    ws = JobWorkspace.for_job(tmp_path, jid)
+    assert ws.pending_user_inputs() == ["prefer peer-reviewed soiling loss %"]
+
+
+def test_finalize_attaches_usage(tmp_path):
+    steps = [DecomposedStep("react", "agent", {}, "a")]
+    repo, service, log = _make(steps, ScriptedRunner(), workspace_root=tmp_path)
+    jid = service.create_job("measure usage")["job"].id
+    from atlas.jobs.workspace import JobWorkspace
+
+    ws = JobWorkspace.for_job(tmp_path, jid)
+    ws.document_path("s1").write_text("soiling loss data " * 50, encoding="utf-8")
+    _drive(service, jid, log)
+    job = repo.get_job(jid)
+    assert "usage" in (job.result or {})
+    assert "human" in job.result["usage"]
+    assert "Text read" in job.result["usage"]["human"]
+
+
+def test_finalize_uses_workspace_claims_not_empty_report(tmp_path):
+    # Regression: finalize used to render claims=[] and overwrite research
+    # report.md with "_No verified claims._" / INSUFFICIENT.
+    steps = [DecomposedStep("research", "research", {}, "research it")]
+    repo, service, log = _make(
+        steps, ScriptedRunner(), reports=_reports(), workspace_root=tmp_path
+    )
+    jid = service.create_job("study soiling estimators")["job"].id
+    from atlas.jobs.workspace import JobWorkspace
+
+    ws = JobWorkspace.for_job(tmp_path, jid)
+    ws.write_json(
+        "claims.json",
+        [
+            {
+                "id": "c1",
+                "statement": "SVR linear kernel beat ridge by roughly 0.4%.",
+                "confidence": "LOW",
+                "confidence_score": 0.4,
+                "supporting_sources": [
+                    {
+                        "source_id": "https://arxiv.org/abs/2301.12939",
+                        "evidence_level": 3,
+                        "level_name": "L3 government/lab",
+                    }
+                ],
+                "contradicting_sources": [],
+            }
+        ],
+    )
+    ws.write_json(
+        "evidence.json",
+        {
+            "sources": [
+                {
+                    "id": "https://arxiv.org/abs/2301.12939",
+                    "title": "Data-driven soiling detection in PV modules",
+                    "url": "https://arxiv.org/abs/2301.12939",
+                    "evidence_level": 3,
+                    "level_name": "L3 government/lab",
+                }
+            ],
+            "claims": [],
+        },
+    )
+    _drive(service, jid, log)
+    job = repo.get_job(jid)
+    md = job.result["report"]
+    assert "_No verified claims._" not in md
+    assert "SVR linear kernel" in md
+    assert job.result["overall_confidence"] == "LOW"
+    assert "Data-driven soiling detection" in md

@@ -1,10 +1,15 @@
 """Job Engine service — decompose, advance, block, resume, recover (S12).
 
-Design (D1/R1/R3/R4/Q1/Q10):
-- **One step per scheduler task.** `create_job` enqueues an ``advance_job`` task;
-  the handler runs *one* runnable step, then **re-enqueues itself**. Short tasks let
-  many jobs interleave on the worker pool (R1, CPU-parallel) while steps within a job
-  stay sequential (Q1). LLM calls still serialise through the single LLM lane (R4).
+Design (D1/R1/R3/R4/Q1/Q10 + 3.2e):
+- **Async planning (3.2e).** ``create_job`` inserts the job, records planning
+  activity, and enqueues ``plan_job``. LLM decompose runs in the background with a
+  bounded timeout; the HTTP create path never waits on Ollama. Deterministic
+  fallback remains on timeout/error (D32.18).
+- **One step per scheduler task.** After planning, ``plan_job`` enqueues
+  ``advance_job``; the handler runs *one* runnable step, then **re-enqueues itself**.
+  Short tasks let many jobs interleave on the worker pool (R1, CPU-parallel) while
+  steps within a job stay sequential (Q1). LLM calls still serialise through the
+  single LLM lane (R4).
 - **Blocking is non-fatal (R3).** A step that needs the user (missing capability,
   missing file, login) is marked ``blocked``; the loop simply advances past it to the
   next runnable step. Dependents of a blocked step cascade to ``blocked``; dependents
@@ -12,8 +17,9 @@ Design (D1/R1/R3/R4/Q1/Q10):
   ``completed_with_blocks`` and is **resumable**.
 - **Reuse, not reimplementation (D1).** Steps run through ``AssistantService.run_step``
   — the exact dispatch a chat turn uses.
-- **Reboot recovery (Q10).** On start, steps left ``running`` reset to ``pending`` and
-  unfinished jobs are re-enqueued.
+- **Reboot recovery (Q10).** On start, steps left ``running`` reset to ``pending``;
+  jobs still planning (no steps) re-enqueue ``plan_job``; jobs with steps re-enqueue
+  ``advance_job``.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from atlas.conversation.service import ConversationContext
 from atlas.jobs.activity import (
     PHASE_LIFECYCLE,
+    PHASE_PLANNING,
     PHASE_STEP,
     ActivityRecorder,
 )
@@ -34,9 +41,14 @@ from atlas.models.job import (
     JOB_COMPLETED,
     JOB_COMPLETED_WITH_BLOCKS,
     JOB_FAILED,
+    JOB_PHASE_KEY,
+    JOB_PLANNING_PHASES,
     JOB_QUEUED,
     JOB_RUNNING,
     JOB_TERMINAL,
+    PHASE_PLANNING as JOB_PHASE_PLANNING,
+    PHASE_PLANNING_QUEUED,
+    PHASE_READY,
     STEP_BLOCKED,
     STEP_DONE,
     STEP_FAILED,
@@ -54,6 +66,7 @@ if TYPE_CHECKING:
     from atlas.services.assistant_service import AssistantService
 
 ADVANCE_TASK = "advance_job"
+PLAN_TASK = "plan_job"
 
 
 class JobService:
@@ -99,9 +112,70 @@ class JobService:
     def create_job(
         self, objective: str, *, session_id: str | None = None
     ) -> dict[str, Any]:
-        """Create a job, decompose it into steps, and enqueue it to run."""
-        job = self._repo.create_job(objective, session_id=session_id)
-        steps = self._planner.decompose(objective)
+        """Create a job and schedule async planning (3.2e).
+
+        Returns immediately after the job row exists and ``plan_job`` is enqueued.
+        LLM JobPlanner decompose runs in the background; steps appear when planning
+        finishes (or falls back to the deterministic plan).
+        """
+        job = self._repo.create_job(
+            objective,
+            session_id=session_id,
+            metadata={JOB_PHASE_KEY: PHASE_PLANNING_QUEUED},
+        )
+        self._logger.info("created job %s (planning queued): %s", job.id, objective[:80])
+        ws = self._workspace(job.id)
+        if ws is not None:
+            try:
+                ws.init_manifest(objective=objective)
+                ws.append_note(f"job created — planning queued: {objective[:120]}")
+            except Exception:  # noqa: BLE001 - workspace I/O must never fail a job
+                self._logger.debug("job %s workspace init failed", job.id)
+        self._recorder(job.id).record(
+            PHASE_LIFECYCLE,
+            "Job submitted — planning queued.",
+            objective=objective[:200],
+            job_phase=PHASE_PLANNING_QUEUED,
+        )
+        self._recorder(job.id).record(
+            PHASE_PLANNING,
+            "Waiting for planner capacity.",
+            job_phase=PHASE_PLANNING_QUEUED,
+        )
+        self._enqueue_plan(job.id)
+        return self.job_detail(job.id)
+
+    def plan_job_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Run JobPlanner decompose, persist steps, then enqueue advance (3.2e)."""
+        job_id = payload.get("job_id")
+        job = self._repo.get_job(job_id) if job_id else None
+        if job is None:
+            return {"status": "unknown_job", "job_id": job_id}
+        if job.status in JOB_TERMINAL:
+            return {"status": job.status, "job_id": job_id}
+
+        existing = self._repo.list_steps(job.id)
+        if existing:
+            # Already planned (duplicate plan task / recovery race) — just advance.
+            self._set_phase(job.id, PHASE_READY)
+            self._enqueue_advance(job.id)
+            return {
+                "status": "already_planned",
+                "job_id": job.id,
+                "steps": len(existing),
+            }
+
+        self._set_phase(job.id, JOB_PHASE_PLANNING)
+        self._recorder(job.id).record(
+            PHASE_PLANNING,
+            "Planner started — decomposing objective.",
+            job_phase=JOB_PHASE_PLANNING,
+        )
+
+        steps = self._planner.decompose(job.objective)
+        source = getattr(self._planner, "last_source", "deterministic")
+        fallback = source == "fallback"
+
         for ordinal, step in enumerate(steps):
             self._repo.add_step(
                 job.id,
@@ -112,36 +186,71 @@ class JobService:
                 description=step.description,
                 depends_on=step.depends_on,
             )
-        self._logger.info(
-            "created job %s (%d step(s)): %s", job.id, len(steps), objective[:80]
+
+        if fallback:
+            self._recorder(job.id).record(
+                PHASE_PLANNING,
+                "Planner timed out or failed — using deterministic plan.",
+                steps=len(steps),
+                fallback=True,
+                source=source,
+            )
+        else:
+            self._recorder(job.id).record(
+                PHASE_PLANNING,
+                f"Plan ready — {len(steps)} step(s).",
+                steps=len(steps),
+                fallback=False,
+                source=source,
+            )
+
+        self._set_phase(job.id, PHASE_READY)
+        self._recorder(job.id).record(
+            PHASE_LIFECYCLE,
+            f"Planning complete — {len(steps)} step(s); starting work.",
+            steps=len(steps),
+            job_phase=PHASE_READY,
         )
         ws = self._workspace(job.id)
         if ws is not None:
             try:
-                ws.init_manifest(objective=objective)
-                ws.append_note(f"job created ({len(steps)} step(s)): {objective[:120]}")
-            except Exception:  # noqa: BLE001 - workspace I/O must never fail a job
-                self._logger.debug("job %s workspace init failed", job.id)
-        self._recorder(job.id).record(
-            PHASE_LIFECYCLE,
-            f"Job created — planned {len(steps)} step(s).",
-            steps=len(steps),
-            objective=objective[:200],
+                ws.append_note(f"planned {len(steps)} step(s)")
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._logger.info(
+            "planned job %s (%d step(s)%s)",
+            job.id,
+            len(steps),
+            ", fallback" if fallback else "",
         )
         self._enqueue_advance(job.id)
-        return self.job_detail(job.id)
+        return {
+            "status": "planned",
+            "job_id": job.id,
+            "steps": len(steps),
+            "fallback": fallback,
+        }
 
     def job_detail(self, job_id: str) -> dict[str, Any]:
         job = self._repo.get_job(job_id)
         if job is None:
             raise KeyError(f"no job {job_id}")
         steps = self._repo.list_steps(job_id)
+        # Prefer finalized usage; otherwise approximate from the live workspace.
+        usage = None
+        if isinstance(getattr(job, "result", None), dict) and job.result.get("usage"):
+            usage = job.result["usage"]
+        else:
+            usage = self._usage_for_job(job_id, steps) or None
         return {
             "job": job,
             "steps": steps,
             "progress": self._progress(steps),
             "blocked": [self._blocked_view(s) for s in steps if s.status == STEP_BLOCKED],
             "activity": self._activity_tail(job_id),
+            "usage": usage,
+            "phase": self._phase_of(job),
         }
 
     def _activity_tail(self, job_id: str, limit: int = 100) -> list[dict[str, Any]]:
@@ -284,10 +393,16 @@ class JobService:
             return
 
         if outcome.blocked:
+            blocked_result: dict[str, Any] = {
+                "answer": outcome.answer,
+                "tool_calls": tool_calls,
+            }
+            if getattr(outcome, "extras", None):
+                blocked_result.update(outcome.extras)
             self._repo.set_step_status(
                 step.id,
                 STEP_BLOCKED,
-                result={"answer": outcome.answer, "tool_calls": tool_calls},
+                result=blocked_result,
                 blocked_reason=outcome.blocked_reason or "needs the user",
                 bump_attempts=True,
             )
@@ -318,15 +433,18 @@ class JobService:
             state="done",
             tools=[tc.get("action") or tc.get("intent") for tc in tool_calls],
         )
+        done_result: dict[str, Any] = {
+            "answer": outcome.answer,
+            "citations": outcome.citations,
+            "run_id": outcome.run_id,
+            "tool_calls": tool_calls,
+        }
+        if getattr(outcome, "extras", None):
+            done_result.update(outcome.extras)
         self._repo.set_step_status(
             step.id,
             STEP_DONE,
-            result={
-                "answer": outcome.answer,
-                "citations": outcome.citations,
-                "run_id": outcome.run_id,
-                "tool_calls": tool_calls,
-            },
+            result=done_result,
             bump_attempts=True,
         )
 
@@ -366,6 +484,17 @@ class JobService:
         # Prefer research-pipeline confidence from workspace evidence when present
         # (C4/C6) — the scientific report written during the research step.
         self._enrich_from_research(job_id, result)
+        usage = self._usage_for_job(job_id, steps)
+        if usage:
+            result["usage"] = usage
+            # Append a short data-usage footer to the report markdown.
+            footer = "\n\n## Data usage\n" + usage.get("human", "") + "\n"
+            if result.get("report"):
+                result["report"] = (result["report"] or "").rstrip() + footer
+            if isinstance(result.get("answer"), str) and result["answer"]:
+                result["answer"] = result["answer"].rstrip() + "\n\nData usage: " + usage.get(
+                    "human", ""
+                )
         self._persist_workspace(job_id, status, result)
         self._repo.set_job_status(job_id, status, result=result)
         self._logger.info("job %s finalized: %s", job_id, status)
@@ -423,48 +552,226 @@ class JobService:
         if ws is None:
             return
         try:
+            from atlas.evidence.models import CONFIDENCE_INSUFFICIENT
+
             claims = ws.read_json("claims.json") or []
-            if claims and not result.get("overall_confidence"):
-                # Most common confidence among verified claims.
+            if claims:
                 from collections import Counter
+
                 counts = Counter(
                     (c.get("confidence") or "UNVERIFIED") for c in claims
                     if isinstance(c, dict)
                 )
                 if counts:
-                    result["overall_confidence"] = counts.most_common(1)[0][0]
-            if claims:
+                    from_claims = counts.most_common(1)[0][0]
+                    current = result.get("overall_confidence")
+                    # Workspace claims win over an empty finalize render that
+                    # stamped INSUFFICIENT / None.
+                    if current in (None, CONFIDENCE_INSUFFICIENT) or not current:
+                        result["overall_confidence"] = from_claims
                 result["research_claims"] = len(claims)
         except Exception:  # noqa: BLE001
             pass
 
+    def _usage_for_job(self, job_id: str, steps: list[JobStep]) -> dict[str, Any]:
+        """Approximate data size read/stored for this job (workspace + pipeline)."""
+        usage: dict[str, Any] = {}
+        ws = self._workspace(job_id)
+        if ws is not None:
+            try:
+                usage.update(ws.usage_stats())
+            except Exception:  # noqa: BLE001
+                pass
+        # Merge any pipeline usage the research step already recorded.
+        for step in steps:
+            pipe = (step.result or {}).get("pipeline") or {}
+            if not pipe and isinstance((step.result or {}).get("answer"), str):
+                continue
+            # tool_calls may carry the research payload indirectly; also check nested.
+            for key in ("chars_read", "bytes_downloaded", "documents_read"):
+                if key in pipe and key not in usage:
+                    usage[key] = pipe[key]
+            nested = (step.result or {}).get("usage")
+            if isinstance(nested, dict):
+                for k, v in nested.items():
+                    usage.setdefault(k, v)
+        # D32.14 / A32.23: per-job verified work rate, not CPU utilization.
+        claims = ws.read_json("claims.json", []) if ws is not None else []
+        if isinstance(claims, list) and claims:
+            graded = sum(
+                1
+                for claim in claims
+                if isinstance(claim, dict)
+                and claim.get("confidence") in {"LOW", "MEDIUM", "HIGH"}
+            )
+            starts = [step.started_at for step in steps if step.started_at is not None]
+            ends = [step.completed_at for step in steps if step.completed_at is not None]
+            if (not starts or not ends) and ws is not None:
+                # In-memory/test repositories may not stamp model timestamps;
+                # the durable activity feed still records step boundaries.
+                try:
+                    from datetime import datetime
+
+                    events = ws.read_activity()
+                    step_events = [
+                        event
+                        for event in events
+                        if event.get("phase") == "step" and event.get("ts")
+                    ]
+                    if step_events:
+                        parsed = [
+                            datetime.fromisoformat(str(event["ts"]))
+                            for event in step_events
+                        ]
+                        starts = starts or [min(parsed)]
+                        ends = ends or [max(parsed)]
+                except (TypeError, ValueError, OSError):
+                    pass
+            if graded and starts and ends:
+                elapsed = max(0.001, (max(ends) - min(starts)).total_seconds())
+                usage["verified_claims"] = graded
+                usage["research_elapsed_seconds"] = round(elapsed, 3)
+                usage["verified_claims_per_hour"] = round(graded * 3600.0 / elapsed, 3)
+        if usage and "human" not in usage:
+            from atlas.jobs.workspace import _format_usage
+            usage["human"] = _format_usage(
+                int(usage.get("workspace_bytes", 0)),
+                int(usage.get("downloads_bytes", 0)),
+                int(usage.get("documents_bytes", 0)),
+                int(usage.get("documents_chars", usage.get("chars_read", 0))),
+                int(usage.get("documents_count", usage.get("documents_read", 0))),
+            )
+        if usage.get("verified_claims_per_hour") is not None:
+            rate = usage["verified_claims_per_hour"]
+            metric = (
+                f"Verified work ≈ {rate:g} graded claim(s)/hour "
+                f"({usage['verified_claims']} claim(s))."
+            )
+            human = str(usage.get("human") or "").strip()
+            if metric not in human:
+                usage["human"] = f"{human} {metric}".strip()
+        return usage
+
+    def add_job_input(self, job_id: str, text: str) -> dict[str, Any]:
+        """Queue human guidance for a running or blocked job.
+
+        Inputs land in ``inputs.jsonl`` (and ``notes.md``). Deep research drains
+        them at the start of each round and turns them into extra search queries.
+        They do not interrupt an in-flight extract/acquire of a single document.
+        """
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("empty input")
+        job = self._repo.get_job(job_id)
+        if job is None:
+            raise KeyError(f"no job {job_id}")
+        ws = self._workspace(job_id)
+        if ws is None:
+            raise RuntimeError("job has no workspace; inputs require workspace_root")
+        # Durable queue: research drains these between rounds; also lands in notes.md.
+        ws.append_user_input(text)
+        self._recorder(job_id).record(
+            PHASE_LIFECYCLE,
+            f"User input received: {text[:160]}",
+            input_preview=text[:200],
+        )
+        return self.job_detail(job_id)
+
     def _build_report(self, job_id: str, steps: list[JobStep]) -> dict[str, Any] | None:
-        """Attach a scientific-review report (§5a.5) to the finished job (S17)."""
+        """Attach a scientific-review report (§5a.5) to the finished job (S17).
+
+        Prefer claims/sources already written by deep research into the job
+        workspace. Finalizing with ``claims=[]`` used to overwrite a good
+        research report with "_No verified claims._" / INSUFFICIENT.
+        """
         if self._reports is None:
             return None
         job = self._repo.get_job(job_id)
         objective = job.objective if job else ""
         answer = self._answer(steps)
-        sources: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for step in steps:
-            for cit in (step.result or {}).get("citations", []) or []:
-                did = str(cit.get("document_id") or cit.get("chunk_id") or "")
-                if did and did not in seen:
-                    seen.add(did)
-                    sources.append(
-                        {
-                            "id": did,
-                            "title": (cit.get("snippet") or "")[:80] or did,
-                            "evidence_level": 3,
-                        }
-                    )
+        claims, sources = self._research_artifacts(job_id)
+        if not sources:
+            seen: set[str] = set()
+            for step in steps:
+                for cit in (step.result or {}).get("citations", []) or []:
+                    did = str(cit.get("document_id") or cit.get("chunk_id") or "")
+                    if did and did not in seen:
+                        seen.add(did)
+                        sources.append(
+                            {
+                                "id": did,
+                                "title": (cit.get("snippet") or "")[:80] or did,
+                                "evidence_level": 3,
+                            }
+                        )
+        # If research already wrote a full report and we have no claims to
+        # re-render, keep that markdown rather than clobbering it.
+        if not claims:
+            existing = self._existing_research_report(job_id)
+            if existing is not None:
+                return existing
         try:
             return self._reports.render(
-                objective, claims=[], sources=sources, answer=answer, notes=answer[:600]
+                objective,
+                claims=claims,
+                sources=sources,
+                answer=answer if not claims else "",
+                notes=answer[:600],
             )
         except Exception:  # noqa: BLE001 - a report must never fail the job
             self._logger.exception("job %s report generation failed", job_id)
+            return None
+
+    def _research_artifacts(
+        self, job_id: str
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Load claims + sources from the research workspace when present."""
+        ws = self._workspace(job_id)
+        if ws is None:
+            return [], []
+        try:
+            claims = ws.read_json("claims.json") or []
+            if not isinstance(claims, list):
+                claims = []
+            evidence = ws.read_json("evidence.json") or {}
+            sources = evidence.get("sources") if isinstance(evidence, dict) else []
+            if not isinstance(sources, list):
+                sources = []
+            return claims, sources
+        except Exception:  # noqa: BLE001
+            return [], []
+
+    def _existing_research_report(self, job_id: str) -> dict[str, Any] | None:
+        """Reuse report.md written during the research step, if any."""
+        ws = self._workspace(job_id)
+        if ws is None:
+            return None
+        try:
+            path = ws.report_path
+            if not path.is_file():
+                return None
+            md = path.read_text(encoding="utf-8")
+            if not md or "_No verified claims._" in md:
+                return None
+            # Prefer confidence from claims when present.
+            overall = None
+            claims = ws.read_json("claims.json") or []
+            if isinstance(claims, list) and claims:
+                from collections import Counter
+
+                counts = Counter(
+                    (c.get("confidence") or "UNVERIFIED")
+                    for c in claims
+                    if isinstance(c, dict)
+                )
+                if counts:
+                    overall = counts.most_common(1)[0][0]
+            return {
+                "markdown": md,
+                "sections": {},
+                "overall_confidence": overall,
+            }
+        except Exception:  # noqa: BLE001
             return None
 
     def _workspace(self, job_id: str) -> JobWorkspace | None:
@@ -499,6 +806,7 @@ class JobService:
                     "summary": result.get("summary", ""),
                     "progress": result.get("progress", {}),
                     "overall_confidence": result.get("overall_confidence"),
+                    "usage": result.get("usage"),
                 },
             )
             ws.append_note(f"finalized: {status}")
@@ -590,6 +898,25 @@ class JobService:
             return
         self._enqueue(ADVANCE_TASK, {"job_id": str(job_id)})
 
+    def _enqueue_plan(self, job_id: str) -> None:
+        if self._enqueue is None:
+            return
+        self._enqueue(PLAN_TASK, {"job_id": str(job_id)})
+
+    @staticmethod
+    def _phase_of(job: Job) -> str:
+        meta = job.metadata if isinstance(job.metadata, dict) else {}
+        phase = meta.get(JOB_PHASE_KEY)
+        if isinstance(phase, str) and phase:
+            return phase
+        return PHASE_READY
+
+    def _set_phase(self, job_id: str, phase: str) -> None:
+        try:
+            self._repo.merge_job_metadata(job_id, {JOB_PHASE_KEY: phase})
+        except Exception:  # noqa: BLE001 - phase is best-effort observability
+            self._logger.debug("job %s phase update failed", job_id)
+
     # --- Service lifecycle ---------------------------------------------
     def start(self) -> None:
         try:
@@ -600,10 +927,21 @@ class JobService:
             return
         if recovered:
             self._logger.info("recovered %d interrupted job step(s)", recovered)
+        planned = 0
+        advanced = 0
         for job in unfinished:
-            self._enqueue_advance(job.id)
-        if unfinished:
-            self._logger.info("re-enqueued %d unfinished job(s)", len(unfinished))
+            steps = self._repo.list_steps(job.id)
+            phase = self._phase_of(job)
+            if not steps or phase in JOB_PLANNING_PHASES:
+                self._enqueue_plan(job.id)
+                planned += 1
+            else:
+                self._enqueue_advance(job.id)
+                advanced += 1
+        if planned or advanced:
+            self._logger.info(
+                "re-enqueued %d planning + %d advance job(s)", planned, advanced
+            )
 
     def stop(self) -> None:
         return None

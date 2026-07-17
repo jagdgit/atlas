@@ -100,3 +100,27 @@ def test_research_first_off_keeps_bare_react():
     steps = JobPlanner(research_first=False).decompose("Data-driven soiling estimation")
     assert len(steps) == 1
     assert steps[0].intent == Intent.REACT
+
+
+def test_llm_timeout_options_passed_and_fallback_marked():
+    seen = {}
+
+    class _RoleStub:
+        def chat(self, messages, **options):
+            seen.update(options)
+            raise TimeoutError("planner timed out")
+
+    class FakeLLM:
+        def for_role(self, role):
+            assert role == "planner"
+            return _RoleStub()
+
+    planner = JobPlanner(
+        llm=FakeLLM(), timeout=12.5, num_predict=64, research_first=False
+    )
+    steps = planner.decompose("hello there")
+    assert seen.get("timeout") == 12.5
+    assert seen.get("num_predict") == 64
+    assert seen.get("think") is False
+    assert planner.last_source == "fallback"
+    assert len(steps) == 1

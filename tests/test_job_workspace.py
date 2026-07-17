@@ -88,3 +88,28 @@ def test_as_summary(tmp_path):
     assert summary["objective"] == "grid batteries"
     assert summary["source_count"] == 1
     assert summary["has_report"] is False
+
+
+def test_user_inputs_queue_and_drain(tmp_path):
+    ws = JobWorkspace.for_job(tmp_path, "1")
+    ws.append_user_input("focus on soiling loss")
+    ws.append_user_input("ignore solar wind papers")
+    first = ws.pending_user_inputs()
+    assert first == ["focus on soiling loss", "ignore solar wind papers"]
+    assert ws.pending_user_inputs() == []  # drained
+    ws.append_user_input("prefer IEEE")
+    assert ws.pending_user_inputs() == ["prefer IEEE"]
+    notes = ws.notes_path.read_text(encoding="utf-8")
+    assert "user input: focus on soiling loss" in notes
+
+
+def test_usage_stats_counts_documents(tmp_path):
+    ws = JobWorkspace.for_job(tmp_path, "1").ensure()
+    (ws.documents_dir / "a.txt").write_text("hello world " * 100, encoding="utf-8")
+    (ws.downloads_dir / "p.pdf").write_bytes(b"%PDF-" + b"x" * 200)
+    stats = ws.usage_stats()
+    assert stats["documents_count"] == 1
+    assert stats["documents_chars"] > 0
+    assert stats["downloads_bytes"] > 0
+    assert stats["workspace_bytes"] > stats["downloads_bytes"]
+    assert "Text read" in stats["human"]

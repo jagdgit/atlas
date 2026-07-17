@@ -339,6 +339,11 @@ class JobConfig(BaseModel):
     # Jobs are for deep work, so this avoids a job silently answering from model
     # memory with no evidence. Chat is unaffected (only the Job Engine uses this).
     research_first: bool = True
+    # 3.2e / A32.27: wall-clock for planner-role decompose (separate from llm.timeout).
+    # On timeout/error the JobPlanner falls back to the deterministic plan.
+    planner_timeout: float = 60.0
+    # Cap planner output tokens so decompose stays a short JSON response.
+    planner_num_predict: int = 512
 
 
 class CodeConfig(BaseModel):
@@ -374,6 +379,52 @@ class ResearchConfig(BaseModel):
     # cap is hit with an unmet evidence gap, Atlas *recommends* further reading (C5)
     # rather than reading unboundedly on CPU-only hardware.
     max_documents: int = 12
+
+
+class TaskCostConfig(BaseModel):
+    units: int
+    ram_mb: int = 0
+    llm_slots: int = 0
+
+
+class ResourceCostsConfig(BaseModel):
+    download: TaskCostConfig = TaskCostConfig(units=1, ram_mb=64)
+    read_html: TaskCostConfig = TaskCostConfig(units=2, ram_mb=128)
+    read_pdf: TaskCostConfig = TaskCostConfig(units=3, ram_mb=256)
+    embedding: TaskCostConfig = TaskCostConfig(units=6, ram_mb=700, llm_slots=1)
+    ocr_pdf: TaskCostConfig = TaskCostConfig(units=8, ram_mb=900)
+    llm_extract: TaskCostConfig = TaskCostConfig(units=15, ram_mb=2100, llm_slots=1)
+    llm_plan: TaskCostConfig = TaskCostConfig(units=12, ram_mb=2100, llm_slots=1)
+    llm_summarize: TaskCostConfig = TaskCostConfig(units=12, ram_mb=2100, llm_slots=1)
+    verify: TaskCostConfig = TaskCostConfig(units=2, ram_mb=128)
+    report: TaskCostConfig = TaskCostConfig(units=3, ram_mb=256)
+
+
+class ResourceBudgetsConfig(BaseModel):
+    conservative: int = 12
+    balanced: int = 20
+    maximum: int = 32
+    overnight: int = 32
+
+
+class ResourcesConfig(BaseModel):
+    """Operator-owned resource caps + OCR bounds (Stage 3.2 / D32.3 / Q8).
+
+    Profiles and full Resource Manager deepen in 3.2c; OCR page/time/DPI bounds are
+    needed immediately for 3.2a PDF OCR.
+    """
+
+    profile: str = "balanced"  # conservative | balanced | maximum | overnight
+    max_worker_threads: int = 4
+    max_download_workers: int = 4
+    max_reader_workers: int = 4
+    max_ocr_workers: int = 2
+    max_extract_workers: int = 2
+    ocr_max_pages: int = 50
+    ocr_max_minutes: float = 15.0
+    ocr_dpi: int = 300
+    costs: ResourceCostsConfig = Field(default_factory=ResourceCostsConfig)
+    budgets: ResourceBudgetsConfig = Field(default_factory=ResourceBudgetsConfig)
 
 
 class LearningConfig(BaseModel):
@@ -442,6 +493,7 @@ class AtlasConfig(BaseModel):
     code: CodeConfig = CodeConfig()
     sandbox: SandboxConfig = SandboxConfig()
     research: ResearchConfig = ResearchConfig()
+    resources: ResourcesConfig = ResourcesConfig()
     learning: LearningConfig = LearningConfig()
     intelligence: IntelligenceConfig = IntelligenceConfig()
     plugins: PluginsConfig = PluginsConfig()
@@ -470,13 +522,18 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
 
     Pydantic coerces string values to the correct type during validation.
     """
+    def apply_nested(values: dict[str, Any], prefix: str) -> None:
+        for key, value in list(values.items()):
+            env_key = f"{prefix}_{key.upper()}"
+            if isinstance(value, dict):
+                apply_nested(value, env_key)
+            elif env_key in os.environ:
+                values[key] = os.environ[env_key]
+
     for section, values in data.items():
         if not isinstance(values, dict):
             continue
-        for key in list(values.keys()):
-            env_key = f"ATLAS_{section.upper()}_{key.upper()}"
-            if env_key in os.environ:
-                values[key] = os.environ[env_key]
+        apply_nested(values, f"ATLAS_{section.upper()}")
 
     # Secret: database password (never in YAML). Accept two aliases.
     password = os.environ.get("ATLAS_DB_PASSWORD") or os.environ.get(

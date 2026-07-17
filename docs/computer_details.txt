@@ -1,0 +1,58 @@
+Research data-driven soiling estimation for solar panels
+completed 1/1 done
+Live activity (52)
+04:31:01 AMlifecycleJob completed — 1/1 step(s) done.
+04:29:06 AMstepStep 1 completed.
+04:25:52 AMlifecycleDocument cap (12) reached with unmet gaps; recommending 0 further source(s).
+04:25:52 AMverifyRound 2: 14 claim(s) from 12 doc(s); gaps: sources, convergence
+04:25:52 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: DGImNet: A deep learning model for photovoltaic soiling loss estimatio
+04:25:07 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Hybrid Data-Driven Modeling and Prediction of Photovoltaic Soiling ...
+04:24:22 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Highly Accurate Photovoltaic Panel Soiling Classification ... - Spring
+04:23:36 AMextractExtracted 4 claim(s) (4 numeric, 0 prose) from: Degradation and soiling example — RdTools 3.2.1 documentation
+04:22:51 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Physics-Grounded Multi-Task Machine Learning for Photovoltaic Power Fo
+04:22:51 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Data-Driven Soiling Estimation and Optimized Cleaning Strategies for I
+04:22:51 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: AI and Open-data Driven Scalable Solar Power Profiling
+04:22:06 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Soiling estimation methods in solar photovoltaic systems: Review ...
+04:21:21 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Data-Driven Soiling Detection in PV Modules - IEEE Xplore
+04:20:36 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Data-Driven Soiling Estimation and Optimized Cleaning Strategies for .
+04:19:51 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: [2301.12939] Data-driven soiling detection in PV modules
+04:19:06 AMacquireAcquired 4 document(s), read 2; 3 blocked, 0 skipped.
+04:19:06 AMreadRead 29945 chars (html) from: Degradation and soiling example — RdTools 3.2.1 documentation
+04:19:05 AMacquireDownloading [L2 technical blog]: Degradation and soiling example — RdTools 3.2.1 documentation
+04:19:05 AMacquirePaywalled, skipping: DGImNet: A deep learning model for photovoltaic soiling loss estimation ...
+04:19:05 AMacquirePaywalled, skipping: Hybrid Data-Driven Modeling and Prediction of Photovoltaic Soiling ...
+04:19:05 AMreadNo extractable text (scanned/empty): Physics-Grounded Multi-Task Machine Learning for Photovoltaic Power Forecasting
+04:19:04 AMacquireDownloading [L2 technical blog]: Physics-Grounded Multi-Task Machine Learning for Photovoltaic Power Forecasting
+04:19:04 AMacquirePaywalled, skipping: Highly Accurate Photovoltaic Panel Soiling Classification ... - Springer
+04:19:04 AMreadNo extractable text (scanned/empty): Data-Driven Soiling Estimation and Optimized Cleaning Strategies for Industrial
+04:19:02 AMacquireDownloading [L2 technical blog]: Data-Driven Soiling Estimation and Optimized Cleaning Strategies for Industrial
+04:19:02 AMreadRead 4773 chars (html) from: AI and Open-data Driven Scalable Solar Power Profiling
+04:19:02 AMacquireDownloading [L3 government/lab]: AI and Open-data Driven Scalable Solar Power Profiling
+04:19:02 AMsearchRelevance filter dropped 5 off-topic candidate(s).
+04:19:02 AMsearchCandidate pool now 17 source(s).
+04:19:01 AMsearchSearching web: 'data-driven soiling estimation for solar panels dataset OR field measurement'
+04:18:51 AMsearchSearching scholar: 'data-driven soiling estimation for solar panels measured value OR empirical result'
+04:18:50 AMsearchSearching web: 'data-driven soiling estimation for solar panels measurement study'
+04:18:47 AMsearchSearching scholar: 'data-driven soiling estimation for solar panels review'
+04:18:47 AMverifyRound 1: 13 claim(s) from 5 doc(s); gaps: sources, convergence
+04:18:47 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Soiling estimation methods in solar photovoltaic systems: Review ...
+04:18:02 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Data-Driven Soiling Detection in PV Modules - IEEE Xplore
+04:17:17 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: Data-Driven Soiling Estimation and Optimized Cleaning Strategies for .
+04:16:32 AMextractExtracted 15 claim(s) (15 numeric, 0 prose) from: [2301.12939] Data-driven soiling detection in PV modules - ar5iv
+04:16:32 AMextractExtracted 0 claim(s) (0 numeric, 0 prose) from: [2301.12939] Data-driven soiling detection in PV modules
+04:15:47 AMacquireAcquired 2 document(s), read 2; 3 blocked, 0 skipped.
+Steps executed (1)
+#0researchresearchdone14m
+Data usage: Text read ≈ 85.2 KB across 4 document(s); downloads 656.7 KB; workspace total 803.7 KB.
+ReportINSUFFICIENT
+# Research Report: Research data-driven soiling estimation for solar panels
+
+## Executive Summary
+Research indicates data-driven soiling estimation for solar panels achieves highest accuracy using SVR with linear kernel and polynomial features, approximately 0.4% better than Ridge Regression. This approach experimentally justifies a 5% MAPE threshold for validation using 15-minute granularity data spanning about 7 years with 15 manual cleaning events. The evidence demonstrates insufficient confidence (low) with no convergence achieved, limiting the reliability of these findings.
+
+## Answer
+Research on: data-driven soiling estimation for solar panels
+Confidence: LOW, convergence 0%)
+Rounds: 2; stopped because: need ≥5 claim-backed sources (have 2); convergence 0% < 90% threshold
+
+Data-driven soiling estimation for solar panels achieves highest accuracy with SVR using linear kernel and polynomial features, which is roughly 0.4% better than Ridge Regression. We experimentally justify a 5% MAPE threshold for validation based on model performance. This approach uses 15-minute granularity data spanning approximately 7 years with 15 manual cleaning events.

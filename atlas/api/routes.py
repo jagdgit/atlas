@@ -31,6 +31,7 @@ from atlas.api.schemas import (
     InvokeToolRequest,
     InvokeToolResponse,
     JobDetailResponse,
+    JobInputRequest,
     JobOut,
     JobsResponse,
     JobStepOut,
@@ -211,11 +212,14 @@ def session_history(session_id: str, request: Request) -> HistoryResponse:
     )
 
 
-def _job_out(job) -> JobOut:
+def _job_out(job, *, phase: str | None = None) -> JobOut:
+    meta = job.metadata if isinstance(getattr(job, "metadata", None), dict) else {}
+    resolved = phase or meta.get("phase") or "ready"
     return JobOut(
         id=job.id,
         objective=job.objective,
         status=job.status,
+        phase=str(resolved),
         session_id=job.session_id,
         result=job.result,
         error=job.error,
@@ -245,11 +249,12 @@ def _step_out(step) -> JobStepOut:
 
 def _job_detail(detail) -> JobDetailResponse:
     return JobDetailResponse(
-        job=_job_out(detail["job"]),
+        job=_job_out(detail["job"], phase=detail.get("phase")),
         steps=[_step_out(s) for s in detail["steps"]],
         progress=detail["progress"],
         blocked=detail["blocked"],
         activity=detail.get("activity", []),
+        usage=detail.get("usage"),
     )
 
 
@@ -588,6 +593,20 @@ def cancel_job(job_id: str, request: Request) -> JobDetailResponse:
         return _job_detail(jobs.cancel_job(job_id))
     except KeyError:
         raise HTTPException(status_code=404, detail="job not found")
+
+
+@v1_router.post("/jobs/{job_id}/input", response_model=JobDetailResponse, tags=["jobs"])
+def add_job_input(job_id: str, body: JobInputRequest, request: Request) -> JobDetailResponse:
+    """Queue human guidance for a job (picked up between research rounds)."""
+    jobs = _app(request).container.resolve("jobs")
+    try:
+        return _job_detail(jobs.add_job_input(job_id, body.text))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @v1_router.post("/knowledge/search", response_model=SearchResponse, tags=["knowledge"])

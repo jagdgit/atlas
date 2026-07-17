@@ -36,7 +36,9 @@ from atlas.evidence.models import (
 )
 from atlas.research.reader import (
     SECTION_ABSTRACT,
+    SECTION_BODY,
     SECTION_CONCLUSION,
+    SECTION_METHODS,
     SECTION_RESULTS,
     Document,
 )
@@ -45,13 +47,21 @@ if TYPE_CHECKING:
     from atlas.jobs.activity import ActivityRecorder
     from atlas.llm.service import LLMService
 
-# Sections we extract from, by default (A5): the abstract + where results/claims live.
-_DEFAULT_SECTIONS = (SECTION_ABSTRACT, SECTION_RESULTS, SECTION_CONCLUSION)
+# Prefer results-bearing sections first (A5). Methods is included because many
+# papers (and HTML converters like ar5iv) bury quantitative findings under a
+# Methods/Experimental heading when Results isn't detected cleanly.
+_DEFAULT_SECTIONS = (
+    SECTION_ABSTRACT,
+    SECTION_RESULTS,
+    SECTION_CONCLUSION,
+    SECTION_METHODS,
+)
 
 # A number followed by a unit/percent. Captures value + unit. Years are filtered later.
+# Also accepts European decimals (0,4%), LaTeX ``80\%``, and spaced ``80 %``.
 _NUM_UNIT_RE = re.compile(
-    r"([-+]?\d[\d,]*(?:\.\d+)?)\s*"
-    r"(%|percent|pct|"
+    r"([-+]?\d{1,3}(?:[,\s]\d{3})*(?:[.,]\d+)?|\d+[.,]\d+|\d+)\s*"
+    r"(\\?%|%|percent|pct|"
     r"kwh(?:/m(?:\^?2|²))?|wh|w/m(?:\^?2|²)|kw|mw|gw|"
     r"°?\s?[ck]\b|kelvin|"
     r"kg|g/m(?:\^?2|²)|mg|µg|ug|"
@@ -60,6 +70,12 @@ _NUM_UNIT_RE = re.compile(
     r"x\b|×)",
     re.IGNORECASE,
 )
+# Soft cap on how much body text we scan when falling back (CPU / noise).
+_FALLBACK_BODY_CHARS = 40_000
+# Don't burn minutes on the LLM prose pass when deterministic already got signal,
+# or when the scoped text is tiny (abstract-only chrome).
+_LLM_MIN_CHARS = 80
+_LLM_TIMEOUT = 45.0
 # Keywords that hint at the *kind* of a quantity, for ClaimValue.kind.
 _KIND_HINTS = (
     ("rmse", "rmse"), ("mae", "mae"), ("mape", "mape"), ("r2", "r2"),
@@ -101,7 +117,16 @@ class ExtractionResult:
 
 
 def _clean_number(token: str) -> float | None:
-    cleaned = token.replace(",", "").strip()
+    cleaned = token.strip().replace(" ", "").replace("\\", "")
+    # European decimal: "0,4" → "0.4"; thousands: "1,234" → "1234".
+    if "," in cleaned and "." not in cleaned:
+        parts = cleaned.split(",")
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            cleaned = f"{parts[0]}.{parts[1]}"
+        else:
+            cleaned = cleaned.replace(",", "")
+    else:
+        cleaned = cleaned.replace(",", "")
     if _YEAR_RE.match(cleaned):
         return None
     try:
@@ -111,10 +136,26 @@ def _clean_number(token: str) -> float | None:
 
 
 def _normalize_unit(unit: str) -> str:
-    u = unit.strip().lower()
-    if u in ("percent", "pct"):
+    u = unit.strip().lower().lstrip("\\")
+    if u in ("percent", "pct", "%"):
         return "%"
-    return unit.strip()
+    return unit.strip().lstrip("\\")
+
+
+def _normalize_text(text: str) -> str:
+    """Flatten ar5iv / MathJax noise so numeric regex can fire."""
+    if not text:
+        return ""
+    # "80 % percent 80 80\%" → "80%"
+    text = re.sub(
+        r"(\d+)\s*%\s*percent\s*\d+\s*\d+\s*\\?%",
+        r"\1%",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\\%", "%", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 def _infer_kind(sentence: str) -> str:
@@ -177,7 +218,22 @@ class ClaimExtractor:
             if len(result.claims) >= self._max:
                 break
 
-        # 2) Bounded LLM prose claims (optional; only fills remaining budget).
+        # If preferred sections yielded nothing, fall back to the full body (capped).
+        # Live soiling run (2026-07-14): ar5iv results lived under "methods"/body while
+        # abstract+conclusion were prose-only → 0 claims despite a full paper being read.
+        if not result.claims and document.text.strip():
+            body = _normalize_text(document.text)[:_FALLBACK_BODY_CHARS]
+            for claim in self._numeric_claims(document, SECTION_BODY, body, level):
+                key = self._dedup_key(claim)
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.claims.append(claim)
+                result.numeric += 1
+                if len(result.claims) >= self._max:
+                    break
+
+        # 2) Bounded LLM prose claims (optional; short timeout; skip if no useful text).
         if self._llm is not None and len(result.claims) < self._max:
             budget = self._max - len(result.claims)
             for claim in self._llm_claims(document, scoped, level, budget):
@@ -205,7 +261,7 @@ class ClaimExtractor:
     def _scoped_sections(self, document: Document) -> list[tuple[str, str]]:
         """(label, text) for the target sections; fall back to the body/full text."""
         scoped = [
-            (s.label, s.text)
+            (s.label, _normalize_text(s.text))
             for s in document.sections
             if s.label in self._sections and s.text.strip()
         ]
@@ -213,13 +269,14 @@ class ClaimExtractor:
             return scoped
         # No recognized target sections → use whatever text we have (capped upstream).
         if document.text.strip():
-            return [("body", document.text)]
+            return [(SECTION_BODY, _normalize_text(document.text)[:_FALLBACK_BODY_CHARS])]
         return []
 
     def _numeric_claims(
         self, document: Document, label: str, text: str, level: int
     ) -> list[Claim]:
         claims: list[Claim] = []
+        text = _normalize_text(text)
         for i, sentence in enumerate(_split_sentences(text)):
             match = _NUM_UNIT_RE.search(sentence)
             if match is None:
@@ -250,14 +307,15 @@ class ClaimExtractor:
         if not parts:
             parts = [t for _, t in scoped[:1]]
         context = "\n\n".join(parts)[:6000].strip()
-        if not context:
+        if len(context) < _LLM_MIN_CHARS:
             return []
         try:
             resp = self._llm.for_role("researcher").chat(
                 [
                     ChatMessage("system", _LLM_SYSTEM.replace("{max}", str(budget))),
                     ChatMessage("user", context),
-                ]
+                ],
+                timeout=_LLM_TIMEOUT,
             )
             raw = (resp.text or "").strip()
         except Exception:  # noqa: BLE001 - LLM failure degrades to deterministic-only

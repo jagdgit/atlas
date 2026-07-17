@@ -144,6 +144,54 @@ class JobWorkspace:
             fh.write(line)
         return self.notes_path
 
+    @property
+    def inputs_path(self) -> Path:
+        return self.root / "inputs.jsonl"
+
+    @property
+    def inputs_cursor_path(self) -> Path:
+        return self.root / "inputs.cursor"
+
+    def append_user_input(self, text: str) -> Path:
+        """Queue a human note for the running job (picked up between research rounds)."""
+        self._ensure_once()
+        payload = {"ts": _now(), "text": (text or "").strip()}
+        with self.inputs_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        self.append_note(f"user input: {payload['text']}")
+        return self.inputs_path
+
+    def pending_user_inputs(self) -> list[str]:
+        """Drain unread lines from ``inputs.jsonl`` (cursor advances; safe mid-run)."""
+        self._ensure_once()
+        path = self.inputs_path
+        if not path.is_file():
+            return []
+        try:
+            lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        except OSError:
+            return []
+        try:
+            cursor = int(self.inputs_cursor_path.read_text(encoding="utf-8").strip() or "0")
+        except (OSError, ValueError):
+            cursor = 0
+        cursor = max(0, min(cursor, len(lines)))
+        pending: list[str] = []
+        for ln in lines[cursor:]:
+            try:
+                obj = json.loads(ln)
+            except ValueError:
+                continue
+            text = (obj.get("text") if isinstance(obj, dict) else "") or ""
+            text = text.strip()
+            if text:
+                pending.append(text)
+        try:
+            self.inputs_cursor_path.write_text(str(len(lines)), encoding="utf-8")
+        except OSError:
+            pass
+        return pending
+
     def append_activity(self, event: dict[str, Any]) -> Path:
         """Append one progress event to ``activity.jsonl`` (the live feed, RL/§5a)."""
         self._ensure_once()
@@ -259,3 +307,87 @@ class JobWorkspace:
             "source_count": len(manifest.get("sources", [])),
             "has_report": self.report_path.is_file(),
         }
+
+    def usage_stats(self) -> dict[str, Any]:
+        """Approximate on-disk + text size accumulated for this job.
+
+        Used at finalize so the result/report can show how much data was read and
+        stored (workspace artifacts). Best-effort; never raises.
+        """
+        try:
+            self._ensure_once()
+        except Exception:  # noqa: BLE001
+            return {}
+        downloads = _dir_bytes(self.downloads_dir)
+        documents = _dir_bytes(self.documents_dir)
+        claims = _file_bytes(self.claims_path)
+        evidence = _file_bytes(self.evidence_path)
+        total = _dir_bytes(self.root)
+        chars = 0
+        doc_count = 0
+        try:
+            if self.documents_dir.is_dir():
+                for path in self.documents_dir.iterdir():
+                    if path.is_file():
+                        doc_count += 1
+                        try:
+                            chars += len(path.read_text(encoding="utf-8", errors="replace"))
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+        return {
+            "workspace_bytes": total,
+            "downloads_bytes": downloads,
+            "documents_bytes": documents,
+            "documents_chars": chars,
+            "documents_count": doc_count,
+            "claims_bytes": claims,
+            "evidence_bytes": evidence,
+            "human": _format_usage(total, downloads, documents, chars, doc_count),
+        }
+
+
+def _file_bytes(path: Path) -> int:
+    try:
+        return path.stat().st_size if path.is_file() else 0
+    except OSError:
+        return 0
+
+
+def _dir_bytes(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    total = 0
+    try:
+        for p in path.rglob("*"):
+            if p.is_file():
+                try:
+                    total += p.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        return 0
+    return total
+
+
+def _format_bytes(n: int) -> str:
+    n = max(0, int(n or 0))
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 ** 2:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 ** 3:
+        return f"{n / (1024 ** 2):.1f} MB"
+    return f"{n / (1024 ** 3):.2f} GB"
+
+
+def _format_usage(
+    total: int, downloads: int, documents: int, chars: int, doc_count: int
+) -> str:
+    parts = [
+        f"Text read ≈ {_format_bytes(chars)} across {doc_count} document(s)",
+        f"downloads {_format_bytes(downloads)}",
+        f"workspace total {_format_bytes(total)}",
+    ]
+    return "; ".join(parts) + "."

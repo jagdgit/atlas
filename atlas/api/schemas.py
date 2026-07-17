@@ -368,6 +368,12 @@ class CreateJobRequest(BaseModel):
     session_id: str | None = None
 
 
+class JobInputRequest(BaseModel):
+    """Human guidance for a running or blocked job (queued into the workspace)."""
+
+    text: str = Field(min_length=1, max_length=8000)
+
+
 class JobStepOut(BaseModel):
     ordinal: int
     intent: str
@@ -387,6 +393,8 @@ class JobOut(BaseModel):
     id: str
     objective: str
     status: str
+    # 3.2e: planning_queued | planning | ready (status stays familiar queued/running/…)
+    phase: str = "ready"
     session_id: str | None = None
     result: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
@@ -407,6 +415,8 @@ class JobDetailResponse(BaseModel):
     blocked: list[dict[str, Any]] = Field(default_factory=list)
     # Live "watch it work" feed (RL/C0): recent human-readable progress events.
     activity: list[dict[str, Any]] = Field(default_factory=list)
+    # Approximate on-disk / text size for this job (live or finalized).
+    usage: dict[str, Any] | None = None
 
 
 class CapabilityInfo(BaseModel):

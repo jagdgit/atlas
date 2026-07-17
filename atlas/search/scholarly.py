@@ -68,13 +68,55 @@ class Paper:
     def as_source(self) -> dict[str, object]:
         """The Evidence Graph `Source` shape (§5a.1) — a graded, citable source."""
         kind = "peer_reviewed" if self.evidence_level >= LEVEL_PEER_REVIEWED else "preprint"
+        citation = _format_citation(
+            authors=self.authors,
+            year=self.year,
+            title=self.title,
+            venue=self.venue,
+            doi=self.doi,
+        )
         return {
             "id": self.source_id,
             "title": self.title,
             "url": self.url,
             "evidence_level": self.evidence_level,
             "kind": kind,
+            "doi": self.doi,
+            "citation": citation,
+            "authors": list(self.authors),
+            "year": self.year,
+            "venue": self.venue,
         }
+
+
+def _format_citation(
+    *,
+    authors: list[str] | tuple[str, ...],
+    year: int | None,
+    title: str,
+    venue: str,
+    doi: str,
+) -> str:
+    """Cheap human cite-string when metadata is present (Stage 3.2 / D32.7)."""
+    parts: list[str] = []
+    names = [a.strip() for a in (authors or []) if str(a).strip()]
+    if names:
+        if len(names) == 1:
+            who = names[0]
+        elif len(names) == 2:
+            who = f"{names[0]} & {names[1]}"
+        else:
+            who = f"{names[0]} et al."
+        parts.append(who)
+    if year is not None:
+        parts.append(f"({year})")
+    if title:
+        parts.append(f"{title.rstrip('.')}." )
+    if venue:
+        parts.append(f"{venue}.")
+    if doi:
+        parts.append(f"DOI: {doi}")
+    return " ".join(parts).strip()
 
 
 @dataclass(frozen=True)

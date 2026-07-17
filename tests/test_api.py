@@ -152,6 +152,7 @@ class FakeJobs:
             "steps": self._steps,
             "progress": {"total": 2, "done": 1, "blocked": 1},
             "blocked": [{"ordinal": 1, "needs": "needs capability: web"}],
+            "phase": "ready",
         }
 
     def create_job(self, objective, *, session_id=None):
@@ -179,6 +180,14 @@ class FakeJobs:
         if job_id != "job-1":
             raise KeyError(job_id)
         self.cancelled = job_id
+        return self._detail()
+
+    def add_job_input(self, job_id, text):
+        if job_id != "job-1":
+            raise KeyError(job_id)
+        if not (text or "").strip():
+            raise ValueError("empty input")
+        self.last_input = text
         return self._detail()
 
 
@@ -619,6 +628,7 @@ def test_create_job():
     assert resp.status_code == 200
     body = resp.json()
     assert body["job"]["id"] == "job-1"
+    assert body["job"]["phase"] == "ready"
     assert body["progress"]["blocked"] == 1
     assert body["steps"][1]["blocked_reason"] == "needs capability: web"
 
@@ -646,6 +656,25 @@ def test_resume_job():
     resp = _client().post("/v1/jobs/job-1/resume", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["job"]["id"] == "job-1"
+
+
+def test_add_job_input():
+    resp = _client().post(
+        "/v1/jobs/job-1/input",
+        headers=AUTH,
+        json={"text": "prefer IEEE soiling papers"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["job"]["id"] == "job-1"
+
+
+def test_add_job_input_unknown_404():
+    resp = _client().post(
+        "/v1/jobs/ghost/input",
+        headers=AUTH,
+        json={"text": "hello"},
+    )
+    assert resp.status_code == 404
 
 
 def test_cancel_job_unknown_404():

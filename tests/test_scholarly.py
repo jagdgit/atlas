@@ -49,6 +49,27 @@ class FakeClient:
 
 
 # --- arXiv ----------------------------------------------------------------
+def test_paper_as_source_keeps_doi_and_citation():
+    from atlas.search.scholarly import Paper
+
+    p = Paper(
+        title="Soiling Losses",
+        url="https://arxiv.org/abs/1",
+        authors=["Jane Doe", "John Roe"],
+        year=2020,
+        venue="arXiv",
+        doi="10.1000/arxiv.1",
+        evidence_level=3,
+    )
+    src = p.as_source()
+    assert src["doi"] == "10.1000/arxiv.1"
+    assert "Jane Doe" in src["citation"]
+    assert src["year"] == 2020
+    restored = __import__("atlas.evidence.models", fromlist=["Source"]).Source.from_dict(src)
+    assert restored.doi == "10.1000/arxiv.1"
+    assert restored.authors == ("Jane Doe", "John Roe")
+
+
 def test_arxiv_parses_papers_and_grades_l3():
     client = FakeClient({"export.arxiv.org": FetchResult("u", OUTCOME_OK, text=_ARXIV_XML)})
     prov = ArxivProvider(client, evidence_level=3)

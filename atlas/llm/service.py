@@ -55,14 +55,17 @@ class RoleClient:
 
     def generate(self, prompt: str, **options: Any) -> LLMResponse:
         options.setdefault("model", self._model)
+        options.setdefault("_atlas_role", self._role)
         return self._service.generate(prompt, **options)
 
     def chat(self, messages: list[ChatMessage], **options: Any) -> LLMResponse:
         options.setdefault("model", self._model)
+        options.setdefault("_atlas_role", self._role)
         return self._service.chat(messages, **options)
 
     def embed(self, texts: list[str], **options: Any) -> EmbeddingResponse:
         options.setdefault("model", self._model)
+        options.setdefault("_atlas_role", self._role)
         return self._service.embed(texts, **options)
 
 
@@ -77,6 +80,7 @@ class LLMService:
         embedding_model: str,
         roles: dict[str, str] | None = None,
         max_concurrency: int = 1,
+        resource_manager: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._provider = provider
@@ -88,21 +92,31 @@ class LLMService:
         self._roles.setdefault("embed", embedding_model)
         self._max_concurrency = max(1, int(max_concurrency))
         self._lane = threading.BoundedSemaphore(self._max_concurrency)
+        self._resources = resource_manager
         self._warned_roles: set[str] = set()
         self._logger = logger or logging.getLogger("atlas.llm")
 
     # --- capability API -------------------------------------------------
     def generate(self, prompt: str, **options: Any) -> LLMResponse:
-        with self._lane, timer("llm.generate"):
+        role = str(options.pop("_atlas_role", "generate"))
+        with self._lane_context(role), timer("llm.generate"):
             return self._provider.generate(prompt, **options)
 
     def chat(self, messages: list[ChatMessage], **options: Any) -> LLMResponse:
-        with self._lane, timer("llm.chat"):
+        role = str(options.pop("_atlas_role", "chat"))
+        with self._lane_context(role), timer("llm.chat"):
             return self._provider.chat(messages, **options)
 
     def embed(self, texts: list[str], **options: Any) -> EmbeddingResponse:
-        with self._lane, timer("llm.embed", batch=len(texts)):
+        role = str(options.pop("_atlas_role", "embed"))
+        with self._lane_context(role), timer("llm.embed", batch=len(texts)):
             return self._provider.embed(texts, **options)
+
+    def _lane_context(self, kind: str):
+        """Use the kernel-owned global lane when Resource Manager is wired."""
+        if self._resources is not None:
+            return self._resources.llm_lane(kind=kind)
+        return self._lane
 
     # --- roles (D7) -----------------------------------------------------
     def model_for_role(self, role: str) -> str:

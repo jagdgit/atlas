@@ -101,6 +101,8 @@ jobs:
   llm_decompose: true         # D2c: planner-role LLM decomposition into multiple steps
   max_steps: 6                # cap on decomposed steps per job
   research_first: true        # lone open-ended objective => research loop (sources), not a bare react answer
+  planner_timeout: 60.0       # 3.2e: planner-role wall-clock; then deterministic fallback
+  planner_num_predict: 512    # keep decompose responses short (JSON steps only)
 
 net:
   # Resilient/polite HTTP layer (D10 / §5c) shared by every web-facing plugin.
@@ -146,6 +148,38 @@ research:
   numeric_tolerance: 0.15   # relative window within which values "agree"
   per_query: 5              # sources gathered per search in the research loop (S21)
   max_documents: 12         # Stage 3 (D3.2): cap on documents acquired + read per job
+
+resources:
+  # Stage 3.2 — operator-owned caps + OCR safety bounds (D32.3 / Q8).
+  # Profiles deepen with the Resource Manager in 3.2c; env overrides:
+  # ATLAS_RESOURCES_MAX_WORKER_THREADS, ATLAS_RESOURCES_OCR_MAX_PAGES, …
+  profile: balanced
+  max_worker_threads: 4
+  max_download_workers: 4
+  max_reader_workers: 4
+  max_ocr_workers: 2
+  max_extract_workers: 2
+  ocr_max_pages: 50
+  ocr_max_minutes: 15
+  ocr_dpi: 300
+  # Stage 3.2d static-first task cost model. These are permanent,
+  # operator-tunable estimates; Stage 4 learns machine-specific values.
+  costs:
+    download:      { units: 1,  ram_mb: 64,   llm_slots: 0 }
+    read_html:     { units: 2,  ram_mb: 128,  llm_slots: 0 }
+    read_pdf:      { units: 3,  ram_mb: 256,  llm_slots: 0 }
+    embedding:     { units: 6,  ram_mb: 700,  llm_slots: 1 }
+    ocr_pdf:       { units: 8,  ram_mb: 900,  llm_slots: 0 }
+    llm_extract:   { units: 15, ram_mb: 2100, llm_slots: 1 }
+    llm_plan:      { units: 12, ram_mb: 2100, llm_slots: 1 }
+    llm_summarize: { units: 12, ram_mb: 2100, llm_slots: 1 }
+    verify:        { units: 2,  ram_mb: 128,  llm_slots: 0 }
+    report:        { units: 3,  ram_mb: 256,  llm_slots: 0 }
+  budgets:
+    conservative: 12
+    balanced: 20
+    maximum: 32
+    overnight: 32
 
 learning:
   # Continuous Learning (S18b, D11/§5d). Atlas never silently learns: completed

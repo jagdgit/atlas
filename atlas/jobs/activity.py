@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 # Coarse phases so the UI can group/icon events consistently across the pipeline.
 PHASE_LIFECYCLE = "lifecycle"   # job created / finalized
+PHASE_PLANNING = "planning"     # async JobPlanner decompose (3.2e)
 PHASE_STEP = "step"             # a job step started / finished / blocked
 PHASE_SEARCH = "search"         # searching web / scholar
 PHASE_CLASSIFY = "classify"     # source classification

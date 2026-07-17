@@ -74,6 +74,10 @@ def test_build_application_wires_core():
     assert app.container.has("config")
     assert app.container.has("events")
     assert app.container.has("database_manager")
+    assert app.container.has("resources")
+    assert app.container.has("execution")
+    assert app.registry.has("resources")
+    assert app.registry.has("execution")
 
 
 def test_application_health_reports_database():

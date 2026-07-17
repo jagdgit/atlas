@@ -56,6 +56,20 @@ def test_analyze_gaps_names_missing_peer_and_gov():
     assert GAP_GOVERNMENT in kinds
 
 
+def test_analyze_gaps_inventory_not_claim_backed_peers():
+    # IEEE in inventory counts toward peer-reviewed even with 0 extracted claims.
+    from atlas.research.gaps import GAP_CLAIMS, GAP_PEER_REVIEWED
+
+    graph = EvidenceGraph()
+    for i in range(3):
+        graph.add_source(_src(f"p{i}", LEVEL_PEER_REVIEWED))
+    graph.add_source(_src("g1", LEVEL_GOVERNMENT))
+    status = analyze_gaps(graph, EvidenceBudget())
+    kinds = {g.kind for g in status.gaps}
+    assert GAP_PEER_REVIEWED not in kinds  # inventory satisfied
+    assert GAP_CLAIMS in kinds             # but extraction produced nothing
+
+
 def test_analyze_gaps_cleared_when_budget_met():
     peers = [_src(f"p{i}", LEVEL_PEER_REVIEWED) for i in range(3)]
     gov = [_src("g1", LEVEL_GOVERNMENT)]

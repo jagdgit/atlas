@@ -1,0 +1,1 @@
+while the job is running can i give the inputs to the agent so that the agent can take my inputs as well to do the job

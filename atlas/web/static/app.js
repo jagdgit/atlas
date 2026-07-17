@@ -247,18 +247,38 @@ async function loadJobs() {
   } catch (err) { toast(err.message); }
 }
 
+function jobPhase(job) {
+  return (job && job.phase) || "ready";
+}
+
+function jobIsActive(job) {
+  if (!job) return false;
+  if (["queued", "running"].includes(job.status)) return true;
+  return ["planning_queued", "planning"].includes(jobPhase(job));
+}
+
+function jobStatusLabel(job) {
+  const phase = jobPhase(job);
+  if (["planning_queued", "planning"].includes(phase)) {
+    return phase.replace(/_/g, " ");
+  }
+  return (job.status || "").replace(/_/g, " ");
+}
+
 function renderJobsList(jobs) {
   const list = $("#jobs-list");
   list.innerHTML = "";
   if (!jobs.length) { list.append(el("div", { class: "muted", style: "padding:18px", text: "No jobs yet." })); return; }
   for (const j of jobs) {
+    const phase = jobPhase(j);
+    const badgeClass = ["planning_queued", "planning"].includes(phase) ? phase : j.status;
     list.append(el("div", {
       class: "job-row" + (j.id === state.jobId ? " active" : ""),
       onclick: () => showJobDetail(j.id),
     },
       el("div", { class: "obj", text: j.objective }),
       el("div", {},
-        el("span", { class: "badge " + j.status, text: j.status.replace(/_/g, " ") }),
+        el("span", { class: "badge " + badgeClass, text: jobStatusLabel(j) }),
         el("span", { class: "muted small", text: "  " + (j.created_at ? j.created_at.replace("T", " ").slice(0, 19) : "") }),
       ),
     ));
@@ -280,8 +300,7 @@ async function showJobDetail(id) {
   try {
     const d = await api(`/v1/jobs/${id}`);
     renderJobDetail(d);
-    const active = ["queued", "running"].includes(d.job.status);
-    if (active) startJobPoll(id); else stopJobPoll();
+    if (jobIsActive(d.job)) startJobPoll(id); else stopJobPoll();
   } catch (err) { toast(err.message); }
 }
 
@@ -384,21 +403,30 @@ function renderJobDetail(d) {
   const box = $("#job-detail");
   box.innerHTML = "";
   const job = d.job;
+  const phase = jobPhase(job);
+  const badgeClass = ["planning_queued", "planning"].includes(phase) ? phase : job.status;
   box.append(el("div", { class: "obj-title", text: job.objective }));
   box.append(el("div", {},
-    el("span", { class: "badge " + job.status, text: job.status.replace(/_/g, " ") }),
+    el("span", { class: "badge " + badgeClass, text: jobStatusLabel(job) }),
     el("span", { class: "muted small", text: `  ${d.progress.done}/${d.progress.total} done`
       + (d.progress.blocked ? ` · ${d.progress.blocked} blocked` : "")
-      + (d.progress.failed ? ` · ${d.progress.failed} failed` : "") }),
+      + (d.progress.failed ? ` · ${d.progress.failed} failed` : "")
+      + (phase && phase !== "ready" && phase !== job.status ? ` · ${phase.replace(/_/g, " ")}` : "") }),
   ));
 
-  const running = ["queued", "running"].includes(job.status);
+  const running = jobIsActive(job);
   if ((d.activity || []).length) {
     box.append(renderActivityFeed(d.activity, running));
+  } else if (["planning_queued", "planning"].includes(phase)) {
+    box.append(el("div", { class: "muted small", style: "margin:10px 0",
+      text: "Planning in progress — waiting for the JobPlanner…" }));
   }
 
   box.append(el("h3", { class: "section-h", text: `Steps executed (${d.steps.length})` }));
   const steps = el("div", { class: "steps" });
+  if (!d.steps.length && ["planning_queued", "planning"].includes(phase)) {
+    steps.append(el("div", { class: "muted small", text: "Steps will appear when planning finishes." }));
+  }
   for (const s of d.steps) steps.append(renderStepCard(s));
   box.append(steps);
 
@@ -407,10 +435,44 @@ function renderJobDetail(d) {
       el("span", { class: "chip gap", text: `step ${b.ordinal} needs: ${b.needs || b.capability}` })));
   }
 
+  const usage = (d.usage && d.usage.human) || (job.result && job.result.usage && job.result.usage.human);
+  if (usage) {
+    box.append(el("div", { class: "muted small", style: "margin-top:10px", text: "Data usage: " + usage }));
+  }
+
+  // Steer a running / blocked job with extra guidance (queued between research rounds).
+  if (["queued", "running", "completed_with_blocks"].includes(job.status)) {
+    const steer = el("div", { class: "job-input" });
+    steer.append(el("h3", { class: "section-h", text: "Add guidance" }));
+    const ta = el("textarea", {
+      rows: "2",
+      placeholder: "e.g. focus on IEEE soiling-loss papers, ignore heliophysics…",
+    });
+    const send = el("button", {
+      onclick: async () => {
+        const text = (ta.value || "").trim();
+        if (!text) return;
+        send.disabled = true;
+        try {
+          await api(`/v1/jobs/${job.id}/input`, { method: "POST", body: { text } });
+          ta.value = "";
+          toast("Input queued for this job");
+          showJobDetail(job.id);
+        } catch (err) {
+          toast(err.message);
+        } finally {
+          send.disabled = false;
+        }
+      },
+    }, "Send to job");
+    steer.append(ta, send);
+    box.append(steer);
+  }
+
   const actions = el("div", { class: "job-actions" });
   if (job.status === "completed_with_blocks")
     actions.append(el("button", { onclick: () => jobAction(job.id, "resume") }, "Resume"));
-  if (["queued", "running"].includes(job.status))
+  if (jobIsActive(job))
     actions.append(el("button", { onclick: () => jobAction(job.id, "cancel") }, "Cancel"));
   actions.append(el("button", { onclick: () => showJobDetail(job.id) }, "Refresh"));
   box.append(actions);
@@ -440,7 +502,7 @@ function startJobPoll(id) {
       const d = await api(`/v1/jobs/${id}`);
       renderJobDetail(d);
       loadJobs();
-      if (!["queued", "running"].includes(d.job.status)) stopJobPoll();
+      if (!jobIsActive(d.job)) stopJobPoll();
     } catch (_) { stopJobPoll(); }
   }, 2000);
 }

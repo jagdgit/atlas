@@ -125,3 +125,25 @@ def test_llm_garbage_is_ignored():
 def test_empty_document_yields_nothing():
     doc = Reader().read_text("", source_id="s1")
     assert ClaimExtractor().extract(doc).count == 0
+
+
+def test_body_fallback_when_results_mislabeled():
+    # Live-run failure mode: quantitative findings under Methods, prose-only abstract.
+    text = (
+        "Abstract\nWe study soiling estimation for PV modules.\n\n"
+        "2. Methods\nThe model reduced RMSE from 3.1% to 1.2% on field data.\n"
+        "Training used 80% of samples and a 5% MAPE threshold.\n\n"
+        "Conclusion\nThe method is useful for cleaning schedules.\n"
+    )
+    doc = Reader().read_text(text, source_id="ar5iv:1", title="soiling")
+    result = ClaimExtractor().extract(doc)
+    assert result.numeric >= 2
+    assert any(c.value and c.value.number in (1.2, 3.1, 80.0, 5.0) for c in result.claims)
+
+
+def test_latex_percent_and_european_decimal():
+    text = "Results\nAccuracy improved by roughly 0,4% and the split was 80\\% / 20\\%.\n"
+    doc = Reader().read_text(text, source_id="s1")
+    result = ClaimExtractor().extract(doc)
+    nums = {c.value.number for c in result.claims if c.value}
+    assert 0.4 in nums or 80.0 in nums

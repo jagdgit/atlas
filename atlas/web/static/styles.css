@@ -169,6 +169,19 @@ button { cursor: pointer; font: inherit; }
 .job-actions { display: flex; gap: 8px; margin-top: 14px; }
 .job-actions button { background: var(--bg-elev2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; }
 .job-actions button:hover { border-color: var(--accent); }
+.job-input { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.job-input textarea {
+  width: 100%; min-height: 56px; resize: vertical;
+  background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  font: inherit;
+}
+.job-input button {
+  align-self: flex-start;
+  background: var(--bg-elev2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+}
+.job-input button:hover { border-color: var(--accent); }
 .report { margin-top: 16px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; max-height: 340px; overflow: auto; }
 
 /* live "watch it work" activity feed (RL/C0) */
@@ -180,6 +193,7 @@ button { cursor: pointer; font: inherit; }
 .feed-phase { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; white-space: nowrap; background: var(--bg-elev2); color: var(--muted); }
 .feed-msg { flex: 1; }
 .phase-lifecycle { background: rgba(79,157,255,.16); color: var(--accent); }
+.phase-planning { background: rgba(163,113,247,.16); color: #c4a7f5; }
 .phase-verify, .phase-report { background: rgba(63,185,80,.16); color: var(--ok); }
 .phase-search, .phase-acquire, .phase-read, .phase-extract { background: rgba(210,153,34,.16); color: var(--warn); }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; animation: pulse 1.4s ease-in-out infinite; }
@@ -187,8 +201,8 @@ button { cursor: pointer; font: inherit; }
 
 /* status badges */
 .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
-.badge.ok, .badge.completed, .badge.done { background: rgba(63,185,80,.16); color: var(--ok); }
-.badge.degraded, .badge.warn, .badge.running, .badge.queued, .badge.completed_with_blocks, .badge.pending { background: rgba(210,153,34,.16); color: var(--warn); }
+.badge.ok, .badge.completed, .badge.done, .badge.ready { background: rgba(63,185,80,.16); color: var(--ok); }
+.badge.degraded, .badge.warn, .badge.running, .badge.queued, .badge.completed_with_blocks, .badge.pending, .badge.planning, .badge.planning_queued { background: rgba(210,153,34,.16); color: var(--warn); }
 .badge.failed, .badge.cancelled { background: rgba(248,81,73,.16); color: var(--fail); }
 .badge.blocked, .badge.skipped { background: rgba(79,157,255,.16); color: var(--accent); }
 .badge.conf { background: var(--bg-elev2); color: var(--muted); }

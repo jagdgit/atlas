@@ -221,6 +221,8 @@ class _Outcome:
     run_id: str | None = None
     blocked: bool = False
     blocked_reason: str | None = None
+    # Optional step extras (e.g. research pipeline / usage) persisted on the job step.
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 class ResponseBuilder:
@@ -936,6 +938,8 @@ class AssistantService:
         payload: dict[str, Any] = {"objective": objective}
         if args.get("max_iterations") is not None:
             payload["max_iterations"] = args["max_iterations"]
+        if args.get("resource_profile"):
+            payload["resource_profile"] = str(args["resource_profile"]).strip().lower()
         # Stage 3 (C0/RL): jobs attach the live recorder + workspace on context so
         # the deep research loop streams phases into activity.jsonl and writes
         # claims/evidence into the job workspace (Step 5 fast-follow).
@@ -971,7 +975,14 @@ class AssistantService:
                 f"after {data.get('iterations', 0)} round(s)."
             )
         citations = _research_citations(data)
-        return _Outcome(answer=_format_research(data), citations=citations)
+        extras: dict[str, Any] = {}
+        if isinstance(data.get("pipeline"), dict):
+            extras["pipeline"] = data["pipeline"]
+        if isinstance(data.get("usage"), dict):
+            extras["usage"] = data["usage"]
+        return _Outcome(
+            answer=_format_research(data), citations=citations, extras=extras
+        )
 
     def _do_ask_knowledge(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")

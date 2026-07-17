@@ -35,11 +35,15 @@ from atlas.evidence.models import (
 from atlas.research.classifier import classify
 from atlas.research.grouping import group_claims
 from atlas.research.reader import Reader
+from atlas.research.relevance import filter_relevant, score_relevance
 from atlas.verification.engine import EvidenceBudget
 
 # A candidate's abstract/snippet must have at least this much text before we treat it as
 # a Tier-1 "document" worth extracting from — a 10-word web snippet is not a paper.
-_MIN_TIER1_CHARS = 80
+# Abstracts/snippets need real substance before we treat them as extractable
+# "documents". Publisher landing pages (~200–400 chars) used to inflate the
+# doc count, burn extract calls, and starve gap follow-ups.
+_MIN_TIER1_CHARS = 500
 
 RESEARCH_OK = "ok"
 RESEARCH_EMPTY = "empty"
@@ -113,8 +117,12 @@ class ResearchService:
         librarian=None,
         extractor=None,
         reader: Reader | None = None,
+        resources=None,
+        execution=None,
         per_query: int = 5,
         max_documents: int = 12,
+        max_extract_workers: int = 1,
+        max_worker_threads: int = 4,
         logger: logging.Logger | None = None,
     ) -> None:
         self._verification = verification
@@ -129,9 +137,14 @@ class ResearchService:
         self._librarian = librarian
         self._extractor = extractor
         self._reader = reader or Reader()
+        self._resources = resources
+        self._execution = execution
         self._per_query = per_query
         self._max_documents = max_documents
+        self._max_extract_workers = max(1, int(max_extract_workers or 1))
+        self._max_worker_threads = max(1, int(max_worker_threads or 1))
         self._logger = logger or logging.getLogger("atlas.research")
+        self._last_throttle_reason: str | None = None
 
     # --- capability -----------------------------------------------------
     def research(
@@ -143,6 +156,7 @@ class ResearchService:
         per_query: int | None = None,
         activity: Any = None,
         workspace: Any = None,
+        resource_profile: str | None = None,
     ) -> dict[str, Any]:
         objective = (objective or "").strip()
         if not objective:
@@ -167,6 +181,7 @@ class ResearchService:
             return self._research_deep(
                 objective, eb, n, scholar, search,
                 activity=activity, workspace=workspace,
+                resource_profile=resource_profile,
             )
 
         graph = EvidenceGraph()
@@ -230,7 +245,7 @@ class ResearchService:
     # --- deep pipeline (Stage 3, Steps 5–6 / §5d–5i, C4/C5) -------------
     def _research_deep(
         self, objective: str, eb: EvidenceBudget, n: int, scholar, search,
-        *, activity: Any, workspace: Any,
+        *, activity: Any, workspace: Any, resource_profile: str | None = None,
     ) -> dict[str, Any]:
         """Search → acquire → read → extract → group → verify, gap-driven (C5)."""
         from atlas.research.gaps import (
@@ -250,6 +265,9 @@ class ResearchService:
         status = None
         acquired_full = 0
 
+        # Stage 3.2c: ask Resource Manager for pool sizes; surface protection posture.
+        self._apply_resource_advice(activity, resource_profile)
+
         # Seed the first round with the base objective (scholar then web).
         pending_plan: list[tuple[str, str]] = []
         if scholar is not None:
@@ -258,6 +276,13 @@ class ResearchService:
             pending_plan.append(("web", base))
 
         for round_i in range(1, eb.max_search_iterations + 1):
+            # Re-check pressure each round (detect → slow).
+            self._apply_resource_advice(activity, resource_profile, quiet=True)
+            # 0) Incorporate any human input queued while this job is running.
+            self._absorb_user_inputs(
+                workspace, activity, pending_plan, scholar, search
+            )
+
             # 1) Gather any pending gap-/seed-targeted queries.
             if pending_plan:
                 before = len(candidates)
@@ -280,11 +305,34 @@ class ResearchService:
                 if g.source.id not in graph.sources:
                     graph.add_source(g.source)
 
-            # 2) Acquire remaining capacity (open-access first).
+            # 2) Relevance gate, then acquire remaining capacity (open-access first).
             remaining = max(0, self._max_documents - len(documents))
-            unread = [
-                g.source for sid, g in candidates.items() if sid not in documents
+            unread_gathered = [
+                g for sid, g in candidates.items() if sid not in documents
             ]
+            kept, dropped = filter_relevant(objective, unread_gathered)
+            if dropped:
+                self._record(
+                    activity, "search",
+                    f"Relevance filter dropped {len(dropped)} off-topic candidate(s).",
+                )
+                # Remove dropped from the candidate pool so they don't fill the cap later.
+                for item, _rel in dropped:
+                    sid = item.source.id if hasattr(item, "source") else getattr(item, "id", "")
+                    candidates.pop(sid, None)
+                    graph.sources.pop(sid, None)
+            # Prefer higher-evidence, on-topic sources when filling the doc budget.
+            kept.sort(
+                key=lambda g: (
+                    score_relevance(
+                        objective, title=g.source.title,
+                        snippet=g.snippet, url=g.source.url,
+                    ).score,
+                    g.source.evidence_level,
+                ),
+                reverse=True,
+            )
+            unread = [g.source for g in kept]
             if remaining > 0 and unread:
                 new_docs, new_blocked, n_full = self._acquire_unread(
                     unread, remaining, workspace, activity
@@ -292,9 +340,18 @@ class ResearchService:
                 documents.update(new_docs)
                 blocked.extend(new_blocked)
                 acquired_full += n_full
-                # Tier-1 fallback for anything still unread with a usable abstract.
-                for sid, g in candidates.items():
+                blocked_ids = {
+                    str(b.get("source_id") or b.get("url") or "")
+                    for b in new_blocked
+                    if isinstance(b, dict)
+                }
+                # Tier-1 fallback: usable abstracts only — never for paywalled
+                # sources we already skipped (those stubs yield 0 claims).
+                for g in kept:
+                    sid = g.source.id
                     if sid in documents or len(documents) >= self._max_documents:
+                        continue
+                    if sid in blocked_ids or g.source.url in blocked_ids:
                         continue
                     text = (g.full_text or "").strip()
                     if len(text) >= _MIN_TIER1_CHARS:
@@ -302,24 +359,17 @@ class ResearchService:
                             text, source_id=sid, title=g.source.title, url=g.source.url,
                         )
 
-            # 3) Extract claims from newly-read docs not yet extracted.
-            extracted_ids = {c.evidence[0].source_id for c in raw if c.evidence}
-            for sid, doc in documents.items():
-                if sid in extracted_ids:
-                    continue
-                level = graph.sources[sid].evidence_level if sid in graph.sources else None
-                try:
-                    res = self._extractor.extract(
-                        doc, evidence_level=level, activity=activity
-                    )
-                    raw.extend(res.claims)
-                except Exception:  # noqa: BLE001
-                    self._logger.exception("claim extraction failed for %s", sid)
+            # 3) Extract claims from newly-read docs not yet extracted (parallel under caps).
+            new_claims = self._extract_parallel(
+                documents, raw, graph, activity
+            )
+            raw.extend(new_claims)
 
             # 4) Group + verify (fresh each round — merging is cheap and deterministic).
+            # Sort evidence by source_id before grouping for stable ordering (D32.4).
             grouped = group_claims(raw)
             graph.claims.clear()
-            for claim in grouped:
+            for claim in sorted(grouped, key=lambda c: c.id if hasattr(c, "id") else str(c)):
                 graph.add_claim(claim)
                 self._verification.verify_claim(claim)
 
@@ -389,6 +439,8 @@ class ResearchService:
             "rejected": len(grouped) - verified,
             "blocked": len(blocked),
             "rounds": len(rounds_log),
+            "chars_read": sum(len(getattr(d, "text", "") or "") for d in documents.values()),
+            "documents_read": len(documents),
         }
         gap_note = ""
         if status is not None and status.has_gaps:
@@ -453,6 +505,91 @@ class ResearchService:
             "log": rounds_log,
         }
 
+    def _apply_resource_advice(
+        self,
+        activity: Any,
+        profile: str | None = None,
+        *,
+        quiet: bool = False,
+    ) -> None:
+        """Ask the Resource Manager for pool sizes; throttle when pressure detected."""
+        if self._resources is None:
+            return
+        try:
+            rec = self._resources.recommend_pool_sizes(profile=profile)
+        except Exception:  # noqa: BLE001 - RM must never break research
+            self._logger.debug("resource manager advice failed", exc_info=True)
+            return
+        self._max_extract_workers = max(1, int(rec.extract_workers))
+        self._max_worker_threads = max(1, int(rec.global_max))
+        if self._librarian is not None:
+            try:
+                self._librarian._max_workers = max(1, int(rec.acquire_workers))
+                self._librarian._global_max_workers = max(1, int(rec.global_max))
+            except Exception:  # noqa: BLE001
+                pass
+        if quiet and rec.throttle_reason == self._last_throttle_reason:
+            return
+        if rec.throttled:
+            self._last_throttle_reason = rec.throttle_reason
+            self._record(
+                activity,
+                "lifecycle",
+                f"Slowing for system protection: {rec.throttle_reason} "
+                f"(workers→1; {rec.protection.get('message', '')})",
+                throttled=True,
+                profile=rec.profile,
+            )
+        elif not quiet:
+            self._last_throttle_reason = None
+            self._record(
+                activity,
+                "lifecycle",
+                f"Resources: profile={rec.profile}, acquire≤{rec.acquire_workers}, "
+                f"extract≤{rec.extract_workers}; {rec.protection.get('message', '')}",
+                profile=rec.profile,
+                acquire_workers=rec.acquire_workers,
+                extract_workers=rec.extract_workers,
+            )
+        elif self._last_throttle_reason and not rec.throttled:
+            self._last_throttle_reason = None
+            self._record(
+                activity,
+                "lifecycle",
+                f"Resource pressure eased — resuming profile={rec.profile} "
+                f"(acquire≤{rec.acquire_workers}, extract≤{rec.extract_workers})",
+                profile=rec.profile,
+            )
+
+    def _absorb_user_inputs(
+        self,
+        workspace: Any,
+        activity: Any,
+        pending_plan: list[tuple[str, str]],
+        scholar,
+        search,
+    ) -> None:
+        """Pull queued human guidance into the next search plan (between rounds)."""
+        if workspace is None or not hasattr(workspace, "pending_user_inputs"):
+            return
+        try:
+            texts = workspace.pending_user_inputs()
+        except Exception:  # noqa: BLE001
+            return
+        for text in texts:
+            preview = text if len(text) <= 120 else text[:117] + "…"
+            self._record(activity, "lifecycle", f"Incorporating your input: {preview}")
+            if scholar is not None:
+                pending_plan.append(("scholar", text))
+            if search is not None:
+                pending_plan.append(("web", text))
+            # If neither provider is up, still keep the note for the report trail.
+            if scholar is None and search is None:
+                try:
+                    workspace.append_note(f"user input (no search provider): {text}")
+                except Exception:  # noqa: BLE001
+                    pass
+
     def _absorb_candidates(
         self,
         plan: list[tuple[str, str]],
@@ -486,20 +623,175 @@ class ResearchService:
         acquired_full = 0
         if self._librarian is None or remaining <= 0:
             return documents, blocked, acquired_full
+        ordered_unread = self._order_execution_items(
+            unread,
+            kind="download",
+            item_id=lambda source: source.id,
+            activity=activity,
+        )
+        # Adaptive acquire pool: never allocate more workers than source work.
+        if self._resources is not None:
+            try:
+                rec = self._resources.recommend_pool_sizes(
+                    download_work=min(remaining, len(ordered_unread)),
+                    reader_work=min(remaining, len(ordered_unread)),
+                )
+                self._librarian._max_workers = rec.acquire_workers
+            except Exception:  # noqa: BLE001
+                self._logger.debug("adaptive acquire sizing failed", exc_info=True)
         try:
             acq = self._librarian.acquire(
-                unread,
+                ordered_unread,
                 workspace=workspace,
                 activity=activity,
                 top_k=remaining,
             )
-            for doc in acq.documents:
+            # Deterministic doc map by source_id (D32.4).
+            for doc in sorted(acq.documents, key=lambda d: d.source_id):
                 documents[doc.source_id] = doc
             blocked = list(getattr(acq, "blocked", []) or [])
             acquired_full = len(documents)
         except Exception:  # noqa: BLE001
             self._logger.exception("acquisition failed; falling back to abstracts")
         return documents, blocked, acquired_full
+
+    def _extract_parallel(
+        self,
+        documents: dict[str, Any],
+        raw: list[Claim],
+        graph: EvidenceGraph,
+        activity: Any,
+    ) -> list[Claim]:
+        """Extract claims from unread docs under ``max_extract_workers`` (3.2b)."""
+        from atlas.research.concurrency import clamp_workers, map_parallel
+
+        extracted_ids = {c.evidence[0].source_id for c in raw if c.evidence}
+        # Stable input order by source_id so parallel results merge deterministically.
+        pending = [
+            (sid, documents[sid])
+            for sid in sorted(documents.keys())
+            if sid not in extracted_ids
+        ]
+        if not pending or self._extractor is None:
+            return []
+
+        workers = clamp_workers(
+            self._max_extract_workers,
+            global_max=self._max_worker_threads,
+            fallback=1,
+            queue_depth=len(pending),
+            work_count=len(pending),
+        )
+        pending = self._order_execution_items(
+            pending,
+            kind="llm_extract",
+            item_id=lambda item: item[0],
+            activity=activity,
+        )
+        if activity is not None and workers > 1 and len(pending) > 1:
+            self._record(
+                activity, "extract",
+                f"Extracting from {len(pending)} document(s) with up to {workers} worker(s).",
+                workers=workers,
+            )
+
+        def _one(item: tuple[str, Any]) -> tuple[str, list[Claim], str | None, str | None]:
+            sid, doc = item
+            if not getattr(doc, "has_text", True):
+                code = getattr(doc, "failure_code", "") or "empty_text"
+                reason = getattr(doc, "failure_reason", "") or "no extractable text"
+                return sid, [], code, reason
+            level = graph.sources[sid].evidence_level if sid in graph.sources else None
+            try:
+                # Activity is not thread-safe across workers; record on main thread.
+                res = self._extractor.extract(doc, evidence_level=level, activity=None)
+                claims = list(res.claims)
+                if not claims:
+                    return sid, [], "empty_text", "extracted 0 claims"
+                return sid, claims, None, None
+            except Exception as exc:  # noqa: BLE001
+                self._logger.exception("claim extraction failed for %s", sid)
+                return sid, [], "parse_error", f"{type(exc).__name__}: {exc}"
+
+        outcomes = map_parallel(_one, pending, max_workers=workers, ordered=True)
+        new_claims: list[Claim] = []
+        for sid, claims, code, reason in outcomes:
+            if code == "empty_text" and not claims and reason == "no extractable text":
+                self._record(
+                    activity, "read",
+                    f"Skipping extract for {sid}: {code} — {reason}",
+                    source_id=sid, failure_code=code,
+                )
+                continue
+            if code and not claims:
+                phase = "extract" if code != "empty_text" or "0 claims" in (reason or "") else "read"
+                if code == "empty_text" and "0 claims" in (reason or ""):
+                    self._record(
+                        activity, "extract",
+                        f"Extracted 0 claims from {sid} "
+                        f"(reader={getattr(documents[sid], 'reader_id', '')}, "
+                        f"chars={getattr(documents[sid], 'chars', 0)})",
+                        source_id=sid, failure_code=code,
+                    )
+                elif code == "parse_error":
+                    self._record(
+                        activity, "extract",
+                        f"Extract failed for {sid}: {reason}",
+                        source_id=sid, failure_code=code,
+                    )
+                else:
+                    self._record(
+                        activity, phase,
+                        f"Skipping extract for {sid}: {code} — {reason}",
+                        source_id=sid, failure_code=code,
+                    )
+                continue
+            self._record(
+                activity, "extract",
+                f"Extracted {len(claims)} claim(s) from {sid}",
+                source_id=sid, claims=len(claims),
+            )
+            new_claims.extend(claims)
+        return new_claims
+
+    def _order_execution_items(
+        self,
+        items: list[Any],
+        *,
+        kind: str,
+        item_id,
+        activity: Any,
+    ) -> list[Any]:
+        """Order work through the kernel Execution Planner when available."""
+        if not items or self._execution is None:
+            return list(items)
+        try:
+            from atlas.core.execution import ExecutionTask
+
+            by_id = {str(item_id(item)): item for item in items}
+            planned = self._execution.plan(
+                [
+                    ExecutionTask(id=task_id, kind=kind)
+                    for task_id in sorted(by_id)
+                ]
+            )
+            deferred = [task for task in planned if not task.admitted]
+            if deferred:
+                self._record(
+                    activity,
+                    "lifecycle",
+                    f"Execution admission deferred {len(deferred)} {kind} task(s); "
+                    "they remain queued under resource limits.",
+                    task_kind=kind,
+                    deferred=len(deferred),
+                )
+            # Tasks remain queued rather than being dropped. The underlying RM
+            # lane/caps enforce admission while this order lets admitted/cheap
+            # work proceed first.
+            return [by_id[row.task.id] for row in planned]
+        except Exception:  # noqa: BLE001
+            self._logger.debug("execution planning failed; using stable input", exc_info=True)
+            return list(items)
 
     def _collect_candidates(
         self, objective: str, eb: EvidenceBudget, n: int, scholar, search, activity: Any,
@@ -525,11 +817,17 @@ class ResearchService:
         return candidates
 
     @staticmethod
-    def _record(activity: Any, phase: str, message: str) -> None:
+    def _record(activity: Any, phase: str, message: str, **data: Any) -> None:
         if activity is None:
             return
         try:
-            activity.record(phase, message)
+            activity.record(phase, message, **data)
+        except TypeError:
+            # Recorders that only accept (phase, message) still work.
+            try:
+                activity.record(phase, message)
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:  # noqa: BLE001 - the feed is best-effort, never fatal
             pass
 

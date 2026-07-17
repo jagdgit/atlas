@@ -51,6 +51,12 @@ class Source:
     url: str = ""
     evidence_level: int = LEVEL_TECHNICAL
     kind: str = ""  # e.g. "peer_reviewed", "government", "field_data", "blog"
+    # Bibliographic extras (Stage 3.2 / D32.7) — keep even when full text fails.
+    doi: str = ""
+    citation: str = ""
+    authors: tuple[str, ...] = ()
+    year: int | None = None
+    venue: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -60,16 +66,32 @@ class Source:
             "evidence_level": self.evidence_level,
             "level_name": level_name(self.evidence_level),
             "kind": self.kind,
+            "doi": self.doi,
+            "citation": self.citation,
+            "authors": list(self.authors),
+            "year": self.year,
+            "venue": self.venue,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Source":
+        authors = data.get("authors") or ()
+        if isinstance(authors, str):
+            authors = tuple(a.strip() for a in authors.split(";") if a.strip())
+        else:
+            authors = tuple(str(a) for a in authors)
+        year = data.get("year")
         return cls(
             id=str(data["id"]),
-            title=data.get("title", ""),
-            url=data.get("url", ""),
+            title=data.get("title", "") or "",
+            url=data.get("url", "") or "",
             evidence_level=int(data.get("evidence_level", LEVEL_TECHNICAL)),
-            kind=data.get("kind", ""),
+            kind=data.get("kind", "") or "",
+            doi=data.get("doi", "") or "",
+            citation=data.get("citation", "") or "",
+            authors=authors,
+            year=int(year) if year is not None and str(year).strip() != "" else None,
+            venue=data.get("venue", "") or "",
         )
 
 

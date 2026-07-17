@@ -37,6 +37,14 @@ def test_env_override_for_section_key(monkeypatch):
     assert config.database.pool_size == 17
 
 
+def test_nested_resource_cost_env_override(monkeypatch):
+    monkeypatch.setenv("ATLAS_RESOURCES_COSTS_LLM_EXTRACT_UNITS", "19")
+    monkeypatch.setenv("ATLAS_RESOURCES_BUDGETS_BALANCED", "24")
+    config = load_config()
+    assert config.resources.costs.llm_extract.units == 19
+    assert config.resources.budgets.balanced == 24
+
+
 def test_get_config_is_singleton():
     a = get_config()
     b = get_config()

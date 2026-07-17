@@ -100,6 +100,41 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     health_repo = HealthRepository(db_manager)
     task_repo = TaskRepository(db_manager)
     handlers = HandlerRegistry()
+    # Stage 3.2d: kernel-owned execution costs + Resource Manager.  Construct
+    # before the LLM service so all model calls share the RM's global LLM lane.
+    from atlas.core.execution import ExecutionPlanner, TaskCostModel
+    from atlas.core.resources import ResourceManager
+
+    task_costs = TaskCostModel(
+        {
+            kind: value
+            for kind, value in cfg.resources.costs.model_dump().items()
+        }
+    )
+    resource_manager = ResourceManager(
+        profile=cfg.resources.profile,
+        max_worker_threads=cfg.resources.max_worker_threads,
+        max_download_workers=cfg.resources.max_download_workers,
+        max_reader_workers=cfg.resources.max_reader_workers,
+        max_ocr_workers=cfg.resources.max_ocr_workers,
+        max_extract_workers=cfg.resources.max_extract_workers,
+        llm_max_concurrency=max(1, int(cfg.llm.max_concurrency or 1)),
+        cost_budgets=cfg.resources.budgets.model_dump(),
+        llm_cost_units={
+            "chat": cfg.resources.costs.llm_plan.units,
+            "planner": cfg.resources.costs.llm_plan.units,
+            "researcher": cfg.resources.costs.llm_extract.units,
+            "summarizer": cfg.resources.costs.llm_summarize.units,
+            "embed": cfg.resources.costs.embedding.units,
+            "default": cfg.resources.costs.llm_extract.units,
+        },
+        logger=get_logger("atlas.resources"),
+    )
+    execution_planner = ExecutionPlanner(
+        resource_manager,
+        task_costs,
+        logger=get_logger("atlas.execution"),
+    )
     llm_provider = OllamaProvider(
         host=cfg.llm.host,
         model=cfg.llm.model,
@@ -115,6 +150,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         embedding_model=cfg.llm.embedding_model,
         roles={role: spec.model for role, spec in cfg.llm.roles.items()},
         max_concurrency=cfg.llm.max_concurrency,
+        resource_manager=resource_manager,
         logger=get_logger("atlas.llm"),
     )
     knowledge_service = KnowledgeService(
@@ -286,6 +322,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # search snippets — with open-access-first + honest paywall blocking (D3.3).
     from atlas.net import FetchClient
     from atlas.research.acquire import Librarian
+    from atlas.research.reader import Reader
 
     fetch_client = FetchClient(
         user_agent=cfg.net.user_agent,
@@ -299,9 +336,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         respect_robots=cfg.net.respect_robots,
         cache_ttl=cfg.net.cache_ttl,
     )
+    reader = Reader(
+        ocr_max_pages=cfg.resources.ocr_max_pages,
+        ocr_max_minutes=cfg.resources.ocr_max_minutes,
+        ocr_dpi=cfg.resources.ocr_dpi,
+    )
+    pools = resource_manager.recommend_pool_sizes()
     librarian = Librarian(
         fetch_client,
+        reader=reader,
         max_documents=cfg.research.max_documents,
+        max_workers=pools.acquire_workers,
+        global_max_workers=cfg.resources.max_worker_threads,
         logger=get_logger("atlas.research.acquire"),
     )
     # Claim Extraction (Stage 3, Step 4 / §5f, C2): read Document → structured claims.
@@ -320,8 +366,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         capabilities=capabilities,  # shared by ref; scholar/search plugins register later
         librarian=librarian,        # Stage 3, Step 5 (C4): acquire + read real documents
         extractor=claim_extractor,  # …then extract structured claims (not score URLs)
+        resources=resource_manager,
+        execution=execution_planner,
         per_query=cfg.research.per_query,
         max_documents=cfg.research.max_documents,
+        max_extract_workers=pools.extract_workers,
+        max_worker_threads=cfg.resources.max_worker_threads,
         logger=get_logger("atlas.research"),
     )
     tools.register(
@@ -331,6 +381,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         params={
             "objective": "the research question or topic",
             "max_iterations": "optional cap on search rounds",
+            "resource_profile": "optional: conservative|balanced|maximum|overnight",
         },
         plugin="research",
     )
@@ -349,6 +400,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         llm_service if cfg.jobs.llm_decompose else None,
         max_steps=cfg.jobs.max_steps,
         research_first=cfg.jobs.research_first,
+        timeout=cfg.jobs.planner_timeout,
+        num_predict=cfg.jobs.planner_num_predict,
         logger=get_logger("atlas.jobs.planner"),
     )
     job_service = JobService(
@@ -366,6 +419,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         retry_delay=cfg.jobs.retry_delay,
         logger=get_logger("atlas.jobs"),
     )
+    handlers.register("plan_job", job_service.plan_job_task)
     handlers.register("advance_job", job_service.advance_job_task)
 
     # Ingestion source (Sprint 3): scan documents dir -> knowledge base. Embedding
@@ -484,6 +538,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("research", research_service)
     container.register_instance("librarian", librarian)
     container.register_instance("claim_extractor", claim_extractor)
+    container.register_instance("resources", resource_manager)
+    container.register_instance("execution", execution_planner)
     container.register_instance("learning", learning_service)
     container.register_instance("intelligence", intelligence_service)
     container.register_instance("ingestion", ingestion_source)
@@ -525,6 +581,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register(
         "research", research_service, contract=caps.ResearchCapability, kind="service"
     )
+    capabilities.register("resources", resource_manager, kind="service")
+    capabilities.register("execution", execution_planner, kind="service")
     capabilities.register(
         "learning", learning_service, contract=caps.LearningCapability, kind="service"
     )
@@ -549,6 +607,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(python_service)
     registry.register(verification_service)
     registry.register(report_service)
+    registry.register(resource_manager)
+    registry.register(execution_planner)
     registry.register(research_service)
     registry.register(learning_service)
     registry.register(intelligence_service)

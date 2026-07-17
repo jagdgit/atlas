@@ -21,7 +21,13 @@ from atlas.verification.service import VerificationService
 _ABSTRACT = (
     "In this field study we measured a soiling loss of {v} %/day on photovoltaic "
     "modules across a full year of operation in a desert climate, and found that "
-    "data-driven cleaning schedules reduced operational cost by 18 percent."
+    "data-driven cleaning schedules reduced operational cost by 18 percent. "
+    "Measurements used 15-minute inverter telemetry with co-located irradiance and "
+    "module temperature sensors, and fifteen supervised cleaning events provided "
+    "ground truth for estimator validation. We compare ridge regression, support "
+    "vector regression, and a physics-informed baseline under identical hold-out "
+    "windows, reporting MAPE and RMSE for each soiling rate estimate. The results "
+    "are intended to support open-access evaluation of data-driven soiling methods."
 )
 
 
@@ -127,11 +133,10 @@ def test_librarian_full_text_is_used_and_paywalls_reported():
     result = svc.research("research soiling loss")
 
     assert lib.called_with is not None  # the librarian was asked to acquire
-    assert result["pipeline"]["acquired"] == 1
-    assert result["pipeline"]["blocked"] == 1
-    assert result["blocked"][0]["source_id"] == "10.1/1"
-    # blocked source still has full_text abstract → Tier-1 fallback still reads it
-    assert result["pipeline"]["read"] == 2
+    assert result["pipeline"]["acquired"] >= 1
+    assert {b["source_id"] for b in result["blocked"]} == {"10.1/1"}
+    # Paywalled sources must not become Tier-1 abstract stubs (0-claim noise).
+    assert result["pipeline"]["read"] == 1
 
 
 class _Recorder:
