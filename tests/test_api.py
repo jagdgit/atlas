@@ -317,6 +317,54 @@ def _fake_intelligence():
     return IntelligenceService(code, intel_repo, learning)
 
 
+class FakeEventRepo:
+    def recent(self, *, limit=100, event_type=None):
+        from datetime import datetime, timezone
+
+        rows = [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "event_type": "job.completed",
+                "payload": {"job": "abc"},
+                "source": "jobs",
+                "status": "pending",
+                "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            }
+        ]
+        if event_type is not None:
+            rows = [r for r in rows if r["event_type"] == event_type]
+        return rows[:limit]
+
+
+class FakeNotifier:
+    def __init__(self):
+        from atlas.notify import EventBroker
+
+        self.broker = EventBroker()
+
+    def subscribe(self):
+        return self.broker.subscribe()
+
+
+class FakeOpsDashboard:
+    def snapshot(self):
+        return {
+            "atlas": {"version": "0.1.0", "healthy": True, "degraded": False,
+                      "uptime_seconds": 12.0, "severity_counts": {"ok": 3, "degraded": 0, "failed": 0}},
+            "counts": {"jobs_total": 2, "jobs_active": 1, "jobs_queued": 1,
+                       "workers": 0, "missions": 0},
+            "host": {"cpu": {"percent": 5.0, "count": 8}, "memory": {"percent": 40.0},
+                     "disk": {"percent": 71.0}, "internet": {"reachable": True},
+                     "temperature": {"present": False}, "ups": {"present": False}},
+            "backup": {"last": "atlas_2026.dump", "count": 3},
+            "storage": {"detail": "storage ready"},
+            "capabilities": [{"name": "clock", "kind": "kernel", "version": "0.1.0"}],
+            "sse_subscribers": 0,
+            "last_checkpoint": None,
+            "generated_at": "2026-01-01T00:00:00+00:00",
+        }
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -348,6 +396,9 @@ class FakeApplication:
                 "learning": _fake_learning(),
                 "intelligence": _fake_intelligence(),
                 "plugins": FakePluginManager(),
+                "event_repo": FakeEventRepo(),
+                "notifier": FakeNotifier(),
+                "ops_dashboard": FakeOpsDashboard(),
             }
         )
 
@@ -490,6 +541,40 @@ def test_list_agents():
     resp = _client().get("/v1/agents", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json() == {"agents": ["rag"]}
+
+
+def test_recent_events_requires_auth():
+    assert _client().get("/v1/events").status_code == 401
+
+
+def test_recent_events_returns_durable_log():
+    resp = _client().get("/v1/events", headers=AUTH)
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert events[0]["type"] == "job.completed"
+    assert events[0]["payload"] == {"job": "abc"}
+    assert events[0]["created_at"].startswith("2026-01-01")
+
+
+def test_recent_events_filter_by_type():
+    resp = _client().get("/v1/events", params={"event_type": "nope"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["events"] == []
+
+
+def test_ops_dashboard_requires_auth():
+    assert _client().get("/v1/ops").status_code == 401
+
+
+def test_ops_dashboard_snapshot():
+    resp = _client().get("/v1/ops", headers=AUTH)
+    assert resp.status_code == 200
+    snap = resp.json()
+    assert snap["atlas"]["version"] == "0.1.0"
+    assert snap["counts"]["jobs_active"] == 1
+    assert snap["host"]["disk"]["percent"] == 71.0
+    assert snap["backup"]["last"] == "atlas_2026.dump"
+    assert snap["last_checkpoint"] is None
 
 
 def test_run_agent_returns_answer_and_citations():

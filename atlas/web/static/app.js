@@ -5,11 +5,13 @@ const KEY_STORE = "atlas_api_key";
 
 const state = {
   key: localStorage.getItem(KEY_STORE) || "",
-  view: "chat",
+  view: "overview",
   sessionId: null,
   jobId: null,
   sending: false,
   jobPoll: null,
+  opsPoll: null,
+  opsStream: null,
 };
 
 /* ---------- tiny DOM helper (textContent-only = XSS-safe) ---------- */
@@ -115,7 +117,9 @@ function switchView(view) {
   const extra = $("#sidebar-extra");
   extra.innerHTML = "";
   stopJobPoll();
-  if (view === "chat") renderSessionSidebar();
+  if (view !== "overview") { stopOpsPoll(); stopOpsStream(); }
+  if (view === "overview") loadOverview();
+  else if (view === "chat") renderSessionSidebar();
   else if (view === "jobs") loadJobs();
   else if (view === "system") loadSystem();
 }
@@ -559,6 +563,150 @@ function renderSystem(status, health) {
   }
 }
 
+/* ---------- overview / operations dashboard ---------- */
+function fmtBytes(n) {
+  if (n == null) return "—";
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+function fmtPct(p) { return p == null ? "—" : `${p}%`; }
+function fmtUptime(upt) {
+  if (upt == null) return "—";
+  if (upt < 90) return `${Math.round(upt)}s`;
+  if (upt < 5400) return `${Math.round(upt / 60)}m`;
+  if (upt < 172800) return `${(upt / 3600).toFixed(1)}h`;
+  return `${(upt / 86400).toFixed(1)}d`;
+}
+function pctSeverity(p) { return p == null ? "" : p >= 92 ? "fail" : p >= 80 ? "warn" : ""; }
+
+async function loadOverview() {
+  startOpsStream();
+  startOpsPoll();
+  await refreshOps();
+}
+
+async function refreshOps() {
+  try {
+    const snap = await api("/v1/ops");
+    if (snap.atlas) applyStatus(snap.atlas);
+    renderOps(snap);
+  } catch (err) { toast(err.message); }
+}
+
+function opsCard(k, v, sev) {
+  return el("div", { class: "card" + (sev ? " " + sev : "") },
+    el("div", { class: "k", text: k }), el("div", { class: "v", text: v }));
+}
+
+function renderOps(snap) {
+  const cards = $("#ops-cards");
+  cards.innerHTML = "";
+  const a = snap.atlas || {}, host = snap.host || {}, counts = snap.counts || {};
+  const cpu = host.cpu || {}, mem = host.memory || {}, disk = host.disk || {};
+  const inet = host.internet || {}, temp = host.temperature || {}, ups = host.ups || {};
+  const backup = snap.backup || {};
+
+  const sc = a.severity_counts || { ok: 0, degraded: 0, failed: 0 };
+  cards.append(opsCard("atlas", a.healthy ? (a.degraded ? "degraded" : "healthy") : "down",
+    a.healthy ? (a.degraded ? "warn" : "") : "fail"));
+  cards.append(opsCard("version", a.version || "—"));
+  cards.append(opsCard("uptime", fmtUptime(a.uptime_seconds)));
+  cards.append(opsCard("services", `${sc.ok} ok · ${sc.degraded} deg · ${sc.failed} down`,
+    sc.failed ? "fail" : sc.degraded ? "warn" : ""));
+
+  cards.append(opsCard("CPU", fmtPct(cpu.percent) + (cpu.count ? ` · ${cpu.count} cores` : ""),
+    pctSeverity(cpu.percent)));
+  cards.append(opsCard("RAM", `${fmtPct(mem.percent)} · ${fmtBytes(mem.used)}/${fmtBytes(mem.total)}`,
+    pctSeverity(mem.percent)));
+  cards.append(opsCard("disk", `${fmtPct(disk.percent)} · ${fmtBytes(disk.free)} free`,
+    pctSeverity(disk.percent)));
+  cards.append(opsCard("internet",
+    inet.reachable == null ? "unknown" : inet.reachable ? "connected" : "disconnected",
+    inet.reachable === false ? "warn" : ""));
+  cards.append(opsCard("temp", temp.present ? `${temp.celsius}°C` : "not present",
+    temp.present && temp.celsius >= 80 ? "warn" : ""));
+  cards.append(opsCard("UPS", ups.present ? "on battery" : "not present"));
+
+  cards.append(opsCard("jobs", `${counts.jobs_active || 0} active · ${counts.jobs_total || 0} total`));
+  cards.append(opsCard("missions", counts.missions || 0));
+  cards.append(opsCard("workers", counts.workers || 0));
+  cards.append(opsCard("last backup", backup.last || "none"));
+  cards.append(opsCard("live clients", snap.sse_subscribers || 0));
+}
+
+function pushActivity(type, payload) {
+  const feed = $("#ops-activity");
+  if (!feed) return;
+  const hint = feed.querySelector(".empty-hint");
+  if (hint) hint.remove();
+  const when = new Date().toLocaleTimeString();
+  const sev = /\.(failed|error)$/.test(type) ? "failed"
+    : /\.(completed|done)$/.test(type) ? "ok" : "";
+  const row = el("div", { class: "health-row" },
+    el("span", { class: "badge " + (sev || "ok"), text: sev || "event" }),
+    el("span", { class: "name", text: type }),
+    el("span", { class: "detail", text: when }));
+  feed.prepend(row);
+  while (feed.children.length > 50) feed.lastChild.remove();
+}
+
+function startOpsPoll() {
+  stopOpsPoll();
+  state.opsPoll = setInterval(() => {
+    if (state.view !== "overview") return stopOpsPoll();
+    refreshOps();
+  }, 5000);
+}
+function stopOpsPoll() { if (state.opsPoll) { clearInterval(state.opsPoll); state.opsPoll = null; } }
+
+// Live event feed over SSE. EventSource can't set an Authorization header, so we read
+// the stream with fetch() + a ReadableStream reader and parse the SSE frames ourselves.
+function startOpsStream() {
+  stopOpsStream();
+  const feed = $("#ops-activity");
+  if (feed && !feed.children.length) {
+    feed.append(el("div", { class: "empty-hint" },
+      el("p", { class: "muted", text: "Waiting for live events…" })));
+  }
+  const ctrl = new AbortController();
+  state.opsStream = ctrl;
+  fetch("/v1/events/stream", {
+    headers: { "Authorization": `Bearer ${state.key}` },
+    signal: ctrl.signal,
+  }).then(async (res) => {
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        handleSseFrame(buf.slice(0, idx));
+        buf = buf.slice(idx + 2);
+      }
+    }
+  }).catch(() => { /* aborted on view switch, or network dropped */ });
+}
+function handleSseFrame(frame) {
+  if (!frame || frame.startsWith(":")) return;  // heartbeat / blank
+  let type = "message", data = null;
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) type = line.slice(6).trim();
+    else if (line.startsWith("data:")) data = line.slice(5).trim();
+  }
+  let payload = {};
+  try { payload = data ? JSON.parse(data) : {}; } catch (_) { /* ignore */ }
+  pushActivity(type, payload);
+}
+function stopOpsStream() {
+  if (state.opsStream) { try { state.opsStream.abort(); } catch (_) {} state.opsStream = null; }
+}
+
 /* ---------- wiring ---------- */
 function init() {
   $("#login-form").addEventListener("submit", (e) => {
@@ -598,6 +746,7 @@ function init() {
   });
   $("#jobs-refresh").addEventListener("click", loadJobs);
   $("#system-refresh").addEventListener("click", loadSystem);
+  $("#overview-refresh").addEventListener("click", refreshOps);
 
   if (state.key) {
     tryConnect(state.key).then((ok) => { if (!ok) { $("#login").classList.remove("hidden"); } });

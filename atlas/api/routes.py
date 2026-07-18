@@ -8,7 +8,9 @@ here — the API is just another caller of the same services agents use (ADR-000
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
+
+from atlas.notify.broker import sse_stream
 
 from atlas.telemetry import get_metrics, render_prometheus
 
@@ -148,6 +150,48 @@ def detailed_health(request: Request) -> DetailedHealthResponse:
 def status(request: Request) -> StatusResponse:
     """Operability summary (S22): version, uptime, and a severity roll-up."""
     return StatusResponse(**_app(request).status())
+
+
+def _event_row(row: dict) -> dict:
+    """JSON-safe projection of an ``audit.events`` row."""
+    return {
+        "id": str(row.get("id")),
+        "type": row.get("event_type"),
+        "source": row.get("source"),
+        "payload": row.get("payload") or {},
+        "status": row.get("status"),
+        "created_at": (
+            row["created_at"].isoformat() if row.get("created_at") else None
+        ),
+    }
+
+
+@v1_router.get("/events", tags=["events"])
+def recent_events(
+    request: Request, limit: int = 100, event_type: str | None = None
+) -> dict:
+    """Recent events from the durable log (``audit.events``) — newest first (§2.5)."""
+    repo = _app(request).container.resolve("event_repo")
+    rows = repo.recent(limit=limit, event_type=event_type)
+    return {"events": [_event_row(r) for r in rows]}
+
+
+@v1_router.get("/ops", tags=["ops"])
+def ops_dashboard(request: Request) -> dict:
+    """Operations Dashboard snapshot (§5.11): the single-screen operator view."""
+    return _app(request).container.resolve("ops_dashboard").snapshot()
+
+
+@v1_router.get("/events/stream", tags=["events"])
+def events_stream(request: Request) -> StreamingResponse:
+    """Live event stream over Server-Sent Events (§2.5): the web console's push feed."""
+    notifier = _app(request).container.resolve("notifier")
+    q = notifier.subscribe()
+    return StreamingResponse(
+        sse_stream(q, broker=notifier.broker),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @v1_router.get("/agents", response_model=AgentsResponse, tags=["agents"])

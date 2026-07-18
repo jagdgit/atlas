@@ -60,6 +60,7 @@ def claim_to_finding(
     objective: str = "",
     domain: str = "research",
     documents: dict[str, Any] | None = None,
+    versions: dict[str, Any] | None = None,
 ) -> Finding:
     """Wrap a (grouped + verified) Claim as a Finding."""
     contested = bool(claim.contradicting)
@@ -71,6 +72,7 @@ def claim_to_finding(
         objective=objective,
         component=_COMPONENT,
         documents=documents,
+        versions=versions,
     )
     return Finding(
         id=finding_id,
@@ -97,8 +99,19 @@ class EvidenceSynthesizer:
 
     name = "synthesis"
 
-    def __init__(self, *, logger: logging.Logger | None = None) -> None:
+    # Artifact version (P2): bump on a material change to synthesis/grouping.
+    VERSION = "1"
+
+    def __init__(
+        self,
+        *,
+        versions: dict[str, Any] | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
         self._logger = logger or logging.getLogger("atlas.research.synthesis")
+        # Real component/model versions stamped onto every Finding's provenance so a
+        # later model swap becomes a scoped re-derivation, not a rebuild (P2).
+        self._versions = dict(versions or {})
 
     def synthesize(
         self,
@@ -122,6 +135,7 @@ class EvidenceSynthesizer:
                 objective=objective,
                 domain=domain,
                 documents=documents,
+                versions=self._versions or None,
             )
             for c in grouped
         ]

@@ -17,6 +17,7 @@ from atlas.net.client import (
     FetchClient,
     FetchResult,
 )
+from atlas.net.download import DownloadError, DownloadResult, resumable_download
 
 __all__ = [
     "FetchClient",
@@ -25,4 +26,7 @@ __all__ = [
     "OUTCOME_BLOCKED",
     "OUTCOME_SKIPPED",
     "OUTCOME_ERROR",
+    "resumable_download",
+    "DownloadResult",
+    "DownloadError",
 ]

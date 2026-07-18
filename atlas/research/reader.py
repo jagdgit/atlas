@@ -243,6 +243,10 @@ def _read_text_from_path(path: Path, content_type: str) -> tuple[str | None, str
 class Reader:
     """Turns an acquired file into a normalized :class:`Document`."""
 
+    # Artifact version (P2): bump on a material change to reading/normalization so
+    # findings can be traced to the reader build that produced them.
+    VERSION = "1"
+
     def __init__(
         self,
         *,

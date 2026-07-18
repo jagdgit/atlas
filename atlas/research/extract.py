@@ -287,6 +287,9 @@ def _split_sentences(text: str) -> list[str]:
 class ClaimExtractor:
     """Extracts structured claims from a read :class:`Document` (hybrid, D3.1)."""
 
+    # Artifact version (P2): bump on a material change to extraction behaviour.
+    VERSION = "1"
+
     def __init__(
         self,
         llm: "LLMService | None" = None,

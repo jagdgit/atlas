@@ -24,7 +24,8 @@
     <aside class="sidebar">
       <div class="brand">🜨 <span>Atlas</span></div>
       <nav class="nav">
-        <button class="nav-btn active" data-view="chat">Chat</button>
+        <button class="nav-btn active" data-view="overview">Overview</button>
+        <button class="nav-btn" data-view="chat">Chat</button>
         <button class="nav-btn" data-view="jobs">Jobs</button>
         <button class="nav-btn" data-view="system">System</button>
       </nav>
@@ -37,8 +38,19 @@
     </aside>
 
     <main class="main">
+      <!-- Overview / Operations Dashboard -->
+      <section id="view-overview" class="view">
+        <div class="panel-head">
+          <h2>Operations</h2>
+          <button id="overview-refresh" class="link">refresh</button>
+        </div>
+        <div id="ops-cards" class="status-cards"></div>
+        <div class="panel-head"><h3 class="section-h">Live activity</h3></div>
+        <div id="ops-activity" class="health-list"></div>
+      </section>
+
       <!-- Chat -->
-      <section id="view-chat" class="view">
+      <section id="view-chat" class="view hidden">
         <div id="transcript" class="transcript"></div>
         <form id="composer" class="composer">
           <textarea id="composer-input" rows="1" placeholder="Ask Atlas anything…  (Enter to send, Shift+Enter for a new line)"></textarea>

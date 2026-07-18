@@ -3,6 +3,43 @@ system:
   version: 0.1.0
   timezone: UTC
 
+# Clock / Time service (Phase 0 · ATLAS_OS_ROADMAP §5.7). Best-effort NTP drift
+# monitor: never blocks startup, never fails the system — an unreachable server only
+# produces a degraded health warning while Atlas runs on the local clock.
+clock:
+  ntp_enabled: true
+  ntp_servers: [pool.ntp.org, time.google.com]
+  ntp_timeout: 2.0
+  check_interval: 3600      # seconds between drift checks
+  drift_warn_seconds: 2.0   # health degrades above this absolute offset
+
+# Storage Manager (Phase 0 · ATLAS_OS_ROADMAP §5.8). All durable files flow through it
+# (versioned + checksummed). Hot/warm/cold tiering deferred (single disk). Quotas are
+# advisory (warn only) in Phase 0.
+storage:
+  dir:                      # storage root; blank => paths.data/storage
+  default_quota_mb: 0       # 0 = no advisory quota
+
+# Notifier (Phase 0 · ATLAS_OS_ROADMAP §2.5). Web/SSE first, email second (A1).
+# Email fires only for "notable" events (failures/completions) and only when SMTP is
+# configured below; otherwise it is silently skipped. The SMTP password is a SECRET —
+# never put it here; set the env var named by email.password_env (ATLAS_SMTP_PASSWORD).
+notifications:
+  enabled: true
+  channels: [web, email]
+  notable_types: []         # extra event types to email beyond *.failed / *.completed
+  sse_max_queue: 1000       # per-client SSE buffer; oldest event dropped when full
+
+email:
+  host:                     # blank => email channel unavailable (web/SSE still works)
+  port: 587                 # 465 => implicit SSL; else STARTTLS when use_tls
+  username:
+  password_env: ATLAS_SMTP_PASSWORD
+  from_addr:
+  to_addrs: []
+  use_tls: true
+  timeout: 20.0
+
 paths:
   data: /data/atlas_data
   documents: /data/atlas_data/documents

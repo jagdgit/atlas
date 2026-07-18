@@ -60,6 +60,7 @@ class LearningService:
         repo: "LearningRepository",
         config: "LearningConfig | None" = None,
         *,
+        versions: dict[str, Any] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._repo = repo
@@ -70,6 +71,9 @@ class LearningService:
         self._default_policy = getattr(config, "default_policy", "temporary")
         self._default_level = getattr(config, "default_level", 1)
         self._recall_k = getattr(config, "recall_k", 5)
+        # Real component/model versions stamped onto every proposed Experience (P2),
+        # so learning survives a model swap as scoped re-derivation, not a rebuild.
+        self._versions = dict(versions or {})
         self._logger = logger or logging.getLogger("atlas.learning")
         # Store sinks (S19): a sink knows how to materialise/deactivate a record in a
         # non-Experience store (e.g. the Code store). Registering one is how "promotion
@@ -101,6 +105,8 @@ class LearningService:
             candidate = _experience_from_job(objective, steps, result, job_id)
             if candidate is None:
                 return None
+            if self._versions:
+                candidate.setdefault("versions", dict(self._versions))
             event = self._propose(
                 SOURCE_JOB,
                 STORE_EXPERIENCE,

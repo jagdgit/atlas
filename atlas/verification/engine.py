@@ -74,6 +74,9 @@ class BudgetDecision:
 class VerificationEngine:
     name = "verification"
 
+    # Artifact version (P2): bump on a material change to confidence/convergence logic.
+    VERSION = "1"
+
     def __init__(self, *, numeric_tolerance: float = 0.15) -> None:
         # A value "agrees" if within tolerance * magnitude of a cluster anchor.
         self._tolerance = numeric_tolerance

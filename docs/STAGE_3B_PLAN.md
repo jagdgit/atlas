@@ -897,3 +897,8 @@ grouping/cap refinements the operator flagged (the "15 → 14" worry).
 > Finish Stage 3 by building an evaluated **knowledge operating system** — shared access,
 > append-only findings, lifecycle, provenance, quality dimensions, memory hierarchy, and
 > governed job/component learning — so Stage 4/5 only teach new domains.
+
+> **What comes after Stage 3:** the project reframes from "Stages" into a product roadmap
+> built on **Intelligence Domains + Missions + Persistent Workers** with durable state,
+> model-independence, and design-for-failure. See **`docs/ATLAS_OS_ROADMAP.md`** (discussion
+> draft — no code yet).

@@ -22,6 +22,8 @@ from atlas.conversation.service import ConversationService
 from atlas.database.connection import DatabaseManager
 from atlas.events.dispatcher import EventDispatcher
 from atlas.events.handlers import WILDCARD, LoggingHandler
+from atlas.notify import EmailSender, EventBroker, Notifier
+from atlas.repositories.event_repo import EventRepository
 from atlas.execution.executor import ToolExecutor
 from atlas.code.parser import CodeParser
 from atlas.code.service import CodeService
@@ -48,6 +50,11 @@ from atlas.knowledge.service import KnowledgeService
 from atlas.llm.ollama_provider import OllamaProvider
 from atlas.llm.service import LLMService
 from atlas.ops.backup import BackupManager
+from atlas.storage import StorageManager, StorageRepository
+from atlas.assets import AssetRepository, AssetStore
+from atlas.recovery import CheckpointStore, RecoveryManager
+from atlas.repositories.recovery_repo import CheckpointRepository, RecoveryRepository
+from atlas.missions import MissionRepository, MissionService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
 from atlas.repositories.agent_run_repo import AgentRunRepository
@@ -71,6 +78,8 @@ from atlas.services.database_service import DatabaseService
 from atlas.services.health import HealthMonitor
 from atlas.services.learning_service import LearningService
 from atlas.services.memory_service import MemoryService
+from atlas.system.time import ClockService
+from atlas.system.versioning import build_artifact_versions
 from atlas.utils.logging import get_logger, setup_logging
 
 
@@ -89,14 +98,65 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     db_manager = DatabaseManager(cfg.database)
 
     # 5. Kernel primitives
-    events = EventDispatcher(get_logger("atlas.events"))
+    # Durable event bus (Phase 0 · §2.5, P1): persist every event to audit.events
+    # BEFORE dispatch, so the stream is replayable after a crash. Persistence is
+    # best-effort inside the dispatcher (a DB blip never blocks the in-process bus).
+    event_repo = EventRepository(db_manager)
+    events = EventDispatcher(get_logger("atlas.events"), store=event_repo)
     events.subscribe(WILDCARD, LoggingHandler(get_logger("atlas.events")))
+
+    # Notifier (Phase 0 · §2.5, A1): one wildcard subscriber fanning events out to the
+    # operator — web/SSE first (EventBroker, consumed by the dashboard over SSE), email
+    # second (best-effort, only for notable events when SMTP is configured). The SMTP
+    # password is a secret read from the env var named by email.password_env (A1).
+    import os as _os
+
+    event_broker = EventBroker(
+        max_queue=cfg.notifications.sse_max_queue,
+        logger=get_logger("atlas.notify.broker"),
+    )
+    email_sender = EmailSender(
+        host=cfg.email.host,
+        port=cfg.email.port,
+        username=cfg.email.username,
+        password=_os.environ.get(cfg.email.password_env, ""),
+        from_addr=cfg.email.from_addr,
+        to_addrs=cfg.email.to_addrs,
+        use_tls=cfg.email.use_tls,
+        timeout=cfg.email.timeout,
+        logger=get_logger("atlas.notify.email"),
+    )
+    notifier = Notifier(
+        event_broker,
+        email_sender,
+        enabled=cfg.notifications.enabled,
+        channels=cfg.notifications.channels,
+        notable_types=cfg.notifications.notable_types,
+        logger=get_logger("atlas.notify"),
+    )
+    events.subscribe(WILDCARD, notifier)
 
     registry = ServiceRegistry()
     container = ServiceContainer()
-    capabilities = CapabilityRegistry()
+    # default_version → Atlas build version, so capabilities without an explicit
+    # version still stamp a real version (P2), never a hardcoded "v1".
+    capabilities = CapabilityRegistry(default_version=cfg.system.version)
     tools = ToolRegistry()
     lifecycle = LifecycleManager(registry, logger)
+
+    # Clock / Time service (Phase 0 · ATLAS_OS_ROADMAP §5.7, P1): one trustworthy
+    # time source (UTC internally, monotonic durations, best-effort NTP drift
+    # monitor). Constructed early and started first so later durable records are
+    # stamped consistently. The drift monitor never blocks startup (R1/Q9).
+    clock = ClockService(
+        timezone_name=cfg.system.timezone,
+        ntp_enabled=cfg.clock.ntp_enabled,
+        ntp_servers=cfg.clock.ntp_servers,
+        ntp_timeout=cfg.clock.ntp_timeout,
+        check_interval=cfg.clock.check_interval,
+        drift_warn_seconds=cfg.clock.drift_warn_seconds,
+        logger=get_logger("atlas.system.clock"),
+    )
 
     # Shared dependencies available for injection
     health_repo = HealthRepository(db_manager)
@@ -286,6 +346,61 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     handlers.register("backup", backup_manager.backup_task)
 
+    # Storage Manager (Phase 0 · ATLAS_OS_ROADMAP §5.8, P8): the one subsystem all
+    # durable files flow through — versioned + checksummed put/get, workspace
+    # allocation, advisory per-scope quotas, and backup orchestration (wraps the
+    # BackupManager above). Hot/warm/cold tiering is deferred (single disk, R2).
+    storage_root = cfg.storage.dir or str(cfg.paths.data / "storage")
+    storage_manager = StorageManager(
+        storage_root,
+        StorageRepository(db_manager),
+        backup=backup_manager,
+        default_quota_bytes=max(0, cfg.storage.default_quota_mb) * 1024 * 1024,
+        logger=get_logger("atlas.storage"),
+    )
+
+    # Asset Store (Phase 0 · ATLAS_OS_ROADMAP §5.9, P8): raw, versioned *source
+    # artifacts* (repos, PDFs, DWG/CAD, MATLAB, images) — the things knowledge is
+    # extracted from — stored through the Storage Manager. Assets ≠ Knowledge, so a
+    # better reader later re-derives knowledge without re-fetching the bytes.
+    asset_store = AssetStore(
+        storage_manager,
+        AssetRepository(db_manager),
+        logger=get_logger("atlas.assets"),
+    )
+
+    # Recovery Manager (Phase 0 · §2.8, P1/P4): the cross-cutting *startup* recovery
+    # layer. Per-subsystem recovery already exists (the scheduler resets interrupted
+    # tasks and the Job Engine re-enqueues unfinished jobs in their own start()); this
+    # runs *first* — before work is accepted — and adds what spans subsystems: a
+    # durable, re-entrant run record (system.recovery_runs; a crash mid-recovery is
+    # marked interrupted and the next boot re-runs cleanly, R1/Q6), storage integrity
+    # (checksums), and backup verification. Never blocks boot; emits RecoveryStarted/
+    # Completed to the dashboard. CheckpointStore is the resume-point foundation
+    # (system.checkpoints) Phase A workers adopt.
+    checkpoint_store = CheckpointStore(
+        CheckpointRepository(db_manager),
+        logger=get_logger("atlas.recovery.checkpoints"),
+    )
+    recovery_manager = RecoveryManager(
+        RecoveryRepository(db_manager),
+        storage=storage_manager,
+        backup=backup_manager,
+        task_repo=task_repo,
+        events=events,
+        logger=get_logger("atlas.recovery"),
+    )
+
+    # Mission Manager (Phase A · §A.1, P5/P7): the Mission layer above Jobs — long-lived,
+    # operator-created objectives that own Jobs and (later) Persistent Workers, run off a
+    # versioned Configuration, and journal every action for explainability (P9). Archival is
+    # non-destructive (B5/B9). Emits Mission* events on the durable bus → dashboard.
+    mission_service = MissionService(
+        MissionRepository(db_manager),
+        events=events,
+        logger=get_logger("atlas.missions"),
+    )
+
     # Conversation + Chat orchestrator (Sprint 10): the shared spine (D1) that the
     # async Job Engine (S12) will reuse. ConversationService owns the transcript;
     # the deterministic Planner routes intents; the ToolExecutor runs tool steps;
@@ -385,7 +500,20 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     from atlas.research.synthesis import EvidenceSynthesizer
 
+    # Artifact versioning (P2 · §2.6): stamp the real component/model builds onto every
+    # Finding + Experience so a later model swap is a scoped re-derivation, not a
+    # rebuild. Versions come from component VERSION constants + configured model names.
+    _researcher_role = cfg.llm.roles.get("researcher")
+    artifact_versions = build_artifact_versions(
+        llm_id=(_researcher_role.model if _researcher_role else cfg.llm.model),
+        embedding_id=cfg.llm.embedding_model,
+        reader_version=Reader.VERSION,
+        extractor_version=ClaimExtractor.VERSION,
+        verifier_version=VerificationEngine.VERSION,
+        synthesizer_version=EvidenceSynthesizer.VERSION,
+    )
     evidence_synthesizer = EvidenceSynthesizer(
+        versions=artifact_versions.as_dict(),
         logger=get_logger("atlas.research.synthesis"),
     )
 
@@ -394,6 +522,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     learning_service = LearningService(
         LearningRepository(db_manager),
         cfg.learning,
+        versions=artifact_versions.as_dict(),
         logger=get_logger("atlas.learning"),
     )
     # Soft bias after apply+enable is loaded inside KnowledgeService.retrieve.
@@ -552,8 +681,11 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     handlers.register("ingest_scan", ingestion_source.scan_task)
 
     container.register_instance("config", cfg)
+    container.register_instance("clock", clock)
     container.register_instance("database_manager", db_manager)
     container.register_instance("events", events)
+    container.register_instance("event_repo", event_repo)
+    container.register_instance("notifier", notifier)
     container.register_instance("health_repo", health_repo)
     container.register_instance("task_repo", task_repo)
     container.register_instance("task_handlers", handlers)
@@ -563,6 +695,11 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("agent", agent_service)
     container.register_instance("memory", memory_service)
     container.register_instance("backup", backup_manager)
+    container.register_instance("storage", storage_manager)
+    container.register_instance("assets", asset_store)
+    container.register_instance("recovery", recovery_manager)
+    container.register_instance("checkpoints", checkpoint_store)
+    container.register_instance("missions", mission_service)
     container.register_instance("conversation", conversation_service)
     container.register_instance("planner", planner)
     container.register_instance("tool_executor", tool_executor)
@@ -585,6 +722,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # Advertise capabilities so agents can query the kernel instead of importing
     # modules (ADR-0040). S11: attach typed contracts so the registry can verify a
     # provider implements its protocol and report missing capabilities (R2).
+    capabilities.register("clock", clock, kind="kernel")
     capabilities.register("llm", llm_service, contract=caps.LLMCapability, kind="service")
     capabilities.register(
         "knowledge", knowledge_service, contract=caps.KnowledgeCapability, kind="service"
@@ -600,6 +738,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         evidence_synthesizer,
         contract=caps.SynthesisCapability,
         kind="service",
+        version=EvidenceSynthesizer.VERSION,
     )
     capabilities.register(
         caps.CAP_KNOWLEDGE_LIFECYCLE,
@@ -615,6 +754,24 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         "memory", memory_service, contract=caps.MemoryCapability, kind="service"
     )
     capabilities.register("backup", backup_manager, kind="service")
+    capabilities.register(
+        "storage", storage_manager, kind="kernel", version=StorageManager.VERSION
+    )
+    capabilities.register(
+        "assets", asset_store, kind="kernel", version=AssetStore.VERSION
+    )
+    capabilities.register(
+        "recovery", recovery_manager, kind="kernel", version=RecoveryManager.VERSION
+    )
+    capabilities.register(
+        "checkpoints", checkpoint_store, kind="kernel", version=CheckpointStore.VERSION
+    )
+    capabilities.register(
+        "missions", mission_service, kind="service", version=MissionService.VERSION
+    )
+    capabilities.register(
+        "notifier", notifier, kind="kernel", version=Notifier.VERSION
+    )
     capabilities.register(
         "conversation",
         conversation_service,
@@ -632,7 +789,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register(
         "python", python_service, contract=caps.PythonExecutionCapability, kind="service"
     )
-    capabilities.register("verification", verification_service, kind="service")
+    capabilities.register(
+        "verification", verification_service, kind="service",
+        version=VerificationEngine.VERSION,
+    )
     capabilities.register("reports", report_service, kind="service")
     capabilities.register(
         "research", research_service, contract=caps.ResearchCapability, kind="service"
@@ -649,12 +809,21 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register("ingestion", ingestion_source, kind="service")
 
     # 6. Core services (registration order = start order)
+    registry.register(clock)  # first: time source for everything that follows
     registry.register(DatabaseService(db_manager))
+    # Recovery runs right after the DB is up and BEFORE any work-accepting service
+    # (scheduler/jobs) starts, so interrupted state is reconciled first (P4).
+    registry.register(recovery_manager)
+    registry.register(checkpoint_store)
     registry.register(llm_service)
     registry.register(scheduler_service)
     registry.register(agent_service)
     registry.register(memory_service)
     registry.register(backup_manager)
+    registry.register(storage_manager)
+    registry.register(asset_store)
+    registry.register(mission_service)
+    registry.register(notifier)
     registry.register(conversation_service)
     registry.register(assistant_service)
     registry.register(job_service)
@@ -692,6 +861,25 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("plugins", plugin_manager)
     capabilities.register("plugins", plugin_manager, kind="kernel")
     registry.register(plugin_manager)
+
+    # 8b. Operations Dashboard (Phase 0 · §5.11, A4): the single-screen operator view
+    # (status, counts, host metrics, last backup, capabilities), fed on demand via
+    # /v1/ops and live-updated by the SSE event stream. Built after `app` so it can read
+    # status/health/capabilities; host metrics are stdlib + best-effort (temp/UPS report
+    # "not present" when no sensor). Registered on the container the app already holds.
+    from atlas.ops.dashboard import OperationsDashboard
+    from atlas.system.host import HostMetrics
+
+    host_metrics = HostMetrics(
+        disk_path=cfg.paths.data,
+        logger=get_logger("atlas.system.host"),
+    )
+    ops_dashboard = OperationsDashboard(
+        app, host_metrics, clock=clock, logger=get_logger("atlas.ops.dashboard")
+    )
+    container.register_instance("host_metrics", host_metrics)
+    container.register_instance("ops_dashboard", ops_dashboard)
+    capabilities.register("ops_dashboard", ops_dashboard, kind="kernel")
 
     # 9. Health monitor last, so it observes every other service (incl. plugins).
     registry.register(

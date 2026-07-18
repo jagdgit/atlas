@@ -36,6 +36,24 @@ class SystemConfig(BaseModel):
     timezone: str = "UTC"
 
 
+class ClockConfig(BaseModel):
+    """Clock / Time service (Phase 0 · ATLAS_OS_ROADMAP §5.7, P1).
+
+    Best-effort NTP drift monitoring (R1/Q9): it never blocks startup and never
+    fails the system — an unreachable NTP server only produces a *degraded* health
+    warning while Atlas keeps running on the local clock. The display timezone is
+    taken from ``system.timezone``.
+    """
+
+    ntp_enabled: bool = True
+    ntp_servers: list[str] = Field(
+        default_factory=lambda: ["pool.ntp.org", "time.google.com"]
+    )
+    ntp_timeout: float = 2.0  # per-server SNTP query wall-clock (seconds)
+    check_interval: int = 3600  # seconds between drift checks (0 = one-shot at start off)
+    drift_warn_seconds: float = 2.0  # health degrades above this absolute offset
+
+
 class PathsConfig(BaseModel):
     data: Path
     documents: Path
@@ -142,6 +160,49 @@ class AuditConfig(BaseModel):
 
 class MonitoringConfig(BaseModel):
     health_interval: int = 30  # seconds between periodic health checks
+
+
+class StorageConfig(BaseModel):
+    """Storage Manager (Phase 0 · ATLAS_OS_ROADMAP §5.8, P8).
+
+    All durable files flow through it (versioned + checksummed). Hot/warm/cold tiering
+    is deferred (single disk today, R2). Quotas are advisory (warn only) in Phase 0.
+    """
+
+    dir: str | None = None  # storage root; None => paths.data/storage
+    default_quota_mb: int = 0  # 0 = no advisory quota
+
+
+class EmailConfig(BaseModel):
+    """SMTP settings for the Notifier's email channel (Phase 0 · §2.5, A1).
+
+    The password is a **secret**: never in YAML — read from the env var named by
+    ``password_env`` at build time (mirrors mail/DB/API-key handling).
+    """
+
+    host: str = ""  # empty => email channel is unavailable (web/SSE still works)
+    port: int = 587  # 465 => implicit SSL; otherwise STARTTLS when use_tls
+    username: str = ""
+    password_env: str = "ATLAS_SMTP_PASSWORD"
+    from_addr: str = ""
+    to_addrs: list[str] = Field(default_factory=list)
+    use_tls: bool = True
+    timeout: float = 20.0
+
+    @field_validator("host", "username", "from_addr", mode="before")
+    @classmethod
+    def _none_to_blank(cls, value: Any) -> Any:
+        """A blank YAML scalar parses to None — treat it as an empty string."""
+        return "" if value is None else value
+
+
+class NotificationsConfig(BaseModel):
+    """Notifier (Phase 0 · ATLAS_OS_ROADMAP §2.5): web/SSE first, email second (A1)."""
+
+    enabled: bool = True
+    channels: list[str] = Field(default_factory=lambda: ["web", "email"])
+    notable_types: list[str] = Field(default_factory=list)  # extra email-worthy types
+    sse_max_queue: int = 1000  # per-client buffer; oldest dropped when full
 
 
 class BackupConfig(BaseModel):
@@ -479,6 +540,7 @@ class ApiConfig(BaseModel):
 
 class AtlasConfig(BaseModel):
     system: SystemConfig
+    clock: ClockConfig = ClockConfig()
     paths: PathsConfig
     database: DatabaseConfig
     llm: LLMConfig
@@ -486,6 +548,9 @@ class AtlasConfig(BaseModel):
     logging: LoggingConfig
     audit: AuditConfig
     monitoring: MonitoringConfig = MonitoringConfig()
+    storage: StorageConfig = StorageConfig()
+    notifications: NotificationsConfig = NotificationsConfig()
+    email: EmailConfig = EmailConfig()
     backup: BackupConfig = BackupConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
     agent: AgentConfig = AgentConfig()

@@ -73,6 +73,115 @@ def test_describe_includes_contract_name():
     assert described[CAP_WEB]["kind"] == "plugin"
 
 
+# --- Phase 0 §5.10: registry self-inspection enrichment ---------------------
+
+
+class _Healthy:
+    class _Status:
+        healthy = True
+        detail = "all good"
+        data = {"queue": 3}
+
+    def health_check(self):
+        return self._Status()
+
+    def metrics(self):
+        return {"processed": 42}
+
+
+class _Crashy:
+    def health_check(self):
+        raise RuntimeError("boom")
+
+
+def test_register_records_version_enabled_dependencies():
+    reg = CapabilityRegistry()
+    reg.register(
+        "storage", object(), kind="service",
+        version="2.4", enabled=False, dependencies=["clock", "db"],
+    )
+    described = reg.describe()["storage"]
+    assert described["version"] == "2.4"
+    assert described["enabled"] is False
+    assert described["dependencies"] == ["clock", "db"]
+
+
+def test_version_of_prefers_explicit_then_attribute():
+    reg = CapabilityRegistry()
+    reg.register("explicit", object(), version="9.9")
+
+    class _Versioned:
+        version = "attr-1.0"
+
+    reg.register("from_attr", _Versioned())
+    reg.register("unknown", object())
+    assert reg.version_of("explicit") == "9.9"
+    assert reg.version_of("from_attr") == "attr-1.0"
+    assert reg.version_of("unknown") is None
+
+
+def test_default_version_fallback():
+    reg = CapabilityRegistry(default_version="0.1.0")
+    reg.register("plain", object())
+    reg.register("explicit", object(), version="3.0")
+    assert reg.version_of("plain") == "0.1.0"  # falls back, never hardcoded "v1"
+    assert reg.version_of("explicit") == "3.0"  # explicit still wins
+
+
+def test_inspect_probes_health_and_metrics():
+    reg = CapabilityRegistry()
+    reg.register("svc", _Healthy(), kind="service", version="1.1")
+    info = reg.inspect("svc")
+    assert info.healthy is True
+    assert info.health_detail == "all good"
+    assert info.version == "1.1"
+    assert info.metrics["processed"] == 42
+    assert info.metrics["health"] == {"queue": 3}
+
+
+def test_inspect_handles_provider_without_health_check():
+    reg = CapabilityRegistry()
+    reg.register("plain", object(), kind="kernel")
+    info = reg.inspect("plain")
+    assert info.healthy is None
+    assert info.metrics == {}
+
+
+def test_inspect_reports_unhealthy_when_health_check_raises():
+    reg = CapabilityRegistry()
+    reg.register("crashy", _Crashy())
+    info = reg.inspect("crashy")
+    assert info.healthy is False
+    assert "boom" in info.health_detail
+
+
+def test_inspect_flags_missing_dependencies():
+    reg = CapabilityRegistry()
+    reg.register("clock", object())
+    reg.register("dep", object(), dependencies=["clock", "absent"])
+    info = reg.inspect("dep")
+    assert info.missing_dependencies == ("absent",)
+
+
+def test_inspect_unknown_raises():
+    import pytest
+
+    from atlas.exceptions import CapabilityMissingError
+
+    with pytest.raises(CapabilityMissingError):
+        CapabilityRegistry().inspect("nope")
+
+
+def test_inspect_all_is_serializable():
+    reg = CapabilityRegistry()
+    reg.register("svc", _Healthy(), kind="service")
+    reg.register("plain", object())
+    everything = reg.inspect_all()
+    assert set(everything) == {"svc", "plain"}
+    assert everything["svc"]["healthy"] is True
+    assert "dependencies" in everything["plain"]
+
+
 def test_runtime_checkable_isinstance():
     assert isinstance(GoodMemory(), MemoryCapability)
     assert not isinstance(NotMemory(), MemoryCapability)
