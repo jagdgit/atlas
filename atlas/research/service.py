@@ -31,6 +31,7 @@ from atlas.evidence.models import (
     EvidenceGraph,
     EvidenceItem,
     Source,
+    level_name,
 )
 from atlas.research.classifier import classify
 from atlas.research.grouping import group_claims
@@ -123,6 +124,10 @@ class ResearchService:
         max_documents: int = 12,
         max_extract_workers: int = 1,
         max_worker_threads: int = 4,
+        knowledge=None,
+        prior_k: int = 5,
+        synthesizer=None,
+        learning=None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._verification = verification
@@ -139,6 +144,10 @@ class ResearchService:
         self._reader = reader or Reader()
         self._resources = resources
         self._execution = execution
+        self._knowledge = knowledge
+        self._prior_k = max(1, int(prior_k or 5))
+        self._synthesizer = synthesizer
+        self._learning = learning
         self._per_query = per_query
         self._max_documents = max_documents
         self._max_extract_workers = max(1, int(max_extract_workers or 1))
@@ -162,6 +171,9 @@ class ResearchService:
         if not objective:
             return {"outcome": RESEARCH_ERROR, "reason": "empty objective"}
 
+        prior = self._recall_prior(objective, activity=activity, workspace=workspace)
+        advice = self._recall_advice(objective, activity=activity, workspace=workspace)
+
         scholar = self._resolve("scholar", self._scholar)
         search = self._resolve("search", self._search)
         if scholar is None and search is None:
@@ -169,6 +181,8 @@ class ResearchService:
                 "outcome": RESEARCH_UNAVAILABLE,
                 "objective": objective,
                 "reason": "no research providers available (need scholar and/or search)",
+                "prior_knowledge": prior,
+                "experience_advice": advice,
             }
 
         eb = self._budget(budget, max_iterations)
@@ -178,11 +192,16 @@ class ResearchService:
         # scoring URLs. Requires a ClaimExtractor; the Librarian is optional (abstracts
         # alone still yield Tier-1 claims), which keeps it working when fetch is offline.
         if self._extractor is not None:
-            return self._research_deep(
+            result = self._research_deep(
                 objective, eb, n, scholar, search,
                 activity=activity, workspace=workspace,
                 resource_profile=resource_profile,
             )
+            if prior is not None:
+                result = {**result, "prior_knowledge": prior}
+            if advice is not None:
+                result = {**result, "experience_advice": advice}
+            return result
 
         graph = EvidenceGraph()
         claim = Claim(id="c1", statement=objective)
@@ -227,6 +246,8 @@ class ResearchService:
                 "iterations": iterations,
                 "reason": "no evidence gathered from the available providers",
                 "log": log,
+                "prior_knowledge": prior,
+                "experience_advice": advice,
             }
 
         report_bundle = self._render(objective, graph, eb)
@@ -240,6 +261,8 @@ class ResearchService:
             "verification": report_bundle.get("verification"),
             "report": report_bundle.get("report"),
             "log": log,
+            "prior_knowledge": prior,
+            "experience_advice": advice,
         }
 
     # --- deep pipeline (Stage 3, Steps 5–6 / §5d–5i, C4/C5) -------------
@@ -429,12 +452,39 @@ class ResearchService:
 
         grouped = list(graph.claims.values())
         verified = sum(1 for c in grouped if c.confidence != CONFIDENCE_INSUFFICIENT)
+        # Authoritative acquisition/extraction funnel (report must match runtime).
+        read_ok = sum(1 for d in documents.values() if getattr(d, "has_text", False))
+        reader_failures = len(documents) - read_ok
+        paywalled = sum(
+            1 for b in blocked if (b.get("failure_code") or "") == "paywall"
+        ) or len(blocked)
+        sources_with_claims = len(
+            {c.evidence[0].source_id for c in raw if c.evidence}
+        )
+        extract_failed = max(read_ok - sources_with_claims, 0)
+        numeric_claims = sum(
+            1 for c in raw
+            if c.evidence and not c.evidence[0].inferred and c.value is not None
+        )
+        prose_claims = sum(
+            1 for c in raw
+            if c.evidence and not c.evidence[0].inferred
+            and (c.evidence[0].locator or "").startswith("prose:")
+        )
+        inferred_claims = sum(1 for c in raw if c.evidence and c.evidence[0].inferred)
         pipeline = {
             "found": len(candidates),
             "acquired": acquired_full,
-            "read": len(documents),
+            "read": read_ok,
+            "reader_failures": reader_failures,
+            "paywalled": paywalled,
+            "extract_ok": sources_with_claims,
+            "extract_failed": extract_failed,
             "extracted": len(raw),
             "claims": len(grouped),
+            "numeric_claims": numeric_claims,
+            "prose_claims": prose_claims,
+            "inferred_claims": inferred_claims,
             "verified": verified,
             "rejected": len(grouped) - verified,
             "blocked": len(blocked),
@@ -445,15 +495,56 @@ class ResearchService:
         gap_note = ""
         if status is not None and status.has_gaps:
             gap_note = " Unmet gaps: " + "; ".join(g.reason for g in status.gaps) + "."
+        # Honest funnel narrative — every stage reconciles with the counters below.
         notes = (
-            f"Pipeline: found {pipeline['found']} sources → acquired {pipeline['acquired']} "
-            f"full-text → read {pipeline['read']} → extracted {pipeline['extracted']} claims "
-            f"→ verified {pipeline['verified']} (rejected {pipeline['rejected']}) "
-            f"over {pipeline['rounds']} round(s)."
+            f"Pipeline: found {pipeline['found']} source(s) → acquired "
+            f"{pipeline['acquired']} → read {pipeline['read']} "
+            f"({pipeline['reader_failures']} reader failure(s), "
+            f"{pipeline['paywalled']} paywalled) → {pipeline['extract_ok']} produced "
+            f"claims / {pipeline['extract_failed']} yielded none → extracted "
+            f"{pipeline['extracted']} claim(s) "
+            f"({pipeline['numeric_claims']} numeric, {pipeline['prose_claims']} prose, "
+            f"{pipeline['inferred_claims']} inferred) → verified "
+            f"{pipeline['verified']} (rejected {pipeline['rejected']}) over "
+            f"{pipeline['rounds']} round(s)."
             + gap_note
         )
-        self._persist_artifacts(workspace, graph, pipeline, notes)
-        report_bundle = self._render(objective, graph, eb, notes=notes)
+        findings = self._synthesize_findings(
+            graph,
+            objective=objective,
+            workspace=workspace,
+            documents=documents,
+        )
+        pipeline["findings"] = len(findings)
+        reasoning = self._reason_across(
+            findings or list(graph.claims.values()),
+            gaps=status,
+            objective=objective,
+            activity=activity,
+        )
+        edges = reasoning.get("edges") or []
+        pipeline["edges"] = len(edges)
+        pipeline["contradictions"] = sum(
+            1 for e in edges if (e.get("relation") if isinstance(e, dict) else "") == "contradict"
+        )
+        pipeline["patterns"] = len(reasoning.get("patterns") or [])
+        pipeline["opportunities"] = len(reasoning.get("opportunities") or [])
+        pipeline["hypotheses"] = len(reasoning.get("hypotheses") or [])
+        # Per-source pipeline trace (§3B hardening): a structured state object for
+        # every source — search → acquire → read → extract → verify → findings —
+        # so a regression in any stage is diagnosable in minutes, per source.
+        trace = self._build_source_traces(
+            candidates, documents, raw, graph, findings, blocked
+        )
+        pipeline["trace"] = trace
+        self._record_trace(activity, workspace, trace)
+        self._persist_artifacts(
+            workspace, graph, pipeline, notes, findings=findings, reasoning=reasoning
+        )
+        report_bundle = self._render(
+            objective, graph, eb, notes=notes, findings=findings,
+            reasoning=reasoning, pipeline=pipeline,
+        )
         report = report_bundle.get("report") or {}
         # Surface recommendations inside the report's next_research when present.
         if recommendations and report.get("sections"):
@@ -502,6 +593,8 @@ class ResearchService:
             "blocked": blocked,
             "gaps": status.as_dict() if status else {},
             "recommendations": recommendations,
+            "findings": [f.as_dict() for f in findings],
+            "reasoning": reasoning,
             "log": rounds_log,
         }
 
@@ -599,16 +692,61 @@ class ResearchService:
         search,
         activity: Any,
     ) -> None:
+        # Canonical identity map so arxiv/ar5iv/PDF/DOI representations of the same
+        # paper collapse into one logical source (never counted as two studies).
+        from atlas.research.acquire import canonical_source_id
+
+        canon: dict[str, str] = {}
+        for sid, g in candidates.items():
+            canon.setdefault(canonical_source_id(g.source), sid)
+        collapsed = 0
         for mode, query in plan:
             provider = scholar if mode == "scholar" else search
             if provider is None:
                 continue
             self._record(activity, "search", f"Searching {mode}: {query!r}")
             for g in self._gather(mode, provider, query, n):
-                candidates.setdefault(g.source.id, g)
+                sid = g.source.id
+                if sid in candidates:
+                    continue
+                key = canonical_source_id(g.source)
+                existing_sid = canon.get(key)
+                if existing_sid is not None:
+                    # Same paper, different representation → keep the better one.
+                    if self._prefer_representation(g, candidates.get(existing_sid)):
+                        candidates.pop(existing_sid, None)
+                        candidates[sid] = g
+                        canon[key] = sid
+                    collapsed += 1
+                    continue
+                candidates[sid] = g
+                canon[key] = sid
+        if collapsed:
+            self._record(
+                activity, "search",
+                f"Collapsed {collapsed} duplicate representation(s) of the same "
+                f"paper (canonical identity).",
+            )
         self._record(
             activity, "search", f"Candidate pool now {len(candidates)} source(s)."
         )
+
+    @staticmethod
+    def _prefer_representation(new: _Gathered, existing: _Gathered | None) -> bool:
+        """True if ``new`` is a better representation of a paper than ``existing``.
+
+        Prefer full-text HTML (e.g. ar5iv) and higher evidence level; a richer
+        representation extracts more reliably than a landing page/abstract.
+        """
+        if existing is None:
+            return True
+        new_full = len((new.full_text or "").strip())
+        old_full = len((existing.full_text or "").strip())
+        if (new_full >= _MIN_TIER1_CHARS) != (old_full >= _MIN_TIER1_CHARS):
+            return new_full >= _MIN_TIER1_CHARS
+        if new.source.evidence_level != existing.source.evidence_level:
+            return new.source.evidence_level > existing.source.evidence_level
+        return new_full > old_full
 
     def _acquire_unread(
         self,
@@ -707,42 +845,40 @@ class ResearchService:
                 res = self._extractor.extract(doc, evidence_level=level, activity=None)
                 claims = list(res.claims)
                 if not claims:
-                    return sid, [], "empty_text", "extracted 0 claims"
+                    # Never a silent "0 claims": carry the extractor's diagnosis.
+                    return sid, [], "no_claims", res.reason or "no claim patterns matched"
                 return sid, claims, None, None
             except Exception as exc:  # noqa: BLE001
                 self._logger.exception("claim extraction failed for %s", sid)
                 return sid, [], "parse_error", f"{type(exc).__name__}: {exc}"
 
-        outcomes = map_parallel(_one, pending, max_workers=workers, ordered=True)
+        outcomes = map_parallel(
+            _one, pending, max_workers=workers, ordered=True, logger=self._logger
+        )
         new_claims: list[Claim] = []
         for sid, claims, code, reason in outcomes:
-            if code == "empty_text" and not claims and reason == "no extractable text":
+            if code in ("empty_text", "paywall", "unsupported") and not claims:
+                # Reader-side failure: the document never yielded usable text.
                 self._record(
                     activity, "read",
-                    f"Skipping extract for {sid}: {code} — {reason}",
+                    f"Reader failure for {sid}: {code} — {reason}",
                     source_id=sid, failure_code=code,
                 )
                 continue
             if code and not claims:
-                phase = "extract" if code != "empty_text" or "0 claims" in (reason or "") else "read"
-                if code == "empty_text" and "0 claims" in (reason or ""):
-                    self._record(
-                        activity, "extract",
-                        f"Extracted 0 claims from {sid} "
-                        f"(reader={getattr(documents[sid], 'reader_id', '')}, "
-                        f"chars={getattr(documents[sid], 'chars', 0)})",
-                        source_id=sid, failure_code=code,
-                    )
-                elif code == "parse_error":
+                if code == "parse_error":
                     self._record(
                         activity, "extract",
                         f"Extract failed for {sid}: {reason}",
                         source_id=sid, failure_code=code,
                     )
                 else:
+                    # code == "no_claims": reader OK but nothing extractable.
                     self._record(
-                        activity, phase,
-                        f"Skipping extract for {sid}: {code} — {reason}",
+                        activity, "extract",
+                        f"Extracted 0 claims from {sid} "
+                        f"(reader={getattr(documents[sid], 'reader_id', '')}, "
+                        f"chars={getattr(documents[sid], 'chars', 0)}) — {reason}",
                         source_id=sid, failure_code=code,
                     )
                 continue
@@ -833,14 +969,29 @@ class ResearchService:
 
     @staticmethod
     def _persist_artifacts(
-        workspace: Any, graph: EvidenceGraph, pipeline: dict[str, Any], notes: str,
+        workspace: Any,
+        graph: EvidenceGraph,
+        pipeline: dict[str, Any],
+        notes: str,
+        *,
+        findings: list | None = None,
+        reasoning: dict[str, Any] | None = None,
     ) -> None:
-        """Write claims/evidence/manifest into the job workspace (best-effort)."""
+        """Write claims/evidence/findings/reasoning/manifest into the job workspace."""
         if workspace is None:
             return
         try:
             workspace.write_json("claims.json", [c.as_dict() for c in graph.claims.values()])
             workspace.write_json("evidence.json", graph.as_dict())
+            if findings is not None:
+                workspace.write_json(
+                    "findings.json",
+                    [f.as_dict() if hasattr(f, "as_dict") else f for f in findings],
+                )
+            if reasoning is not None:
+                workspace.write_json("reasoning.json", reasoning)
+            if pipeline is not None:
+                workspace.write_json("pipeline.json", pipeline)
             workspace.append_note(notes)
             if hasattr(workspace, "load_manifest") and hasattr(workspace, "write_json"):
                 manifest = workspace.load_manifest()
@@ -851,6 +1002,9 @@ class ResearchService:
                     ("read", "read"),
                     ("extracted", "extracted"),
                     ("verified", "verified"),
+                    ("findings", "findings"),
+                    ("patterns", "patterns"),
+                    ("hypotheses", "hypotheses"),
                 ):
                     counts[field] = max(int(counts.get(field, 0)), int(pipeline.get(key, 0)))
                 from datetime import datetime, timezone
@@ -858,6 +1012,222 @@ class ResearchService:
                 workspace.write_json("manifest.json", manifest)
         except Exception:  # noqa: BLE001 - workspace I/O must never fail research
             pass
+
+    def _build_source_traces(
+        self,
+        candidates: dict[str, _Gathered],
+        documents: dict[str, Any],
+        raw: list[Claim],
+        graph: EvidenceGraph,
+        findings: list | None,
+        blocked: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """One structured state object per source, across every pipeline stage.
+
+        Fields answer "what happened to this source?": searched → acquired → read
+        (reader/chars/sections) → extracted (numeric/qualitative/inferred) → distinct
+        → verified → findings, plus an explicit ``status`` and ``failure_reason`` when
+        a stage stopped. This is the trace the operator asked for — debugging by
+        reading one row instead of correlating log lines.
+        """
+        from collections import defaultdict
+
+        numeric: dict[str, int] = defaultdict(int)
+        prose: dict[str, int] = defaultdict(int)
+        inferred: dict[str, int] = defaultdict(int)
+        for c in raw:
+            if not c.evidence:
+                continue
+            ev = c.evidence[0]
+            sid = ev.source_id
+            if getattr(ev, "inferred", False):
+                inferred[sid] += 1
+            elif c.value is not None:
+                numeric[sid] += 1
+            else:
+                prose[sid] += 1
+
+        distinct: dict[str, int] = defaultdict(int)
+        verified: dict[str, int] = defaultdict(int)
+        for c in graph.claims.values():
+            is_verified = c.confidence != CONFIDENCE_INSUFFICIENT
+            for sid in {e.source_id for e in c.evidence}:
+                distinct[sid] += 1
+                if is_verified:
+                    verified[sid] += 1
+
+        finding_by_sid: dict[str, int] = defaultdict(int)
+        for f in findings or []:
+            fd = f.as_dict() if hasattr(f, "as_dict") else dict(f)
+            sids = {
+                str(s.get("source_id", ""))
+                for s in (fd.get("supporting_sources") or [])
+                if isinstance(s, dict) and s.get("source_id")
+            }
+            for sid in sids:
+                finding_by_sid[sid] += 1
+
+        blocked_by_sid: dict[str, dict[str, Any]] = {}
+        for b in blocked or []:
+            if not isinstance(b, dict):
+                continue
+            key = str(b.get("source_id") or b.get("url") or "")
+            if key:
+                blocked_by_sid.setdefault(key, b)
+
+        # Stable order: candidates first (discovery order), then any doc/blocked-only ids.
+        order: list[str] = list(candidates.keys())
+        for sid in list(documents.keys()) + list(blocked_by_sid.keys()):
+            if sid not in order:
+                order.append(sid)
+
+        traces: list[dict[str, Any]] = []
+        for sid in order:
+            g = candidates.get(sid)
+            doc = documents.get(sid)
+            src = (g.source if g else None) or graph.sources.get(sid)
+            title = ((src.title if src else "") or sid) or ""
+            url = (src.url if src else "") or ""
+            lvl = getattr(src, "evidence_level", None) if src else None
+            blk = blocked_by_sid.get(sid) or blocked_by_sid.get(url)
+            acquired = doc is not None
+            read = bool(doc and getattr(doc, "has_text", False))
+            n_num = numeric.get(sid, 0)
+            n_prose = prose.get(sid, 0)
+            n_inf = inferred.get(sid, 0)
+            row = {
+                "source_id": sid,
+                "title": title[:120],
+                "url": url,
+                "evidence_level": lvl,
+                "level_name": level_name(lvl) if lvl else "",
+                "searched": True,
+                "acquired": acquired,
+                "read": read,
+                "reader": (getattr(doc, "reader_id", "") if doc else ""),
+                "chars": (getattr(doc, "chars", 0) if doc else 0),
+                "sections": (len(getattr(doc, "sections", []) or []) if doc else 0),
+                "numeric_claims": n_num,
+                "qualitative_claims": n_prose,
+                "inferred_claims": n_inf,
+                "distinct_claims": distinct.get(sid, 0),
+                "verified_claims": verified.get(sid, 0),
+                "findings": finding_by_sid.get(sid, 0),
+            }
+            if blk:
+                row["status"] = "blocked"
+                row["failure_reason"] = str(
+                    blk.get("reason") or blk.get("failure_code") or "blocked"
+                )
+            elif not acquired:
+                row["status"] = "not_acquired"
+                row["failure_reason"] = "not selected within document cap, or fetch failed"
+            elif not read:
+                row["status"] = "read_failed"
+                row["failure_reason"] = (
+                    getattr(doc, "failure_reason", "")
+                    or getattr(doc, "failure_code", "")
+                    or "no extractable text"
+                )
+            elif (n_num + n_prose + n_inf) == 0:
+                row["status"] = "no_claims"
+                row["failure_reason"] = "read OK but no claim patterns matched"
+            else:
+                row["status"] = "ok"
+                row["failure_reason"] = ""
+            traces.append(row)
+        return traces
+
+    def _record_trace(
+        self, activity: Any, workspace: Any, trace: list[dict[str, Any]]
+    ) -> None:
+        """Persist the per-source trace and note a one-line summary on the feed."""
+        if workspace is not None and hasattr(workspace, "write_json"):
+            try:
+                workspace.write_json("pipeline_trace.json", trace)
+            except Exception:  # noqa: BLE001 - trace is diagnostic, never fatal
+                pass
+        if activity is None or not trace:
+            return
+        by_status: dict[str, int] = {}
+        for row in trace:
+            st = str(row.get("status", ""))
+            by_status[st] = by_status.get(st, 0) + 1
+        summary = ", ".join(f"{k}: {v}" for k, v in sorted(by_status.items()))
+        self._record(
+            activity, "lifecycle",
+            f"Pipeline trace for {len(trace)} source(s) — {summary}.",
+        )
+
+    def _reason_across(
+        self,
+        items: list,
+        *,
+        gaps: Any = None,
+        objective: str = "",
+        activity: Any = None,
+    ) -> dict[str, Any]:
+        """Best-effort cross-document reasoning (3B.4)."""
+        try:
+            from atlas.research.reasoning import CrossDocumentReasoner
+
+            result = CrossDocumentReasoner(logger=self._logger).reason(
+                items, gaps=gaps, objective=objective
+            )
+            payload = result.as_dict()
+            self._record(
+                activity,
+                "reasoning",
+                (
+                    f"Cross-doc reasoning: {len(result.edges)} edge(s), "
+                    f"{len(result.patterns)} pattern(s), "
+                    f"{len(result.opportunities)} opportunity(ies), "
+                    f"{len(result.hypotheses)} hypothesis(es)."
+                ),
+            )
+            return payload
+        except Exception:  # noqa: BLE001
+            self._logger.exception("cross-document reasoning failed")
+            return {
+                "edges": [],
+                "patterns": [],
+                "opportunities": [],
+                "hypotheses": [],
+            }
+
+    def _synthesize_findings(
+        self,
+        graph: EvidenceGraph,
+        *,
+        objective: str = "",
+        workspace: Any = None,
+        documents: dict[str, Any] | None = None,
+    ) -> list:
+        """Best-effort Claims → Findings via EvidenceSynthesizer."""
+        synthesizer = self._synthesizer
+        if synthesizer is None:
+            try:
+                from atlas.research.synthesis import EvidenceSynthesizer
+
+                synthesizer = EvidenceSynthesizer(logger=self._logger)
+            except Exception:  # noqa: BLE001
+                return []
+        try:
+            claims = list(graph.claims.values())
+            job_id = None
+            if workspace is not None and hasattr(workspace, "job_id"):
+                job_id = str(workspace.job_id)
+            return synthesizer.synthesize(
+                claims,
+                already_grouped=True,
+                job_id=job_id,
+                objective=objective,
+                domain="research",
+                documents=documents,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.exception("finding synthesis failed")
+            return []
 
     # --- gather ---------------------------------------------------------
     def _gather(self, mode: str, provider, query: str, n: int) -> list[_Gathered]:
@@ -916,11 +1286,30 @@ class ResearchService:
         return added
 
     def _render(
-        self, objective: str, graph: EvidenceGraph, eb: EvidenceBudget, *, notes: str = "",
+        self,
+        objective: str,
+        graph: EvidenceGraph,
+        eb: EvidenceBudget,
+        *,
+        notes: str = "",
+        findings: list | None = None,
+        reasoning: dict[str, Any] | None = None,
+        pipeline: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
+            finding_dicts = None
+            if findings:
+                finding_dicts = [
+                    f.as_dict() if hasattr(f, "as_dict") else f for f in findings
+                ]
             return self._reports.report(
-                objective, graph.as_dict(), budget=eb.as_dict(), notes=notes
+                objective,
+                graph.as_dict(),
+                budget=eb.as_dict(),
+                notes=notes,
+                findings=finding_dicts,
+                reasoning=reasoning,
+                pipeline=pipeline,
             )
         except Exception:  # noqa: BLE001 - a report must never fail the research result
             self._logger.exception("report generation failed")
@@ -954,6 +1343,94 @@ class ResearchService:
         if max_iterations is not None:
             eb.max_search_iterations = max_iterations
         return eb
+
+    def _recall_advice(
+        self,
+        objective: str,
+        *,
+        activity: Any = None,
+        workspace: Any = None,
+    ) -> dict[str, Any] | None:
+        """Advice-only experience recall for research (3B.5). Non-mutating."""
+        if self._learning is None or not hasattr(self._learning, "advice_for"):
+            return None
+        try:
+            advice = self._learning.advice_for(objective)
+            if workspace is not None and hasattr(workspace, "write_json"):
+                try:
+                    workspace.write_json("experience_advice.json", advice)
+                except Exception as exc:  # noqa: BLE001
+                    self._logger.debug("experience_advice workspace write failed: %s", exc)
+            if activity is not None and advice.get("count"):
+                try:
+                    activity(
+                        "experience_advice",
+                        f"Recalled {advice['count']} experience advice item(s) "
+                        "(non-mutating).",
+                        count=advice["count"],
+                    )
+                except TypeError:
+                    try:
+                        activity(
+                            f"Recalled {advice.get('count', 0)} experience advice item(s)."
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                except Exception:  # noqa: BLE001
+                    pass
+            return advice
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("experience advice recall failed: %s", exc)
+            return {"error": str(exc), "mutating": False}
+
+    def _recall_prior(
+        self,
+        objective: str,
+        *,
+        activity: Any = None,
+        workspace: Any = None,
+    ) -> dict[str, Any] | None:
+        """Mandatory Access Layer recall for research (3B.1). Best-effort."""
+        if self._knowledge is None or not hasattr(self._knowledge, "retrieve"):
+            return None
+        try:
+            from atlas.research.prior_knowledge import recall_prior_knowledge
+
+            ranked = recall_prior_knowledge(
+                self._knowledge, objective, k=self._prior_k
+            )
+            payload = ranked.as_dict()
+            if workspace is not None and hasattr(workspace, "write_json"):
+                try:
+                    workspace.write_json("prior_knowledge.json", payload)
+                except Exception as exc:  # noqa: BLE001
+                    self._logger.debug("prior_knowledge workspace write failed: %s", exc)
+            if activity is not None:
+                try:
+                    activity(
+                        "prior_knowledge",
+                        f"Recalled {len(ranked.hits)} prior knowledge hit(s).",
+                        hits=len(ranked.hits),
+                        mode=ranked.mode,
+                    )
+                except TypeError:
+                    try:
+                        activity(
+                            f"Recalled {len(ranked.hits)} prior knowledge hit(s)."
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                except Exception:  # noqa: BLE001
+                    pass
+            return {
+                "hits": len(ranked.hits),
+                "mode": ranked.mode,
+                "diagnostics_id": ranked.diagnostics_id,
+                "chunk_ids": [h.chunk_id for h in ranked.hits],
+            }
+        except Exception as exc:  # noqa: BLE001 — never fail research on recall
+            self._logger.warning("prior knowledge recall failed: %s", exc)
+            return {"error": str(exc)}
 
     # --- lifecycle (registered as a service) ---------------------------
     def start(self) -> None:

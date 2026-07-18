@@ -43,6 +43,7 @@ def promote_research(
     summary: dict[str, Any] = {
         "external_docs": 0,
         "research_docs": 0,
+        "findings": 0,
         "events": 0,
         "errors": 0,
     }
@@ -55,6 +56,7 @@ def promote_research(
         summary["research_docs"] = _ingest_claims_graph(
             knowledge, workspace, graph, claims, meta_base, embed=embed
         )
+        summary["findings"] = _promote_findings(knowledge, workspace, meta_base)
 
     # Optional governed proposals into the learning ledger for the research store,
     # so promotion stays explainable/reversible even when auto_apply is off.
@@ -165,3 +167,70 @@ def _ingest_claims_graph(
         except Exception:  # noqa: BLE001
             _logger.debug("ingest evidence graph failed", exc_info=True)
     return count
+
+
+def _promote_findings(
+    knowledge: Any,
+    workspace: Any,
+    meta: dict[str, Any],
+) -> int:
+    """Consolidate workspace findings into ``knowledge.findings`` (append-only)."""
+    if workspace is None:
+        return 0
+    try:
+        findings = workspace.read_json("findings.json")
+    except Exception:  # noqa: BLE001
+        findings = None
+    if not findings or not isinstance(findings, list):
+        return 0
+
+    for item in findings:
+        if isinstance(item, dict):
+            prov = item.setdefault("provenance", {})
+            if isinstance(prov, dict):
+                prov.setdefault("job_id", meta.get("job_id"))
+                prov.setdefault("objective", meta.get("objective"))
+
+    from atlas.research.reasoning import filter_out_hypotheses
+
+    findings = filter_out_hypotheses(findings)
+
+    lifecycle = getattr(knowledge, "_lifecycle", None) or getattr(
+        knowledge, "lifecycle", None
+    )
+    if lifecycle is not None and hasattr(lifecycle, "promote_many"):
+        try:
+            rows = lifecycle.promote_many(findings)
+            return len(rows)
+        except Exception:  # noqa: BLE001
+            _logger.debug("lifecycle promote findings failed", exc_info=True)
+            return 0
+
+    repo = getattr(knowledge, "_findings", None) or getattr(knowledge, "findings", None)
+    if repo is not None and hasattr(repo, "promote_many"):
+        try:
+            from atlas.knowledge.consolidation import KnowledgeLifecycleService
+
+            rows = KnowledgeLifecycleService(repo).promote_many(findings)
+            return len(rows)
+        except Exception:  # noqa: BLE001
+            _logger.debug("promote findings failed", exc_info=True)
+            return 0
+
+    # Fall back: store a JSON document artifact (still domain=research).
+    try:
+        body = json.dumps(findings, indent=2, ensure_ascii=False)
+        knowledge.ingest_text(
+            "research",
+            body,
+            uri=f"job:{meta.get('job_id')}:findings" if meta.get("job_id") else None,
+            title=f"Findings — {meta.get('objective', '')[:80]}",
+            content_type="application/json",
+            metadata={**meta, "artifact": "findings"},
+            domain=DOMAIN_RESEARCH,
+            embed=False,
+        )
+        return 1
+    except Exception:  # noqa: BLE001
+        _logger.debug("ingest findings artifact failed", exc_info=True)
+        return 0

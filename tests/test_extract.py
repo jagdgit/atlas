@@ -105,26 +105,72 @@ def test_llm_prose_claims_added_and_capped():
     ]"""
     llm = FakeLLM(text=payload)
     result = ClaimExtractor(llm=llm).extract(_doc(), evidence_level=LEVEL_PEER_REVIEWED)
-    assert result.prose == 2
+    # LLM-derived claims are Atlas *inferences*, tracked separately from the
+    # deterministic quote-based numeric/qualitative passes.
+    assert result.inferred == 2
     assert "researcher" in llm.roles  # used the researcher role (A5)
-    assert any("ROI in arid" in c.statement for c in result.claims)
+    inferred = [c for c in result.claims if c.evidence and c.evidence[0].inferred]
+    assert any("ROI in arid" in c.statement for c in inferred)
+    assert all(c.evidence[0].origin == "inferred" for c in inferred)
 
 
 def test_llm_failure_degrades_to_deterministic():
     llm = FakeLLM(raises=True)
     result = ClaimExtractor(llm=llm).extract(_doc())
-    assert result.prose == 0
+    assert result.inferred == 0
     assert result.numeric >= 3  # deterministic claims still produced
 
 
 def test_llm_garbage_is_ignored():
     result = ClaimExtractor(llm=FakeLLM(text="not json")).extract(_doc())
-    assert result.prose == 0
+    assert result.inferred == 0
 
 
 def test_empty_document_yields_nothing():
     doc = Reader().read_text("", source_id="s1")
     assert ClaimExtractor().extract(doc).count == 0
+
+
+def test_qualitative_claims_extracted_without_numbers():
+    # Engineering papers are mostly prose: a comparison/finding with no number is
+    # still a claim. This must work with NO LLM (deterministic, cue-based).
+    text = (
+        "Abstract\nThis study evaluates regression models for soiling.\n\n"
+        "Conclusion\nSVR clearly outperformed Ridge regression on unseen sites. "
+        "However, the approach cannot handle abrupt weather changes reliably. "
+        "We recommend combining physical models with data-driven estimation.\n"
+    )
+    doc = Reader().read_text(text, source_id="springer:1", title="prose paper")
+    result = ClaimExtractor().extract(doc)  # no LLM
+    assert result.prose >= 2
+    assert result.inferred == 0
+    kinds = {c.evidence[0].locator for c in result.claims if c.evidence}
+    assert any(k.startswith("prose:") for k in kinds)
+    assert all(
+        c.evidence[0].origin == "extracted" for c in result.claims if c.evidence
+    )
+
+
+def test_claim_taxonomy_parameter_vs_result():
+    from atlas.research.extract import classify_claim_type
+    from atlas.evidence.models import (
+        CLAIM_TYPE_PARAMETER, CLAIM_TYPE_RESULT, CLAIM_TYPE_COMPARISON, ClaimValue,
+    )
+
+    v = ClaimValue(number=0.9, unit="", kind="")
+    assert classify_claim_type("The quantile q=0.9 was used.", v, "results") == CLAIM_TYPE_PARAMETER
+    assert classify_claim_type("Train/test split was 80/20.", ClaimValue(80.0), "results") == CLAIM_TYPE_PARAMETER
+    assert classify_claim_type("We used a 30-day window for aggregation.", ClaimValue(30.0), "m") == CLAIM_TYPE_PARAMETER
+    assert classify_claim_type("The model reduced RMSE to 1.2%.", ClaimValue(1.2, "%", "rmse"), "results") == CLAIM_TYPE_RESULT
+    assert classify_claim_type("SVR outperformed Ridge.", None, "prose:comparison") == CLAIM_TYPE_COMPARISON
+
+
+def test_zero_claims_reports_a_reason():
+    text = "Abstract\nThis page describes our journal and submission guidelines.\n"
+    doc = Reader().read_text(text, source_id="landing:1", title="journal home")
+    result = ClaimExtractor().extract(doc)
+    assert result.count == 0
+    assert result.reason  # never a silent 0 claims
 
 
 def test_body_fallback_when_results_mislabeled():

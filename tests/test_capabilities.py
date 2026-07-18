@@ -84,6 +84,8 @@ def test_catalog_has_core_capabilities():
         assert cap_id in CAPABILITY_CATALOG
         spec = CAPABILITY_CATALOG[cap_id]
         assert spec.summary and spec.unlocks and spec.since
+        assert spec.version
+        assert spec.cost_class
 
 
 def test_describe_capabilities_merges_catalog_and_registry():
@@ -97,6 +99,50 @@ def test_describe_capabilities_merges_catalog_and_registry():
     assert rows["search"]["provided"] is False
     assert rows["search"]["unlocks"]
     assert rows["search"]["since"] == "S13"
+    assert "cost_class" in rows["search"]
+    assert "metrics" in rows["search"]
+
+
+def test_stage_3b_capability_stubs_catalogued_not_provided():
+    from atlas.capabilities import (
+        CAP_KNOWLEDGE_LIFECYCLE,
+        CAP_RETRIEVAL,
+        CAP_SYNTHESIS,
+        KnowledgeLifecycleCapability,
+        RetrievalCapability,
+        SynthesisCapability,
+    )
+
+    assert CAPABILITY_CATALOG[CAP_RETRIEVAL].contract is RetrievalCapability
+    assert CAPABILITY_CATALOG[CAP_RETRIEVAL].since == "3B.1"
+    assert CAPABILITY_CATALOG[CAP_RETRIEVAL].version == "1"
+
+    assert CAPABILITY_CATALOG[CAP_SYNTHESIS].contract is SynthesisCapability
+    assert CAPABILITY_CATALOG[CAP_SYNTHESIS].since == "3B.2"
+    assert CAPABILITY_CATALOG[CAP_SYNTHESIS].version == "1"
+
+    assert CAPABILITY_CATALOG[CAP_KNOWLEDGE_LIFECYCLE].contract is KnowledgeLifecycleCapability
+    assert CAPABILITY_CATALOG[CAP_KNOWLEDGE_LIFECYCLE].since == "3B.3"
+    assert CAPABILITY_CATALOG[CAP_KNOWLEDGE_LIFECYCLE].version == "1"
+
+    reg = CapabilityRegistry()
+    rows = {r["id"]: r for r in describe_capabilities(reg)}
+    assert rows[CAP_RETRIEVAL]["provided"] is False
+    assert rows[CAP_SYNTHESIS]["provided"] is False
+    assert rows[CAP_KNOWLEDGE_LIFECYCLE]["provided"] is False
+
+
+def test_retrieval_capability_contract_shape():
+    from atlas.capabilities import CAP_RETRIEVAL, RetrievalCapability
+
+    class GoodRetrieval:
+        def retrieve(self, query, *a, **k):
+            return []
+
+    reg = CapabilityRegistry()
+    reg.register(CAP_RETRIEVAL, GoodRetrieval(), contract=RetrievalCapability)
+    assert reg.verify(CAP_RETRIEVAL) is True
+    assert isinstance(GoodRetrieval(), RetrievalCapability)
 
 
 def test_gap_report_describes_missing():

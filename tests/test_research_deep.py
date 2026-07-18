@@ -214,6 +214,78 @@ def test_gap_driven_followup_query_is_not_a_synonym():
     assert "peer" in followups or "ieee" in followups or "elsevier" in followups
 
 
+def test_pipeline_trace_is_built_per_source():
+    scholar = FakeScholar(_papers([0.31, 0.33, 0.30]))
+    result = _deep_service(scholar=scholar).research("research PV soiling loss rate")
+    trace = result["pipeline"]["trace"]
+    assert len(trace) >= 3
+    ok = [t for t in trace if t["status"] == "ok"]
+    assert ok, "read + extracted sources should be status=ok"
+    row = ok[0]
+    assert row["read"] is True
+    assert row["numeric_claims"] >= 1
+    assert row["chars"] > 0
+    assert "## Pipeline Trace (per source)" in result["report"]["markdown"]
+
+
+def test_build_source_traces_classifies_each_stage():
+    from atlas.evidence.models import (
+        Claim,
+        ClaimValue,
+        EvidenceGraph,
+        EvidenceItem,
+        Source,
+    )
+    from atlas.research.reader import Document
+    from atlas.research.service import ResearchService, _Gathered
+
+    svc = ResearchService(None, None)
+    reader = Reader()
+    good = Source(id="good", url="https://s/g", title="Good", evidence_level=4)
+    landing = Source(id="landing", url="https://s/l", title="Landing", evidence_level=3)
+    nocl = Source(id="nocl", url="https://s/n", title="NoClaims", evidence_level=3)
+    pay = Source(id="pay", url="https://s/p", title="Pay", evidence_level=4)
+    candidates = {
+        s.id: _Gathered(s, None, "", full_text="")
+        for s in (good, landing, nocl, pay)
+    }
+    good_doc = reader.read_text(
+        "Soiling loss was 0.3 %/day.", source_id="good", title="Good", url="https://s/g"
+    )
+    nocl_doc = reader.read_text(
+        "This is a generic sentence with nothing measurable to extract at all here.",
+        source_id="nocl", title="NoClaims", url="https://s/n",
+    )
+    landing_doc = Document(
+        source_id="landing", title="Landing", url="https://s/l", text="",
+        failure_code="landing_page", failure_reason="no article body detected",
+    )
+    documents = {"good": good_doc, "nocl": nocl_doc, "landing": landing_doc}
+    ev = EvidenceItem(
+        source_id="good", evidence_level=4, extracted_value=0.3, unit="%",
+        snippet="Soiling loss was 0.3 %/day.", locator="results",
+    )
+    claim = Claim(
+        id="good#n0", statement="Soiling loss was 0.3 %/day.",
+        value=ClaimValue(number=0.3, unit="%"), evidence=[ev],
+    )
+    graph = EvidenceGraph()
+    for s in (good, landing, nocl, pay):
+        graph.add_source(s)
+    graph.add_claim(claim)
+    blocked = [{"source_id": "pay", "reason": "paywall/login wall", "failure_code": "paywall"}]
+
+    traces = svc._build_source_traces(candidates, documents, [claim], graph, [], blocked)
+    by_id = {t["source_id"]: t for t in traces}
+    assert by_id["good"]["status"] == "ok"
+    assert by_id["good"]["numeric_claims"] == 1
+    assert by_id["good"]["distinct_claims"] == 1
+    assert by_id["landing"]["status"] == "read_failed"
+    assert "no article body" in by_id["landing"]["failure_reason"]
+    assert by_id["nocl"]["status"] == "no_claims"
+    assert by_id["pay"]["status"] == "blocked"
+
+
 def test_document_cap_surfaces_recommendations():
     # Cap at 1 document; leave unread candidates → recommendations for unmet gaps.
     papers = _papers([0.31, 0.33, 0.30, 0.32], level=2)  # all L2 → gaps remain

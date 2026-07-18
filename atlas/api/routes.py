@@ -483,6 +483,39 @@ def learning_remember(body: ExperienceRequest, request: Request) -> dict:
     return learning.remember_experience(**body.model_dump(exclude_none=True))
 
 
+@v1_router.get("/learning/advice", tags=["learning"])
+def learning_advice(request: Request, q: str = "", limit: int = 5) -> dict:
+    """Non-mutating experience advice for planning/research (3B.5)."""
+    learning = _app(request).container.resolve("learning")
+    return learning.advice_for(q, limit=limit)
+
+
+@v1_router.post("/learning/experiences/{experience_id}/bias", tags=["learning"])
+def learning_enable_bias(
+    experience_id: str, request: Request, enabled: bool = True
+) -> dict:
+    """Explicit soft-bias gate after apply (D3B.12). Default remains off."""
+    learning = _app(request).container.resolve("learning")
+    try:
+        return learning.enable_bias(experience_id, enabled=enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="experience not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@v1_router.get("/learning/components", tags=["learning"])
+def learning_components(
+    request: Request, component_key: str | None = None, limit: int = 50
+) -> dict:
+    learning = _app(request).container.resolve("learning")
+    return {
+        "observations": learning.list_component_observations(
+            component_key=component_key, limit=limit
+        )
+    }
+
+
 @v1_router.post("/intelligence/repositories", tags=["intelligence"])
 def intel_learn(body: LearnRepositoryRequest, request: Request) -> dict:
     intel = _app(request).container.resolve("intelligence")
@@ -612,18 +645,33 @@ def add_job_input(job_id: str, body: JobInputRequest, request: Request) -> JobDe
 @v1_router.post("/knowledge/search", response_model=SearchResponse, tags=["knowledge"])
 def search(body: SearchRequest, request: Request) -> SearchResponse:
     knowledge = _app(request).container.resolve("knowledge")
-    results = knowledge.search(body.query, limit=body.limit)
+    ranked = knowledge.retrieve(
+        body.query,
+        k=body.limit,
+        domains=body.domains,
+        tiers=body.tiers,
+        role=body.role,
+        mode=body.mode,
+    )
     return SearchResponse(
         results=[
             SearchResultOut(
-                chunk_id=r.chunk_id,
-                document_id=r.document_id,
-                ordinal=r.ordinal,
-                content=r.content,
-                similarity=r.similarity,
+                chunk_id=h.chunk_id,
+                document_id=h.document_id,
+                ordinal=h.ordinal,
+                content=h.content,
+                similarity=h.similarity,
+                dense_score=h.dense_score,
+                lexical_score=h.lexical_score,
+                rrf_score=h.rrf_score,
+                score=h.score,
             )
-            for r in results
-        ]
+            for h in ranked.hits
+        ],
+        role=ranked.role,
+        mode=ranked.mode,
+        diagnostics_id=ranked.diagnostics_id,
+        context=ranked.context,
     )
 
 

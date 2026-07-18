@@ -98,10 +98,16 @@ class VerificationEngine:
         values = claim.supporting_values()
         conv = self.convergence(values) if len(values) >= 2 else None
 
-        n = len(supporting)
-        n_l4 = sum(1 for e in supporting if e.evidence_level >= LEVEL_PEER_REVIEWED)
-        n_l3 = sum(1 for e in supporting if e.evidence_level >= LEVEL_GOVERNMENT)
-        n_contra = len(contradicting)
+        # Count *independent studies*, not document representations: arxiv + ar5iv
+        # of one paper must never read as two supporting sources (§5a.3 integrity).
+        n = self._independent(supporting)
+        n_l4 = self._independent(
+            [e for e in supporting if e.evidence_level >= LEVEL_PEER_REVIEWED]
+        )
+        n_l3 = self._independent(
+            [e for e in supporting if e.evidence_level >= LEVEL_GOVERNMENT]
+        )
+        n_contra = self._independent(contradicting)
         avg_level = fmean([e.evidence_level for e in supporting]) if supporting else 0.0
         quality = avg_level / 5.0
 
@@ -126,19 +132,28 @@ class VerificationEngine:
         )
         return claim
 
+    @staticmethod
+    def _independent(items: list) -> int:
+        """Distinct studies among evidence items (dedup by source identity)."""
+        ids = {e.source_id for e in items if getattr(e, "source_id", "")}
+        # Evidence without a source_id still counts as one anonymous study each.
+        return len(ids) + sum(1 for e in items if not getattr(e, "source_id", ""))
+
     def _label(
         self, n: int, n_l3: int, conv: float | None, quality: float,
         n_contra: int, score: float,
     ) -> str:
         if n == 0:
             return CONFIDENCE_INSUFFICIENT
-        # HIGH: multiple solid (L3+) sources that converge, no contradictions (§5a.3).
+        # HIGH: multiple solid (L3+) *independent* sources that converge (§5a.3).
         if n_l3 >= 2 and (conv is not None and conv >= 0.8) and n_contra == 0:
             return CONFIDENCE_HIGH
         if n < 2:
-            # A single source can't be HIGH; strong single source → LOW/MEDIUM by quality.
+            # A single study can't be HIGH; strong single source → LOW/MEDIUM by quality.
             return CONFIDENCE_MEDIUM if quality >= 0.8 and n_contra == 0 else CONFIDENCE_LOW
-        if score >= 0.75 and n_contra == 0:
+        # Fallback HIGH needs breadth too: a couple of low-authority sources that
+        # merely agree is not high confidence (source diversity matters, §5a.3).
+        if score >= 0.75 and n_contra == 0 and n >= 3:
             return CONFIDENCE_HIGH
         if score >= 0.5:
             return CONFIDENCE_MEDIUM
@@ -156,7 +171,7 @@ class VerificationEngine:
         conv: float | None, score: float, label: str,
     ) -> list[str]:
         trace = [
-            f"{n} supporting source(s): {n_l4} peer-reviewed (L4+), {n_l3} L3+ "
+            f"{n} independent source(s): {n_l4} peer-reviewed (L4+), {n_l3} L3+ "
             f"(avg level {avg_level:.1f}).",
         ]
         if conv is not None:
@@ -165,15 +180,37 @@ class VerificationEngine:
             trace.append("No numeric values to converge; judged on evidence quality.")
         if n_contra:
             trace.append(f"{n_contra} contradicting source(s) lowered confidence.")
+        # Explain the common "high convergence, low confidence" case so users don't
+        # think the engine is broken: agreement is necessary but not sufficient.
+        if (
+            conv is not None
+            and conv >= 0.8
+            and label in (CONFIDENCE_LOW, CONFIDENCE_MEDIUM)
+        ):
+            if n < 2:
+                trace.append(
+                    "High agreement but only 1 independent study — insufficient "
+                    "source diversity to raise confidence."
+                )
+            elif n_l3 < 2:
+                trace.append(
+                    f"High agreement across {n} source(s) but only {n_l3} are L3+ "
+                    "(government/peer-reviewed) — more authoritative, independent "
+                    "sources are needed to raise confidence."
+                )
         trace.append(f"Confidence score = {score:.2f} → {label}.")
         return trace
 
     # --- Evidence Budget (§5a.4) ---------------------------------------
     def decide(self, claim: Claim, budget: EvidenceBudget, *, iteration: int = 0) -> BudgetDecision:
         supporting = claim.supporting
-        n = len(supporting)
-        n_l4 = sum(1 for e in supporting if e.evidence_level >= LEVEL_PEER_REVIEWED)
-        n_l3 = sum(1 for e in supporting if e.evidence_level == LEVEL_GOVERNMENT)
+        n = self._independent(supporting)
+        n_l4 = self._independent(
+            [e for e in supporting if e.evidence_level >= LEVEL_PEER_REVIEWED]
+        )
+        n_l3 = self._independent(
+            [e for e in supporting if e.evidence_level == LEVEL_GOVERNMENT]
+        )
         values = claim.supporting_values()
         conv = self.convergence(values) if len(values) >= 2 else 0.0
 

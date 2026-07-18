@@ -1,0 +1,26 @@
+{
+  "name": "provenance_cases",
+  "description": "Answer/finding provenance completeness (embedded fields + parent edges).",
+  "cases": [
+    {
+      "id": "prov-001",
+      "required_ids": ["finding:F-000001", "claim:c1", "chunk:ch1", "document:d1", "reader:html@1"],
+      "present_ids": ["finding:F-000001", "claim:c1", "chunk:ch1", "document:d1", "reader:html@1"]
+    },
+    {
+      "id": "prov-002",
+      "required_ids": ["finding:F-000002", "claim:c9", "chunk:ch9", "document:d9"],
+      "present_ids": ["finding:F-000002", "claim:c9", "chunk:ch9"]
+    },
+    {
+      "id": "prov-003",
+      "required_fields": ["entity_id", "transform", "component_id", "component_version", "ts", "parent_ids"],
+      "present_fields": ["entity_id", "transform", "component_id", "component_version", "ts", "parent_ids"]
+    },
+    {
+      "id": "prov-004",
+      "required_fields": ["entity_id", "transform", "component_id", "component_version", "ts", "parent_ids"],
+      "present_fields": ["entity_id", "transform", "component_id"]
+    }
+  ]
+}

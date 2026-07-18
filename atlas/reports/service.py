@@ -42,6 +42,9 @@ class ReportService:
         *,
         budget: dict[str, Any] | None = None,
         notes: str = "",
+        findings: list[dict[str, Any]] | None = None,
+        reasoning: dict[str, Any] | None = None,
+        pipeline: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self._verification is None:
             # No engine wired: render from the (assumed pre-verified) claims as-is.
@@ -55,8 +58,11 @@ class ReportService:
         report = self._generator.generate(
             objective,
             claims=verified["claims"],
+            findings=findings,
             sources=verified.get("sources", []),
             notes=notes,
+            reasoning=reasoning,
+            pipeline=pipeline,
         )
         return {"report": report, "verification": verified}
 
@@ -65,12 +71,22 @@ class ReportService:
         objective: str,
         *,
         claims: list[dict[str, Any]] | None = None,
+        findings: list[dict[str, Any]] | None = None,
         sources: list[dict[str, Any]] | None = None,
         answer: str = "",
         notes: str = "",
+        reasoning: dict[str, Any] | None = None,
+        pipeline: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._generator.generate(
-            objective, claims=claims, sources=sources, answer=answer, notes=notes
+            objective,
+            claims=claims,
+            findings=findings,
+            sources=sources,
+            answer=answer,
+            notes=notes,
+            reasoning=reasoning,
+            pipeline=pipeline,
         )
 
     # --- lifecycle ------------------------------------------------------

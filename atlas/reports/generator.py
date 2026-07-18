@@ -16,11 +16,13 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from atlas.evidence.models import (
+    CLAIM_TYPE_PARAMETER,
     CONFIDENCE_HIGH,
     CONFIDENCE_INSUFFICIENT,
     CONFIDENCE_LOW,
     CONFIDENCE_MEDIUM,
     CONFIDENCE_UNVERIFIED,
+    HEADLINE_CLAIM_TYPES,
     level_name,
 )
 
@@ -32,11 +34,40 @@ REPORT_SECTIONS = [
     "answer",
     "confidence",
     "methodology",
+    "funnel",
+    "pipeline_trace",
     "evidence",
+    "parameters",
     "references",
     "conflicting_views",
+    "weakly_supported",
+    "patterns",
+    "opportunities",
+    "hypotheses",
     "limitations",
     "next_research",
+]
+
+# Authoritative acquisition/extraction funnel: (pipeline key, display label).
+# Rendered deterministically so report counts can never disagree with the run.
+_FUNNEL_ROWS = [
+    ("found", "Sources found"),
+    ("acquired", "Documents acquired"),
+    ("read", "Successfully read"),
+    ("reader_failures", "Reader failures"),
+    ("paywalled", "Paywalled / blocked"),
+    ("extract_ok", "Produced ≥1 claim"),
+    ("extract_failed", "Read but no claims"),
+    ("extracted", "Claims extracted"),
+    ("numeric_claims", "— numeric"),
+    ("prose_claims", "— qualitative (prose)"),
+    ("inferred_claims", "— Atlas-inferred"),
+    ("claims", "Distinct claims"),
+    ("verified", "Verified claims"),
+    ("findings", "Findings"),
+    ("patterns", "Patterns"),
+    ("contradictions", "Contradictions"),
+    ("hypotheses", "Hypotheses"),
 ]
 
 # Most → least conservative (for overall-confidence tie-breaking and ordering).
@@ -74,36 +105,57 @@ class ReportGenerator:
         objective: str,
         *,
         claims: list[dict[str, Any]] | None = None,
+        findings: list[dict[str, Any]] | None = None,
         sources: list[dict[str, Any]] | None = None,
         answer: str = "",
         notes: str = "",
+        reasoning: dict[str, Any] | None = None,
+        pipeline: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        claims = list(claims or [])
+        # Prefer findings when present (A3B.9); fall back to claims.
+        body = list(findings) if findings else list(claims or [])
         sources = list(sources or [])
-        overall, distribution = self._overall_confidence(claims)
-        conflicting = self._conflicting(claims)
-        references = self._references(claims, sources)
+        reasoning = dict(reasoning or {})
+        overall, distribution = self._overall_confidence(body)
+        conflicting = self._conflicting(body)
+        weakly_supported = self._weakly_supported(body)
+        references = self._references(body, sources)
 
         sections: dict[str, Any] = {
-            "answer": answer.strip() or self._answer(claims),
+            "answer": answer.strip() or self._answer(body),
             "confidence": {"overall": overall, "distribution": distribution},
             "methodology": _METHODOLOGY,
-            "evidence": [self._evidence_row(c) for c in claims],
+            "funnel": {k: v for k, v in (pipeline or {}).items() if k != "trace"},
+            "pipeline_trace": list((pipeline or {}).get("trace") or []),
+            "evidence": [
+                self._evidence_row(c) for c in body
+                if str(c.get("claim_type", "")) != CLAIM_TYPE_PARAMETER
+            ],
+            "parameters": [
+                self._evidence_row(c) for c in body
+                if str(c.get("claim_type", "")) == CLAIM_TYPE_PARAMETER
+            ],
             "references": references,
             "conflicting_views": conflicting,
-            "limitations": self._limitations(claims, conflicting),
-            "next_research": self._next_research(claims),
+            "weakly_supported": weakly_supported,
+            "patterns": list(reasoning.get("patterns") or []),
+            "opportunities": list(reasoning.get("opportunities") or []),
+            "hypotheses": list(reasoning.get("hypotheses") or []),
+            "limitations": self._limitations(body, conflicting),
+            "next_research": self._next_research(body, reasoning),
         }
         sections["executive_summary"] = self._executive_summary(
             objective, sections, overall, notes
         )
         # Optional LLM polish of the free-text sections (best-effort).
-        self._polish(objective, sections, claims, notes)
+        self._polish(objective, sections, body, notes)
 
         report = {
             "objective": objective,
             "overall_confidence": overall,
             "sections": sections,
+            "used_findings": bool(findings),
+            "reasoning": reasoning,
         }
         report["markdown"] = self._render_markdown(objective, sections, overall)
         return report
@@ -127,22 +179,48 @@ class ReportGenerator:
     def _answer(claims: list[dict[str, Any]]) -> str:
         if not claims:
             return "No verifiable claims were established for this objective."
-        lines = []
-        for c in claims:
-            lines.append(f"- {c.get('statement', '').strip()} [{c.get('confidence')}]")
+
+        def _rank(c: dict[str, Any]) -> int:
+            ct = str(c.get("claim_type", ""))
+            if ct in HEADLINE_CLAIM_TYPES:
+                return 0
+            if ct == CLAIM_TYPE_PARAMETER:
+                return 2  # config detail — never lead with it
+            return 1
+
+        # Lead with results/conclusions/comparisons/limitations; drop parameters
+        # from the headline answer (they live in their own section).
+        ordered = sorted(
+            (c for c in claims if str(c.get("claim_type", "")) != CLAIM_TYPE_PARAMETER),
+            key=_rank,
+        )
+        if not ordered:
+            ordered = list(claims)
+        lines = [
+            f"- {c.get('statement', '').strip()} [{c.get('confidence')}]"
+            for c in ordered
+        ]
         return "\n".join(lines)
 
     @staticmethod
     def _evidence_row(claim: dict[str, Any]) -> dict[str, Any]:
+        supporting = claim.get("supporting_sources", []) or []
+        # Report honesty (§3B): distinguish quotes from the source ("extracted")
+        # from Atlas paraphrases/inferences ("inferred"). A claim is inferred only
+        # if it has support and *all* of it is Atlas-generated.
+        origins = {str(s.get("origin", "extracted")) for s in supporting}
+        inferred = bool(supporting) and origins == {"inferred"}
         return {
             "statement": claim.get("statement", ""),
             "value": claim.get("value"),
             "confidence": claim.get("confidence"),
             "convergence": claim.get("convergence"),
             "verification_method": claim.get("verification_method", ""),
-            "supporting": len(claim.get("supporting_sources", [])),
+            "supporting": len(supporting),
             "contradicting": len(claim.get("contradicting_sources", [])),
             "reasoning_trace": claim.get("reasoning_trace", []),
+            "inferred": inferred,
+            "claim_type": str(claim.get("claim_type", "")),
         }
 
     @staticmethod
@@ -175,23 +253,48 @@ class ReportGenerator:
 
     @staticmethod
     def _conflicting(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Real conflicts only: sources that actually disagree (§3B: weak ≠ conflict)."""
         out = []
         for c in claims:
             contra = c.get("contradicting_sources", [])
-            low = c.get("confidence") in {CONFIDENCE_LOW, CONFIDENCE_INSUFFICIENT}
-            if contra or low:
+            if contra:
                 out.append(
                     {
                         "statement": c.get("statement", ""),
                         "confidence": c.get("confidence"),
                         "contradicting": len(contra),
-                        "note": (
-                            "contradicting sources present"
-                            if contra
-                            else "weak/insufficient evidence"
-                        ),
+                        "note": f"{len(contra)} source(s) disagree with this finding",
                     }
                 )
+        return out
+
+    @staticmethod
+    def _weakly_supported(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """LOW/INSUFFICIENT findings with NO contradiction — a diversity gap, not a
+        conflict. Kept distinct so users don't read thin evidence as disagreement."""
+        out = []
+        for c in claims:
+            if c.get("contradicting_sources"):
+                continue
+            if c.get("confidence") not in {CONFIDENCE_LOW, CONFIDENCE_INSUFFICIENT}:
+                continue
+            n = len({
+                str(s.get("source_id", ""))
+                for s in c.get("supporting_sources", []) if s.get("source_id")
+            })
+            reason = (
+                "only 1 independent source"
+                if n <= 1
+                else f"only {n} independent sources / limited authority"
+            )
+            out.append(
+                {
+                    "statement": c.get("statement", ""),
+                    "confidence": c.get("confidence"),
+                    "independent_sources": n,
+                    "note": reason,
+                }
+            )
         return out
 
     @staticmethod
@@ -217,29 +320,80 @@ class ReportGenerator:
         return " ".join(parts)
 
     @staticmethod
-    def _next_research(claims: list[dict[str, Any]]) -> str:
+    def _next_research(
+        claims: list[dict[str, Any]], reasoning: dict[str, Any] | None = None
+    ) -> str:
+        parts: list[str] = []
+        reasoning = reasoning or {}
+        for opp in reasoning.get("opportunities") or []:
+            title = opp.get("title") if isinstance(opp, dict) else None
+            why = opp.get("why") if isinstance(opp, dict) else None
+            if title:
+                parts.append(f"{title}: {why}" if why else str(title))
+        for hyp in reasoning.get("hypotheses") or []:
+            stmt = hyp.get("statement") if isinstance(hyp, dict) else None
+            if stmt:
+                parts.append(f"Open hypothesis — {stmt}")
         gaps = [
             c.get("statement", "")
             for c in claims
             if c.get("confidence") in {CONFIDENCE_LOW, CONFIDENCE_INSUFFICIENT}
             or (c.get("convergence") is not None and c["convergence"] < 0.9)
         ]
-        if not gaps:
+        if gaps:
+            head = "; ".join(g for g in gaps[:3] if g)
+            parts.append(f"Gather stronger/converging sources for: {head}.")
+        if not parts:
             return "No further research required for the current objective."
-        head = "; ".join(g for g in gaps[:3] if g)
-        return f"Gather stronger/converging sources for: {head}."
+        return " ".join(parts[:6])
 
     def _executive_summary(
         self, objective: str, sections: dict[str, Any], overall: str, notes: str
     ) -> str:
-        n = len(sections["evidence"])
+        evidence = sections["evidence"]
+        n = len(evidence)
         conflicts = len(sections["conflicting_views"])
+        weak = len(sections.get("weakly_supported") or [])
+        # Honesty guard (§3B hardening): a report summarizes what Atlas *verified*
+        # this run, not what is true in general. With zero verified findings we must
+        # NOT assert a conclusion — say plainly that nothing was extractable and
+        # point to the funnel for where the pipeline stopped.
+        if n == 0:
+            funnel = sections.get("funnel") or {}
+            found = int(funnel.get("found", 0) or 0)
+            read = int(funnel.get("read", 0) or 0)
+            if found or read:
+                return (
+                    f"Objective: {objective.strip()}. Atlas identified {found} "
+                    f"candidate source(s) and read {read}, but was unable to extract "
+                    "any verifiable claims from the acquired material. No conclusion "
+                    "can be drawn for this objective from the current evidence set — "
+                    "see the Research Funnel for where the pipeline stopped."
+                )
+            return (
+                f"Objective: {objective.strip()}. No sources yielded verifiable "
+                "claims, so no conclusion can be drawn for this objective from the "
+                "current evidence set."
+            )
         base = (
-            f"Objective: {objective.strip()}. {n} claim(s) assessed; overall "
+            f"Objective: {objective.strip()}. {n} finding(s) assessed; overall "
             f"confidence {overall}."
         )
+        # Synthesis-oriented: lead with the top result/comparison, not raw config.
+        if evidence:
+            head = str(evidence[0].get("statement", "")).strip().rstrip(".")
+            if head:
+                base += f" Key finding: {head}."
         if conflicts:
-            base += f" {conflicts} claim(s) show conflicting or weak evidence."
+            base += (
+                f" {conflicts} finding(s) have conflicting sources that need "
+                "resolution."
+            )
+        if weak:
+            base += (
+                f" {weak} finding(s) rest on limited independent evidence; more "
+                "sources are needed before confidence can rise."
+            )
         return base
 
     # --- optional LLM polish -------------------------------------------
@@ -252,6 +406,10 @@ class ReportGenerator:
     ) -> None:
         if self._llm is None:
             return
+        # No verified claims → do not let the summarizer invent a conclusion from
+        # world knowledge. Keep the honest deterministic "nothing extractable" text.
+        if not claims:
+            return
         facts = self._facts_block(objective, sections, claims, notes)
         try:
             prose = self._llm.for_role("summarizer").chat(
@@ -260,12 +418,19 @@ class ReportGenerator:
                     _msg(
                         "user",
                         "Write a 2-4 sentence executive summary grounded ONLY in these "
-                        f"facts. Do not add sources or numbers.\n\n{facts}",
+                        "facts. Do NOT state any counts, totals, or numbers about how "
+                        "many sources/documents/claims were processed — those live in a "
+                        "separate funnel table. Focus on what the evidence says and how "
+                        f"confident it is.\n\n{facts}",
                     ),
                 ]
             ).text.strip()
             if prose:
-                sections["executive_summary"] = prose
+                # Keep the authoritative deterministic count sentence in front of the
+                # LLM narrative so the summary can never contradict the funnel.
+                sections["executive_summary"] = (
+                    sections.get("executive_summary", "").strip() + " " + prose
+                ).strip()
         except Exception:  # noqa: BLE001 - polish is best-effort; keep deterministic text
             self._logger.debug("report LLM polish failed; using deterministic summary")
 
@@ -276,8 +441,13 @@ class ReportGenerator:
         lines = [f"Objective: {objective}", f"Overall confidence: {sections['confidence']['overall']}"]
         for c in claims:
             lines.append(f"- {c.get('statement')} [{c.get('confidence')}]")
-        if notes:
-            lines.append(f"Notes: {notes[:800]}")
+        # Only feed the LLM the *qualitative* notes (e.g. unmet gaps), never the
+        # pipeline counters — the funnel table is the single source of truth.
+        gap_note = ""
+        if notes and "Unmet gaps:" in notes:
+            gap_note = "Unmet gaps:" + notes.split("Unmet gaps:", 1)[1]
+        if gap_note:
+            lines.append(f"Notes: {gap_note[:600]}")
         return "\n".join(lines)
 
     # --- markdown render -----------------------------------------------
@@ -291,6 +461,40 @@ class ReportGenerator:
         lines += ["## Confidence", f"Overall: **{overall}**" + (f" ({dist})" if dist else ""), ""]
         lines += ["## Methodology", sections["methodology"], ""]
 
+        funnel = sections.get("funnel") or {}
+        if funnel:
+            lines.append("## Research Funnel")
+            lines.append("| Stage | Count |")
+            lines.append("| --- | ---: |")
+            for key, label in _FUNNEL_ROWS:
+                if key in funnel:
+                    lines.append(f"| {label} | {funnel[key]} |")
+            lines.append("")
+
+        trace = sections.get("pipeline_trace") or []
+        if trace:
+            lines.append("## Pipeline Trace (per source)")
+            lines.append(
+                "| Source | Status | Reader | Chars | Sec | Num | Qual | Inf | "
+                "Distinct | Verified | Findings | Note |"
+            )
+            lines.append(
+                "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | "
+                "---: | ---: | --- |"
+            )
+            for t in trace:
+                label = str(t.get("title") or t.get("source_id") or "")[:48]
+                note = str(t.get("failure_reason") or "")[:80]
+                lines.append(
+                    f"| {label} | {t.get('status', '')} | {t.get('reader', '') or '—'} "
+                    f"| {t.get('chars', 0)} | {t.get('sections', 0)} "
+                    f"| {t.get('numeric_claims', 0)} | {t.get('qualitative_claims', 0)} "
+                    f"| {t.get('inferred_claims', 0)} | {t.get('distinct_claims', 0)} "
+                    f"| {t.get('verified_claims', 0)} | {t.get('findings', 0)} "
+                    f"| {note or '—'} |"
+                )
+            lines.append("")
+
         lines.append("## Evidence")
         if sections["evidence"]:
             for e in sections["evidence"]:
@@ -300,14 +504,30 @@ class ReportGenerator:
                 )
                 conv = e["convergence"]
                 conv_str = f", convergence {conv:.0%}" if isinstance(conv, (int, float)) else ""
+                origin_tag = " _(Atlas-inferred)_" if e.get("inferred") else ""
                 lines.append(
-                    f"- **{e['statement']}** [{e['confidence']}]{val_str} "
+                    f"- **{e['statement']}**{origin_tag} [{e['confidence']}]{val_str} "
                     f"({e['supporting']} supporting, {e['contradicting']} contradicting"
                     f"{conv_str})"
                 )
         else:
             lines.append("_No verified claims._")
         lines.append("")
+
+        if sections.get("parameters"):
+            lines.append("## Parameters & Configuration")
+            lines.append(
+                "_Experiment/config details extracted from sources "
+                "(not primary findings):_"
+            )
+            for e in sections["parameters"]:
+                val = e["value"]
+                val_str = (
+                    f" — {val['number']}{val.get('unit', '')}"
+                    if isinstance(val, dict) else ""
+                )
+                lines.append(f"- {e['statement']}{val_str}")
+            lines.append("")
 
         lines.append("## References")
         if sections["references"]:
@@ -325,7 +545,42 @@ class ReportGenerator:
             for c in sections["conflicting_views"]:
                 lines.append(f"- {c['statement']} [{c['confidence']}] — {c['note']}")
         else:
-            lines.append("_No conflicts detected._")
+            lines.append("_No conflicting sources detected._")
+        lines.append("")
+
+        lines.append("## Weakly Supported Findings")
+        if sections.get("weakly_supported"):
+            for c in sections["weakly_supported"]:
+                lines.append(f"- {c['statement']} [{c['confidence']}] — {c['note']}")
+        else:
+            lines.append("_No weakly supported findings._")
+        lines.append("")
+
+        lines.append("## Patterns")
+        if sections.get("patterns"):
+            for p in sections["patterns"]:
+                lines.append(f"- **{p.get('label', '')}** — {p.get('detail', '')}")
+        else:
+            lines.append("_No recurring patterns detected._")
+        lines.append("")
+
+        lines.append("## Research Opportunities")
+        if sections.get("opportunities"):
+            for o in sections["opportunities"]:
+                lines.append(f"- **{o.get('title', '')}** — {o.get('why', '')}")
+        else:
+            lines.append("_No open opportunities listed._")
+        lines.append("")
+
+        lines.append("## Hypotheses")
+        if sections.get("hypotheses"):
+            for h in sections["hypotheses"]:
+                lines.append(
+                    f"- [{h.get('status', 'open')}] {h.get('statement', '')} "
+                    f"— {h.get('rationale', '')}"
+                )
+        else:
+            lines.append("_No typed hypotheses._")
         lines.append("")
 
         lines += ["## Limitations", sections["limitations"], ""]

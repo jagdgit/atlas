@@ -1,4 +1,4 @@
-"""LearningService — the ``learning`` capability (S18b, D11/§5d).
+"""LearningService — the ``learning`` capability (S18b, D11/§5d + Stage 3B.5).
 
 Continuous Learning is the third pillar: completed activities become durable,
 *governed* knowledge. Two guarantees are enforced here, not just documented:
@@ -11,10 +11,10 @@ Continuous Learning is the third pillar: completed activities become durable,
   (temporary/project/personal/verified) + Learning Level, and creates the store
   record; **reverting** flips the event to ``reverted`` and deactivates that record.
 
-S18b lands the **Experience store** concretely (problem → diagnosis → actions →
-mistakes → solution → lessons) and the governance ledger. Promotion into the other
-stores (knowledge graph, code/architecture, generalized patterns → Learning Levels
-L2–L5) is the Engineering-Intelligence work of S19; the ledger already models it.
+Stage 3B.5 extends Experience payloads (readers, paywalls, timings, strategies,
+recommendations, component+version observations) and adds advice-only recall plus
+a gated soft-bias path (apply → enable_bias → tiny retrieve boost). Soft bias never
+auto-enables and never rewrites core behavior.
 """
 
 from __future__ import annotations
@@ -22,11 +22,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from atlas.learning.components import (
+    REASONER_V1,
+    RETRIEVAL_HYBRID,
+    SYNTHESIZER_V1,
+    component_observation,
+    reader_component_key,
+)
 from atlas.models.learning import (
     EVENT_APPLIED,
     EVENT_PROPOSED,
     EVENT_REVERTED,
-    EXP_ACTIVE,
     EXP_REVERTED,
     POLICIES,
     SOURCE_JOB,
@@ -38,6 +44,9 @@ from atlas.services.base import HealthStatus
 if TYPE_CHECKING:
     from atlas.config import LearningConfig
     from atlas.repositories.learning_repo import LearningRepository
+
+# Tiny soft-bias magnitude after human enable (A3B.18 / A3B.25). Never filters/hides.
+SOFT_BIAS_BOOST = 0.005
 
 
 class LearningService:
@@ -83,7 +92,9 @@ class LearningService:
             steps = detail.get("steps") or []
             objective = getattr(job, "objective", "") or ""
             job_id = getattr(job, "id", None)
-            result = getattr(job, "result", {}) or {}
+            result = getattr(job, "result", None) or detail.get("result") or {}
+            if not isinstance(result, dict):
+                result = {}
             candidate = _experience_from_job(objective, steps, result, job_id)
             if candidate is None:
                 return None
@@ -187,15 +198,19 @@ class LearningService:
                 tags=payload.get("tags", []),
                 source_job_id=event.source_id,
                 policy=policy or event.policy,
+                payload=payload,
+                bias_enabled=False,
             )
             ref_id = exp.id
+            self._persist_component_observations(
+                payload.get("component_observations") or [],
+                source_job_id=event.source_id,
+                experience_id=exp.id,
+                event_id=event.id,
+            )
         elif event.store in self._sinks:
-            # A registered store sink (e.g. the S19 Code store) materialises the record
-            # and returns its id, so promotion stays governed through this one ledger.
             ref_id = self._sinks[event.store].apply(payload, policy=policy or event.policy)
         else:
-            # No concrete sink for this store yet; the ledger still records the applied
-            # decision so it stays explainable/reversible.
             self._logger.info("applied learning to store '%s' (no sink)", event.store)
 
         self._repo.set_event_status(
@@ -212,11 +227,40 @@ class LearningService:
         if event.status == EVENT_APPLIED and event.ref_id:
             if event.store == STORE_EXPERIENCE:
                 self._repo.set_experience_status(event.ref_id, EXP_REVERTED)
+                if hasattr(self._repo, "set_bias_enabled"):
+                    self._repo.set_bias_enabled(event.ref_id, False)
             elif event.store in self._sinks:
                 self._sinks[event.store].revert(event.ref_id)
         self._repo.set_event_status(event.id, EVENT_REVERTED, reviewed=True)
         reverted = self._repo.get_event(event.id)
         return {"event": reverted.as_dict() if reverted else None, "reverted": True}
+
+    def _persist_component_observations(
+        self,
+        observations: list[Any],
+        *,
+        source_job_id: str | None,
+        experience_id: str,
+        event_id: str,
+    ) -> None:
+        if not hasattr(self._repo, "add_component_observation"):
+            return
+        for obs in observations:
+            if not isinstance(obs, dict) or not obs.get("component_key"):
+                continue
+            try:
+                self._repo.add_component_observation(
+                    component_key=str(obs["component_key"]),
+                    component_version=str(obs.get("component_version") or "1"),
+                    corpus=obs.get("corpus"),
+                    profile=obs.get("profile"),
+                    metrics=obs.get("metrics") or {},
+                    source_job_id=source_job_id,
+                    experience_id=experience_id,
+                    event_id=str(event_id),
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("component observation persist failed", exc_info=True)
 
     # --- introspection (explainable) -----------------------------------
     def list_events(
@@ -246,6 +290,12 @@ class LearningService:
             "title", "problem", "diagnosis", "actions", "mistakes",
             "solution", "lessons", "tags",
         ) if fields.get(k) is not None}
+        for key in (
+            "readers", "paywalls", "timings", "strategies", "recommendations",
+            "component_observations", "domain", "provisional", "overall_confidence",
+        ):
+            if fields.get(key) is not None:
+                payload[key] = fields[key]
         event = self._propose(
             SOURCE_MANUAL,
             STORE_EXPERIENCE,
@@ -256,7 +306,6 @@ class LearningService:
             payload=payload,
             policy=fields.get("policy"),
         )
-        # A manual "remember" is an explicit act → apply immediately if not already.
         if not event.get("applied"):
             return self.apply(event["event"]["id"], policy=fields.get("policy"))
         return event
@@ -270,6 +319,89 @@ class LearningService:
         if not query:
             return self.list_experiences(limit=k)
         return [e.as_dict() for e in self._repo.search_experiences(query, limit=k)]
+
+    def advice_for(self, query: str, *, limit: int | None = None) -> dict[str, Any]:
+        """Non-mutating planning/research advice from applied experiences (3B.5)."""
+        hits = self.recall(query, limit=limit)
+        lines: list[str] = []
+        for hit in hits:
+            title = (hit.get("title") or hit.get("problem") or "").strip()
+            lessons = (hit.get("lessons") or "").strip()
+            solution = (hit.get("solution") or "").strip()
+            payload = hit.get("payload") or {}
+            recs = payload.get("recommendations") if isinstance(payload, dict) else None
+            bit = lessons or solution
+            if not bit and isinstance(recs, list) and recs:
+                bit = "; ".join(
+                    str(r.get("title") or r.get("why") or r)
+                    for r in recs[:3]
+                    if r
+                )
+            if title or bit:
+                lines.append(f"- {title}: {bit}".rstrip(": "))
+        text = "\n".join(lines).strip()
+        return {
+            "query": query,
+            "count": len(hits),
+            "advice": text,
+            "experiences": hits,
+            "mutating": False,
+        }
+
+    def enable_bias(self, experience_id: str, *, enabled: bool = True) -> dict[str, Any]:
+        """Explicit human gate for soft retrieve bias (D3B.12 / A3B.18)."""
+        exp = self._repo.get_experience(experience_id)
+        if exp is None:
+            raise KeyError(f"no experience {experience_id}")
+        if exp.status != "active":
+            raise ValueError("bias can only be enabled on active experiences")
+        if not hasattr(self._repo, "set_bias_enabled"):
+            raise RuntimeError("repository does not support bias_enabled")
+        self._repo.set_bias_enabled(experience_id, enabled)
+        updated = self._repo.get_experience(experience_id)
+        return {
+            "experience": updated.as_dict() if updated else None,
+            "bias_enabled": bool(enabled),
+        }
+
+    def soft_bias_terms(self, *, limit: int = 20) -> list[str]:
+        """Terms from bias-enabled experiences for a tiny retrieve boost (never hide)."""
+        if not hasattr(self._repo, "list_bias_enabled"):
+            return []
+        terms: list[str] = []
+        for exp in self._repo.list_bias_enabled(limit=limit):
+            payload = exp.payload or {}
+            for key in ("title", "problem", "solution"):
+                val = getattr(exp, key, "") or ""
+                if val:
+                    terms.append(str(val)[:80])
+            for rec in payload.get("recommendations") or []:
+                if isinstance(rec, dict):
+                    t = rec.get("title") or rec.get("why") or ""
+                    if t:
+                        terms.append(str(t)[:80])
+                elif rec:
+                    terms.append(str(rec)[:80])
+        seen: set[str] = set()
+        out: list[str] = []
+        for t in terms:
+            low = t.lower().strip()
+            if low and low not in seen:
+                seen.add(low)
+                out.append(t.strip())
+        return out
+
+    def list_component_observations(
+        self, *, component_key: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        if not hasattr(self._repo, "list_component_observations"):
+            return []
+        return [
+            o.as_dict()
+            for o in self._repo.list_component_observations(
+                component_key=component_key, limit=limit
+            )
+        ]
 
     # --- lifecycle ------------------------------------------------------
     def start(self) -> None:
@@ -315,6 +447,8 @@ def _experience_from_job(
         elif status in {"failed", "blocked", "skipped"}:
             reason = getattr(s, "blocked_reason", None) or getattr(s, "error", None) or status
             mistakes.append(f"{desc}: {reason}")
+
+    research = _aggregate_research_extras(steps, result)
     solution = result.get("answer", "") or ""
     sections = result.get("report_sections") or {}
     lessons_bits = []
@@ -322,12 +456,18 @@ def _experience_from_job(
         lessons_bits.append(f"Limitations: {sections['limitations']}")
     if sections.get("next_research"):
         lessons_bits.append(f"Next: {sections['next_research']}")
-    # Stage 3 A6/C6: always tag domain=experience; flag provisional when
-    # overall confidence is below MEDIUM so weak runs don't silently harden.
     tags = ["job", "experience"]
     confidence = (result.get("overall_confidence") or "").upper()
     if confidence and confidence not in _CONFIDENCE_OK:
         tags.append("provisional")
+
+    readers = research.get("readers") or []
+    paywalls = research.get("paywalls") or research.get("blocked") or []
+    timings = research.get("timings") or {}
+    strategies = research.get("strategies") or {}
+    recommendations = research.get("recommendations") or []
+    components = _component_observations_from_research(research, timings)
+
     return {
         "title": objective[:120],
         "problem": objective,
@@ -340,4 +480,147 @@ def _experience_from_job(
         "domain": "experience",
         "provisional": "provisional" in tags,
         "overall_confidence": confidence or None,
+        "readers": readers,
+        "paywalls": paywalls,
+        "timings": timings,
+        "strategies": strategies,
+        "recommendations": recommendations,
+        "component_observations": components,
     }
+
+
+def _aggregate_research_extras(
+    steps: list[Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    """Pull pipeline/blocked/recommendations/readers from job result + step extras."""
+    extras: dict[str, Any] = {
+        "pipeline": dict(result.get("pipeline") or {}),
+        "blocked": list(result.get("blocked") or []),
+        "recommendations": list(result.get("recommendations") or []),
+        "readers": list(result.get("readers") or []),
+        "usage": dict(result.get("usage") or {}),
+    }
+    for step in steps:
+        step_result = getattr(step, "result", None) or {}
+        if not isinstance(step_result, dict):
+            continue
+        if step_result.get("pipeline") and not extras["pipeline"]:
+            extras["pipeline"] = dict(step_result["pipeline"])
+        elif isinstance(step_result.get("pipeline"), dict):
+            for k, v in step_result["pipeline"].items():
+                extras["pipeline"].setdefault(k, v)
+        for key in ("blocked", "recommendations", "readers"):
+            vals = step_result.get(key)
+            if isinstance(vals, list) and vals:
+                if not extras[key]:
+                    extras[key] = list(vals)
+                else:
+                    extras[key].extend(x for x in vals if x not in extras[key])
+        usage = step_result.get("usage")
+        if isinstance(usage, dict):
+            for k, v in usage.items():
+                extras["usage"].setdefault(k, v)
+        docs = step_result.get("documents")
+        if isinstance(docs, dict):
+            for doc in docs.values():
+                if isinstance(doc, dict) and doc.get("reader_id"):
+                    rid = doc["reader_id"]
+                    if rid not in extras["readers"]:
+                        extras["readers"].append(rid)
+        elif isinstance(docs, list):
+            for doc in docs:
+                if isinstance(doc, dict) and doc.get("reader_id"):
+                    rid = doc["reader_id"]
+                    if rid not in extras["readers"]:
+                        extras["readers"].append(rid)
+
+    usage = extras["usage"]
+    timings = {
+        k: usage[k]
+        for k in (
+            "research_elapsed_seconds",
+            "verified_claims",
+            "verified_claims_per_hour",
+            "workspace_bytes",
+            "documents_count",
+            "documents_chars",
+            "chars_read",
+        )
+        if k in usage
+    }
+    pipeline = extras["pipeline"]
+    strategies = {
+        k: pipeline[k]
+        for k in (
+            "rounds", "found", "acquired", "read", "extracted", "verified",
+            "rejected", "findings", "patterns", "hypotheses", "blocked",
+        )
+        if k in pipeline
+    }
+    return {
+        "readers": extras["readers"],
+        "paywalls": extras["blocked"],
+        "blocked": extras["blocked"],
+        "timings": timings,
+        "strategies": strategies,
+        "recommendations": extras["recommendations"],
+        "pipeline": pipeline,
+        "usage": usage,
+    }
+
+
+def _component_observations_from_research(
+    research: dict[str, Any], timings: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Build A3B.17 component+version observation stubs from a research run."""
+    out: list[dict[str, Any]] = []
+    reader_counts: dict[str, int] = {}
+    for rid in research.get("readers") or []:
+        key = reader_component_key(str(rid))
+        if key:
+            reader_counts[key] = reader_counts.get(key, 0) + 1
+    for key, count in reader_counts.items():
+        out.append(
+            component_observation(
+                key,
+                component_version="1",
+                metrics={
+                    "documents": count,
+                    **{k: timings[k] for k in timings if k.startswith("documents")},
+                },
+            )
+        )
+    strategies = research.get("strategies") or {}
+    if strategies:
+        out.append(
+            component_observation(
+                RETRIEVAL_HYBRID,
+                component_version="1",
+                metrics={
+                    "rounds": strategies.get("rounds"),
+                    "acquired": strategies.get("acquired"),
+                    "verified": strategies.get("verified"),
+                },
+                profile="research",
+            )
+        )
+    if strategies.get("findings") is not None:
+        out.append(
+            component_observation(
+                SYNTHESIZER_V1,
+                component_version="1",
+                metrics={"findings": strategies.get("findings")},
+            )
+        )
+    if strategies.get("patterns") is not None or strategies.get("hypotheses") is not None:
+        out.append(
+            component_observation(
+                REASONER_V1,
+                component_version="1",
+                metrics={
+                    "patterns": strategies.get("patterns"),
+                    "hypotheses": strategies.get("hypotheses"),
+                },
+            )
+        )
+    return out

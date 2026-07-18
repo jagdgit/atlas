@@ -108,6 +108,78 @@ def ar5iv_html_url(url: str) -> str | None:
     return f"https://ar5iv.labs.arxiv.org/html/{aid}"
 
 
+# Highwire/Google-Scholar metadata tag that publishers (IEEE, Springer, MDPI,
+# Wiley, ScienceDirect, PLOS, …) expose on the article landing page to advertise
+# the full-text PDF. Resolving it turns a landing-page HTML "0 claims" into the
+# real article. Match regardless of attribute order or quote style.
+_CITATION_PDF_RES = (
+    re.compile(
+        r"<meta[^>]+name=[\"']citation_pdf_url[\"'][^>]+content=[\"']([^\"']+)[\"']",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+name=[\"']citation_pdf_url[\"']",
+        re.IGNORECASE,
+    ),
+)
+# Below this many characters, an HTML "article" is almost certainly a landing
+# page / abstract stub rather than full text worth extracting from.
+_LANDING_MAX_CHARS = 4000
+
+
+def citation_pdf_url(html: str, base_url: str = "") -> str | None:
+    """Return the ``citation_pdf_url`` advertised by a publisher landing page."""
+    if not html:
+        return None
+    for rx in _CITATION_PDF_RES:
+        m = rx.search(html)
+        if m:
+            href = (m.group(1) or "").strip()
+            if not href:
+                continue
+            if href.startswith("//"):
+                scheme = urlparse(base_url).scheme or "https"
+                return f"{scheme}:{href}"
+            if href.startswith("/") and base_url:
+                p = urlparse(base_url)
+                return f"{p.scheme}://{p.netloc}{href}"
+            return href
+    return None
+
+
+_DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"'<>]+)", re.IGNORECASE)
+
+
+def canonical_source_id(source: Any) -> str:
+    """A stable identity for the *logical paper*, collapsing representations.
+
+    arXiv abstract/PDF/HTML/ar5iv URLs and DOI landing pages all map to a single
+    key so the same study is never counted as two independent sources (which would
+    inflate convergence and support). Falls back to a normalized URL, then id.
+    """
+    doi = (getattr(source, "doi", "") or "").strip().lower()
+    if not doi:
+        # DOIs sometimes only live in the citation string or URL.
+        for text in (getattr(source, "citation", ""), getattr(source, "url", "")):
+            m = _DOI_RE.search(str(text or ""))
+            if m:
+                doi = m.group(1).lower()
+                break
+    if doi:
+        doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", doi).rstrip("/.")
+        return f"doi:{doi}"
+    url = (getattr(source, "url", "") or "").strip()
+    aid = arxiv_id_from_url(url)
+    if aid:
+        return "arxiv:" + re.sub(r"v\d+$", "", aid)
+    if url:
+        p = urlparse(url.lower())
+        host = p.netloc.replace("www.", "")
+        path = (p.path or "").rstrip("/")
+        return f"url:{host}{path}"
+    return f"id:{getattr(source, 'id', '')}"
+
+
 def _ext_for(content_type: str, url: str) -> str:
     ct = (content_type or "").lower()
     for needle, ext in _CT_EXT:
@@ -209,17 +281,23 @@ class Librarian:
             source, cls = pair
             return self._process_one(source, cls, workspace)
 
-        outcomes = map_parallel(_run, ranked, max_workers=workers, ordered=True)
+        outcomes = map_parallel(
+            _run, ranked, max_workers=workers, ordered=True, logger=self._logger
+        )
         # Deterministic merge by source_id (D32.4), stable even if pool reorders work.
         outcomes.sort(key=lambda o: o.source_id)
+        by_source = {s.id: (s, c) for s, c in ranked}
         for outcome in outcomes:
-            source = next(s for s, _ in ranked if s.id == outcome.source_id)
-            cls = next(c for s, c in ranked if s.id == outcome.source_id)
-            for stage in outcome.stages:
-                self._record(workspace, source, cls, stage=stage)
+            source, cls = by_source.get(outcome.source_id, (None, None))
+            # Always merge the acquired artifacts — even if we somehow can't map the
+            # source back for manifest/activity, the documents must not be lost.
             result.documents.extend(outcome.documents)
             result.blocked.extend(outcome.blocked)
             result.skipped.extend(outcome.skipped)
+            if source is None or cls is None:
+                continue
+            for stage in outcome.stages:
+                self._record(workspace, source, cls, stage=stage)
             if activity is not None:
                 self._emit_activity(activity, outcome, cls)
 
@@ -334,8 +412,29 @@ class Librarian:
                 continue
 
             content_type = getattr(res, "content_type", "") or ""
-            doc = self._read(res, source, content_type, workspace)
-            doc.metadata.update(_source_metadata(source))
+            # Read + optional landing-page→PDF resolution are isolated per source:
+            # a single reader/resolver exception must NEVER abort the acquisition
+            # batch. (Regression 2026-07-18: one worker raising here propagated up
+            # through the thread pool and discarded every already-read document, so
+            # the funnel showed 0 acquired/read even though a doc was on disk.)
+            try:
+                doc = self._read(res, source, content_type, workspace)
+                doc.metadata.update(_source_metadata(source))
+                # Publisher landing page → resolve to the advertised article PDF.
+                doc = self._maybe_resolve_pdf(
+                    doc, res, source, content_type, attempt_url, workspace
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad source ≠ batch failure
+                self._logger.exception(
+                    "read/resolve failed for %s (%s)", attempt_url, source.id
+                )
+                last_skip = {
+                    "source_id": source.id,
+                    "url": attempt_url,
+                    "reason": f"reader error: {type(exc).__name__}: {exc}",
+                    "failure_code": "parse_error",
+                }
+                continue
             out.documents.append(doc)
             out.stages.append("downloaded")
             if doc.has_text:
@@ -440,6 +539,62 @@ class Librarian:
                 reader_id=doc.reader_id,
                 quality=doc.quality,
             )
+
+    def _maybe_resolve_pdf(
+        self,
+        doc: Document,
+        res: Any,
+        source: Source,
+        content_type: str,
+        attempt_url: str,
+        workspace: "JobWorkspace | None",
+    ) -> Document:
+        """If ``doc`` is a publisher landing page, fetch the advertised article PDF.
+
+        Turns the common "IEEE/Springer landing page → 0 claims" failure into
+        either the real full text, or an honest reader-failure reason that names
+        the landing page — never a silent empty document.
+        """
+        if "html" not in (content_type or "").lower():
+            return doc
+        # Only bother when this looks like a stub (no text or short abstract page).
+        if doc.has_text and doc.chars >= _LANDING_MAX_CHARS:
+            return doc
+        raw_html = getattr(res, "text", "") or ""
+        if not raw_html:
+            raw = getattr(res, "content", b"") or b""
+            if isinstance(raw, bytes):
+                raw_html = raw.decode("utf-8", "ignore")
+        pdf_url = citation_pdf_url(raw_html, base_url=attempt_url)
+        if not pdf_url or pdf_url.rstrip("/") == attempt_url.rstrip("/"):
+            # No advertised PDF: if we also have no text, say *why* explicitly.
+            if not doc.has_text and not doc.failure_reason:
+                doc.failure_code = doc.failure_code or "landing_page"
+                doc.failure_reason = (
+                    "publisher landing page with no extractable full text and no "
+                    "advertised PDF (citation_pdf_url absent)"
+                )
+            return doc
+        try:
+            pdf_res = self._fetcher.get(pdf_url)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("citation_pdf fetch failed for %s: %s", pdf_url, exc)
+            pdf_res = None
+        if pdf_res is not None and getattr(pdf_res, "outcome", None) == OUTCOME_OK:
+            pdf_ct = getattr(pdf_res, "content_type", "") or "application/pdf"
+            better = self._read(pdf_res, source, pdf_ct, workspace)
+            better.metadata.update(_source_metadata(source))
+            if better.has_text:
+                better.metadata["resolved_pdf_url"] = pdf_url
+                return better
+        # Landing page found a PDF link but we couldn't read it (paywall/JS/OCR).
+        if not doc.has_text:
+            doc.failure_code = doc.failure_code or "landing_page"
+            doc.failure_reason = (
+                f"downloaded publisher landing page; article PDF ({pdf_url}) "
+                f"was not retrievable (paywall or unreadable)"
+            )
+        return doc
 
     def _read(
         self,

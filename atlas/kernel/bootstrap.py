@@ -60,6 +60,8 @@ from atlas.repositories.intelligence_repo import IntelligenceRepository
 from atlas.repositories.job_repo import JobRepository
 from atlas.repositories.learning_repo import LearningRepository
 from atlas.repositories.memory_repo import MemoryRepository
+from atlas.repositories.retrieval_diagnostics_repo import RetrievalDiagnosticsRepository
+from atlas.repositories.finding_repo import FindingRepository
 from atlas.repositories.task_repo import TaskRepository
 from atlas.scheduler.handlers import HandlerRegistry
 from atlas.scheduler.service import SchedulerService
@@ -162,8 +164,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         chunk_max_words=cfg.knowledge.chunk_max_words,
         chunk_overlap=cfg.knowledge.chunk_overlap,
         embed_batch=cfg.knowledge.embed_batch,
+        rrf_k=cfg.knowledge.rrf_k,
+        candidate_multiplier=cfg.knowledge.candidate_multiplier,
+        max_context_chars=cfg.agent.max_context_chars,
+        retrieval_mode=cfg.knowledge.retrieval_mode,
+        persist_diagnostics=cfg.knowledge.persist_retrieval_diagnostics,
+        diagnostics=RetrievalDiagnosticsRepository(db_manager),
         logger=get_logger("atlas.knowledge"),
     )
+    # Finding store (3B.2) — lifecycle service wired after scheduler exists.
+    finding_repo = FindingRepository(db_manager)
+    knowledge_service._findings = finding_repo  # noqa: SLF001
+    knowledge_service._lifecycle = None  # noqa: SLF001 — set below after scheduler
     # Deferred/resilient embedding path: enqueue an 'embed_document' task.
     handlers.register("embed_document", knowledge_service.embed_document_task)
 
@@ -229,6 +241,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         backoff_base=cfg.scheduler.backoff_base,
         drain_timeout=cfg.scheduler.drain_timeout,
         logger=get_logger("atlas.scheduler"),
+    )
+    from atlas.knowledge.consolidation import KnowledgeLifecycleService
+
+    knowledge_lifecycle = KnowledgeLifecycleService(
+        finding_repo,
+        enqueue=scheduler_service.enqueue,
+        logger=get_logger("atlas.knowledge.lifecycle"),
+    )
+    knowledge_service._lifecycle = knowledge_lifecycle  # noqa: SLF001
+    handlers.register(
+        "review_finding",
+        knowledge_lifecycle.review_finding,
     )
 
     # Memory service (Sprint 6): working/episodic/semantic memory over memory.items.
@@ -359,6 +383,21 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         llm_service,
         logger=get_logger("atlas.research.extract"),
     )
+    from atlas.research.synthesis import EvidenceSynthesizer
+
+    evidence_synthesizer = EvidenceSynthesizer(
+        logger=get_logger("atlas.research.synthesis"),
+    )
+
+    # Continuous Learning (Sprint 18b + Stage 3B.5): create before research so
+    # advice-only recall can be injected into the research loop.
+    learning_service = LearningService(
+        LearningRepository(db_manager),
+        cfg.learning,
+        logger=get_logger("atlas.learning"),
+    )
+    # Soft bias after apply+enable is loaded inside KnowledgeService.retrieve.
+    knowledge_service._learning = learning_service  # noqa: SLF001
 
     research_service = ResearchService(
         verification_service,
@@ -368,6 +407,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         extractor=claim_extractor,  # …then extract structured claims (not score URLs)
         resources=resource_manager,
         execution=execution_planner,
+        knowledge=knowledge_service,
+        synthesizer=evidence_synthesizer,
+        learning=learning_service,
         per_query=cfg.research.per_query,
         max_documents=cfg.research.max_documents,
         max_extract_workers=pools.extract_workers,
@@ -386,13 +428,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         plugin="research",
     )
 
-    # Continuous Learning (Sprint 18b, D11/§5d): governed, reversible promotion of
-    # completed activities into the five stores; seeds the Experience store.
-    learning_service = LearningService(
-        LearningRepository(db_manager),
-        cfg.learning,
-        logger=get_logger("atlas.learning"),
-    )
+    # Continuous Learning is constructed earlier (before ResearchService) so
+    # research/planner can recall advice without inventing a second ledger.
 
     job_repo = JobRepository(db_manager)
     job_planner = JobPlanner(
@@ -402,6 +439,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         research_first=cfg.jobs.research_first,
         timeout=cfg.jobs.planner_timeout,
         num_predict=cfg.jobs.planner_num_predict,
+        learning=learning_service,
         logger=get_logger("atlas.jobs.planner"),
     )
     job_service = JobService(
@@ -550,6 +588,24 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register("llm", llm_service, contract=caps.LLMCapability, kind="service")
     capabilities.register(
         "knowledge", knowledge_service, contract=caps.KnowledgeCapability, kind="service"
+    )
+    capabilities.register(
+        caps.CAP_RETRIEVAL,
+        knowledge_service,
+        contract=caps.RetrievalCapability,
+        kind="service",
+    )
+    capabilities.register(
+        caps.CAP_SYNTHESIS,
+        evidence_synthesizer,
+        contract=caps.SynthesisCapability,
+        kind="service",
+    )
+    capabilities.register(
+        caps.CAP_KNOWLEDGE_LIFECYCLE,
+        knowledge_lifecycle,
+        contract=caps.KnowledgeLifecycleCapability,
+        kind="service",
     )
     capabilities.register("scheduler", scheduler_service, kind="service")
     capabilities.register(

@@ -60,13 +60,26 @@ def test_different_kinds_do_not_merge():
     assert len(grouped) == 2  # same value+unit but different quantity → separate claims
 
 
-def test_bare_numbers_without_kind_stay_standalone():
+def test_bare_numbers_same_statement_dedup_across_sources():
+    # Identical config statements from two representations of one study must NOT
+    # appear twice — they merge into one claim with multi-source support (§3B dedup).
     claims = [
-        _claim("a", "value 10", number=10.0, unit="", kind="", source="p1"),
-        _claim("b", "value 10", number=10.0, unit="", kind="", source="p2"),
+        _claim("a", "The train/test split was 80/20.", number=80.0, unit="", kind="", source="p1"),
+        _claim("b", "The train/test split was 80/20.", number=80.0, unit="", kind="", source="p2"),
     ]
     grouped = group_claims(claims)
-    assert len(grouped) == 2  # no kind → grouping would be a false match, so kept apart
+    assert len(grouped) == 1
+    assert len(grouped[0].supporting) == 2
+
+
+def test_bare_numbers_different_statements_stay_apart():
+    # Same bare number but different statements are different claims (no false merge).
+    claims = [
+        _claim("a", "The quantile q was set to 0.9.", number=0.9, unit="", kind="", source="p1"),
+        _claim("b", "The dropout rate was 0.9 during training.", number=0.9, unit="", kind="", source="p2"),
+    ]
+    grouped = group_claims(claims)
+    assert len(grouped) == 2
 
 
 def test_similar_prose_claims_merge():

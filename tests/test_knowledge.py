@@ -94,6 +94,7 @@ class FakeDocRepo:
 class FakeChunkRepo:
     def __init__(self):
         self.by_doc = {}
+        self.doc_domains = {}
         self._n = 0
 
     def add_many(self, doc_id, chunks):
@@ -111,11 +112,38 @@ class FakeChunkRepo:
     def count_for_document(self, doc_id):
         return len(self.by_doc.get(str(doc_id), []))
 
+    def search_lexical(self, query, *, limit=5, domains=None):
+        q = {t for t in (query or "").lower().split() if t}
+        rows = []
+        for doc_id, chunks in self.by_doc.items():
+            if domains is not None:
+                domain = self.doc_domains.get(str(doc_id), "external")
+                if domain not in domains:
+                    continue
+            for ch in chunks:
+                tokens = {t for t in ch["content"].lower().split() if t}
+                overlap = len(q & tokens)
+                if overlap <= 0:
+                    continue
+                rows.append(
+                    {
+                        "chunk_id": ch["id"],
+                        "document_id": ch["document_id"],
+                        "ordinal": ch["ordinal"],
+                        "content": ch["content"],
+                        "rank": float(overlap),
+                    }
+                )
+        rows.sort(key=lambda r: -r["rank"])
+        return rows[:limit]
+
 
 def _cosine_distance(a, b):
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 1.0
     return 1.0 - dot / (na * nb)
 
 
@@ -232,6 +260,33 @@ def test_search_ranks_by_similarity():
     assert results
     assert "cat" in results[0].content
     assert results[0].similarity > 0.9
+
+
+def test_retrieve_hybrid_fuses_dense_and_lexical_with_scores():
+    svc, docs, chunks, embs = _service()
+    cat = svc.ingest_text("note", "the cat sat on the mat")
+    car = svc.ingest_text("note", "the car drove down the road")
+    for doc_id in (cat["document_id"], car["document_id"]):
+        chunks.doc_domains[doc_id] = "external"
+        for ch in chunks.list_for_document(doc_id):
+            embs.register_chunk(ch["id"], ch["document_id"], ch["ordinal"], ch["content"])
+            embs.doc_domains[doc_id] = "external"
+
+    ranked = svc.retrieve("cat", k=2, role="chat", mode="hybrid", domains=["external"])
+    assert ranked.mode == "hybrid"
+    assert ranked.hits
+    assert ranked.context.startswith("[1]")
+    top = ranked.hits[0]
+    assert top.rrf_score > 0
+    assert top.dense_score is not None or top.lexical_score is not None
+    assert "cat" in top.content
+
+
+def test_retrieve_archive_excluded_by_default():
+    from atlas.knowledge.access import archive_requested, normalize_tiers
+
+    assert not archive_requested(normalize_tiers(None))
+    assert archive_requested(normalize_tiers(["knowledge", "archive"]))
 
 
 def test_embed_document_count_mismatch_raises():

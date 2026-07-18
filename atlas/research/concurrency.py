@@ -11,6 +11,7 @@ Hard rules (D32.3 / A32.16):
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Iterable, TypeVar
 
@@ -47,26 +48,42 @@ def map_parallel(
     *,
     max_workers: int,
     ordered: bool = True,
+    logger: logging.Logger | None = None,
 ) -> list[R]:
     """Run ``fn`` over ``items`` with a bounded thread pool.
 
     When ``ordered`` is True, results are returned in **input order** (deterministic),
     even though execution overlaps. ``max_workers <= 1`` runs serially.
+
+    Fault isolation (D: one bad item ≠ batch failure): a worker that raises is
+    logged and its slot dropped, so a single failure can never discard the results
+    of its siblings. Callers get every successful result; failures surface via the
+    optional ``logger``. This prevents regressions where one document's reader/
+    extractor exception silently wiped out an entire acquisition round.
     """
     seq = list(items)
     if not seq:
         return []
     workers = clamp_workers(max_workers, global_max=max_workers, fallback=1)
     if workers <= 1 or len(seq) == 1:
-        return [fn(item) for item in seq]
+        out: list[R] = []
+        for item in seq:
+            try:
+                out.append(fn(item))
+            except Exception:  # noqa: BLE001 - isolate per-item failure
+                if logger is not None:
+                    logger.exception("map_parallel item failed; skipping")
+        return out
 
     results: list[R | None] = [None] * len(seq)
     with ThreadPoolExecutor(max_workers=min(workers, len(seq))) as pool:
         futures = {pool.submit(fn, item): idx for idx, item in enumerate(seq)}
         for fut in as_completed(futures):
             idx = futures[fut]
-            results[idx] = fut.result()
-    if ordered:
-        return [r for r in results if r is not None]  # type: ignore[misc]
-    # Unordered path still fills by completion into a list preserving slots.
+            try:
+                results[idx] = fut.result()
+            except Exception:  # noqa: BLE001 - isolate per-item failure
+                if logger is not None:
+                    logger.exception("map_parallel worker failed; skipping")
+                results[idx] = None
     return [r for r in results if r is not None]  # type: ignore[misc]

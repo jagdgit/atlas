@@ -1,0 +1,31 @@
+{
+  "name": "supersession_cases",
+  "description": "Append-only revision / supersede transition labels (never overwrite).",
+  "cases": [
+    {
+      "id": "sup-001",
+      "scenario": "new_evidence_same_finding",
+      "gold_transition": "revise",
+      "predicted_transition": "revise",
+      "notes": "New evidence appends a revision with supersedes link."
+    },
+    {
+      "id": "sup-002",
+      "scenario": "finding_replaced_by_better_evidence",
+      "gold_transition": "supersede",
+      "predicted_transition": "supersede"
+    },
+    {
+      "id": "sup-003",
+      "scenario": "deprecated_without_replacement",
+      "gold_transition": "archive",
+      "predicted_transition": "archive"
+    },
+    {
+      "id": "sup-004",
+      "scenario": "contested_split",
+      "gold_transition": "split_contested",
+      "predicted_transition": "split_contested"
+    }
+  ]
+}

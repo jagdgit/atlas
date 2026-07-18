@@ -1,0 +1,55 @@
+{
+  "name": "freshness_cases",
+  "description": "Knowledge-type-aware freshness labels (oracle policy for 3B.3).",
+  "cases": [
+    {
+      "id": "fresh-001",
+      "knowledge_type": "software",
+      "age_days": 30,
+      "contradicted": false,
+      "gold_freshness": "current"
+    },
+    {
+      "id": "fresh-002",
+      "knowledge_type": "software",
+      "age_days": 200,
+      "contradicted": false,
+      "gold_freshness": "aging"
+    },
+    {
+      "id": "fresh-003",
+      "knowledge_type": "api",
+      "age_days": 400,
+      "contradicted": false,
+      "gold_freshness": "stale"
+    },
+    {
+      "id": "fresh-004",
+      "knowledge_type": "science",
+      "age_days": 400,
+      "contradicted": false,
+      "gold_freshness": "current"
+    },
+    {
+      "id": "fresh-005",
+      "knowledge_type": "science",
+      "age_days": 2000,
+      "contradicted": false,
+      "gold_freshness": "stale"
+    },
+    {
+      "id": "fresh-006",
+      "knowledge_type": "science",
+      "age_days": 10,
+      "contradicted": true,
+      "gold_freshness": "stale"
+    },
+    {
+      "id": "fresh-007",
+      "knowledge_type": "standard",
+      "age_days": 2000,
+      "contradicted": false,
+      "gold_freshness": "current"
+    }
+  ]
+}

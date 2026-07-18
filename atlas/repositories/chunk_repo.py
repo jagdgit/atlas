@@ -80,3 +80,40 @@ class ChunkRepository(BaseRepository):
             "SELECT count(*) FROM knowledge.chunks WHERE document_id = %s",
             (str(document_id),),
         )
+
+    def search_lexical(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        domains: Sequence[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Full-text search over chunk content (tsvector / GIN). Returns rank DESC."""
+        q = (query or "").strip()
+        if not q or limit <= 0:
+            return []
+        if domains:
+            return self.fetch_all(
+                """
+                SELECT c.id AS chunk_id, c.document_id, c.ordinal, c.content,
+                       ts_rank_cd(c.content_tsv, plainto_tsquery('english', %s)) AS rank
+                FROM knowledge.chunks c
+                JOIN knowledge.documents d ON d.id = c.document_id
+                WHERE c.content_tsv @@ plainto_tsquery('english', %s)
+                  AND d.domain = ANY(%s)
+                ORDER BY rank DESC
+                LIMIT %s
+                """,
+                (q, q, list(domains), limit),
+            )
+        return self.fetch_all(
+            """
+            SELECT c.id AS chunk_id, c.document_id, c.ordinal, c.content,
+                   ts_rank_cd(c.content_tsv, plainto_tsquery('english', %s)) AS rank
+            FROM knowledge.chunks c
+            WHERE c.content_tsv @@ plainto_tsquery('english', %s)
+            ORDER BY rank DESC
+            LIMIT %s
+            """,
+            (q, q, limit),
+        )

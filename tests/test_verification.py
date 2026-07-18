@@ -43,6 +43,32 @@ def test_convergence_tight_cluster_is_high():
     assert eng.convergence([3.7, 3.9, 4.0, 3.8]) == 1.0
 
 
+def test_duplicate_representations_count_as_one_study():
+    # Same source_id repeated (arxiv+ar5iv collapsed) must not read as 2 studies.
+    ev = [
+        EvidenceItem(source_id="paperA", evidence_level=4, extracted_value=4.0),
+        EvidenceItem(source_id="paperA", evidence_level=4, extracted_value=4.0),
+    ]
+    claim = Claim(id="c", statement="loss ~4%", evidence=ev)
+    VerificationEngine().verify_claim(claim)
+    # Only one independent study → cannot be HIGH despite perfect agreement.
+    assert claim.confidence != CONFIDENCE_HIGH
+    assert any("1 independent" in t for t in claim.reasoning_trace)
+
+
+def test_high_convergence_low_diversity_is_explained():
+    # Two independent but low-level (L2) sources that agree perfectly.
+    ev = [
+        EvidenceItem(source_id="s1", evidence_level=2, extracted_value=4.0),
+        EvidenceItem(source_id="s2", evidence_level=2, extracted_value=4.0),
+    ]
+    claim = Claim(id="c", statement="loss ~4%", evidence=ev)
+    VerificationEngine().verify_claim(claim)
+    assert claim.convergence == 1.0
+    assert claim.confidence in (CONFIDENCE_LOW, CONFIDENCE_MEDIUM)
+    assert any("High agreement" in t for t in claim.reasoning_trace)
+
+
 def test_convergence_scattered_is_low():
     eng = VerificationEngine()
     assert eng.convergence([2, 11, 6, 4]) < 0.5

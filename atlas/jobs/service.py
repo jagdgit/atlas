@@ -495,6 +495,7 @@ class JobService:
                 result["answer"] = result["answer"].rstrip() + "\n\nData usage: " + usage.get(
                     "human", ""
                 )
+        self._enrich_learning_signals(steps, result)
         self._persist_workspace(job_id, status, result)
         self._repo.set_job_status(job_id, status, result=result)
         self._logger.info("job %s finalized: %s", job_id, status)
@@ -515,6 +516,45 @@ class JobService:
             },
         )
         return status
+
+    def _enrich_learning_signals(
+        self, steps: list[JobStep], result: dict[str, Any]
+    ) -> None:
+        """Attach research pipeline extras so Experience observation is rich (3B.5)."""
+        for key in ("pipeline", "blocked", "recommendations", "readers"):
+            if result.get(key):
+                continue
+            for step in steps:
+                step_result = step.result or {}
+                if not isinstance(step_result, dict):
+                    continue
+                val = step_result.get(key)
+                if val:
+                    result[key] = val
+                    break
+        # Collect reader_ids from nested documents if still empty.
+        if not result.get("readers"):
+            readers: list[str] = []
+            for step in steps:
+                step_result = step.result or {}
+                docs = step_result.get("documents") if isinstance(step_result, dict) else None
+                if isinstance(docs, dict):
+                    for doc in docs.values():
+                        if isinstance(doc, dict) and doc.get("reader_id"):
+                            readers.append(str(doc["reader_id"]))
+                elif isinstance(docs, list):
+                    for doc in docs:
+                        if isinstance(doc, dict) and doc.get("reader_id"):
+                            readers.append(str(doc["reader_id"]))
+            if readers:
+                # Preserve order, unique.
+                seen: set[str] = set()
+                uniq: list[str] = []
+                for r in readers:
+                    if r not in seen:
+                        seen.add(r)
+                        uniq.append(r)
+                result["readers"] = uniq
 
     def _observe_learning(
         self, job_id: str, steps: list[JobStep], result: dict[str, Any]
@@ -690,6 +730,7 @@ class JobService:
         objective = job.objective if job else ""
         answer = self._answer(steps)
         claims, sources = self._research_artifacts(job_id)
+        findings, reasoning, pipeline = self._research_synthesis(job_id)
         if not sources:
             seen: set[str] = set()
             for step in steps:
@@ -714,9 +755,12 @@ class JobService:
             return self._reports.render(
                 objective,
                 claims=claims,
+                findings=findings or None,
                 sources=sources,
                 answer=answer if not claims else "",
                 notes=answer[:600],
+                reasoning=reasoning or None,
+                pipeline=pipeline or None,
             )
         except Exception:  # noqa: BLE001 - a report must never fail the job
             self._logger.exception("job %s report generation failed", job_id)
@@ -740,6 +784,32 @@ class JobService:
             return claims, sources
         except Exception:  # noqa: BLE001
             return [], []
+
+    def _research_synthesis(
+        self, job_id: str
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+        """Load findings + reasoning + pipeline the research step wrote.
+
+        Re-rendering the job report from ``claims.json`` alone silently dropped
+        findings, cross-document patterns/opportunities, and the funnel — the
+        report then disagreed with the runtime. Carry them through instead.
+        """
+        ws = self._workspace(job_id)
+        if ws is None:
+            return [], {}, {}
+        try:
+            findings = ws.read_json("findings.json") or []
+            if not isinstance(findings, list):
+                findings = []
+            reasoning = ws.read_json("reasoning.json") or {}
+            if not isinstance(reasoning, dict):
+                reasoning = {}
+            pipeline = ws.read_json("pipeline.json") or {}
+            if not isinstance(pipeline, dict):
+                pipeline = {}
+            return findings, reasoning, pipeline
+        except Exception:  # noqa: BLE001
+            return [], {}, {}
 
     def _existing_research_report(self, job_id: str) -> dict[str, Any] | None:
         """Reuse report.md written during the research step, if any."""

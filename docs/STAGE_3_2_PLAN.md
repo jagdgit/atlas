@@ -5,7 +5,10 @@
 > Implementation defaults **A32.*** are locked in §12.
 >
 > **Build progress:** **3.2a–3.2e** are in the tree.
-> Stage 4 may later learn/tune machine-specific costs and broaden planner coverage.
+> **Next:** Stage **3B** Knowledge & Learning Foundation — see `docs/STAGE_3B_PLAN.md`
+> (**3B.0–3B.5 done**; §10 code close-out done) — Operator Benchmark/live acceptance remains,
+> provenance, quality, memory hierarchy, evaluation, and component learning **before**
+> Stage 4 Engineering Intelligence.
 >
 > **2026-07-17 architecture-review alignment:** external review rated the Stage 3.2
 > architecture very highly and asked for one strategic direction —

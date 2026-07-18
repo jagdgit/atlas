@@ -25,11 +25,55 @@ class FakeKnowledge:
         self._results = results
         self.last_query = None
         self.last_limit = None
+        self.last_role = None
 
-    def search(self, query, *, limit=5):
+    def search(self, query, *, limit=5, domains=None):
         self.last_query = query
         self.last_limit = limit
         return self._results[:limit]
+
+    def retrieve(self, query, *, k=5, role="chat", mode=None, **kwargs):
+        from atlas.knowledge.access import RankedContext, RankedHit
+
+        self.last_query = query
+        self.last_limit = k
+        self.last_role = role
+        hits = []
+        for r in self._results[:k]:
+            hits.append(
+                RankedHit(
+                    chunk_id=r.chunk_id,
+                    document_id=r.document_id,
+                    ordinal=r.ordinal,
+                    content=r.content,
+                    dense_score=r.similarity,
+                    lexical_score=None,
+                    rrf_score=r.similarity,
+                    score=r.similarity,
+                    distance=r.distance,
+                    similarity=r.similarity,
+                )
+            )
+        citations = tuple(
+            {
+                "index": i,
+                "document_id": h.document_id,
+                "chunk_id": h.chunk_id,
+                "similarity": h.similarity,
+                "snippet": h.content[:80],
+                "score": h.score,
+            }
+            for i, h in enumerate(hits, start=1)
+        )
+        context = "\n\n".join(f"[{i}] {h.content}" for i, h in enumerate(hits, start=1))
+        return RankedContext(
+            query=query,
+            hits=tuple(hits),
+            context=context,
+            citations=citations,
+            role=role,
+            mode=str(mode or "dense"),
+        )
 
 
 class FakeLLM:

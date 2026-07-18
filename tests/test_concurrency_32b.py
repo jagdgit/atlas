@@ -38,6 +38,21 @@ def test_map_parallel_serial_when_one_worker():
     assert seen == [3, 1, 2]
 
 
+def test_map_parallel_isolates_worker_failures():
+    # One item raising must NOT abort the batch — siblings still return (D: fault
+    # isolation). Regression guard for the acquire batch-discard bug (2026-07-18).
+    def fn(x: int) -> int:
+        if x == 3:
+            raise ValueError("bad item")
+        return x * 2
+
+    parallel = map_parallel(fn, [1, 2, 3, 4], max_workers=2, ordered=True)
+    assert sorted(parallel) == [2, 4, 8]  # 3 dropped; 1,2,4 survive
+
+    serial = map_parallel(fn, [1, 2, 3, 4], max_workers=1, ordered=True)
+    assert serial == [2, 4, 8]
+
+
 def test_librarian_parallel_acquire_orders_by_source_id():
     lock = threading.Lock()
     active = {"n": 0, "peak": 0}

@@ -61,6 +61,43 @@ class FakeKnowledge:
             )
         ]
 
+    def retrieve(self, query, *, k=5, role="chat", **kwargs):
+        from atlas.knowledge.access import RankedContext, RankedHit
+
+        hits = [
+            RankedHit(
+                chunk_id="chunk-1",
+                document_id="doc-1",
+                ordinal=0,
+                content="Atlas is an AI operating system.",
+                dense_score=0.8,
+                lexical_score=0.5,
+                rrf_score=0.03,
+                score=0.03,
+                distance=0.2,
+                similarity=0.8,
+            )
+        ]
+        return RankedContext(
+            query=query,
+            hits=tuple(hits[:k]),
+            context="[1] Atlas is an AI operating system.",
+            citations=(
+                {
+                    "index": 1,
+                    "document_id": "doc-1",
+                    "chunk_id": "chunk-1",
+                    "similarity": 0.8,
+                    "snippet": "Atlas is an AI operating system.",
+                },
+            ),
+            role=role,
+            mode=str(kwargs.get("mode") or "hybrid"),
+        )
+
+    def list_documents(self, *, limit=50):
+        return []
+
     def ingest_text(self, source, content, **kwargs):
         return {
             "document_id": "doc-1",

@@ -40,6 +40,18 @@ CAP_OCR = "ocr"
 CAP_MAIL = "mail"
 CAP_BROWSER = "browser"
 CAP_RESEARCH = "research"
+# Stage 3B knowledge-OS capabilities (stubs until providers land; D3B.25).
+CAP_RETRIEVAL = "retrieval"
+CAP_SYNTHESIS = "synthesis"
+CAP_KNOWLEDGE_LIFECYCLE = "knowledge_lifecycle"
+
+# Cost classes reused by Resource Manager / CapabilitySpec (3.2d / A3B.20).
+COST_FREE = "free"
+COST_CHEAP = "cheap"
+COST_MODERATE = "moderate"
+COST_EXPENSIVE = "expensive"
+COST_LLM = "llm"
+COST_UNKNOWN = "unknown"
 
 
 # --- contracts (Protocols) ----------------------------------------------
@@ -61,10 +73,11 @@ class MemoryCapability(Protocol):
 
 @runtime_checkable
 class KnowledgeCapability(Protocol):
-    """Ingest documents and answer/search over them (RAG)."""
+    """Ingest documents and answer/search over them (RAG + Access Layer)."""
 
     def ingest_text(self, *args: Any, **kwargs: Any) -> Any: ...
     def search(self, *args: Any, **kwargs: Any) -> Any: ...
+    def retrieve(self, *args: Any, **kwargs: Any) -> Any: ...
     def list_documents(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
@@ -215,6 +228,28 @@ class ResearchCapability(Protocol):
     def research(self, objective: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class RetrievalCapability(Protocol):
+    """Global Knowledge Access retrieve path (Stage 3B.1): Retrieve→Re-rank→Context."""
+
+    def retrieve(self, query: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class SynthesisCapability(Protocol):
+    """Evidence → Findings synthesizer (Stage 3B.2)."""
+
+    def synthesize(self, claims: Any, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class KnowledgeLifecycleCapability(Protocol):
+    """Append-only finding revisions, freshness, supersede/archive (Stage 3B.3)."""
+
+    def revise(self, *args: Any, **kwargs: Any) -> Any: ...
+    def supersede(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
 # --- the catalog ---------------------------------------------------------
 @dataclass(frozen=True)
 class CapabilitySpec:
@@ -225,6 +260,12 @@ class CapabilitySpec:
     summary: str
     unlocks: str
     since: str  # the sprint that introduces (or will introduce) it
+    # Stage 3B.0 extensions (defaults keep existing catalog entries valid).
+    version: str = "1"
+    cost_class: str = COST_UNKNOWN
+    dependencies: tuple[str, ...] = ()
+    metrics: tuple[str, ...] = ()
+    quality_notes: str = ""
 
 
 CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
@@ -367,6 +408,48 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Run an autonomous gather→verify→decide research loop and emit a verified report.",
         "Turns the tools + Verification Engine into a self-directing researcher.",
         "S21",
+        cost_class=COST_LLM,
+        dependencies=(CAP_SCHOLAR, CAP_WEB, CAP_KNOWLEDGE),
+        metrics=("benchmark_pass_rate",),
+        quality_notes="First consumer of Access Layer + Findings; not a separate RAG stack.",
+    ),
+    CAP_RETRIEVAL: CapabilitySpec(
+        CAP_RETRIEVAL,
+        RetrievalCapability,
+        "Global retrieve(query, domains, filters, role) with dense+lexical hybrid and diagnostics.",
+        "One Access Layer for chat, research, planner, and future Engineering/Personal.",
+        "3B.1",
+        version="1",
+        cost_class=COST_MODERATE,
+        dependencies=(CAP_KNOWLEDGE, CAP_LLM),
+        metrics=("precision_at_k", "recall_at_k", "citation_coverage"),
+        quality_notes=(
+            "Pipeline locked: Retrieve→Re-rank→Context→LLM. Persist dense/lexical/rrf scores."
+        ),
+    ),
+    CAP_SYNTHESIS: CapabilitySpec(
+        CAP_SYNTHESIS,
+        SynthesisCapability,
+        "Synthesize per-source claims into durable Findings (support/contradict/quality).",
+        "Canonical findings with provenance; evolves group_claims into knowledge.findings.",
+        "3B.2",
+        version="1",
+        cost_class=COST_CHEAP,
+        dependencies=(CAP_RESEARCH,),
+        metrics=("merge_accuracy", "false_merge_rate", "contradiction_recall"),
+        quality_notes="Conservative merge; never silently average contradictions.",
+    ),
+    CAP_KNOWLEDGE_LIFECYCLE: CapabilitySpec(
+        CAP_KNOWLEDGE_LIFECYCLE,
+        KnowledgeLifecycleCapability,
+        "Append-only finding revisions, freshness, supersede/archive, invalidation.",
+        "Durable knowledge that never overwrites; archive excluded from retrieval by default.",
+        "3B.3",
+        version="1",
+        cost_class=COST_CHEAP,
+        dependencies=(CAP_SYNTHESIS, CAP_RETRIEVAL),
+        metrics=("freshness_label_accuracy", "supersession_correctness"),
+        quality_notes="IDs: UUID + F-###### + revision. supersedes/superseded_by links.",
     ),
 }
 
@@ -394,6 +477,11 @@ def describe_capabilities(registry: Any) -> list[dict[str, Any]]:
                 "summary": (spec.summary if spec else meta.get("summary", "")),
                 "unlocks": (spec.unlocks if spec else ""),
                 "since": (spec.since if spec else None),
+                "version": (spec.version if spec else None),
+                "cost_class": (spec.cost_class if spec else None),
+                "dependencies": list(spec.dependencies) if spec else [],
+                "metrics": list(spec.metrics) if spec else [],
+                "quality_notes": (spec.quality_notes if spec else ""),
             }
         )
     return rows

@@ -104,6 +104,10 @@ class HistoryResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=5, ge=1, le=50)
+    domains: list[str] | None = None
+    tiers: list[str] | None = None
+    role: str = Field(default="chat", min_length=1)
+    mode: str = Field(default="hybrid", pattern="^(hybrid|dense|lexical)$")
 
 
 class SearchResultOut(BaseModel):
@@ -111,11 +115,19 @@ class SearchResultOut(BaseModel):
     document_id: str
     ordinal: int
     content: str
-    similarity: float
+    similarity: float | None = None
+    dense_score: float | None = None
+    lexical_score: float | None = None
+    rrf_score: float | None = None
+    score: float | None = None
 
 
 class SearchResponse(BaseModel):
     results: list[SearchResultOut]
+    role: str | None = None
+    mode: str | None = None
+    diagnostics_id: str | None = None
+    context: str | None = None
 
 
 class IngestRequest(BaseModel):

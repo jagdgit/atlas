@@ -1,21 +1,13 @@
 """RAG agent — retrieval-augmented question answering over the knowledge base.
 
-Flow (ADR-0031):
+Flow (ADR-0031 / Stage 3B.1):
 
     query
-      -> knowledge.search(query, k)        [step: retrieve]
-      -> keep chunks above similarity_floor
-      -> assemble numbered context
-      -> llm.chat([system, user])          [step: generate]
+      -> knowledge.retrieve(query, role=chat)   [Retrieve → Re-rank → Context]
+      -> llm.chat([system, user])               [Generate]
       -> answer with inline [n] citations + a trailing Sources list
 
-The agent depends only on kernel services (KnowledgeService, LLMService) and the
-AgentRunRepository — never on SQL or the Ollama client directly (ADR-0006/0030).
-Every run and its steps are persisted for observability and recovery (ADR-0032).
-
-Grounding is configurable (ADR-0035): "strict" answers only from retrieved context
-(and says so when nothing relevant is found); "blended" also allows the model's own
-knowledge, labelled as not sourced from the knowledge base.
+Never Retrieve → LLM → Re-rank (D3B.28).
 """
 
 from __future__ import annotations
@@ -28,7 +20,8 @@ from atlas.llm.provider import ChatMessage
 from atlas.telemetry import get_metrics, start_span, timer
 
 if TYPE_CHECKING:
-    from atlas.knowledge.service import KnowledgeService, SearchResult
+    from atlas.knowledge.access import RankedHit
+    from atlas.knowledge.service import KnowledgeService
     from atlas.llm.service import LLMService
     from atlas.repositories.agent_run_repo import AgentRunRepository
 
@@ -78,14 +71,20 @@ class RagAgent:
         k = int(options.get("k", self._k))
         floor = float(options.get("similarity_floor", self._floor))
         grounding = str(options.get("grounding", self._grounding))
+        role = str(options.get("role", "chat"))
+        mode = options.get("mode")
 
-        run_id = self._open_run(query, {"k": k, "floor": floor, "grounding": grounding})
+        run_id = self._open_run(
+            query, {"k": k, "floor": floor, "grounding": grounding, "role": role}
+        )
         get_metrics().incr("agent.run", agent=self.name)
         with start_span("agent.rag.run", agent=self.name, grounding=grounding):
             try:
                 with timer("agent.rag.retrieve"):
-                    results = self._knowledge.search(query, limit=k)
-                kept = [r for r in results if r.similarity >= floor]
+                    ranked = self._knowledge.retrieve(
+                        query, k=k, role=role, mode=mode
+                    )
+                kept = self._apply_floor(list(ranked.hits), floor, ranked.mode)
                 self._record_step(
                     run_id,
                     0,
@@ -94,25 +93,40 @@ class RagAgent:
                         "query": query,
                         "k": k,
                         "floor": floor,
+                        "role": role,
+                        "mode": ranked.mode,
                         "hits": [
-                            {"chunk_id": r.chunk_id, "similarity": round(r.similarity, 4)}
-                            for r in results
+                            {
+                                "chunk_id": h.chunk_id,
+                                "similarity": (
+                                    round(h.similarity, 4)
+                                    if h.similarity is not None
+                                    else None
+                                ),
+                                "dense_score": h.dense_score,
+                                "lexical_score": h.lexical_score,
+                                "rrf_score": round(h.rrf_score, 6),
+                                "score": round(h.score, 6),
+                            }
+                            for h in ranked.hits
                         ],
                         "kept": len(kept),
+                        "diagnostics_id": ranked.diagnostics_id,
                     },
                 )
 
-                # Strict grounding with nothing relevant: short-circuit, no generation.
                 if not kept and grounding == "strict":
                     result = AgentResult(
                         answer=_NO_CONTEXT_ANSWER,
                         citations=[],
-                        usage={"retrieved": len(results), "used": 0},
+                        usage={"retrieved": len(ranked.hits), "used": 0},
                         run_id=run_id,
                     )
                     self._finish_run(run_id, result)
                     return result
 
+                # Always assemble with this agent's char budget (Access Layer may
+                # have used a different max_context_chars).
                 context, citations = self._assemble_context(kept)
                 messages = self._build_messages(query, context, grounding)
                 prompt_chars = sum(len(m.content) for m in messages)
@@ -136,9 +150,10 @@ class RagAgent:
                     citations=citations,
                     usage={
                         "model": response.model,
-                        "retrieved": len(results),
+                        "retrieved": len(ranked.hits),
                         "used": len(kept),
                         "prompt_chars": prompt_chars,
+                        "mode": ranked.mode,
                         **response.usage,
                     },
                     run_id=run_id,
@@ -153,16 +168,22 @@ class RagAgent:
                 self._logger.exception("rag run failed for query: %s", query)
                 raise
 
-    # --- internals ------------------------------------------------------
+    def _apply_floor(
+        self, hits: "list[RankedHit]", floor: float, mode: str
+    ) -> "list[RankedHit]":
+        """Dense mode uses similarity floor; hybrid trusts Access Layer top-k."""
+        if floor <= 0 or mode != "dense":
+            return hits
+        return [h for h in hits if (h.similarity or 0.0) >= floor]
+
     def _assemble_context(
-        self, kept: "list[SearchResult]"
+        self, kept: "list[RankedHit]"
     ) -> tuple[str, list[Citation]]:
         blocks: list[str] = []
         citations: list[Citation] = []
         used_chars = 0
         for i, r in enumerate(kept, start=1):
             block = f"[{i}] {r.content}"
-            # Always include the first source; otherwise respect the char cap.
             if i > 1 and used_chars + len(block) > self._max_context_chars:
                 break
             blocks.append(block)
@@ -172,7 +193,9 @@ class RagAgent:
                     index=i,
                     document_id=r.document_id,
                     chunk_id=r.chunk_id,
-                    similarity=r.similarity,
+                    similarity=float(
+                        r.similarity if r.similarity is not None else r.score
+                    ),
                     snippet=_snippet(r.content),
                 )
             )
@@ -187,7 +210,7 @@ class RagAgent:
                 "use your own knowledge to fill gaps, but clearly mark any statement "
                 "not supported by the context with '(not from knowledge base)'."
             )
-        else:  # strict (default)
+        else:
             rule = (
                 "Answer using ONLY the numbered context below. Cite each source you "
                 "use inline as [n], matching the context numbers. If the context does "

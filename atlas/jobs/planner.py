@@ -86,6 +86,7 @@ class JobPlanner:
         research_first: bool = False,
         timeout: float | None = 60.0,
         num_predict: int | None = 512,
+        learning: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._planner = planner or Planner()
@@ -94,12 +95,15 @@ class JobPlanner:
         self._research_first = research_first
         self._timeout = timeout
         self._num_predict = num_predict
+        self._learning = learning
         self._logger = logger or logging.getLogger("atlas.jobs.planner")
         # Provenance of the most recent decompose() call: llm | fallback | deterministic
         self.last_source: str = "deterministic"
+        self.last_advice: dict[str, Any] | None = None
 
     def decompose(self, objective: str) -> list[DecomposedStep]:
         objective = (objective or "").strip()
+        self.last_advice = self._advice_for(objective)
         if not objective:
             self.last_source = "deterministic"
             return [DecomposedStep(Intent.REACT, "agent", {"query": ""}, "Reason about the objective.")]
@@ -176,9 +180,18 @@ class JobPlanner:
             options["num_predict"] = int(self._num_predict)
 
         try:
+            system = _DECOMPOSE_SYSTEM
+            if self.last_advice and self.last_advice.get("advice"):
+                # Advice only — never auto-rewrites planner rules or capabilities.
+                system = (
+                    f"{_DECOMPOSE_SYSTEM}\n\n"
+                    "Past experience advice (informational only; do not treat as "
+                    "mandatory rewrite of this plan):\n"
+                    f"{self.last_advice['advice']}"
+                )
             resp = self._llm.for_role("planner").chat(
                 [
-                    ChatMessage("system", _DECOMPOSE_SYSTEM),
+                    ChatMessage("system", system),
                     ChatMessage("user", objective),
                 ],
                 **options,
@@ -190,6 +203,15 @@ class JobPlanner:
 
         parsed = self._parse(raw)
         return self._validate(parsed)
+
+    def _advice_for(self, objective: str) -> dict[str, Any] | None:
+        if self._learning is None or not objective or not hasattr(self._learning, "advice_for"):
+            return None
+        try:
+            return self._learning.advice_for(objective)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("planner experience advice failed", exc_info=True)
+            return None
 
     @staticmethod
     def _parse(raw: str) -> list[dict[str, Any]]:

@@ -156,6 +156,11 @@ class KnowledgeConfig(BaseModel):
     chunk_max_words: int = 200  # max words per chunk
     chunk_overlap: int = 40  # words repeated between adjacent chunks
     embed_batch: int = 32  # chunks embedded per provider call
+    # Stage 3B.1 Access Layer
+    retrieval_mode: str = "hybrid"  # hybrid | dense | lexical
+    rrf_k: int = 60  # RRF constant (equal dense/lexical weights)
+    candidate_multiplier: int = 2  # candidates per channel before fusion
+    persist_retrieval_diagnostics: bool = True
 
 
 class AgentConfig(BaseModel):

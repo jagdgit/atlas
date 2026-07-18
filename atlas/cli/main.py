@@ -248,15 +248,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_learn.add_argument(
         "action",
-        choices=["events", "show", "apply", "revert", "experiences", "recall"],
-        help="events|show <id>|apply <id>|revert <id>|experiences|recall <query>",
+        choices=[
+            "events", "show", "apply", "revert", "experiences", "recall",
+            "advice", "components", "bias",
+        ],
+        help="events|show|apply|revert|experiences|recall|advice|components|bias",
     )
-    p_learn.add_argument("target", nargs="?", help="event id, or a recall query")
+    p_learn.add_argument("target", nargs="?", help="event/experience id, or a recall query")
     p_learn.add_argument("--status", help="filter events by status")
     p_learn.add_argument("--store", help="filter events by store")
     p_learn.add_argument("--policy", help="policy when applying (temporary|project|personal|verified)")
     p_learn.add_argument("--level", type=int, help="Learning Level (1-5) when applying")
     p_learn.add_argument("--limit", type=int, default=20)
+    p_learn.add_argument(
+        "--disable",
+        action="store_true",
+        help="for bias action: disable soft bias (default is enable)",
+    )
 
     p_intel = sub.add_parser(
         "intel", help="engineering intelligence: learn repos, generalize, recommend (S19)"
@@ -1042,6 +1050,43 @@ def cmd_learn(args: argparse.Namespace, app: "Application | None" = None) -> int
             print(f"{x['id']}  {x['title'] or x['problem'][:80]}")
             if x.get("lessons"):
                 print(f"    lessons: {x['lessons']}")
+        return 0
+
+    if action == "advice":
+        query = args.target or ""
+        data = learning.advice_for(query, limit=args.limit)
+        print(f"advice ({data['count']} hit(s), mutating={data['mutating']}):")
+        print(data.get("advice") or "(none)")
+        return 0
+
+    if action == "components":
+        for o in learning.list_component_observations(
+            component_key=args.target, limit=args.limit
+        ):
+            print(
+                f"{o['component_key']}@{o['component_version']}  "
+                f"job={o.get('source_job_id') or '-'}  metrics={o.get('metrics')}"
+            )
+        return 0
+
+    if action == "bias":
+        if not args.target:
+            print("usage: atlas learn bias <experience_id> [--enable|--disable]")
+            return 2
+        try:
+            result = learning.enable_bias(
+                args.target, enabled=not bool(getattr(args, "disable", False))
+            )
+        except KeyError:
+            print("experience not found")
+            return 1
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        print(
+            f"bias_enabled={result.get('bias_enabled')} for "
+            f"{(result.get('experience') or {}).get('id', args.target)}"
+        )
         return 0
 
     return 2

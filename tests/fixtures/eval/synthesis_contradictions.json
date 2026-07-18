@@ -1,0 +1,62 @@
+{
+  "name": "synthesis_contradictions",
+  "description": "Quantitative outliers should surface as contradict stance, not be averaged away.",
+  "cases": [
+    {
+      "id": "con-001",
+      "expected_group_count": 1,
+      "gold_clusters": [["p1", "p2", "p3"]],
+      "gold_contradict_sources": ["p3"],
+      "claims": [
+        {
+          "id": "a",
+          "statement": "loss 0.3%/day",
+          "value": {"number": 0.3, "unit": "%/day", "kind": "soiling_loss"},
+          "evidence": [
+            {"source_id": "p1", "evidence_level": 4, "extracted_value": 0.3, "unit": "%/day", "snippet": "loss 0.3%/day", "stance": "support"}
+          ]
+        },
+        {
+          "id": "b",
+          "statement": "loss 0.32%/day",
+          "value": {"number": 0.32, "unit": "%/day", "kind": "soiling_loss"},
+          "evidence": [
+            {"source_id": "p2", "evidence_level": 4, "extracted_value": 0.32, "unit": "%/day", "snippet": "loss 0.32%/day", "stance": "support"}
+          ]
+        },
+        {
+          "id": "c",
+          "statement": "loss 5.0%/day",
+          "value": {"number": 5.0, "unit": "%/day", "kind": "soiling_loss"},
+          "evidence": [
+            {"source_id": "p3", "evidence_level": 2, "extracted_value": 5.0, "unit": "%/day", "snippet": "loss 5.0%/day", "stance": "support"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "con-002",
+      "expected_group_count": 1,
+      "gold_clusters": [["s1", "s2"]],
+      "gold_contradict_sources": ["s2"],
+      "claims": [
+        {
+          "id": "a",
+          "statement": "annual soiling 2.5%",
+          "value": {"number": 2.5, "unit": "%", "kind": "annual_soiling"},
+          "evidence": [
+            {"source_id": "s1", "evidence_level": 5, "extracted_value": 2.5, "unit": "%", "snippet": "annual soiling 2.5%", "stance": "support"}
+          ]
+        },
+        {
+          "id": "b",
+          "statement": "annual soiling 12%",
+          "value": {"number": 12.0, "unit": "%", "kind": "annual_soiling"},
+          "evidence": [
+            {"source_id": "s2", "evidence_level": 2, "extracted_value": 12.0, "unit": "%", "snippet": "annual soiling 12%", "stance": "support"}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -494,20 +494,32 @@ async function jobAction(id, action) {
   } catch (err) { toast(err.message); }
 }
 
+// Keep polling through transient errors (a slow LLM planning step or a single
+// failed/late GET must NOT freeze the status at "planning" forever). Only give up
+// after several consecutive failures; otherwise re-render each tick until the job
+// reaches a terminal state.
+const JOB_POLL_MAX_FAILURES = 8;
 function startJobPoll(id) {
   stopJobPoll();
+  state.jobPollFailures = 0;
   state.jobPoll = setInterval(async () => {
     if (state.view !== "jobs") return stopJobPoll();
     try {
       const d = await api(`/v1/jobs/${id}`);
+      state.jobPollFailures = 0;
       renderJobDetail(d);
       loadJobs();
       if (!jobIsActive(d.job)) stopJobPoll();
-    } catch (_) { stopJobPoll(); }
+    } catch (_) {
+      // Tolerate transient failures; only stop after a sustained outage.
+      state.jobPollFailures = (state.jobPollFailures || 0) + 1;
+      if (state.jobPollFailures >= JOB_POLL_MAX_FAILURES) stopJobPoll();
+    }
   }, 2000);
 }
 function stopJobPoll() {
   if (state.jobPoll) { clearInterval(state.jobPoll); state.jobPoll = null; }
+  state.jobPollFailures = 0;
 }
 
 /* ---------- system ---------- */

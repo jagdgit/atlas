@@ -12,7 +12,7 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
-from atlas.models.learning import Experience, LearningEvent
+from atlas.models.learning import ComponentObservation, Experience, LearningEvent
 from atlas.repositories.base import BaseRepository
 
 _EVENT_COLS = (
@@ -21,7 +21,11 @@ _EVENT_COLS = (
 )
 _EXP_COLS = (
     "id, title, problem, diagnosis, actions, mistakes, solution, lessons, tags, "
-    "source_job_id, policy, status, created_at, updated_at"
+    "source_job_id, policy, status, payload, bias_enabled, created_at, updated_at"
+)
+_COMP_COLS = (
+    "id, component_key, component_version, corpus, profile, metrics, "
+    "source_job_id, experience_id, event_id, created_at"
 )
 
 
@@ -138,18 +142,21 @@ class LearningRepository(BaseRepository):
         tags: list[str] | None = None,
         source_job_id: str | None = None,
         policy: str = "temporary",
+        payload: dict[str, Any] | None = None,
+        bias_enabled: bool = False,
     ) -> Experience:
         row = self.fetch_one(
             f"""
             INSERT INTO learning.experiences
                 (title, problem, diagnosis, actions, mistakes, solution, lessons,
-                 tags, source_job_id, policy)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 tags, source_job_id, policy, payload, bias_enabled)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING {_EXP_COLS}
             """,
             (
                 title, problem, diagnosis, Jsonb(actions or []), mistakes, solution,
                 lessons, Jsonb(tags or []), source_job_id, policy,
+                Jsonb(payload or {}), bool(bias_enabled),
             ),
         )
         return Experience.from_row(row)
@@ -176,10 +183,11 @@ class LearningRepository(BaseRepository):
             SELECT {_EXP_COLS} FROM learning.experiences
             WHERE status = 'active'
               AND (title ILIKE %s OR problem ILIKE %s OR solution ILIKE %s
-                   OR lessons ILIKE %s)
+                   OR lessons ILIKE %s
+                   OR payload::text ILIKE %s)
             ORDER BY created_at DESC LIMIT %s
             """,
-            (like, like, like, like, limit),
+            (like, like, like, like, like, limit),
         )
         return Experience.from_rows(rows)
 
@@ -193,6 +201,27 @@ class LearningRepository(BaseRepository):
             > 0
         )
 
+    def set_bias_enabled(self, exp_id: UUID | str, enabled: bool) -> bool:
+        return (
+            self.execute(
+                "UPDATE learning.experiences SET bias_enabled = %s, updated_at = now() "
+                "WHERE id = %s AND status = 'active'",
+                (bool(enabled), str(exp_id)),
+            )
+            > 0
+        )
+
+    def list_bias_enabled(self, *, limit: int = 50) -> list[Experience]:
+        rows = self.fetch_all(
+            f"""
+            SELECT {_EXP_COLS} FROM learning.experiences
+            WHERE status = 'active' AND bias_enabled = true
+            ORDER BY created_at DESC LIMIT %s
+            """,
+            (limit,),
+        )
+        return Experience.from_rows(rows)
+
     def count_experiences(self) -> int:
         return (
             self.fetch_val(
@@ -200,3 +229,56 @@ class LearningRepository(BaseRepository):
             )
             or 0
         )
+
+    # --- component observations -----------------------------------------
+    def add_component_observation(
+        self,
+        *,
+        component_key: str,
+        component_version: str = "1",
+        corpus: str | None = None,
+        profile: str | None = None,
+        metrics: dict[str, Any] | None = None,
+        source_job_id: str | None = None,
+        experience_id: str | None = None,
+        event_id: str | None = None,
+    ) -> ComponentObservation:
+        row = self.fetch_one(
+            f"""
+            INSERT INTO learning.component_observations
+                (component_key, component_version, corpus, profile, metrics,
+                 source_job_id, experience_id, event_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING {_COMP_COLS}
+            """,
+            (
+                component_key,
+                str(component_version or "1"),
+                corpus,
+                profile,
+                Jsonb(metrics or {}),
+                source_job_id,
+                experience_id,
+                event_id,
+            ),
+        )
+        return ComponentObservation.from_row(row)
+
+    def list_component_observations(
+        self,
+        *,
+        component_key: str | None = None,
+        limit: int = 50,
+    ) -> list[ComponentObservation]:
+        clauses, params = [], []
+        if component_key:
+            clauses.append("component_key = %s")
+            params.append(component_key)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = self.fetch_all(
+            f"SELECT {_COMP_COLS} FROM learning.component_observations {where} "
+            f"ORDER BY created_at DESC LIMIT %s",
+            tuple(params),
+        )
+        return ComponentObservation.from_rows(rows)

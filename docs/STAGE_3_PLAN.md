@@ -682,6 +682,25 @@ See **`docs/STAGE_3_2_PLAN.md`**. Order: **3.2a readers → 3.2b concurrent docs
 kernel Resource Manager → 3.2d Execution Planner + predictive resource refinement → 3.2e
 async Job Planner + create visibility**. **3.2a–e shipped.**
 
+### 8d. Next — Stage 3B (Knowledge & Learning Foundation) **FINALIZED**
+
+**Do not open Stage 4 yet.** See **`docs/STAGE_3B_PLAN.md`** (**3B.0–3B.5 + §10 code close-out done**; operator Benchmark/live acceptance remaining):
+global Knowledge Access Layer, append-only `knowledge.findings`, lifecycle/freshness,
+provenance, quality, memory hierarchy, evaluation, cross-document reasoning, and component
+Experience Learning. Stage 3A = research pipeline (done); Stage 3B finishes the knowledge
+operating system before Engineering Intelligence.
+
+### 8e. Live-run hardening #2 — post-BM-001 (2026-07-18)
+
+The first live **Benchmark Set** run (BM-001) drove a second researcher-quality hardening pass:
+publisher-landing→PDF resolution, deterministic prose extraction, evidence-vs-inference and claim
+taxonomy, canonical source identity, independent-study-aware confidence, report funnel + findings
+serialization fix, conflicts-vs-weak-evidence split, and a UI fix for job status frozen on
+"planning" (resilient polling). A **wave 2** then fixed the Acquire→Read→Extract batch-discard
+regression (one source raising discarded the whole acquisition batch — funnel 0 despite a doc read),
+made the executive summary honest when 0 findings are extracted, and added a **per-source Pipeline
+Trace**. **Full write-up: `docs/STAGE_3B_PLAN.md` §16 (§16.7 for wave 2).**
+
 ---
 
 ## 9. Non-goals for Stage 3 (explicit)

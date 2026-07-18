@@ -127,6 +127,7 @@ def _cluster_quant(members: list[Claim], tolerance: float) -> Claim:
         statement=rep.statement,
         value=rep.value,
         evidence=evidence,
+        claim_type=rep.claim_type,
     )
 
 
@@ -152,6 +153,7 @@ def _cluster_prose(members: list[Claim], threshold: float) -> list[Claim]:
                 statement=rep.statement,
                 value=rep.value,
                 evidence=_merge_evidence(grp, stance=STANCE_SUPPORT),
+                claim_type=rep.claim_type,
             )
         )
     return out
@@ -184,6 +186,8 @@ def group_claims(
     grouped: list[Claim] = []
     for members in quant_groupable.values():
         grouped.append(_cluster_quant(members, tolerance))
-    grouped.extend(standalone)
+    # Standalone (kind-less numeric, e.g. "q=0.9", "80/20 split") still dedup by
+    # statement similarity so the same config isn't reported twice from two papers.
+    grouped.extend(_cluster_prose(standalone, prose_similarity))
     grouped.extend(_cluster_prose(prose, prose_similarity))
     return grouped

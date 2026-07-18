@@ -8,6 +8,7 @@ explainable, recall) is exercised without a database.
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 from atlas.config import LearningConfig
 from atlas.models.learning import (
@@ -20,12 +21,15 @@ from atlas.models.learning import (
     LearningEvent,
 )
 from atlas.services.learning_service import LearningService, _experience_from_job
+from atlas.knowledge.access import RankedHit, heuristic_rerank
+from atlas.services.learning_service import SOFT_BIAS_BOOST
 
 
 class FakeLearningRepo:
     def __init__(self):
         self._events: dict[str, LearningEvent] = {}
         self._exps: dict[str, Experience] = {}
+        self._comps: dict[str, Any] = {}
         self._seq = 0
 
     def _id(self, prefix):
@@ -77,6 +81,8 @@ class FakeLearningRepo:
             mistakes=kw.get("mistakes", ""), solution=kw.get("solution", ""),
             lessons=kw.get("lessons", ""), tags=kw.get("tags") or [],
             source_job_id=kw.get("source_job_id"), policy=kw.get("policy", "temporary"),
+            payload=kw.get("payload") or {},
+            bias_enabled=bool(kw.get("bias_enabled", False)),
         )
         self._exps[xid] = exp
         return exp
@@ -94,6 +100,7 @@ class FakeLearningRepo:
             if e.status == EXP_ACTIVE and (
                 q in e.title.lower() or q in e.problem.lower()
                 or q in e.solution.lower() or q in e.lessons.lower()
+                or q in str(e.payload or {}).lower()
             )
         ]
         return hits[:limit]
@@ -103,8 +110,45 @@ class FakeLearningRepo:
         self._exps[str(exp_id)] = dataclasses.replace(e, status=status)
         return True
 
+    def set_bias_enabled(self, exp_id, enabled):
+        e = self._exps.get(str(exp_id))
+        if e is None or e.status != EXP_ACTIVE:
+            return False
+        self._exps[str(exp_id)] = dataclasses.replace(e, bias_enabled=bool(enabled))
+        return True
+
+    def list_bias_enabled(self, *, limit=50):
+        return [
+            e for e in self._exps.values()
+            if e.status == EXP_ACTIVE and e.bias_enabled
+        ][:limit]
+
     def count_experiences(self):
         return len(self.list_experiences(limit=10_000))
+
+    def add_component_observation(self, **kw):
+        oid = self._id("comp")
+        from atlas.models.learning import ComponentObservation
+
+        obs = ComponentObservation(
+            id=oid,
+            component_key=kw["component_key"],
+            component_version=str(kw.get("component_version") or "1"),
+            corpus=kw.get("corpus"),
+            profile=kw.get("profile"),
+            metrics=kw.get("metrics") or {},
+            source_job_id=kw.get("source_job_id"),
+            experience_id=kw.get("experience_id"),
+            event_id=kw.get("event_id"),
+        )
+        self._comps[oid] = obs
+        return obs
+
+    def list_component_observations(self, *, component_key=None, limit=50):
+        out = list(self._comps.values())
+        if component_key:
+            out = [o for o in out if o.component_key == component_key]
+        return out[:limit]
 
 
 @dataclasses.dataclass
@@ -121,6 +165,7 @@ class _FakeStep:
     description: str = ""
     error: str | None = None
     blocked_reason: str | None = None
+    result: dict | None = None
 
 
 def _svc(**cfg):
@@ -314,3 +359,176 @@ def test_experience_from_job_partitions_actions_and_mistakes():
     assert payload["actions"] == ["did a"]
     assert "tried b: boom" in payload["mistakes"]
     assert payload["solution"] == "solved"
+
+
+# --- Stage 3B.5: rich experience + components + advice + gated bias ------
+def test_experience_from_job_captures_rich_research_signals():
+    steps = [
+        _FakeStep(
+            "research",
+            "done",
+            "deep research",
+            result={
+                "pipeline": {
+                    "rounds": 2, "acquired": 3, "verified": 4, "findings": 2,
+                    "patterns": 1, "hypotheses": 1,
+                },
+                "blocked": [{"url": "https://paywall.example", "reason": "login"}],
+                "recommendations": [{"title": "Try open-access preprint", "why": "paywall"}],
+                "readers": ["html", "pdf_ocr"],
+                "usage": {
+                    "research_elapsed_seconds": 12.5,
+                    "verified_claims": 4,
+                    "verified_claims_per_hour": 1152.0,
+                },
+            },
+        ),
+    ]
+    payload = _experience_from_job(
+        "soiling loss rates",
+        steps,
+        {"answer": "≈0.3%/day", "usage": steps[0].result["usage"]},
+        "job-rich",
+    )
+    assert payload is not None
+    assert "html" in payload["readers"]
+    assert payload["paywalls"]
+    assert payload["timings"]["research_elapsed_seconds"] == 12.5
+    assert payload["strategies"]["rounds"] == 2
+    assert payload["recommendations"]
+    keys = {c["component_key"] for c in payload["component_observations"]}
+    assert "reader:html" in keys
+    assert "reader:ocr" in keys
+    assert "retrieval:hybrid" in keys
+    assert "synthesizer:v1" in keys
+
+
+def test_apply_persists_payload_and_component_observations():
+    repo, svc = _svc()
+    detail = _job_detail()
+    detail["job"].result = {
+        **detail["job"].result,
+        "pipeline": {"rounds": 1, "verified": 2, "findings": 1},
+        "readers": ["html"],
+        "blocked": [{"url": "x", "reason": "paywall"}],
+        "recommendations": [{"title": "prefer OA"}],
+        "usage": {"research_elapsed_seconds": 3.0},
+    }
+    event = svc.observe_job(detail)["event"]
+    meta = repo.get_event(event["id"]).metadata["payload"]
+    assert meta["readers"] == ["html"]
+    assert meta["component_observations"]
+
+    applied = svc.apply(event["id"])
+    exp = repo.get_experience(applied["event"]["ref_id"])
+    assert exp.payload.get("readers") == ["html"]
+    assert exp.bias_enabled is False
+    comps = svc.list_component_observations()
+    assert any(c["component_key"] == "reader:html" for c in comps)
+
+
+def test_advice_for_is_non_mutating():
+    repo, svc = _svc()
+    svc.remember_experience(
+        problem="deadlock on migrate",
+        solution="add lock_timeout",
+        lessons="run migrations serially",
+    )
+    advice = svc.advice_for("deadlock")
+    assert advice["mutating"] is False
+    assert advice["count"] == 1
+    assert "lock_timeout" in advice["advice"] or "serially" in advice["advice"]
+    # No soft bias terms until explicitly enabled.
+    assert svc.soft_bias_terms() == []
+
+
+def test_soft_bias_requires_apply_then_enable():
+    repo, svc = _svc()
+    out = svc.observe_job(_job_detail())
+    assert out["applied"] is False
+    assert svc.soft_bias_terms() == []
+
+    applied = svc.apply(out["event"]["id"])
+    exp_id = applied["event"]["ref_id"]
+    assert svc.soft_bias_terms() == []  # apply alone is not enough
+
+    enabled = svc.enable_bias(exp_id, enabled=True)
+    assert enabled["bias_enabled"] is True
+    terms = svc.soft_bias_terms()
+    assert terms  # now present
+
+    # Soft bias only boosts; never drops hits.
+    hits = [
+        RankedHit("c1", "d1", 0, "unrelated text about cats", rrf_score=0.1, score=0.1),
+        RankedHit(
+            "c2", "d2", 0, "Find the fastest sort for small arrays",
+            rrf_score=0.1, score=0.1,
+        ),
+    ]
+    ranked = heuristic_rerank(hits, "sort", soft_bias_terms=terms, soft_bias_boost=SOFT_BIAS_BOOST)
+    assert len(ranked) == 2
+    assert ranked[0].chunk_id == "c2"
+
+
+def test_knowledge_retrieve_loads_soft_bias_from_learning():
+    """Production path: KnowledgeService.retrieve pulls bias terms from learning."""
+    from atlas.knowledge.access import RankedContext, RankedHit, TIER_KNOWLEDGE
+    from atlas.knowledge.service import KnowledgeService
+
+    class _EmptyEmb:
+        def search(self, *a, **k):
+            return []
+
+    class _EmptyChunks:
+        def search_lexical(self, *a, **k):
+            return []
+
+    class _FakeLLM:
+        def embed(self, texts, model=None):
+            class R:
+                vectors = [[0.0] * 3 for _ in texts]
+            return R()
+
+    repo, learning = _svc(auto_apply=True)
+    evt = learning.observe_job(_job_detail())["event"]
+    learning.enable_bias(evt["ref_id"], enabled=True)
+    assert learning.soft_bias_terms()
+
+    ks = KnowledgeService(
+        documents=None,  # unused
+        chunks=_EmptyChunks(),
+        embeddings=_EmptyEmb(),
+        llm=_FakeLLM(),
+        embedding_model="fake",
+        learning=learning,
+    )
+    # Inject empty dense path by monkeypatching retrieve internals via mode lexical
+    # with no rows → empty hits, but soft_bias_term_count should still be recorded.
+    ranked = ks.retrieve("sort", role="chat", mode="lexical", k=3)
+    assert isinstance(ranked, RankedContext)
+    assert ranked.meta.get("soft_bias_term_count", 0) > 0
+
+
+def test_enable_bias_rejects_inactive():
+    repo, svc = _svc(auto_apply=True)
+    evt = svc.observe_job(_job_detail())["event"]
+    exp_id = evt["ref_id"]
+    svc.revert(evt["id"])
+    try:
+        svc.enable_bias(exp_id)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_observe_still_proposes_only_with_rich_payload():
+    """Hard boundary: rich extraction must not flip auto-apply on."""
+    repo, svc = _svc()  # auto_apply=False
+    detail = _job_detail()
+    detail["job"].result["pipeline"] = {"rounds": 1, "findings": 1}
+    detail["job"].result["readers"] = ["html"]
+    out = svc.observe_job(detail)
+    assert out["applied"] is False
+    assert repo.count_experiences() == 0
+    assert "readers" in repo.get_event(out["event"]["id"]).metadata["payload"]
+

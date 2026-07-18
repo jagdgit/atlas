@@ -1,0 +1,127 @@
+{
+  "name": "atlas_benchmark_set",
+  "description": "Fixed research problems for milestone regression (A3B.15 / D3B.14).",
+  "version": "1",
+  "problems": [
+    {
+      "id": "BM-001",
+      "topic": "PV soiling loss rates in arid climates",
+      "objective": "Estimate typical daily and annual soiling loss ranges for arid sites and cite primary sources.",
+      "domains": ["research", "external"],
+      "tags": ["soiling", "pv"],
+      "acceptance_notes": "Findings include numeric ranges with units; contradictions surfaced; provenance to papers."
+    },
+    {
+      "id": "BM-002",
+      "topic": "Optimal PV cleaning frequency vs cost",
+      "objective": "Summarize evidence for cleaning schedule economics under different soiling rates.",
+      "domains": ["research", "external"],
+      "tags": ["cleaning", "ops"],
+      "acceptance_notes": "At least two independent sources; cost drivers listed; open questions marked as hypotheses."
+    },
+    {
+      "id": "BM-003",
+      "topic": "Dust deposition models for PV modules",
+      "objective": "Compare leading dust deposition / soiling accumulation models and their assumptions.",
+      "domains": ["research"],
+      "tags": ["models", "dust"],
+      "acceptance_notes": "Model names + key variables; gaps noted when variables missing."
+    },
+    {
+      "id": "BM-004",
+      "topic": "Rainfall natural cleaning effectiveness",
+      "objective": "Evidence on how rainfall events restore PV performance after soiling.",
+      "domains": ["research", "external"],
+      "tags": ["rainfall", "cleaning"],
+      "acceptance_notes": "Climate dependence acknowledged; stale software/API knowledge not required."
+    },
+    {
+      "id": "BM-005",
+      "topic": "Spectral vs broadband irradiance soiling effects",
+      "objective": "Clarify whether soiling impacts are spectral-selective and when it matters.",
+      "domains": ["research"],
+      "tags": ["spectral", "soiling"],
+      "acceptance_notes": "Contested claims split; confidence separate from evidence quality."
+    },
+    {
+      "id": "BM-006",
+      "topic": "Anti-soiling coatings durability",
+      "objective": "Durability and performance claims for anti-soiling coatings on glass.",
+      "domains": ["research", "external"],
+      "tags": ["coatings"],
+      "acceptance_notes": "Field vs lab evidence distinguished by evidence level."
+    },
+    {
+      "id": "BM-007",
+      "topic": "Tracker vs fixed-tilt soiling differentials",
+      "objective": "Does tracking change soiling loss relative to fixed tilt?",
+      "domains": ["research"],
+      "tags": ["trackers"],
+      "acceptance_notes": "If evidence thin, emit typed hypothesis not finding."
+    },
+    {
+      "id": "BM-008",
+      "topic": "Desert dust composition and adhesion",
+      "objective": "What dust properties drive adhesion and hard-to-remove layers?",
+      "domains": ["research"],
+      "tags": ["dust", "adhesion"],
+      "acceptance_notes": "Material properties linked to cleaning difficulty."
+    },
+    {
+      "id": "BM-009",
+      "topic": "Soiling monitoring sensors and uncertainty",
+      "objective": "Compare soiling sensor approaches and measurement uncertainty.",
+      "domains": ["research", "external"],
+      "tags": ["sensors"],
+      "acceptance_notes": "Uncertainty ranges cited; manufacturer claims graded L2."
+    },
+    {
+      "id": "BM-010",
+      "topic": "Inverter temperature derating curves",
+      "objective": "Typical inverter efficiency derating vs ambient temperature.",
+      "domains": ["research", "external"],
+      "tags": ["inverter", "thermal"],
+      "acceptance_notes": "Numeric derating with units; datasheet vs field distinguished."
+    },
+    {
+      "id": "BM-011",
+      "topic": "Bifacial PV rear-side soiling",
+      "objective": "Evidence for rear-side soiling contribution on bifacial modules.",
+      "domains": ["research"],
+      "tags": ["bifacial"],
+      "acceptance_notes": "If sparse, gap card + hypothesis; do not invent consensus."
+    },
+    {
+      "id": "BM-012",
+      "topic": "Snow shedding vs soiling on PV",
+      "objective": "Separate snow loss mechanisms from dust soiling; when each dominates.",
+      "domains": ["research"],
+      "tags": ["snow"],
+      "acceptance_notes": "Climate regimes labeled; no false merge of snow and dust claims."
+    },
+    {
+      "id": "BM-013",
+      "topic": "IEC / standards relevant to PV soiling",
+      "objective": "List effective standards and measurement methods for soiling.",
+      "domains": ["research", "external"],
+      "tags": ["standards"],
+      "acceptance_notes": "Freshness uses effective-date awareness; standards not auto-staled by age alone."
+    },
+    {
+      "id": "BM-014",
+      "topic": "Machine learning soiling forecasts",
+      "objective": "Survey ML approaches for soiling rate forecasting and reported errors.",
+      "domains": ["research"],
+      "tags": ["ml", "forecast"],
+      "acceptance_notes": "RMSE/MAE with units; train/test leakage risks noted if claimed."
+    },
+    {
+      "id": "BM-015",
+      "topic": "Waterless cleaning methods for utility PV",
+      "objective": "Evidence on robotic / dry cleaning effectiveness and OPEX.",
+      "domains": ["research", "external"],
+      "tags": ["cleaning", "robotics"],
+      "acceptance_notes": "Vendor L2 vs field L5 separated; contradictions surfaced."
+    }
+  ]
+}

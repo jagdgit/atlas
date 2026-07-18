@@ -1,0 +1,34 @@
+{
+  "name": "retrieval_relevant",
+  "description": "Labeled relevant-chunk cases with hermetic ranked_ids (dense-style baseline).",
+  "cases": [
+    {
+      "id": "rel-001",
+      "query": "PV soiling loss rate arid climate",
+      "k": 3,
+      "relevant_ids": ["chunk-soil-01", "chunk-soil-02"],
+      "ranked_ids": ["chunk-soil-01", "chunk-unrelated-09", "chunk-soil-02", "chunk-soil-03"]
+    },
+    {
+      "id": "rel-002",
+      "query": "cleaning schedule optimization solar panels",
+      "k": 5,
+      "relevant_ids": ["chunk-clean-01", "chunk-clean-02", "chunk-clean-03"],
+      "ranked_ids": ["chunk-clean-01", "chunk-clean-02", "chunk-other-01", "chunk-clean-03", "chunk-other-02"]
+    },
+    {
+      "id": "rel-003",
+      "query": "dust deposition models for photovoltaic modules",
+      "k": 2,
+      "relevant_ids": ["chunk-dust-01"],
+      "ranked_ids": ["chunk-other-10", "chunk-dust-01"]
+    },
+    {
+      "id": "rel-004",
+      "query": "inverter efficiency temperature derating",
+      "k": 4,
+      "relevant_ids": ["chunk-inv-01", "chunk-inv-02"],
+      "ranked_ids": ["chunk-inv-01", "chunk-inv-02", "chunk-inv-03", "chunk-other-20"]
+    }
+  ]
+}

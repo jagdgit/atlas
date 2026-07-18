@@ -1,0 +1,91 @@
+{
+  "name": "synthesis_duplicates",
+  "description": "Near-duplicate quantitative and prose claims that should merge conservatively.",
+  "cases": [
+    {
+      "id": "dup-001",
+      "expected_group_count": 1,
+      "gold_clusters": [["p1", "p2", "p3"]],
+      "gold_contradict_sources": [],
+      "claims": [
+        {
+          "id": "a",
+          "statement": "RMSE 1.2%",
+          "value": {"number": 1.2, "unit": "%", "kind": "rmse"},
+          "evidence": [
+            {"source_id": "p1", "evidence_level": 4, "extracted_value": 1.2, "unit": "%", "snippet": "RMSE 1.2%", "stance": "support"}
+          ]
+        },
+        {
+          "id": "b",
+          "statement": "RMSE 1.25%",
+          "value": {"number": 1.25, "unit": "%", "kind": "rmse"},
+          "evidence": [
+            {"source_id": "p2", "evidence_level": 4, "extracted_value": 1.25, "unit": "%", "snippet": "RMSE 1.25%", "stance": "support"}
+          ]
+        },
+        {
+          "id": "c",
+          "statement": "RMSE 1.18%",
+          "value": {"number": 1.18, "unit": "%", "kind": "rmse"},
+          "evidence": [
+            {"source_id": "p3", "evidence_level": 3, "extracted_value": 1.18, "unit": "%", "snippet": "RMSE 1.18%", "stance": "support"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dup-002",
+      "expected_group_count": 2,
+      "gold_clusters": [["p1", "p2"], ["p3"]],
+      "gold_contradict_sources": [],
+      "claims": [
+        {
+          "id": "a",
+          "statement": "Data-driven cleaning schedules reduce operational cost significantly.",
+          "evidence": [
+            {"source_id": "p1", "evidence_level": 2, "snippet": "Data-driven cleaning schedules reduce operational cost significantly.", "stance": "support"}
+          ]
+        },
+        {
+          "id": "b",
+          "statement": "Data-driven cleaning schedules significantly reduce operational costs.",
+          "evidence": [
+            {"source_id": "p2", "evidence_level": 2, "snippet": "Data-driven cleaning schedules significantly reduce operational costs.", "stance": "support"}
+          ]
+        },
+        {
+          "id": "c",
+          "statement": "Solar irradiance varies with latitude and season.",
+          "evidence": [
+            {"source_id": "p3", "evidence_level": 2, "snippet": "Solar irradiance varies with latitude and season.", "stance": "support"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dup-003",
+      "expected_group_count": 2,
+      "gold_clusters": [["p1"], ["p2"]],
+      "gold_contradict_sources": [],
+      "claims": [
+        {
+          "id": "a",
+          "statement": "RMSE 2%",
+          "value": {"number": 2.0, "unit": "%", "kind": "rmse"},
+          "evidence": [
+            {"source_id": "p1", "evidence_level": 4, "extracted_value": 2.0, "unit": "%", "snippet": "RMSE 2%", "stance": "support"}
+          ]
+        },
+        {
+          "id": "b",
+          "statement": "efficiency 2%",
+          "value": {"number": 2.0, "unit": "%", "kind": "efficiency"},
+          "evidence": [
+            {"source_id": "p2", "evidence_level": 4, "extracted_value": 2.0, "unit": "%", "snippet": "efficiency 2%", "stance": "support"}
+          ]
+        }
+      ]
+    }
+  ]
+}
