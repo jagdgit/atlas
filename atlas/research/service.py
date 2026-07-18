@@ -397,10 +397,12 @@ class ResearchService:
                 self._verification.verify_claim(claim)
 
             status = analyze_gaps(graph, eb)
+            # Report raw→distinct so the deduplicated total is never mistaken for a
+            # per-document extraction count (grouping only ever merges, never drops).
             self._record(
                 activity, "verify",
-                f"Round {round_i}: {len(grouped)} claim(s) from {len(documents)} "
-                f"doc(s); gaps: "
+                f"Round {round_i}: {len(raw)} raw → {len(grouped)} distinct claim(s) "
+                f"from {len(documents)} doc(s); gaps: "
                 + (", ".join(g.kind for g in status.gaps) or "none"),
             )
             if rounds_log:
@@ -1378,6 +1380,23 @@ class ResearchService:
                         pass
                 except Exception:  # noqa: BLE001
                     pass
+            # Surface accumulated operational source-reliability advice (§3B loop),
+            # even when no lexical experience matched the objective. Advice-only.
+            operational = advice.get("operational") if isinstance(advice, dict) else None
+            if activity is not None and isinstance(operational, dict):
+                n_pref = len(operational.get("prefer") or [])
+                n_avoid = len(operational.get("avoid") or [])
+                if n_pref or n_avoid:
+                    try:
+                        activity(
+                            "source_advice",
+                            f"Source-reliability advice: prefer {n_pref} domain(s), "
+                            f"deprioritize {n_avoid} (non-mutating).",
+                            prefer=n_pref,
+                            avoid=n_avoid,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
             return advice
         except Exception as exc:  # noqa: BLE001
             self._logger.warning("experience advice recall failed: %s", exc)

@@ -69,6 +69,67 @@ def test_extract_html_strips_tags(tmp_path):
     assert "<" not in text
 
 
+# --- main-content extraction (publisher landing pages) -------------------
+_PUBLISHER_HTML = """
+<html><head><title>Soiling paper</title></head>
+<body>
+<header><nav><ul>
+<li><a href="/">Home</a></li><li><a href="/browse">Browse Journals Here</a></li>
+<li><a href="/subscribe">Subscribe Now Today</a></li><li><a href="/login">Sign In</a></li>
+</ul></nav></header>
+<div id="cookie-banner">We use cookies. Accept all cookies to continue browsing.</div>
+<main><article>
+<h1>Soiling losses in photovoltaic systems</h1>
+<p>We measured soiling losses across twelve field sites over three years of
+operation and analysis. The results show that daily soiling loss averaged
+0.35% per day during the extended dry season across all monitored arrays.</p>
+<p>Support Vector Regression outperformed Ridge Regression by roughly 0.4% in
+mean absolute error. Data-driven cleaning schedules reduced operational cost
+significantly compared with fixed calendar-based cleaning schedules.</p>
+</article></main>
+<footer><nav><a href="/privacy">Privacy Policy Page</a>
+<a href="/terms">Terms of Use Page</a></nav></footer>
+</body></html>
+"""
+
+
+def test_html_to_main_text_keeps_article_drops_boilerplate():
+    from atlas.ingestion.extractors import html_to_main_text
+
+    text = html_to_main_text(_PUBLISHER_HTML)
+    assert text
+    assert "0.35%" in text  # article body kept
+    assert "Browse Journals Here" not in text  # nav chrome removed
+    assert "Subscribe Now Today" not in text
+    assert "Privacy Policy Page" not in text  # footer removed
+
+
+def test_heuristic_main_text_selects_dense_container():
+    from atlas.ingestion.extractors import _heuristic_main_text
+
+    text = _heuristic_main_text(_PUBLISHER_HTML)
+    assert text and "0.35%" in text
+    assert "Browse Journals Here" not in text
+
+
+def test_html_to_main_text_falls_back_for_tiny_page():
+    from atlas.ingestion.extractors import html_to_main_text
+
+    text = html_to_main_text(
+        "<html><body><h1>Title</h1><p>Hello world</p></body></html>"
+    )
+    assert text and "Hello world" in text
+
+
+def test_looks_paywalled_detects_login_gate():
+    from atlas.ingestion.extractors import looks_paywalled
+
+    assert looks_paywalled("Please sign in to continue reading this article.")
+    assert looks_paywalled("Purchase this article to unlock the full text.")
+    assert looks_paywalled("Access through your institution to read more.")
+    assert not looks_paywalled("We measured soiling losses across twelve sites.")
+
+
 def test_extract_pdf_text_layer(tmp_path):
     pdf = tmp_path / "doc.pdf"
     pdf.write_bytes(_make_pdf("Hello Atlas PDF"))

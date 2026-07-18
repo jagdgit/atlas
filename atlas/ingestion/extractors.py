@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
+from typing import Any
 
 CONTENT_TYPES = {
     ".txt": "text/plain",
@@ -142,8 +144,122 @@ def html_to_text(html: str) -> str | None:
     return cleaned or None
 
 
+# Structural boilerplate tags that never carry article body text.
+_BOILERPLATE_TAGS = (
+    "script", "style", "noscript", "nav", "header", "footer", "aside",
+    "form", "button", "iframe", "svg", "figure", "figcaption",
+)
+# id/class/role substrings that mark non-article regions across publishers.
+_BOILERPLATE_HINTS = (
+    "nav", "menu", "sidebar", "footer", "header", "banner", "cookie",
+    "consent", "subscribe", "advert", "promo", "breadcrumb", "related",
+    "recommend", "social", "share", "masthead", "toolbar", "skip", "search",
+    "newsletter", "paywall", "modal", "popup", "notice",
+)
+# Below this the main-content heuristic is considered too thin to trust; the
+# caller falls back to the naive whole-page strip (small/simple pages still work).
+_MIN_MAIN_CHARS = 200
+
+
+def _trafilatura_main_text(html: str) -> str | None:
+    """Best-effort article extraction via trafilatura (optional dependency)."""
+    try:
+        import trafilatura
+    except Exception:  # noqa: BLE001 - optional; degrade to the heuristic
+        return None
+    try:
+        text = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=True,
+            favor_recall=True,
+            no_fallback=False,
+        )
+    except Exception:  # noqa: BLE001 - never let extraction crash the reader
+        return None
+    text = (text or "").strip()
+    return text or None
+
+
+def _heuristic_main_text(html: str) -> str | None:
+    """Deterministic main-content extraction: drop chrome, keep the densest body.
+
+    Removes boilerplate tags and any element whose id/class/role marks it as
+    navigation/promo/cookie chrome, then selects the container with the most
+    paragraph text (preferring semantic ``<article>``/``<main>``/``[role=main]``).
+    Returns ``None`` when nothing text-rich is found so the caller can fall back.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(list(_BOILERPLATE_TAGS)):
+        tag.decompose()
+    for el in list(soup.find_all(True)):
+        cls = el.get("class")
+        cls_str = " ".join(cls) if isinstance(cls, list) else (cls or "")
+        attrs = f"{cls_str} {el.get('id') or ''} {el.get('role') or ''}".lower()
+        if attrs.strip() and any(h in attrs for h in _BOILERPLATE_HINTS):
+            el.decompose()
+
+    def _para_score(node: Any) -> int:
+        return sum(len(p.get_text(strip=True)) for p in node.find_all("p"))
+
+    best = None
+    best_score = 0
+    # Prefer semantic containers, then fall back to the densest div/section.
+    semantic = soup.find_all(["article", "main"]) + soup.find_all(attrs={"role": "main"})
+    for node in semantic:
+        score = _para_score(node)
+        if score > best_score:
+            best, best_score = node, score
+    if best is None or best_score < _MIN_MAIN_CHARS:
+        for node in soup.find_all(["div", "section"]):
+            score = _para_score(node)
+            if score > best_score:
+                best, best_score = node, score
+    if best is None or best_score < _MIN_MAIN_CHARS:
+        return None
+    text = best.get_text(separator="\n")
+    lines = [line.strip() for line in text.splitlines()]
+    cleaned = "\n".join(line for line in lines if line).strip()
+    return cleaned or None
+
+
+def html_to_main_text(html: str) -> str | None:
+    """Extract the main article text from HTML, dropping nav/boilerplate.
+
+    Publisher landing pages (IEEE/Springer/ScienceDirect) otherwise flatten into a
+    boilerplate blob with no recognizable article body → zero claims. This tries
+    trafilatura (best publisher coverage), then a deterministic boilerplate-stripping
+    heuristic, and finally the naive :func:`html_to_text` so simple pages still work.
+    """
+    if not html or not html.strip():
+        return None
+    return (
+        _trafilatura_main_text(html)
+        or _heuristic_main_text(html)
+        or html_to_text(html)
+    )
+
+
+# Markers that a page is a paywall / login gate rather than an article body.
+_PAYWALL_RE = re.compile(
+    r"\b(?:subscribe to (?:continue|view|read)|sign in to (?:continue|view|read|access)|"
+    r"log in to (?:view|read|access|continue)|purchase (?:this )?(?:article|pdf|access)|"
+    r"buy (?:this )?article|get access|access through your institution|"
+    r"institutional (?:login|access|sign)|check (?:if you have )?access|"
+    r"already (?:a subscriber|have an account)|create an account to)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_paywalled(text: str) -> bool:
+    """Heuristic: does this normalized text read like a paywall/login gate?"""
+    return bool(text) and _PAYWALL_RE.search(text) is not None
+
+
 def _extract_html(path: Path) -> str | None:
-    return html_to_text(path.read_text(encoding="utf-8", errors="replace"))
+    return html_to_main_text(path.read_text(encoding="utf-8", errors="replace"))
 
 
 EXTRACTORS = {

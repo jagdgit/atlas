@@ -109,5 +109,36 @@ def test_representative_prefers_stronger_evidence():
     assert grouped[0].id == "strong"  # highest evidence level wins the representative
 
 
+def test_representative_prefers_specific_numeric_over_longer_vague():
+    from atlas.research.grouping import _rep
+
+    vague = _claim(
+        "long_vague",
+        "the model reduced error substantially in every evaluated scenario overall",
+        source="p1",
+    )
+    numeric = _claim("short_numeric", "the model reduced error by 0.4%", source="p2")
+    # Same evidence level; the quantified statement must win despite being shorter,
+    # so merging near-duplicate prose never discards the number (§3B refinement).
+    assert _rep([vague, numeric]).id == "short_numeric"
+
+
+def test_grouping_is_monotonic_adding_claims_never_reduces_count():
+    # Property: group_claims only ever merges — adding claims (a later round)
+    # cannot reduce the distinct total. Guards the reported "15 → 14" confusion.
+    subset = [
+        _claim("a", "RMSE 1.2%", number=1.2, unit="%", kind="rmse", source="p1"),
+        _claim("b", "efficiency improved on unseen sites", source="p2"),
+    ]
+    extra = [
+        _claim("c", "soiling loss 0.3%/day", number=0.3, unit="%/day",
+               kind="soiling_loss", source="p3"),
+        _claim("d", "a different qualitative finding about latitude effects", source="p4"),
+    ]
+    n_subset = len(group_claims(subset))
+    n_superset = len(group_claims(subset + extra))
+    assert n_superset >= n_subset
+
+
 def test_empty_input():
     assert group_claims([]) == []

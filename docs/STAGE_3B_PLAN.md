@@ -7,7 +7,10 @@
 > Architecture is frozen.
 > **Hardening pass (2026-07-18)** applied post-BM-001 live eval — quality/correctness + UI status
 > fixes (§16), then a wave-2 fix for the Acquire→Read→Extract batch-discard regression, exec-summary
-> honesty, and a per-source Pipeline Trace (§16.7).
+> honesty, and a per-source Pipeline Trace (§16.7); wave-3 closes the first feedback-loop half with
+> **advice-only operational source-reliability learning** (`source:{domain}`) (§16.8); wave-4 hardens
+> **document ingestion** (main-content HTML extraction, paywall detection) + grouping/cap fidelity
+> so peer-reviewed sources yield claims (§16.9).
 >
 > **Purpose:** Define Atlas’s reusable **knowledge operating system** *before* Stage 4
 > (Engineering Intelligence), so Atlas finishes becoming a researcher whose knowledge is
@@ -815,6 +818,77 @@ events. Not architectural — an **implementation regression** in the Acquire→
   `test_concurrency_32b.py::test_map_parallel_isolates_worker_failures`;
   `test_reports.py` honesty + trace-render cases; `test_research_deep.py` per-source-trace build +
   end-to-end. Full suite: **992 passed.**
+
+### 16.8 Closing the loop — operational source-reliability advice (2026-07-18, wave 3)
+
+The per-source Pipeline Trace (§16.7) made per-source outcomes *observable*; this closes the first
+half of the feedback loop **Research → Knowledge → Experience → Recommendations → (human approval)
+→ improved future research** by turning those outcomes into **accumulated, advice-only** retrieval
+guidance. Still no autonomous behavior change — Atlas *recommends*, a human (or the informed planner)
+*decides* (D3B: “experience produces recommendations first, never silent behavior”).
+
+- **New component family `source:{domain}` (`atlas/learning/components.py`).** `domain_from_url()`
+  normalizes hosts (`https://www.ieeexplore.ieee.org/x` → `ieeexplore.ieee.org`, bare hosts accepted);
+  `source_component_key()` maps a URL/domain to `source:{domain}`.
+- **Capture (governed).** `LearningService._experience_from_job` now folds the pipeline trace into
+  per-domain acquisition outcomes (`_source_outcomes_from_trace`): `{ok, no_claims, read_failed,
+  blocked, not_acquired, total, claims}`. These land in the experience payload (`source_outcomes`)
+  **and** as `source:{domain}` component observations. Because observations persist only on
+  **apply** (auto-apply stays off), the store only accumulates evidence a human has approved — the
+  approval gate, unchanged.
+- **Recommend.** `LearningService.source_advice()` aggregates all `source:{domain}` observations and
+  ranks **prefer** (produced claims in ≥50% of ≥2 attempts) vs **deprioritize** (blocked/unreadable
+  in ≥50% of ≥2 attempts), each with a reason and counts (e.g. *“Prefer arxiv.org — produced claims
+  in 2/2 attempt(s)”*, *“Deprioritize ieeexplore.ieee.org — blocked/unreadable in 2/2 attempt(s);
+  seek an open-access alternative”*). Purely non-mutating.
+- **Surface.** Folded into `advice_for()` (new `operational` field + a “Source reliability” block in
+  the advice text) so it flows into `ResearchService._recall_advice` → `experience_advice.json`, the
+  planner’s advice context, and a new `source_advice` activity-feed line. Also exposed directly via
+  `GET /v1/learning/sources` and `atlas learn sources`.
+- **Not yet (deferred, intentional).** Atlas does not *reorder* acquisition automatically from this
+  advice — that adaptive step remains behind the human-approval gate, matching the Stage 3B stance.
+- **Tests.** `test_learning.py`: domain normalization, trace aggregation, payload capture,
+  prefer/deprioritize ranking, `min_attempts` guard, **apply-gated** accumulation, and `advice_for`
+  fold-in; `test_api.py::test_learning_sources_endpoint_is_advice_only`.
+
+### 16.9 Document ingestion + grouping fidelity (2026-07-18, wave 4)
+
+A third live run (85.2 KB read across 4 docs; ar5iv→15 & RdTools→4 claims; IEEE/Springer/review
+papers → **0 claims**) localized the remaining bottleneck to **document ingestion, not reasoning**:
+the HTML reader flattened publisher pages into a nav/boilerplate blob (or empty text) with no article
+body, so peer-reviewed sources yielded nothing. This wave hardens ingestion and tightens a couple of
+grouping/cap refinements the operator flagged (the "15 → 14" worry).
+
+- **Main-content HTML extraction (biggest lever).** `atlas/ingestion/extractors.py` gains
+  `html_to_main_text()`: try **trafilatura** (new dependency; best publisher coverage) → a
+  deterministic **boilerplate-stripping heuristic** (`_heuristic_main_text`: drop
+  `script/style/nav/header/footer/aside/form/…` and any element whose id/class/role matches
+  chrome hints like `menu/cookie/subscribe/sidebar/share`, then select the container with the most
+  *paragraph* text, preferring semantic `<article>`/`<main>`/`[role=main]`) → naive `html_to_text`
+  fallback so simple pages still work. The `.html/.htm` extractor and the content-type HTML reader
+  path now use it, so ar5iv-style full-text pages keep their body while nav/footers are dropped.
+- **Paywall / landing-page classification.** `looks_paywalled()` detects subscribe/login/purchase
+  gates; `Reader.read_path` flags HTML gates with `metadata["paywall_suspected"]`, a warning, and
+  `failure_code="paywall"` (**text is kept** so an available abstract can still be mined). This gives
+  the Pipeline Trace a precise reason ("paywall") instead of a vague "no claim patterns matched".
+- **Per-doc claim cap raised + adaptive.** `ClaimExtractor` default `max_claims_per_doc` **15 → 30**,
+  with `_doc_cap()` giving peer-reviewed sources 1.5× headroom (they carry the most findings). ar5iv
+  was being truncated at exactly 15; this stops mid-paper cut-off.
+- **Grouping keeps the *specific* claim.** `_rep()` now ranks by (evidence level → **carries a
+  number** → length), so merging near-duplicate prose never discards the quantified version
+  ("SVR beat Ridge by 0.4%" wins over a longer vague paraphrase).
+- **Round logging clarity.** The per-round line now reads `N raw → M distinct claim(s)` so the
+  deduplicated total is never mistaken for a per-document extraction count. A property test
+  (`test_grouping_is_monotonic_adding_claims_never_reduces_count`) proves grouping only ever
+  merges — the "15 → 14" was a raw-vs-distinct log mismatch, **not** lost evidence.
+- **Deferred (documented next step).** DOI→open-access resolution (Unpaywall/PMC) and routing
+  paywalled publishers to OA mirrors — pairs naturally with §16.8 source-reliability advice; skipped
+  here because it needs network/credentials and can't be tested hermetically.
+- **Tests.** `test_ingestion.py` (main-content keeps article/drops nav+footer+cookie, heuristic
+  container selection, tiny-page fallback, paywall detection); `test_reader.py`
+  (`test_read_path_html_flags_paywall_landing`); `test_grouping.py` (specific-representative +
+  monotonic property); `test_extract.py` (raised default cap + peer-reviewed headroom). Full suite:
+  **1009 passed.**
 
 ---
 

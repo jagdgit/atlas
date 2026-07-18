@@ -250,9 +250,9 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         choices=[
             "events", "show", "apply", "revert", "experiences", "recall",
-            "advice", "components", "bias",
+            "advice", "sources", "components", "bias",
         ],
-        help="events|show|apply|revert|experiences|recall|advice|components|bias",
+        help="events|show|apply|revert|experiences|recall|advice|sources|components|bias",
     )
     p_learn.add_argument("target", nargs="?", help="event/experience id, or a recall query")
     p_learn.add_argument("--status", help="filter events by status")
@@ -1057,6 +1057,18 @@ def cmd_learn(args: argparse.Namespace, app: "Application | None" = None) -> int
         data = learning.advice_for(query, limit=args.limit)
         print(f"advice ({data['count']} hit(s), mutating={data['mutating']}):")
         print(data.get("advice") or "(none)")
+        return 0
+
+    if action == "sources":
+        data = learning.source_advice(limit=args.limit)
+        print(
+            f"source reliability advice ({data['count']} domain(s), "
+            f"mutating={data['mutating']}):"
+        )
+        print(
+            data.get("advice")
+            or "(none yet — apply some research experiences first)"
+        )
         return 0
 
     if action == "components":

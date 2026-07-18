@@ -1075,6 +1075,14 @@ def test_learning_requires_auth():
     assert _client().get("/v1/learning/events").status_code == 401
 
 
+def test_learning_sources_endpoint_is_advice_only():
+    resp = _client().get("/v1/learning/sources", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mutating"] is False
+    assert "prefer" in body and "avoid" in body
+
+
 def test_intelligence_learn_and_recommend_flow():
     c = _client()
     learn = c.post(

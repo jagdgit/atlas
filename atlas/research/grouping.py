@@ -65,12 +65,23 @@ def _agrees(value: float, anchor: float, tolerance: float) -> bool:
     return abs(value - anchor) <= window
 
 
+_DIGIT_RE = re.compile(r"\d")
+
+
 def _rep(members: list[Claim]) -> Claim:
-    """Representative claim of a group: strongest evidence, then longest statement."""
+    """Representative claim of a group: strongest evidence, then *most specific*.
+
+    Specificity favours a statement that actually carries a number (e.g.
+    "SVR beat Ridge by 0.4%") over a longer but vaguer paraphrase — so merging
+    near-duplicate prose never discards the quantified version (§3B refinement).
+    """
     def _peak(c: Claim) -> int:
         return max((e.evidence_level for e in c.evidence), default=0)
 
-    return max(members, key=lambda c: (_peak(c), len(c.statement)))
+    def _has_digits(c: Claim) -> int:
+        return 1 if (c.value is not None or _DIGIT_RE.search(c.statement)) else 0
+
+    return max(members, key=lambda c: (_peak(c), _has_digits(c), len(c.statement)))
 
 
 def _merge_evidence(

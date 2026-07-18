@@ -699,7 +699,15 @@ serialization fix, conflicts-vs-weak-evidence split, and a UI fix for job status
 "planning" (resilient polling). A **wave 2** then fixed the Acquire→Read→Extract batch-discard
 regression (one source raising discarded the whole acquisition batch — funnel 0 despite a doc read),
 made the executive summary honest when 0 findings are extracted, and added a **per-source Pipeline
-Trace**. **Full write-up: `docs/STAGE_3B_PLAN.md` §16 (§16.7 for wave 2).**
+Trace**. A **wave 3** then closed the first half of the feedback loop with **advice-only operational
+source-reliability learning** — per-domain acquisition outcomes accumulate (apply-gated) into
+`source:{domain}` experience and surface as prefer/deprioritize retrieval advice (`atlas learn
+sources`, `GET /v1/learning/sources`), never auto-applied. A **wave 4** then hardened **document
+ingestion** — main-content HTML extraction (trafilatura + boilerplate-stripping heuristic) so
+publisher/peer-reviewed pages yield article text instead of a nav blob, paywall/landing detection,
+a raised+adaptive per-doc claim cap, and grouping that keeps the quantified representative — fixing
+the "IEEE/Springer → 0 claims" bottleneck. **Full write-up: `docs/STAGE_3B_PLAN.md` §16 (§16.7 wave
+2, §16.8 wave 3, §16.9 wave 4).**
 
 ---
 

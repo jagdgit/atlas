@@ -100,3 +100,18 @@ def test_read_path_html_content_type_without_suffix(tmp_path):
     doc = Reader().read_path(p, source_id="s1", content_type="text/html; charset=utf-8")
     assert doc.read_method == READ_HTML
     assert "hello" in doc.text
+
+
+def test_read_path_html_flags_paywall_landing(tmp_path):
+    # A thin publisher gate: some abstract text but a login wall, not an article.
+    p = tmp_path / "gate.html"
+    p.write_text(
+        "<html><body><h1>Soiling losses in PV</h1>"
+        "<p>Abstract: soiling reduces module output.</p>"
+        "<p>Sign in to continue reading this article.</p></body></html>",
+        encoding="utf-8",
+    )
+    doc = Reader().read_path(p, source_id="s1", content_type="text/html")
+    assert doc.metadata.get("paywall_suspected") is True
+    assert doc.failure_code == "paywall"
+    assert doc.has_text  # text is kept so the abstract can still be mined

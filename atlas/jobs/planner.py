@@ -197,8 +197,19 @@ class JobPlanner:
                 **options,
             )
             raw = (resp.text or "").strip()
-        except Exception:  # noqa: BLE001 - LLM failure must fall back, never crash
-            self._logger.exception("planner-role decomposition failed")
+        except Exception as exc:  # noqa: BLE001 - LLM failure must fall back, never crash
+            # A planner-LLM timeout / unavailability is an EXPECTED, recoverable
+            # condition: we degrade to the deterministic planner (and the caller
+            # records the fallback on the job's activity feed). Log it concisely so
+            # operators don't mistake a routine fallback for an unhandled crash;
+            # the full traceback stays available at DEBUG.
+            self._logger.warning(
+                "planner LLM decomposition failed (%s: %s); using deterministic "
+                "fallback plan",
+                type(exc).__name__,
+                exc,
+            )
+            self._logger.debug("planner decomposition traceback", exc_info=True)
             return []
 
         parsed = self._parse(raw)

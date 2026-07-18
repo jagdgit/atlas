@@ -15,7 +15,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from atlas.ingestion.extractors import EXTRACTORS, extract, html_to_text
+from atlas.ingestion.extractors import (
+    EXTRACTORS,
+    extract,
+    html_to_main_text,
+    looks_paywalled,
+)
 from atlas.research.pdf_ocr import (
     CODE_EMPTY_TEXT,
     CODE_OCR_UNAVAILABLE,
@@ -48,6 +53,13 @@ FORMAT_UNKNOWN = "unknown"
 
 # Minimum PDF text-layer chars before we skip OCR (weak / scanned PDFs).
 _MIN_PDF_TEXT_CHARS = 200
+
+# A read that returned some text but reads like a subscribe/login gate rather than
+# an article body (publisher landing pages). Informational: we keep whatever text
+# there is (an abstract may still yield a low-evidence claim) but flag *why* a
+# peer-reviewed source produced little, so the pipeline trace can say "paywall"
+# instead of a vague "no claim patterns matched".
+CODE_PAYWALL = "paywall"
 
 # Canonical section labels we care about for extraction scoping (D3.9 / A5).
 SECTION_ABSTRACT = "abstract"
@@ -214,7 +226,7 @@ def _read_text_from_path(path: Path, content_type: str) -> tuple[str | None, str
         return text, method, reader_id, fmt
     if "html" in ct or "xml" in ct:
         return (
-            html_to_text(path.read_text(encoding="utf-8", errors="replace")),
+            html_to_main_text(path.read_text(encoding="utf-8", errors="replace")),
             READ_HTML,
             READER_HTML,
             FORMAT_HTML,
@@ -304,6 +316,19 @@ class Reader:
             failure_code = CODE_EMPTY_TEXT
             failure_reason = "No extractable text"
             quality = QUALITY_EMPTY
+
+        # Publisher landing/paywall gate: text present but it reads like a login
+        # wall, not an article. Keep the text (abstract may help) but record why.
+        if fmt == FORMAT_HTML and (text or "").strip() and looks_paywalled(text):
+            warnings.append("paywall/login markers detected in page text")
+            meta["paywall_suspected"] = True
+            if not failure_code:
+                failure_code = CODE_PAYWALL
+                failure_reason = (
+                    "paywall/login gate detected — article body may be inaccessible"
+                )
+            if quality == QUALITY_FULL:
+                quality = QUALITY_PARTIAL
 
         return self._build(
             source_id,

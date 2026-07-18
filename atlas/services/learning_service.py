@@ -25,9 +25,12 @@ from typing import TYPE_CHECKING, Any
 from atlas.learning.components import (
     REASONER_V1,
     RETRIEVAL_HYBRID,
+    SOURCE_PREFIX,
     SYNTHESIZER_V1,
     component_observation,
+    domain_from_url,
     reader_component_key,
+    source_component_key,
 )
 from atlas.models.learning import (
     EVENT_APPLIED,
@@ -340,11 +343,98 @@ class LearningService:
             if title or bit:
                 lines.append(f"- {title}: {bit}".rstrip(": "))
         text = "\n".join(lines).strip()
+        # Fold in accumulated *operational* source-reliability advice (§3B loop):
+        # which publishers/domains have been reliably readable vs routinely blocked.
+        # Advice-only — this never reorders acquisition automatically.
+        operational = self.source_advice()
+        combined = text
+        if operational.get("advice"):
+            block = "Source reliability (operational, advice-only):\n" + operational["advice"]
+            combined = f"{text}\n\n{block}".strip() if text else block
         return {
             "query": query,
             "count": len(hits),
-            "advice": text,
+            "advice": combined,
             "experiences": hits,
+            "operational": operational,
+            "mutating": False,
+        }
+
+    def source_advice(self, *, min_attempts: int = 2, limit: int = 20) -> dict[str, Any]:
+        """Ranked prefer/deprioritize advice from accumulated source outcomes (§3B loop).
+
+        Aggregates ``source:{domain}`` component observations (which only exist for
+        *applied* experiences — the human-approval gate) into per-domain acquisition
+        success/failure, then recommends preferring reliably readable domains and
+        deprioritizing routinely blocked/unreadable ones. Purely non-mutating: Atlas
+        surfaces this so a human (or the informed planner) can act on it; it never
+        silently changes acquisition order.
+        """
+        empty = {"count": 0, "prefer": [], "avoid": [], "advice": "", "mutating": False}
+        if not hasattr(self._repo, "list_component_observations"):
+            return empty
+        agg: dict[str, dict[str, int]] = {}
+        try:
+            observations = self._repo.list_component_observations(limit=1000)
+        except Exception:  # noqa: BLE001 - advice must never raise into research
+            self._logger.debug("source_advice observation load failed", exc_info=True)
+            return empty
+        for obs in observations:
+            key = getattr(obs, "component_key", "") or ""
+            if not key.startswith(SOURCE_PREFIX):
+                continue
+            domain = key[len(SOURCE_PREFIX):]
+            if not domain:
+                continue
+            metrics = getattr(obs, "metrics", None) or {}
+            d = agg.setdefault(domain, {})
+            for field in _SOURCE_STATUSES + ("total", "claims"):
+                d[field] = d.get(field, 0) + int(metrics.get(field) or 0)
+        prefer: list[dict[str, Any]] = []
+        avoid: list[dict[str, Any]] = []
+        for domain, d in agg.items():
+            total = int(d.get("total", 0))
+            if total < min_attempts:
+                continue
+            produced = int(d.get("ok", 0))
+            readable = produced + int(d.get("no_claims", 0))
+            failed = (
+                int(d.get("blocked", 0))
+                + int(d.get("read_failed", 0))
+                + int(d.get("not_acquired", 0))
+            )
+            produce_rate = produced / total
+            fail_rate = failed / total
+            entry = {
+                "domain": domain,
+                "attempts": total,
+                "produced_claims": produced,
+                "readable": readable,
+                "failed": failed,
+                "claims": int(d.get("claims", 0)),
+                "produce_rate": round(produce_rate, 3),
+                "fail_rate": round(fail_rate, 3),
+            }
+            if produce_rate >= 0.5:
+                entry["reason"] = f"produced claims in {produced}/{total} attempt(s)"
+                prefer.append(entry)
+            elif fail_rate >= 0.5:
+                entry["reason"] = f"blocked/unreadable in {failed}/{total} attempt(s)"
+                avoid.append(entry)
+        prefer.sort(key=lambda e: (e["produce_rate"], e["attempts"]), reverse=True)
+        avoid.sort(key=lambda e: (e["fail_rate"], e["attempts"]), reverse=True)
+        prefer, avoid = prefer[:limit], avoid[:limit]
+        lines = [f"- Prefer {e['domain']} — {e['reason']}." for e in prefer]
+        lines += [
+            f"- Deprioritize {e['domain']} — {e['reason']}; seek an open-access "
+            "alternative."
+            for e in avoid
+        ]
+        return {
+            "count": len(agg),
+            "prefer": prefer,
+            "avoid": avoid,
+            "advice": "\n".join(lines).strip(),
             "mutating": False,
         }
 
@@ -426,6 +516,36 @@ class LearningService:
 
 # --- experience extraction (pure helper) ---------------------------------
 _CONFIDENCE_OK = {"HIGH", "MEDIUM"}
+# Per-source pipeline-trace statuses aggregated into operational source experience.
+_SOURCE_STATUSES = ("ok", "no_claims", "read_failed", "blocked", "not_acquired")
+
+
+def _source_outcomes_from_trace(
+    trace: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, int]]:
+    """Aggregate a per-source pipeline trace into per-domain acquisition outcomes.
+
+    ``{domain: {ok, no_claims, read_failed, blocked, not_acquired, total, claims}}``.
+    This is the raw operational signal behind source-reliability advice (§3B loop).
+    """
+    out: dict[str, dict[str, int]] = {}
+    for row in trace or []:
+        if not isinstance(row, dict):
+            continue
+        domain = domain_from_url(row.get("url") or "")
+        if not domain:
+            continue
+        agg = out.setdefault(domain, {s: 0 for s in _SOURCE_STATUSES})
+        agg["total"] = agg.get("total", 0) + 1
+        status = str(row.get("status") or "")
+        if status in agg:
+            agg[status] += 1
+        agg["claims"] = agg.get("claims", 0) + (
+            int(row.get("numeric_claims") or 0)
+            + int(row.get("qualitative_claims") or 0)
+            + int(row.get("inferred_claims") or 0)
+        )
+    return out
 
 
 def _experience_from_job(
@@ -466,6 +586,7 @@ def _experience_from_job(
     timings = research.get("timings") or {}
     strategies = research.get("strategies") or {}
     recommendations = research.get("recommendations") or []
+    source_outcomes = _source_outcomes_from_trace(research.get("trace"))
     components = _component_observations_from_research(research, timings)
 
     return {
@@ -485,6 +606,7 @@ def _experience_from_job(
         "timings": timings,
         "strategies": strategies,
         "recommendations": recommendations,
+        "source_outcomes": source_outcomes,
         "component_observations": components,
     }
 
@@ -565,6 +687,7 @@ def _aggregate_research_extras(
         "strategies": strategies,
         "recommendations": extras["recommendations"],
         "pipeline": pipeline,
+        "trace": pipeline.get("trace") or [],
         "usage": usage,
     }
 
@@ -590,6 +713,13 @@ def _component_observations_from_research(
                 },
             )
         )
+    # Operational source-reliability observations (one per domain seen this run).
+    for domain, agg in _source_outcomes_from_trace(research.get("trace")).items():
+        key = source_component_key(domain)
+        if key:
+            out.append(
+                component_observation(key, metrics=agg, profile="acquisition")
+            )
     strategies = research.get("strategies") or {}
     if strategies:
         out.append(

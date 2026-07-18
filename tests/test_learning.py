@@ -20,8 +20,13 @@ from atlas.models.learning import (
     Experience,
     LearningEvent,
 )
-from atlas.services.learning_service import LearningService, _experience_from_job
+from atlas.services.learning_service import (
+    LearningService,
+    _experience_from_job,
+    _source_outcomes_from_trace,
+)
 from atlas.knowledge.access import RankedHit, heuristic_rerank
+from atlas.learning.components import domain_from_url, source_component_key
 from atlas.services.learning_service import SOFT_BIAS_BOOST
 
 
@@ -531,4 +536,123 @@ def test_observe_still_proposes_only_with_rich_payload():
     assert out["applied"] is False
     assert repo.count_experiences() == 0
     assert "readers" in repo.get_event(out["event"]["id"]).metadata["payload"]
+
+
+# --- §3B loop: operational source-reliability learning -------------------
+def test_domain_from_url_normalizes_host():
+    assert domain_from_url("https://www.ieeexplore.ieee.org/document/1") == (
+        "ieeexplore.ieee.org"
+    )
+    assert domain_from_url("http://arxiv.org/abs/2301.12939") == "arxiv.org"
+    assert domain_from_url("arxiv.org") == "arxiv.org"  # bare host accepted
+    assert domain_from_url("") == ""
+    assert source_component_key("https://arxiv.org/abs/1") == "source:arxiv.org"
+    assert source_component_key("") is None
+
+
+def test_source_outcomes_from_trace_aggregates_per_domain():
+    trace = [
+        {"url": "https://arxiv.org/abs/1", "status": "ok", "numeric_claims": 3,
+         "qualitative_claims": 5, "inferred_claims": 0},
+        {"url": "https://arxiv.org/abs/2", "status": "no_claims"},
+        {"url": "https://ieeexplore.ieee.org/x", "status": "blocked"},
+        {"url": "https://ieeexplore.ieee.org/y", "status": "read_failed"},
+        {"status": "ok"},  # no url → ignored
+    ]
+    out = _source_outcomes_from_trace(trace)
+    assert out["arxiv.org"]["ok"] == 1
+    assert out["arxiv.org"]["no_claims"] == 1
+    assert out["arxiv.org"]["total"] == 2
+    assert out["arxiv.org"]["claims"] == 8
+    assert out["ieeexplore.ieee.org"]["blocked"] == 1
+    assert out["ieeexplore.ieee.org"]["read_failed"] == 1
+    assert out["ieeexplore.ieee.org"]["total"] == 2
+
+
+def _research_detail_with_trace(job_id, trace):
+    job = _FakeJob(id=job_id, objective="soiling loss rates for PV",
+                   result={"answer": "ok"})
+    steps = [
+        _FakeStep("research", "done", "deep research", result={
+            "pipeline": {"rounds": 1, "findings": 1, "trace": trace},
+        }),
+    ]
+    return {"job": job, "steps": steps, "result": job.result}
+
+
+def test_experience_payload_captures_source_outcomes_from_trace():
+    trace = [
+        {"url": "https://arxiv.org/abs/1", "status": "ok", "numeric_claims": 2},
+        {"url": "https://ieeexplore.ieee.org/x", "status": "blocked"},
+    ]
+    payload = _experience_from_job(
+        "soiling loss rates",
+        _research_detail_with_trace("job-t", trace)["steps"],
+        {"answer": "ok"},
+        "job-t",
+    )
+    assert payload is not None
+    assert payload["source_outcomes"]["arxiv.org"]["ok"] == 1
+    keys = {c["component_key"] for c in payload["component_observations"]}
+    assert "source:arxiv.org" in keys
+    assert "source:ieeexplore.ieee.org" in keys
+
+
+def test_source_advice_prefers_reliable_and_deprioritizes_blocked():
+    repo, svc = _svc(auto_apply=True)
+    # arxiv reads well twice; IEEE blocked twice — accumulate via applied jobs.
+    svc.observe_job(_research_detail_with_trace("job-1", [
+        {"url": "https://arxiv.org/abs/1", "status": "ok", "numeric_claims": 3},
+        {"url": "https://ieeexplore.ieee.org/x", "status": "blocked"},
+    ]))
+    svc.observe_job(_research_detail_with_trace("job-2", [
+        {"url": "https://arxiv.org/abs/2", "status": "ok", "numeric_claims": 1},
+        {"url": "https://ieeexplore.ieee.org/y", "status": "read_failed"},
+    ]))
+    advice = svc.source_advice()
+    assert advice["mutating"] is False
+    prefer_domains = [e["domain"] for e in advice["prefer"]]
+    avoid_domains = [e["domain"] for e in advice["avoid"]]
+    assert "arxiv.org" in prefer_domains
+    assert "ieeexplore.ieee.org" in avoid_domains
+    assert "Prefer arxiv.org" in advice["advice"]
+    assert "Deprioritize ieeexplore.ieee.org" in advice["advice"]
+
+
+def test_source_advice_requires_min_attempts():
+    repo, svc = _svc(auto_apply=True)
+    svc.observe_job(_research_detail_with_trace("job-1", [
+        {"url": "https://arxiv.org/abs/1", "status": "ok", "numeric_claims": 3},
+    ]))
+    # Only one attempt → not enough evidence to advise.
+    advice = svc.source_advice(min_attempts=2)
+    assert advice["prefer"] == []
+    assert advice["avoid"] == []
+
+
+def test_source_advice_only_after_apply_human_gate():
+    repo, svc = _svc()  # propose-only default
+    svc.observe_job(_research_detail_with_trace("job-1", [
+        {"url": "https://arxiv.org/abs/1", "status": "ok", "numeric_claims": 3},
+        {"url": "https://arxiv.org/abs/2", "status": "ok", "numeric_claims": 2},
+    ]))
+    # Proposed but not applied → no component observations → no advice yet.
+    assert svc.source_advice()["prefer"] == []
+
+
+def test_advice_for_folds_in_operational_source_advice():
+    repo, svc = _svc(auto_apply=True)
+    svc.observe_job(_research_detail_with_trace("job-1", [
+        {"url": "https://arxiv.org/abs/1", "status": "ok", "numeric_claims": 3},
+        {"url": "https://ieeexplore.ieee.org/x", "status": "blocked"},
+    ]))
+    svc.observe_job(_research_detail_with_trace("job-2", [
+        {"url": "https://arxiv.org/abs/2", "status": "ok", "numeric_claims": 1},
+        {"url": "https://ieeexplore.ieee.org/y", "status": "read_failed"},
+    ]))
+    out = svc.advice_for("soiling")
+    assert out["mutating"] is False
+    assert "operational" in out
+    assert "Source reliability" in out["advice"]
+    assert "Prefer arxiv.org" in out["advice"]
 

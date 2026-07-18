@@ -41,6 +41,7 @@ from atlas.evidence.models import (
     Claim,
     ClaimValue,
     EvidenceItem,
+    LEVEL_PEER_REVIEWED,
     LEVEL_TECHNICAL,
 )
 from atlas.research.reader import (
@@ -290,16 +291,25 @@ class ClaimExtractor:
         self,
         llm: "LLMService | None" = None,
         *,
-        max_claims_per_doc: int = 15,
+        max_claims_per_doc: int = 30,
         sections: tuple[str, ...] = _DEFAULT_SECTIONS,
         max_sentence_chars: int = 400,
         logger: logging.Logger | None = None,
     ) -> None:
         self._llm = llm
+        # Per-doc cap (A5). Raised from 15 → 30 so rich sources (ar5iv full-text)
+        # aren't truncated mid-paper; peer-reviewed sources get a higher ceiling
+        # still (see ``_doc_cap``) because they carry the most extractable findings.
         self._max = max_claims_per_doc
         self._sections = sections
         self._max_sentence_chars = max_sentence_chars
         self._logger = logger or logging.getLogger("atlas.research.extract")
+
+    def _doc_cap(self, level: int) -> int:
+        """Adaptive per-doc claim cap: give higher-evidence sources more headroom."""
+        if level >= LEVEL_PEER_REVIEWED:
+            return int(self._max * 1.5)
+        return self._max
 
     def extract(
         self,
@@ -309,6 +319,7 @@ class ClaimExtractor:
         activity: "ActivityRecorder | None" = None,
     ) -> ExtractionResult:
         level = evidence_level if evidence_level is not None else LEVEL_TECHNICAL
+        cap = self._doc_cap(level)
         scoped = self._scoped_sections(document)
         result = ExtractionResult(sections_seen=len(scoped))
         seen: set[str] = set()
@@ -326,9 +337,9 @@ class ClaimExtractor:
         for label, text in scoped:
             for claim in self._numeric_claims(document, label, text, level):
                 _add(claim, "numeric")
-                if len(result.claims) >= self._max:
+                if len(result.claims) >= cap:
                     break
-            if len(result.claims) >= self._max:
+            if len(result.claims) >= cap:
                 break
 
         # If preferred sections yielded nothing, fall back to the full body (capped).
@@ -338,28 +349,28 @@ class ClaimExtractor:
             body = _normalize_text(document.text)[:_FALLBACK_BODY_CHARS]
             for claim in self._numeric_claims(document, SECTION_BODY, body, level):
                 _add(claim, "numeric")
-                if len(result.claims) >= self._max:
+                if len(result.claims) >= cap:
                     break
 
         # 2) Deterministic qualitative claims (always; LLM-free). Engineering papers
         # are mostly prose — "SVR outperformed Ridge" is a claim with no number. This
         # is what stops Atlas from being a pure number-extractor.
-        if len(result.claims) < self._max:
+        if len(result.claims) < cap:
             for claim in self._qualitative_claims(document, scoped, level):
                 _add(claim, "prose")
-                if len(result.claims) >= self._max:
+                if len(result.claims) >= cap:
                     break
 
         # 3) Bounded LLM prose claims (optional; short timeout; skip if no useful text).
         #    These are Atlas *inferences/paraphrases* (origin=inferred), not quotes.
-        if self._llm is not None and len(result.claims) < self._max:
-            budget = self._max - len(result.claims)
+        if self._llm is not None and len(result.claims) < cap:
+            budget = cap - len(result.claims)
             llm_claims = self._llm_claims(document, scoped, level, budget)
             if not llm_claims:
                 result.reason = (result.reason + " llm_prose_unavailable").strip()
             for claim in llm_claims:
                 _add(claim, "inferred")
-                if len(result.claims) >= self._max:
+                if len(result.claims) >= cap:
                     break
 
         result.reason = self._diagnose(document, result).strip()

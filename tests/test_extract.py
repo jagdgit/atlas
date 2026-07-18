@@ -165,6 +165,18 @@ def test_claim_taxonomy_parameter_vs_result():
     assert classify_claim_type("SVR outperformed Ridge.", None, "prose:comparison") == CLAIM_TYPE_COMPARISON
 
 
+def test_default_per_doc_cap_raised():
+    # Raised from 15 → 30 so rich full-text sources aren't truncated mid-paper.
+    assert ClaimExtractor()._max == 30
+
+
+def test_peer_reviewed_sources_get_a_higher_cap():
+    from atlas.evidence.models import LEVEL_PEER_REVIEWED, LEVEL_TECHNICAL
+
+    ex = ClaimExtractor()
+    assert ex._doc_cap(LEVEL_PEER_REVIEWED) > ex._doc_cap(LEVEL_TECHNICAL)
+
+
 def test_zero_claims_reports_a_reason():
     text = "Abstract\nThis page describes our journal and submission guidelines.\n"
     doc = Reader().read_text(text, source_id="landing:1", title="journal home")

@@ -490,6 +490,13 @@ def learning_advice(request: Request, q: str = "", limit: int = 5) -> dict:
     return learning.advice_for(q, limit=limit)
 
 
+@v1_router.get("/learning/sources", tags=["learning"])
+def learning_sources(request: Request, limit: int = 20) -> dict:
+    """Operational source-reliability advice (prefer/deprioritize) — advice-only (§3B)."""
+    learning = _app(request).container.resolve("learning")
+    return learning.source_advice(limit=limit)
+
+
 @v1_router.post("/learning/experiences/{experience_id}/bias", tags=["learning"])
 def learning_enable_bias(
     experience_id: str, request: Request, enabled: bool = True
