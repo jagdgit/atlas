@@ -52,6 +52,7 @@ from atlas.kernel.lifecycle import LifecycleManager
 from atlas.kernel.registry import ServiceRegistry
 from atlas.kernel.service_container import ServiceContainer
 from atlas.kernel.tools import ToolRegistry
+from atlas.knowledge.coverage import CoverageService
 from atlas.knowledge.service import KnowledgeService
 from atlas.llm.ollama_provider import OllamaProvider
 from atlas.llm.service import LLMService
@@ -81,6 +82,7 @@ from atlas.repositories.job_repo import JobRepository
 from atlas.repositories.learning_repo import LearningRepository
 from atlas.repositories.memory_repo import MemoryRepository
 from atlas.repositories.retrieval_diagnostics_repo import RetrievalDiagnosticsRepository
+from atlas.repositories.coverage_repo import CoverageRepository
 from atlas.repositories.finding_repo import FindingRepository
 from atlas.repositories.task_repo import TaskRepository
 from atlas.scheduler.handlers import HandlerRegistry
@@ -747,6 +749,14 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         if cfg.intelligence.design_review
         else None
     )
+    # Knowledge Coverage map (Phase C · §C.4, A10/CC15): per (asset_version × reader) extraction
+    # telemetry that rolls up coverage % (how much was read) and understanding % (how well it is
+    # understood, from finding maturity/confidence), and enumerates assets processed by an older
+    # reader/extractor version for targeted re-extraction.
+    coverage_repo = CoverageRepository(db_manager)
+    coverage_service = CoverageService(
+        coverage_repo, finding_repo, logger=get_logger("atlas.coverage")
+    )
     intelligence_service = IntelligenceService(
         code_service,
         intelligence_repo,
@@ -758,6 +768,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         design_reviewer=design_reviewer,
         findings=engineering_findings,
         finding_repo=finding_repo,
+        coverage=coverage_service,
         logger=get_logger("atlas.intelligence"),
     )
     learning_service.register_sink(
@@ -843,6 +854,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("learning", learning_service)
     container.register_instance("intelligence", intelligence_service)
     container.register_instance("ingestion", ingestion_source)
+    container.register_instance("coverage", coverage_service)
 
     # Advertise capabilities so agents can query the kernel instead of importing
     # modules (ADR-0040). S11: attach typed contracts so the registry can verify a
@@ -950,6 +962,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         contract=caps.IntelligenceCapability, kind="service",
     )
     capabilities.register("ingestion", ingestion_source, kind="service")
+    capabilities.register(
+        "coverage", coverage_service, kind="service", version=CoverageService.VERSION
+    )
 
     # 6. Core services (registration order = start order)
     registry.register(clock)  # first: time source for everything that follows

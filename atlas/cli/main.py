@@ -280,6 +280,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_intel.add_argument("--policy", help="policy for learned repo (default: project)")
     p_intel.add_argument("--limit", type=int, default=20)
 
+    sub.add_parser(
+        "coverage",
+        help="knowledge coverage map: per-domain coverage %% + understanding %% (C.4)",
+    )
+
     sub.add_parser("backup", help="run an on-demand database backup (pg_dump)")
 
     return parser
@@ -1182,6 +1187,22 @@ def cmd_intel(args: argparse.Namespace, app: "Application | None" = None) -> int
     return 2
 
 
+def cmd_coverage(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    summary = app.container.resolve("coverage").summary()
+    domains = summary.get("domains") or []
+    if not domains:
+        print("no coverage recorded yet — ingest documents or learn a repository first")
+        return 0
+    overall = summary.get("overall") or {}
+    print(f"{'domain':<16} {'coverage':>10} {'understanding':>14}")
+    for d in domains:
+        print(f"{d['domain']:<16} {d['coverage_pct']:>9.1f}% {d['understanding_pct']:>13.1f}%")
+    print(f"{'overall':<16} {overall.get('coverage_pct', 0.0):>9.1f}% "
+          f"{overall.get('understanding_pct', 0.0):>13.1f}%")
+    return 0
+
+
 def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     backup = app.container.resolve("backup")
@@ -1206,6 +1227,7 @@ _HANDLERS = {
     "tools": cmd_tools,
     "capabilities": cmd_capabilities,
     "tool": cmd_tool,
+    "coverage": cmd_coverage,
     "jobs": cmd_jobs,
     "job": cmd_job,
     "formats": cmd_formats,

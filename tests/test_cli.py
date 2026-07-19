@@ -15,6 +15,7 @@ from atlas.cli.main import (
     cmd_ask,
     cmd_backup,
     cmd_capabilities,
+    cmd_coverage,
     cmd_chat,
     cmd_code,
     cmd_download,
@@ -216,6 +217,22 @@ def _fake_capabilities():
     return reg
 
 
+class _FakeCoverage:
+    def __init__(self, domains=None):
+        self._domains = domains
+
+    def summary(self):
+        if self._domains is None:
+            self._domains = [
+                {"domain": "code", "coverage_pct": 100.0, "understanding_pct": 82.0},
+                {"domain": "external", "coverage_pct": 50.0, "understanding_pct": 40.0},
+            ]
+        return {
+            "domains": self._domains,
+            "overall": {"coverage_pct": 75.0, "understanding_pct": 61.0},
+        }
+
+
 class FakeApp:
     def __init__(self):
         self.tools = FakeTools()
@@ -236,6 +253,7 @@ class FakeApp:
                 "reports": ReportService(VerificationService()),
                 "learning": _fake_learning(),
                 "intelligence": _fake_intelligence(),
+                "coverage": _FakeCoverage(),
             }
         )
 
@@ -930,3 +948,22 @@ def test_cmd_backup_prints_path(capsys):
     rc = cmd_backup(args, app=FakeApp())
     assert rc == 0
     assert "atlas_atlas_20260101_000000.dump" in capsys.readouterr().out
+
+
+def test_cmd_coverage_prints_domains(capsys):
+    args = build_parser().parse_args(["coverage"])
+    rc = cmd_coverage(args, app=FakeApp())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "code" in out and "100.0%" in out
+    assert "understanding" in out
+    assert "overall" in out
+
+
+def test_cmd_coverage_empty(capsys):
+    app = FakeApp()
+    app.container._mapping["coverage"] = _FakeCoverage(domains=[])
+    args = build_parser().parse_args(["coverage"])
+    rc = cmd_coverage(args, app=app)
+    assert rc == 0
+    assert "no coverage recorded yet" in capsys.readouterr().out

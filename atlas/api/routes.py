@@ -710,6 +710,14 @@ def eng_findings(
     }
 
 
+@v1_router.get("/knowledge/coverage", tags=["knowledge"])
+def knowledge_coverage(request: Request) -> dict:
+    """Knowledge coverage map (Phase C · §C.4): per-domain **coverage %** (how much was read) and
+    **understanding %** (how well it is understood, from finding maturity/confidence), plus an overall
+    rollup. Coverage ≠ comprehension — both are surfaced side by side."""
+    return _app(request).container.resolve("coverage").summary()
+
+
 @v1_router.post("/engineering/ingest", tags=["engineering"])
 def eng_ingest(body: EngineeringIngestRequest, request: Request) -> dict:
     if bool(body.path) == bool(body.url):

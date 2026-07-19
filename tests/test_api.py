@@ -544,6 +544,18 @@ class FakeTemplates:
         return {"mission": mission, "config": {"version": 1}, "workers": [self.state.workers[wid]]}
 
 
+class _FakeCoverage:
+    def summary(self):
+        return {
+            "domains": [
+                {"domain": "code", "coverage_pct": 100.0, "understanding_pct": 82.0,
+                 "coverage": {"total": 3, "done": 3}, "understanding": {"total": 5}},
+            ],
+            "overall": {"coverage_pct": 100.0, "understanding_pct": 82.0,
+                        "assets_read": 3, "assets_total": 3, "findings": 5},
+        }
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -579,6 +591,7 @@ class FakeApplication:
                 "reports": ReportService(VerificationService()),
                 "learning": _fake_learning(),
                 "intelligence": _fake_intelligence(),
+                "coverage": _FakeCoverage(),
                 "plugins": FakePluginManager(),
                 "event_repo": FakeEventRepo(),
                 "notifier": FakeNotifier(),
@@ -997,6 +1010,20 @@ def test_document_formats():
     resp = _client().get("/v1/documents/formats", headers=AUTH)
     assert resp.status_code == 200
     assert ".pdf" in resp.json()["formats"]
+
+
+def test_knowledge_coverage_summary():
+    resp = _client().get("/v1/knowledge/coverage", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["overall"]["coverage_pct"] == 100.0
+    assert body["domains"][0]["domain"] == "code"
+    assert body["domains"][0]["understanding_pct"] == 82.0
+
+
+def test_knowledge_coverage_requires_auth():
+    resp = _client().get("/v1/knowledge/coverage")
+    assert resp.status_code == 401
 
 
 def test_document_formats_require_auth():
