@@ -589,6 +589,69 @@ class _FakePolicy:
         return {"id": "P-1", "enabled": True}
 
 
+class _FakePersonal:
+    def __init__(self):
+        self._facts = {
+            "F-1": {"id": "F-1", "category": "skill", "key": "celery", "subject": "python",
+                    "state": "inferred", "statement": "Skilled in Celery",
+                    "value": {"skill": "Celery"}},
+        }
+
+    def profile(self, *, include_inferred=True):
+        facts = [f for f in self._facts.values()
+                 if include_inferred or f["state"] == "verified"]
+        return {"identity": [], "skills": facts, "timeline": [], "professional": []}
+
+    def list_facts(self, *, category=None, state=None, limit=500):
+        return [f for f in self._facts.values()
+                if (category is None or f["category"] == category)
+                and (state is None or f["state"] == state)]
+
+    def add_fact(self, category, key, *, subject="", statement="", value=None, actor=None):
+        row = {"id": f"F-{len(self._facts) + 1}", "category": category, "key": key,
+               "subject": subject, "state": "verified", "statement": statement,
+               "value": value or {}}
+        self._facts[row["id"]] = row
+        return row
+
+    def infer(self):
+        return {"skills": 1, "identity": 0, "timeline": 0}
+
+    def confirm(self, fact_id):
+        if fact_id not in self._facts:
+            raise KeyError(fact_id)
+        self._facts[fact_id]["state"] = "verified"
+        return self._facts[fact_id]
+
+    def correct(self, fact_id, *, statement=None, value=None, actor=None):
+        if fact_id not in self._facts:
+            raise KeyError(fact_id)
+        if statement is not None:
+            self._facts[fact_id]["statement"] = statement
+        self._facts[fact_id]["state"] = "verified"
+        return self._facts[fact_id]
+
+    def reject(self, fact_id):
+        if fact_id not in self._facts:
+            raise KeyError(fact_id)
+        self._facts[fact_id]["state"] = "rejected"
+        return self._facts[fact_id]
+
+    def draft(self, kind="resume", *, include_inferred=False):
+        if kind not in ("resume", "linkedin"):
+            raise ValueError(f"unknown draft kind: {kind}")
+        return {"kind": kind, "markdown": "# Resume\n", "counts": {"skills": 1}}
+
+    def list_events(self, *, fact_id=None, limit=100):
+        return [{"id": "E-1", "fact_id": fact_id, "action": "inferred",
+                 "created_at": "2026-07-19T00:00:00+00:00"}]
+
+    def revert(self, event_id):
+        if event_id == "missing":
+            raise KeyError(event_id)
+        return {"id": "F-1", "state": "inferred"}
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -626,6 +689,7 @@ class FakeApplication:
                 "intelligence": _fake_intelligence(),
                 "coverage": _FakeCoverage(),
                 "policy": _FakePolicy(),
+                "personal": _FakePersonal(),
                 "plugins": FakePluginManager(),
                 "event_repo": FakeEventRepo(),
                 "notifier": FakeNotifier(),
@@ -1093,6 +1157,47 @@ def test_policy_revert_missing_event_404():
 
 def test_policy_requires_auth():
     assert _client().get("/v1/policy/rules").status_code == 401
+
+
+def test_personal_profile_and_infer():
+    client = _client()
+    prof = client.get("/v1/personal/profile", headers=AUTH)
+    assert prof.status_code == 200
+    assert "skills" in prof.json()
+    inferred = client.post("/v1/personal/infer", headers=AUTH)
+    assert inferred.status_code == 200
+    assert inferred.json()["skills"] == 1
+
+
+def test_personal_confirm_and_reject():
+    client = _client()
+    confirmed = client.post("/v1/personal/facts/F-1/confirm", headers=AUTH)
+    assert confirmed.status_code == 200
+    assert confirmed.json()["state"] == "verified"
+    rejected = client.post("/v1/personal/facts/F-1/reject", headers=AUTH)
+    assert rejected.json()["state"] == "rejected"
+
+
+def test_personal_confirm_missing_fact_404():
+    assert _client().post("/v1/personal/facts/nope/confirm", headers=AUTH).status_code == 404
+
+
+def test_personal_add_fact_validates_category():
+    resp = _client().post(
+        "/v1/personal/facts", headers=AUTH, json={"category": "bogus", "key": "x"}
+    )
+    assert resp.status_code == 422
+
+
+def test_personal_draft_from_profile():
+    resp = _client().get("/v1/personal/draft?kind=resume", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["kind"] == "resume"
+    assert "markdown" in resp.json()
+
+
+def test_personal_requires_auth():
+    assert _client().get("/v1/personal/profile").status_code == 401
 
 
 def test_document_formats_require_auth():

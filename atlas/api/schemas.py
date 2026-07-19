@@ -376,6 +376,23 @@ class PolicyRuleRequest(BaseModel):
     provenance: dict[str, Any] | None = None
 
 
+class PersonalFactRequest(BaseModel):
+    # Operator adds an authoritative personal fact directly (Phase C · §C.7). Starts life verified.
+    category: str = Field(pattern="^(identity|skill|timeline|professional)$")
+    key: str = Field(min_length=1)
+    subject: str = ""
+    statement: str = ""
+    value: dict[str, Any] | None = None
+    actor: str | None = None
+
+
+class PersonalCorrectRequest(BaseModel):
+    # Operator edits (and thereby verifies) an inferred personal fact.
+    statement: str | None = None
+    value: dict[str, Any] | None = None
+    actor: str | None = None
+
+
 class PythonRunRequest(BaseModel):
     code: str = Field(min_length=1)
     timeout: float | None = Field(default=None, gt=0)

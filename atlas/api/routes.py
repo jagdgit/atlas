@@ -68,6 +68,8 @@ from atlas.api.schemas import (
     GitRequest,
     LearningApplyRequest,
     LearnRepositoryRequest,
+    PersonalCorrectRequest,
+    PersonalFactRequest,
     PolicyRuleRequest,
     RecommendRequest,
     PythonRunRequest,
@@ -772,6 +774,94 @@ def policy_revert(event_id: str, request: Request) -> dict:
         return {"reverted": policy.revert(event_id)}
     except KeyError:
         raise HTTPException(status_code=404, detail="policy event not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@v1_router.get("/personal/profile", tags=["personal"])
+def personal_profile(request: Request, include_inferred: bool = True) -> dict:
+    """The assembled owner profile — identity/skills/timeline/professional (Phase C · §C.7)."""
+    return _app(request).container.resolve("personal").profile(include_inferred=include_inferred)
+
+
+@v1_router.get("/personal/facts", tags=["personal"])
+def personal_facts(
+    request: Request,
+    category: str | None = None,
+    state: str | None = None,
+    limit: int = 500,
+) -> dict:
+    personal = _app(request).container.resolve("personal")
+    return {"facts": personal.list_facts(category=category, state=state, limit=limit)}
+
+
+@v1_router.post("/personal/facts", tags=["personal"])
+def personal_add_fact(body: PersonalFactRequest, request: Request) -> dict:
+    """Operator adds an authoritative fact directly (starts life verified)."""
+    personal = _app(request).container.resolve("personal")
+    return personal.add_fact(**body.model_dump(exclude_none=True))
+
+
+@v1_router.post("/personal/infer", tags=["personal"])
+def personal_infer(request: Request) -> dict:
+    """Refresh inferred facts from Experience + Engineering knowledge (CC7; no silent scraping)."""
+    return _app(request).container.resolve("personal").infer()
+
+
+@v1_router.post("/personal/facts/{fact_id}/confirm", tags=["personal"])
+def personal_confirm(fact_id: str, request: Request) -> dict:
+    """Operator confirms an inferred fact → verified (CC7/A9)."""
+    personal = _app(request).container.resolve("personal")
+    try:
+        return personal.confirm(fact_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="personal fact not found")
+
+
+@v1_router.post("/personal/facts/{fact_id}/correct", tags=["personal"])
+def personal_correct(fact_id: str, body: PersonalCorrectRequest, request: Request) -> dict:
+    """Operator edits a fact (and thereby verifies it)."""
+    personal = _app(request).container.resolve("personal")
+    try:
+        return personal.correct(fact_id, **body.model_dump(exclude_none=True))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="personal fact not found")
+
+
+@v1_router.post("/personal/facts/{fact_id}/reject", tags=["personal"])
+def personal_reject(fact_id: str, request: Request) -> dict:
+    """Operator rejects a fact → rejected (Atlas will not re-infer over it)."""
+    personal = _app(request).container.resolve("personal")
+    try:
+        return personal.reject(fact_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="personal fact not found")
+
+
+@v1_router.get("/personal/draft", tags=["personal"])
+def personal_draft(request: Request, kind: str = "resume", include_inferred: bool = False) -> dict:
+    """Draft a resume/LinkedIn summary purely from the profile (retrieval, not action; P10)."""
+    personal = _app(request).container.resolve("personal")
+    try:
+        return personal.draft(kind, include_inferred=include_inferred)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@v1_router.get("/personal/events", tags=["personal"])
+def personal_events(request: Request, fact_id: str | None = None, limit: int = 100) -> dict:
+    personal = _app(request).container.resolve("personal")
+    return {"events": personal.list_events(fact_id=fact_id, limit=limit)}
+
+
+@v1_router.post("/personal/events/{event_id}/revert", tags=["personal"])
+def personal_revert(event_id: str, request: Request) -> dict:
+    """Undo a personal-fact change, restoring the prior state (governed + reversible)."""
+    personal = _app(request).container.resolve("personal")
+    try:
+        return {"reverted": personal.revert(event_id)}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="personal event not found")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

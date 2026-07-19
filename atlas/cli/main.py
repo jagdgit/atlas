@@ -302,6 +302,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_policy.add_argument("--by", help="created_by (provenance)")
     p_policy.add_argument("--limit", type=int, default=50)
 
+    p_personal = sub.add_parser(
+        "personal", help="owner profile — inferred skills/identity/timeline, operator-confirmed (C.7)"
+    )
+    p_personal.add_argument(
+        "action",
+        choices=["infer", "profile", "facts", "skills", "confirm", "reject", "draft", "events"],
+        help="infer|profile|facts|skills|confirm <id>|reject <id>|draft|events [fact_id]",
+    )
+    p_personal.add_argument("target", nargs="?", help="fact/event id (confirm/reject/events)")
+    p_personal.add_argument(
+        "--category", choices=["identity", "skill", "timeline", "professional"]
+    )
+    p_personal.add_argument("--state", choices=["inferred", "verified", "rejected"])
+    p_personal.add_argument("--kind", choices=["resume", "linkedin"], default="resume")
+    p_personal.add_argument(
+        "--include-inferred", action="store_true", help="include not-yet-verified facts in a draft"
+    )
+    p_personal.add_argument("--limit", type=int, default=50)
+
     sub.add_parser("backup", help="run an on-demand database backup (pg_dump)")
 
     return parser
@@ -1298,6 +1317,70 @@ def cmd_policy(args: argparse.Namespace, app: "Application | None" = None) -> in
     return 2
 
 
+def cmd_personal(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    personal = app.container.resolve("personal")
+    action = args.action
+
+    if action == "infer":
+        result = personal.infer()
+        print(f"inferred: skills={result['skills']} identity={result['identity']} "
+              f"timeline={result['timeline']}")
+        return 0
+
+    if action == "profile":
+        profile = personal.profile(include_inferred=True)
+        for section in ("identity", "skills", "timeline", "professional"):
+            rows = profile.get(section, [])
+            print(f"\n== {section} ({len(rows)}) ==")
+            for f in rows:
+                print(f"  [{f['state']:<8}] {f.get('statement') or f['key']}")
+        return 0
+
+    if action in ("facts", "skills"):
+        category = "skill" if action == "skills" else args.category
+        facts = personal.list_facts(category=category, state=args.state, limit=args.limit)
+        if not facts:
+            print("no personal facts yet")
+            return 0
+        for f in facts:
+            print(f"{f['id']}  [{f['state']:<8}] {f['category']:<12} "
+                  f"{f.get('statement') or f['key']}")
+        return 0
+
+    if action in ("confirm", "reject"):
+        if not args.target:
+            print(f"usage: atlas personal {action} <fact_id>")
+            return 2
+        try:
+            f = personal.confirm(args.target) if action == "confirm" else personal.reject(args.target)
+        except KeyError:
+            print("personal fact not found")
+            return 1
+        print(f"{f['id']}  state={f['state']}")
+        return 0
+
+    if action == "draft":
+        try:
+            out = personal.draft(args.kind, include_inferred=args.include_inferred)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 2
+        print(out["markdown"])
+        return 0
+
+    if action == "events":
+        events = personal.list_events(fact_id=args.target, limit=args.limit)
+        if not events:
+            print("no personal events")
+            return 0
+        for e in events:
+            print(f"{e['created_at']}  {e['action']:<9} fact={e['fact_id']}")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     backup = app.container.resolve("backup")
@@ -1324,6 +1407,7 @@ _HANDLERS = {
     "tool": cmd_tool,
     "coverage": cmd_coverage,
     "policy": cmd_policy,
+    "personal": cmd_personal,
     "jobs": cmd_jobs,
     "job": cmd_job,
     "formats": cmd_formats,

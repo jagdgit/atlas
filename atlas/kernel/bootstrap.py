@@ -32,7 +32,9 @@ from atlas.engineering.artifacts import DerivedArtifactStore
 from atlas.engineering.design_review import DesignReviewer
 from atlas.engineering.findings import EngineeringFindingWriter
 from atlas.learning.experience_extraction import ExperienceWriter
+from atlas.personal import PersonalService
 from atlas.repositories.experience_store import ExperienceStore
+from atlas.repositories.personal_repo import PersonalRepository
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -804,6 +806,17 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # missions instantiate a working RepoWatcher.
     worker_manager.register_worker_type(RepoWatcher(intelligence_service))
 
+    # Personal Intelligence (Phase C · §C.7, CC7/A9): a curated, governed model of the owner —
+    # skills inferred from consolidated experiences, identity/timeline from Engineering Intelligence,
+    # all held as `inferred` until the operator confirms them. Retrieval, not action (P10).
+    personal_service = PersonalService(
+        PersonalRepository(db_manager),
+        experiences=experience_store,
+        intelligence=intelligence_service,
+        llm=llm_service,
+        logger=get_logger("atlas.personal"),
+    )
+
     # Python Execution Sandbox (Sprint 16, D6 — hybrid): run analysis code in a
     # resource-limited child interpreter (subprocess default; docker swappable) with
     # network disabled by default; computed results can become L5 evidence (§5a.6).
@@ -881,6 +894,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("ingestion", ingestion_source)
     container.register_instance("coverage", coverage_service)
     container.register_instance("policy", policy_service)
+    container.register_instance("personal", personal_service)
 
     # Advertise capabilities so agents can query the kernel instead of importing
     # modules (ADR-0040). S11: attach typed contracts so the registry can verify a
@@ -993,6 +1007,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "policy", policy_service, kind="service", version=PolicyService.VERSION
+    )
+    capabilities.register(
+        "personal", personal_service, kind="service", version=PersonalService.VERSION
     )
 
     # 6. Core services (registration order = start order)

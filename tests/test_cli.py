@@ -16,6 +16,7 @@ from atlas.cli.main import (
     cmd_backup,
     cmd_capabilities,
     cmd_coverage,
+    cmd_personal,
     cmd_policy,
     cmd_chat,
     cmd_code,
@@ -265,6 +266,41 @@ class _FakePolicyCli:
         return None
 
 
+class _FakePersonalCli:
+    def __init__(self):
+        self._facts = {"F-1": {"id": "F-1", "category": "skill", "key": "celery",
+                               "state": "inferred", "statement": "Skilled in Celery"}}
+
+    def infer(self):
+        return {"skills": 1, "identity": 0, "timeline": 0}
+
+    def profile(self, *, include_inferred=True):
+        return {"identity": [], "skills": list(self._facts.values()),
+                "timeline": [], "professional": []}
+
+    def list_facts(self, *, category=None, state=None, limit=50):
+        return [f for f in self._facts.values()
+                if (category is None or f["category"] == category)]
+
+    def confirm(self, fact_id):
+        if fact_id not in self._facts:
+            raise KeyError(fact_id)
+        self._facts[fact_id]["state"] = "verified"
+        return self._facts[fact_id]
+
+    def reject(self, fact_id):
+        if fact_id not in self._facts:
+            raise KeyError(fact_id)
+        self._facts[fact_id]["state"] = "rejected"
+        return self._facts[fact_id]
+
+    def draft(self, kind="resume", *, include_inferred=False):
+        return {"kind": kind, "markdown": "# Resume\n"}
+
+    def list_events(self, *, fact_id=None, limit=50):
+        return [{"created_at": "2026-07-19", "action": "inferred", "fact_id": "F-1"}]
+
+
 class FakeApp:
     def __init__(self):
         self.tools = FakeTools()
@@ -287,6 +323,7 @@ class FakeApp:
                 "intelligence": _fake_intelligence(),
                 "coverage": _FakeCoverage(),
                 "policy": _FakePolicyCli(),
+                "personal": _FakePersonalCli(),
             }
         )
 
@@ -1028,3 +1065,32 @@ def test_cmd_policy_disable_and_revert(capsys):
     rc = cmd_policy(build_parser().parse_args(["policy", "revert", "missing"]), app=app)
     assert rc == 1
     assert "not found" in capsys.readouterr().out
+
+
+def test_cmd_personal_infer_and_profile(capsys):
+    app = FakeApp()
+    rc = cmd_personal(build_parser().parse_args(["personal", "infer"]), app=app)
+    assert rc == 0
+    assert "skills=1" in capsys.readouterr().out
+
+    rc = cmd_personal(build_parser().parse_args(["personal", "profile"]), app=app)
+    assert rc == 0
+    assert "== skills" in capsys.readouterr().out
+
+
+def test_cmd_personal_confirm_and_missing(capsys):
+    app = FakeApp()
+    rc = cmd_personal(build_parser().parse_args(["personal", "confirm", "F-1"]), app=app)
+    assert rc == 0
+    assert "state=verified" in capsys.readouterr().out
+
+    rc = cmd_personal(build_parser().parse_args(["personal", "reject", "nope"]), app=app)
+    assert rc == 1
+    assert "not found" in capsys.readouterr().out
+
+
+def test_cmd_personal_draft(capsys):
+    app = FakeApp()
+    rc = cmd_personal(build_parser().parse_args(["personal", "draft", "--kind", "resume"]), app=app)
+    assert rc == 0
+    assert "# Resume" in capsys.readouterr().out
