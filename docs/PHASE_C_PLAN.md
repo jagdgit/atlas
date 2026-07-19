@@ -345,7 +345,40 @@
   for re-extraction and leaves others untouched; a coverage summary **with both coverage % and
   understanding %** is queryable via API/console.
 
-#### C.5 Policy store  ·  migration `0036` *(re-penciled)*
+#### C.5 Policy store  ·  ✅ **DONE (2026-07-19)**  ·  migration `0036`
+
+> **✅ Delivered (2026-07-19).** Built in four committed sub-steps (`7682a8b`, `ea69571`, `6c25809`,
+> `b2ef4c7`):
+> - **C.5a** `policy` schema (migration `0036`): `policy.rules`
+>   (scope/subject/rule/strength/enabled/provenance, `prefer|avoid|trust|distrust`, unique per
+>   scope+subject+rule) + append-only `policy.events` before/after journal + `PolicyRepository`
+>   (CRUD, natural-key upsert, snapshot restore, JSON-safe journaling).
+> - **C.5b** `PolicyService` (capability `policy`): create/update/enable-disable/delete each **journal**
+>   a before/after event; **`revert(event_id)`** restores the prior state (undo create→delete,
+>   delete→restore, update/toggle→restore-before). `retrieval_influence()` derives a **signed, bounded**
+>   weight per enabled rule (prefer/trust +, avoid/distrust −; magnitude = `strength × POLICY_INFLUENCE_MAX`,
+>   0.02) with global-only scoping unless a caller scope is supplied.
+> - **C.5c** influence wired into **retrieval + advice**: `heuristic_rerank` applies signed policy
+>   deltas and records the affecting rule ids on each hit + citation ("boosted by policy P-12");
+>   `KnowledgeService.retrieve` reports `policy_rules_applied` in `meta`; `IntelligenceService.recommend`
+>   re-orders advice by the same influence. **Influence, not arbitration** — a hit/rec is never removed.
+> - **C.5d** operator surfaces: `GET/POST /v1/policy/rules`, `GET /v1/policy/rules/{id}`,
+>   `POST .../enable`, `GET /v1/policy/events`, `POST /v1/policy/events/{id}/revert` + an
+>   `atlas policy <set|list|show|enable|disable|revert|events>` CLI; registered as the `policy`
+>   capability and attached to KnowledgeService + IntelligenceService in bootstrap.
+
+> **Deviations / notes:** (1) Governance uses a **dedicated `policy.events` journal** (before/after +
+> `revert`) rather than routing through the Learning ledger — keeps the Policy layer cleanly separate
+> from Experience (the five-things model). (2) No hard `DELETE` route (the codebase uses POST
+> sub-actions); rule removal is available via the service/CLI, and API edits are create/enable/disable/
+> revert. (3) Policy influence magnitude (0.02) is deliberately small — larger than experience
+> soft-bias (0.005) but far below relevance, so it nudges ranking without overriding it (CC8).
+> (4) Scoping beyond `global` is stored but retrieval only applies `global` unless a caller passes a
+> scope; mission/domain-scoped application is a later hook. (5) Full suite 1385 green, same known
+> pre-existing env flake `OI-T2`.
+
+*(Original plan below.)*
+
 - **`policy.*` schema + service** (`atlas/policy/`): durable, editable, provenance-stamped operator
   rules — `{scope, subject, rule, strength, enabled, provenance, created_by, created_at}`. Governed
   (edits are journaled + reversible). Examples: *prefer momentum strategies*, *never trade crypto*,
@@ -435,7 +468,7 @@ Learning ledger, mission/config/schedule/worker). New objects created `AUTHORIZA
 | _(placeholders below)_ | **Note:** numbers `0030+` are **planning placeholders**; actual migration numbers are assigned sequentially at implementation time. `finding_embeddings`, `knowledge_coverage`, etc. now shift to `0030`, `0031`, … as the slots below are built. |
 | `00xx_finding_embeddings` | Prose-finding **embeddings** for NN dedup + retrieval (pgvector — already used by `knowledge.embeddings`); `embedding_id` provenance stamp. |
 | `0035_knowledge_coverage` ✅ | `knowledge.coverage` — per `(asset_id, asset_version, reader, reader_version)` extraction status/counts + `extractor_version`/`domain`/`source`/`repo_uid`. *(Shipped as C.4a at slot `0035`; understanding % is a `FindingRepository.understanding_by_domain()` aggregate + `CoverageService` policy, not columns on this table.)* |
-| `0031_policy` | `policy.policies` — operator rules (scope/subject/rule/strength/enabled/provenance/created_by). |
+| `0036_policy` ✅ | `policy` schema — `policy.rules` (scope/subject/rule/strength/enabled/provenance/created_by, `prefer|avoid|trust|distrust`) + append-only `policy.events` before/after journal. *(Shipped as C.5a at slot `0036`; governance is a dedicated journal, not the learning ledger.)* |
 | `0032_experience_consolidation` | Extend `learning.experiences` with evidence list + confidence + corroboration count (consolidation fields). |
 | `0033_personal` | `personal.*` — profile facts, skills, timeline, professional (publications/patents), each with provenance + confidence + `inferred/verified` status. |
 | `0034_owner_mission` | Owner Knowledge Mission built-in template + `user_archive` config schema; (worker types reuse Phase-A/B). |
@@ -490,7 +523,10 @@ doc**, exactly as Phases A/B did.
 > (migrations `0030`–`0034`; commits `7919464`, `de0522b`, `deaac08`, `5f1634c`, `58f7c78`, `f5624b0`,
 > `4595ee8`; full suite 1339 green, 1 known pre-existing env flake `OI-T2`; leftovers `OI-C1`–`OI-C5`).
 > **C.4 (Knowledge Coverage map + understanding quality) ✅ DONE** (migration `0035`; commits
-> `4039739`, `b40ab0f`, `949a125`, `c8b3b40`, `f3e0f91`; full suite 1360 green, same 1 known
-> pre-existing env flake `OI-T2`). C.4 consumed exactly `0035`, so C.5–C.8 keep `0036`–`0039`.
-> **Next: C.5** (Policy store; migration `0036`).
+> `4039739`, `b40ab0f`, `949a125`, `c8b3b40`, `f3e0f91`; full suite 1360 green). C.4 consumed exactly
+> `0035`. **C.5 (Policy store + retrieval/advice influence) ✅ DONE** (migration `0036`; commits
+> `7682a8b`, `ea69571`, `6c25809`, `b2ef4c7`; full suite 1385 green, same 1 known pre-existing env
+> flake `OI-T2`). C.5 consumed exactly `0036`, so C.6–C.8 keep `0037`–`0039`.
+> **C-Foundations complete.** **Next: C.6** (Experience extraction + consolidation — first C-Personal
+> slice; migration `0037`).
 > Land/test/smoke/update-doc per slice, exactly as Phases A/B.
