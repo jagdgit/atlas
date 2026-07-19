@@ -168,7 +168,21 @@
   equally-scored Y and the rule id appears in the decision's explanation; LLM-off still yields a
   complete decision. Hermetic tests with stubbed capabilities.
 
-### D.3 — Human-approval gate  ·  migration `0040`
+### D.3 — Human-approval gate  ·  migration `0040`  ·  ✅ DONE
+> **Delivered:** `atlas/decision/approvals.py` — `ApprovalService` (the P14 human gate) +
+> `ApplierRegistry`/`ActionApplier` protocol + `ApprovalError`, over `decision.approvals`
+> (migration `0040`; single-row state machine `proposed → approved → applied → reverted`, or
+> `→ rejected`, with `before`/`after` snapshots for reversibility). `propose(decision)` opens the gate
+> **only** when `decision.requires_approval` (DD3 — read/advice/sim bypass it); `approve`/`reject`
+> record who/when; `apply` runs the mission-type's registered `ActionApplier`, capturing before/after
+> so `revert` can restore prior state; every transition emits an event (P9). Approving something with
+> **no registered applier** raises an honest `ApprovalError` (the P15 boundary — add the applier).
+> `DecisionEngine` gained an optional `approvals` dep and **auto-proposes** on a side-effecting
+> decision. Tests: `tests/test_approvals.py` (10 hermetic — full lifecycle, reject blocks apply,
+> illegal transitions, no-applier honesty, pending queue, engine auto-propose only for side-effecting)
+> + `tests/test_approval_repo.py` (2 live-DB — lifecycle + snapshots, pending queue). Wiring into
+> bootstrap + the operator API is D.5.
+
 - **New** `atlas/decision/approvals.py` (`ApprovalService`) + migration `0040_decision_approvals.sql`
   (`decision.approvals`: id, decision_id, mission_id, action JSONB, status
   ∈ `proposed|approved|rejected|applied|reverted`, requested_at, decided_by, decided_at, note,
@@ -286,5 +300,6 @@ are incremental follow-ons.
 ---
 
 > **D.1 ✅ DONE** (`atlas/decision/` + `0039` + 11 tests). **D.2 ✅ DONE** (`IntelligenceContext`
-> composition + policy arbitration + 5 tests). **Next: D.3 — Human-approval gate
-> (`decision.approvals`, migration `0040`): propose → approve/reject → apply → revert (P14).**
+> composition + policy arbitration + 5 tests). **D.3 ✅ DONE** (`ApprovalService` + `ActionApplier` +
+> `0040` + 12 tests): propose → approve/reject → apply → revert, reversible + journaled (P14), gate
+> bypassed for read/advice/sim (DD3). **Next: D.4 — Cross-mission Resource Manager arbitration (A7).**

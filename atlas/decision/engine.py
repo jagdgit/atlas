@@ -57,6 +57,7 @@ class DecisionEngine:
         knowledge: Any = None,
         versions_provider: Callable[[], dict[str, Any]] | None = None,
         narrator: Any = None,
+        approvals: Any = None,
         events: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -74,6 +75,9 @@ class DecisionEngine:
         self._versions_provider = versions_provider
         # Optional LLM seam that only rewrites the ``why`` prose (CC-D1); never picks the action.
         self._narrator = narrator
+        # Optional ApprovalService (§D.3, P14). When present, a side-effecting decision automatically
+        # opens the human gate (proposes an approval); non-side-effecting decisions never enter it.
+        self._approvals = approvals
         self._events = events
         self._logger = logger or logging.getLogger("atlas.decision")
 
@@ -250,6 +254,12 @@ class DecisionEngine:
             decision.id = row.get("id")
             decision.created_at = row.get("created_at")
         self._emit(event, decision)
+        # P14 human gate: a side-effecting decision opens an approval; the operator decides before it acts.
+        if decision.requires_approval and self._approvals is not None:
+            try:
+                self._approvals.propose(decision)
+            except Exception:  # noqa: BLE001 - a failed proposal must not void the recorded decision
+                self._logger.exception("failed to propose approval for decision %s", decision.id)
         return decision
 
     def _emit(self, event_type: str, decision: Decision) -> None:

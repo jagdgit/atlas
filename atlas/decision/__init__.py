@@ -16,6 +16,17 @@ from atlas.decision.contracts import (
     ScoredOption,
     derive_confidence,
 )
+from atlas.decision.approvals import (
+    STATUS_APPLIED,
+    STATUS_APPROVED,
+    STATUS_PROPOSED,
+    STATUS_REJECTED,
+    STATUS_REVERTED,
+    ActionApplier,
+    ApplierRegistry,
+    ApprovalError,
+    ApprovalService,
+)
 from atlas.decision.context import IntelligenceContext
 from atlas.decision.engine import DecisionEngine
 from atlas.decision.rules import (
@@ -36,6 +47,15 @@ __all__ = [
     "IntelligenceContext",
     "CapabilityGap",
     "apply_policy_influence",
+    "ApprovalService",
+    "ApplierRegistry",
+    "ActionApplier",
+    "ApprovalError",
+    "STATUS_PROPOSED",
+    "STATUS_APPROVED",
+    "STATUS_REJECTED",
+    "STATUS_APPLIED",
+    "STATUS_REVERTED",
     "ACTION_RECOMMEND",
     "ACTION_HOLD",
     "ACTION_CAPABILITY_GAP",
