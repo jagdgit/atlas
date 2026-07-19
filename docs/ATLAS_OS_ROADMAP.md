@@ -1,8 +1,8 @@
 # Atlas — OS Roadmap (post–Stage 3): Intelligence Domains, Missions & Durable State
 
 > **Status:** 🟢 **FROZEN FOR IMPLEMENTATION (2026-07-18).** The top-level architecture and
-> principles (P1–P13) are locked; remaining items are non-blocking, per-phase design details
-> (see §12). Next step is to spin out `docs/PHASE_0_PLAN.md` and begin Phase 0. No code yet.
+> principles (P1–P15) are locked; remaining items are non-blocking, per-phase design details
+> (see §12). Phases 0/A/B/C are complete; **Phase D is in progress** (`docs/PHASE_D_PLAN.md`).
 > **Created:** 2026-07-18 · **Review round 1:** 9/11 open questions resolved.
 > **Review round 2:** added **Storage Manager** + **Asset Store**, enriched **Capability
 > Registry**, reclassified the **Decision Engine as a Kernel Service**, added **Mission
@@ -24,6 +24,14 @@
 > verified → established → deprecated/contradicted/superseded → archived), **Asset
 > relationships/groups** (§5.9), **evolution-vs-conflict** routing, and **understanding quality** on
 > the coverage map. See §11 for the full decision log and §12 for remaining ambiguities.
+> **Review round 6 (Phase-D planning, 2026-07-19):** Phase **C is complete** (C.1–C.9,
+> `docs/PHASE_C_PLAN.md`). Added **P14 — Atlas recommends; the operator decides** (§3), and
+> structured **Phase D** into **D-Core** (Decision Engine as a Kernel Service + human-approval gate +
+> cross-mission RM arbitration) → **D-Missions** with **Paper Trading (simulation-only)** as the
+> flagship end-to-end gate (`docs/PHASE_D_PLAN.md`). After an external architecture review, added
+> **P15 — capability-gap honesty** (Atlas surfaces what it *can't* do so the operator can extend it)
+> and recorded post-Phase-D **future maturity directions** (§13, deferred by review discipline).
+> Principles now **P1–P15**.
 >
 > **Supersedes the framing of:** "Stage 4 / Stage 5". Those become **Phases** and
 > **Missions** here (see §1). The Stage 3 / 3.2 / 3B plans remain the *history* of the
@@ -401,6 +409,48 @@ Consequences that follow from P13 (all realized by the **Knowledge Consolidator*
   over time, not a contradiction. The consolidator uses recency/temporal signals to distinguish a
   legitimate **revision/supersession** from a genuine **contradiction** (contested).
 
+### P14 — Atlas recommends; the operator decides (R6, formalizes the human-gate non-goal)
+
+**No autonomous behaviour change that acts on the world happens without a human gate.** The Decision
+Engine (§5.5) and Learning OS **recommend**; the operator approves. This formalizes the long-standing
+non-goal ("No autonomous behavior change without a human gate", §10) into a numbered principle so
+Phase D builds it in from the start.
+
+- **Record all, gate the side-effecting.** *Every* decision is journaled + explainable (P9), but only
+  a decision that would **act on the world** (a side-effecting/external action) requires an explicit
+  **approval** before it is applied. Read/advice/simulation decisions flow freely.
+- **Reversible + journaled.** Approvals move through `propose → approve/reject → apply → revert`; an
+  applied action can be reverted from its recorded before/after state.
+- **Deterministic core (Q7/A5).** The engine *chooses* deterministically (rules/scoring); the LLM only
+  renders the human-readable *why* of an already-made decision. Confidence is a function of score
+  margin, never an LLM guess.
+- **Consistent with P10** (no irreversible real-world action without the operator) — P14 is the
+  mechanism (the gate) behind P10's guarantee.
+
+### P15 — Atlas knows the limits of its capabilities (capability-gap honesty) (R6)
+
+**When Atlas cannot perform a task because it lacks a capability, it says so — explicitly, naming
+what is missing — and never fakes, guesses, or silently fails.** A capability gap is a **first-class,
+surfaced outcome** ("I have no reader for AutoCAD files", "no market-data source for this exchange",
+"no strategy rule registered for this mission type", "this needs a tool I don't have"), routed to the
+**operator** so the missing capability can be added. This closes the loop the operator asked for:
+Atlas should tell us what it *can't* do so we can extend it.
+
+Realized by machinery that **already exists** — no new subsystem (consistent with keeping the kernel
+small, P7):
+- the **Capability Registry** (§5.10) is the source of truth for *what Atlas can do* and its health,
+  and gains a **capability-gap self-report** (requested-but-absent capabilities);
+- **honest-failure readers** (P11 corollary) already return `unsupported`/`empty`/`error` outcomes
+  rather than silently dropping input, and the **coverage map** already reports honest partial
+  understanding ("MATLAB 20%");
+- the **Decision Engine** (§5.5) emits a **`capability_gap` recommendation** instead of a fabricated
+  action when a needed capability/reader/data-source/rule is absent (a P14 recommendation, P9-
+  explainable);
+- every such gap is **journaled + notified** (§5.6) so it becomes a visible, prioritisable backlog
+  item, not a swallowed error.
+
+The rule: **a gap is a recommendation to the operator, never a fabricated result.**
+
 ---
 
 ## 4. Target architecture (frozen top level)
@@ -549,6 +599,10 @@ Each subsystem below is a proposal. Data-model details are collected in §8.
   behavior changes stay human-gated (consistent with the Learning OS stance).
 - **Explainability (P9):** the `Decision` record is the canonical "Explain this" payload
   surfaced by the dashboard/Mission views; nothing the engine outputs is a black box.
+- **Capability-gap outcome (P15):** when the engine cannot choose an action because a needed
+  capability/reader/data-source/rule is **absent**, it returns a **`capability_gap` recommendation**
+  (naming exactly what is missing) instead of a fabricated action — journaled + notified to the
+  operator so the capability can be added. Honest "I can't do this yet" over a guessed answer.
 - **Open questions:** §9 Q7 (how much reasoning is deterministic vs LLM).
 
 ### 5.6 Notification / Event bus upgrade (durable + channels + live UI)
@@ -639,6 +693,10 @@ Each subsystem below is a proposal. Data-model details are collected in §8.
   (`name, version, enabled, healthy, metrics, dependencies`) surfaced via `/health` and the
   Operations Dashboard, and used as the source of the real component versions that stamp
   Findings/Experiences (replacing hardcoded `"v1"`).
+- **Capability-gap self-report (P15):** the registry is also the source of truth for *what Atlas
+  cannot do* — it records **requested-but-absent** capabilities (a reader that doesn't exist for a
+  file type, a data source with no adapter, a missing decision rule) so gaps become a visible,
+  prioritisable backlog surfaced to the operator, not swallowed errors.
 - **Open questions:** §9 Q14 (push vs pull for health/metrics).
 
 ### 5.11 Operations Dashboard (mobile-first — R2)
@@ -825,18 +883,33 @@ rest.
   better reader **without duplication**; a durable, editable personal/professional profile Missions
   can read.
 
-### Phase D — Persistent Workers / Missions (ongoing)
-Each is a **Mission** composing the three intelligences + Decision Engine + config + workers:
-- **Job Watcher** (LinkedIn/Naukri/company sites → ranked matches → notify).
-- **Research Watcher** (IEEE/arXiv/Scholar → summarize → Knowledge Base).
-- **Paper-Trading Worker** (market data → indicators → strategy → **simulation only, no real
-  money** → virtual portfolio → learning). Operator-configurable + operator inputs/constraints.
+### Phase D — Decision Engine + applied persistent Missions (ongoing)
+> Split into **D-Core** (the shared brain — *no compromise*, built first) then **D-Missions**
+> (applied missions on top). Detailed plan in `docs/PHASE_D_PLAN.md`. Decided (R6): D-Core first,
+> then **Paper Trading (simulation-only)** as the flagship end-to-end gate; other watchers follow.
+
+**D-Core** (the Decision Engine as a Kernel Service, §5.5 + P14):
+- **Decision Engine** (`atlas/decision/`): typed `DecisionRequest → Decision` (full P9 record),
+  **deterministic core + `DecisionRule` plugins per mission type** (one engine, many missions), LLM
+  narrative-only. Journaled to `decision.decisions` (`0039`).
+- **Intelligence + Policy composition:** the engine consumes Research + Engineering + Personal + the
+  **Policy store** (C.5), turning policy *influence* into real decision **arbitration**.
+- **Human-approval gate (P14):** `decision.approvals` (`0040`) — record every decision; require
+  approval only for **side-effecting** actions; reversible + journaled.
+- **Cross-mission RM arbitration (A7):** weighted `effective_priority` + hard budget caps (consume the
+  `budget`/`deadline`/`importance` mission fields, not just `max_concurrent_tasks`).
+
+**D-Missions** (each a **Mission** composing the intelligences + Decision Engine + config + workers):
+- **Paper Trading** (`0041`, **flagship e2e**) — pluggable `MarketDataReader` (fixture/replay first) →
+  indicators → `StrategyDecisionRule` → **simulation only, no real money** → virtual portfolio →
+  learning (experiences). Live operator constraints + policy-arbitrated.
+- **Research Watcher** (arXiv/IEEE/Scholar → summarize → Knowledge OS).
+- **Job Watcher** (postings → match against Personal + Policy → ranked matches → notify; draft-only).
 - **Technology / Security Watcher** (breaking changes, CVEs).
 - **Atlas Self-Improvement Watcher** (benchmarks, regressions, performance).
-- **Decision Engine** (§5.5) lands here as the shared brain for all of the above.
-- **Acceptance:** at least one end-to-end Mission (proposed: Paper Trading, simulation-only)
-  running for days across reboots, configurable live, notifying, and journaling explainable
-  decisions.
+- **Acceptance:** the Paper-Trading Mission runs for days across reboots, configurable live, notifying,
+  and journaling explainable decisions — every decision provenance-stamped (P9), gated where
+  side-effecting (P14), and reversible.
 
 ---
 
@@ -1035,14 +1108,26 @@ all long-lived (P1).
 | 2026-07-19 (R5) | Add **Asset relationships / groups** (`asset.groups` + membership / pairwise `related`) so repo+doc+chat+PDF of one project link, and readers/consolidator traverse across sources | Assets aren't islands; cross-source corroboration strengthens knowledge | **Accepted** |
 | 2026-07-19 (R5) | Consolidator distinguishes **evolution (revision over time) from conflict (contradiction)** using recency/temporal signals | "Redis optional → required" is a revision, not a contradiction | **Accepted** |
 | 2026-07-19 (R5) | Coverage map also exposes **understanding quality** (confidence/comprehension) alongside coverage % | Coverage ≠ comprehension — Atlas may have read everything yet hold low confidence | **Accepted** |
+| 2026-07-19 (R6) | **Phase C complete** (C.1–C.9); spin out **`docs/PHASE_D_PLAN.md`** (Decision Engine + applied Missions) | Foundations + Personal Intelligence shipped; Phase D is next | **Accepted** |
+| 2026-07-19 (R6) | Add **P14 — Atlas recommends; the operator decides** (formalizes the human-gate non-goal): record every decision, gate only side-effecting actions, reversible + journaled | Makes the human gate a first-class, buildable principle for Phase D | **Accepted** |
+| 2026-07-19 (R6) | **Structure Phase D** into **D-Core** (Decision Engine + human-gate + RM arbitration, no compromise) **then D-Missions**, with **Paper Trading (simulation-only)** as the flagship end-to-end gate | Prove the reusable spine before fanning out to watchers | **Accepted** |
+| 2026-07-19 (R6) | **One engine, many missions:** generic typed `Decision` core + **per-mission-type deterministic `DecisionRule` plugins** | Shared engine (R2); isolated, testable per-type scoring | **Accepted** |
+| 2026-07-19 (R6) | **Human gate = record-all, approve-only-side-effecting** (`decision.approvals`, propose→approve→apply→revert) | P14 without stalling safe, reversible, sim-only work | **Accepted** |
+| 2026-07-19 (R6) | **Policy becomes decision arbitration** — the engine consumes `retrieval_influence`/`advice_influence` as signed, bounded scoring terms | The C.5 store was built to influence; Phase D is where it arbitrates | **Accepted** |
+| 2026-07-19 (R6) | **Paper Trading market data = pluggable `MarketDataReader`, fixture/replay first** (live feed a swappable reader later); RM cross-mission arbitration = weighted priority + hard budget cap (A7, no preemption) | Hermetic/deterministic tests now; start simple, refine empirically | **Accepted** |
+| 2026-07-19 (R6, external review) | Add **P15 — capability-gap honesty**: when Atlas can't do a task for lack of a capability, it surfaces the gap (naming what's missing) to the operator — realized via the Capability Registry + honest-failure + a Decision-Engine `capability_gap` outcome (no new subsystem) | Operator asked to be told what Atlas *can't* do so it can be extended; keeps Atlas honest over fabricating results | **Accepted** |
+| 2026-07-19 (R6, external review) | Record **future maturity directions (§13)** — Decision Knowledge, Temporal Knowledge, System Introspection, standardized post-decision feedback loops — as **deferred** post-Phase-D | Reviewer + operator agree: execute the roadmap; don't add top-level concepts until implementation exposes a genuine limit | **Accepted (deferred)** |
 
 ---
 
 ## 12. Implementation readiness & remaining ambiguities
 
 **The plan is frozen.** The top-level architecture, the four planes, the subsystem set, the
-phase order (0 → A → B → C → D), and principles **P1–P13** are locked and should not be
-reopened without a new decision-log entry.
+phase order (0 → A → B → C → D), and principles **P1–P15** are locked and should not be
+reopened without a new decision-log entry. **Phases 0/A/B/C are complete; Phase D is in progress
+(plan: `docs/PHASE_D_PLAN.md`).** A5 (determinism split) and A7 (mission arbitration formula) are
+resolved in the Phase-D plan (DD4/DD7). Post-Phase-D **future maturity directions** are parked in §13
+(deferred by review discipline — execute the roadmap before adding new top-level concepts).
 
 **What is fully decided (no ambiguity):** the reframe to Intelligence Domains + Missions;
 Missions as first-class operator-created objects above Jobs; three permanent intelligences;
@@ -1071,7 +1156,44 @@ the-operator (P10); readers-never-own-knowledge + Reader Registry (P11). Deferre
 None of A1–A10 block starting Phase 0. Each becomes a small decision recorded in the relevant
 `docs/PHASE_*_PLAN.md`.
 
-> **Next step:** spin out `docs/PHASE_0_PLAN.md` (Clock, Storage Manager, Asset Store,
-> Capability Registry enrichment, durable event bus + SSE, Operations Dashboard, Recovery
-> Manager, artifact versioning, resumable downloads/checkpoint hooks) in the style of the
-> Stage plans, resolving A1–A4 there, then begin implementation.
+> **Next step:** implement **Phase D** per `docs/PHASE_D_PLAN.md`, starting with **D.1 — Decision
+> Engine skeleton + `decision.decisions` (migration `0039`)**. (Phases 0/A/B/C are complete.)
+
+---
+
+## 13. Future maturity directions (post-Phase-D — deferred by review discipline)
+
+> **These are intentionally deferred architectural directions. They are NOT part of the implementation
+> contract for Phase D and MUST NOT influence current implementation unless explicitly promoted into a
+> future phase (via a new decision-log entry).** They exist to be neither lost nor prematurely built.
+
+An external architecture review (2026-07-19) rated the architecture ~9.9/10 and — crucially — advised
+that **the greatest return now is executing the roadmap, not redesigning it**: *resist adding new
+top-level concepts unless implementation exposes a genuine architectural limitation.* The following
+directions are **endorsed and recorded, but intentionally deferred** until the roadmap is executed and
+one of them is justified by a real limit. None require reopening the frozen architecture; each rides on
+existing abstractions. Tracked as `OI-F*` in `docs/OPEN_ITEMS.md`.
+
+- **F1 — Decisions as first-class historical knowledge ("Decision Knowledge").** Beyond `Knowledge →
+  Decision`, learn *which decisions consistently produced good outcomes* (`Decision → outcome →
+  Decision Knowledge`). Rides on `decision.decisions` (Phase D) + the experience consolidator (C.6);
+  becomes a distilled, queryable track record that biases future scoring. **Deferred** until Phase D
+  decisions + outcomes exist to learn from.
+- **F2 — Temporal Knowledge layer (historical / current / predicted truth).** Today's lifecycle
+  captures *validity over time*; a temporal layer would explicitly distinguish **what was true**,
+  **what is true now**, and **what is predicted** — valuable for market analysis, infra planning, and
+  forecasting. Rides on existing freshness/lineage + revision history. **Deferred** — introduce when a
+  mission genuinely needs prediction-vs-fact separation.
+- **F3 — System Introspection ("Atlas understands itself").** A periodic **self-analysis mission**:
+  *what do I know? what am I uncertain about? which readers fail most? which missions cost most? which
+  policies block decisions? what should I improve next?* Overlaps the Phase-D **Self-Improvement
+  Watcher** (D.10) and the **capability-gap self-report** (P15/§5.10); the *generalized* introspection
+  mission is **deferred** until those exist to aggregate.
+- **F4 — Standardized post-decision feedback loops.** Make `Recommendation → Outcome → Difference →
+  Learning` a **standard cycle across all missions** (not just Paper Trading's learning loop, D.6). The
+  architecture already supports it (decisions + experiences + consolidator); **deferred** to a
+  cross-mission convention once ≥2 applied missions run.
+
+> These stay parked here (and in `OPEN_ITEMS.md`) so they are neither lost nor prematurely built. They
+> are revisited **after** Phase D, or sooner **only if** implementation exposes a concrete limitation
+> that one of them resolves.

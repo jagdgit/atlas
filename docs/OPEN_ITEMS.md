@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-19 (after Phase C.9 — **Phase C complete**).
+> **Last updated:** 2026-07-19 (after Phase C.9 — **Phase C complete**; **Phase D planned**, see `docs/PHASE_D_PLAN.md`; **P15 capability-gap honesty** + post-Phase-D future directions recorded after external review).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -34,6 +34,38 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C7 | 🟡 | P3 | **Migration-number placeholders.** The `PHASE_C_PLAN.md` data-model table lists planning placeholders. Real numbers are assigned sequentially at build time — `0028`=document↔asset, `0029`=asset groups, C.3 `0030`–`0034`, `0035`=knowledge_coverage, `0036`=policy, `0037`=experience_consolidation, `0038`=personal. **C.8 added no migration** (template + config schema are code-seeded), so the next real migration is `0039`. Keep the table honest as slots are built. | C.2 | ongoing |
 | OI-C12 | 🔴 | P3 | **Personal/Owner SPA dashboard view.** C.8d ships the *data* — `GET /v1/personal/dashboard` (per-domain coverage + understanding + skills/timeline/professional) and live updates over the shared `/v1/events/stream` SSE feed — and a CLI (`atlas personal dashboard`), but no dedicated `/ui` panel. Add a console view rendering the coverage bars + profile with the P9 "why" and confirm/correct controls. | C.8d | Phase D / UI pass |
 | OI-C13 | 🔴 | P3 | **Conversation → experience extraction.** The Conversation Reader (C.8a) feeds chats through the pipeline as prose **candidates → findings**, but chats do not yet distill owner **experiences** (a `build_conversation_experiences` analog to `build_repo_experiences`). So skills currently derive from code repos; chat-stated skills ("I spent years on PostgreSQL") become findings, not corroborating experience evidence. | C.8a | Phase D |
+
+---
+
+## 1c. Phase D (planned — seeded from `docs/PHASE_D_PLAN.md`)
+
+Forward-looking scope cuts recorded at plan time; opened for real as the slices land.
+
+| ID | Status | Pri | Item | Notes |
+|----|--------|-----|------|-------|
+| OI-D1 | 🔴 | P2 | **Live market-data feed** (real provider) as a swappable `MarketDataReader`. | DD6 ships fixture/replay first. |
+| OI-D2 | 🔴 | P3 | **RM arbitration beyond weighted-priority + hard cap** (preemption, fair-share). | A7 — refine empirically. |
+| OI-D3 | 🔴 | P2 | **Applied watchers D.7–D.10** (Research/Job/Tech-Security/Self-Improvement) land after the Paper-Trading gate. | PHASE_D §3 |
+| OI-D4 | ⚪ | — | **Real-world side-effecting appliers** (e.g. actually submitting a draft) stay behind the P14 approval gate — out of scope until explicitly requested. | PHASE_D DD3/P14 |
+
+---
+
+## 1d. Future maturity directions (post-Phase-D — deferred by review discipline)
+
+> **Intentionally deferred architectural directions. NOT part of the Phase-D implementation contract;
+> they must not influence current implementation unless explicitly promoted into a future phase.**
+
+From the 2026-07-19 external architecture review (rated ~9.9/10). **Endorsed but intentionally
+deferred** — execute the roadmap before adding new top-level concepts; revisit after Phase D or when
+implementation exposes a genuine limit. Mirrored in `ATLAS_OS_ROADMAP.md` §13.
+
+| ID | Status | Pri | Item | Notes |
+|----|--------|-----|------|-------|
+| OI-F1 | 🔴 | P3 | **Decision Knowledge** — learn *which decisions consistently produced good outcomes* (`Decision → outcome → Decision Knowledge`), biasing future scoring. | Rides on `decision.decisions` (D) + experience consolidator (C.6). Needs Phase-D decisions+outcomes first. |
+| OI-F2 | 🔴 | P3 | **Temporal Knowledge layer** — distinguish historical / current / **predicted** truth (forecasting, market/infra planning). | Rides on freshness + lineage + revisions. Introduce when a mission needs prediction-vs-fact. |
+| OI-F3 | 🔴 | P3 | **System Introspection mission** — periodic self-analysis (what do I know / am uncertain about / which readers fail most / mission cost / policies blocking decisions / what to improve). | Generalizes the D.10 Self-Improvement Watcher + the P15 capability-gap self-report. |
+| OI-F4 | 🔴 | P3 | **Standardized post-decision feedback loops** — `Recommendation → Outcome → Difference → Learning` as a cross-mission convention (not just D.6 Paper Trading). | Architecture already supports it; make it a convention once ≥2 applied missions run. |
+| OI-F5 | 🟡 | P2 | **Capability-gap honesty (P15)** — surface *what Atlas can't do* (missing reader/data-source/rule/tool) to the operator. Partially realized today (honest-failure readers `unsupported`/`empty`, coverage map). To first-class: a Capability Registry gap self-report + the Decision-Engine `capability_gap` outcome (D.1). | Requested by the operator 2026-07-19. Land the `capability_gap` outcome in D.1; the registry self-report is a small Phase-D add. |
 
 ---
 
