@@ -139,7 +139,7 @@
   mission-scoped e2e in `tests/test_phase_b_e2e.py`. Full suite: 1287 passed (the 1 unrelated
   `test_event_lifecycle` failure is a pre-existing shared-DB pollution flake).
 
-#### C.2 Unified ingestion — generic acquirer + document/PDF reader  ·  *the spine*  ·  migration `0028`
+#### C.2 Unified ingestion — generic acquirer + document/PDF reader  ·  *the spine*  ·  ✅ **DONE (2026-07-19)**  ·  migrations `0028`, `0029`
 - **Generic (non-git) Asset Acquirer** (`atlas/ingestion/acquire.py` or `atlas/assets/…`): register
   arbitrary bytes/files as an **asset** (kind e.g. `document`, `pdf`, `transcript`), identity =
   **content sha256** (matches today's `DocumentRepository` dedup), versioned + checksummed via the
@@ -167,8 +167,36 @@
   provenance-linked to the asset id + version; re-ingesting the identical file reuses the asset (no
   duplicate bytes); two related assets can be grouped and the group is queryable. Hermetic unit tests
   + one live-DB smoke.
+- **✅ Delivered (2026-07-19):**
+  - **C.2a** `atlas/ingestion/acquire.py` — `AssetAcquirer.acquire_bytes/acquire_file`, content-sha256
+    identity, reuse-on-identical, via the Asset Store (P11). *(commit `51927a5`)*
+  - **C.2b** `atlas/readers/document.py` — `DocumentReader` turns a doc asset → cached text artifact
+    in the Derived Artifact Store keyed by `{asset_id, asset_version, reader, reader_version}`.
+    *(commit `5f0ee51`)*
+  - **C.2c** `atlas/ingestion/service.py` — `IngestionService` bridge (acquire → read → chunks/
+    embeddings); migration **`0028`** links `knowledge.documents` → `(asset_id, asset_version)`
+    (soft ref); `DocumentRepository.set_asset/get_by_asset`; `ingest_text` threads the link.
+    *(commit `cd6805f`)*
+  - **C.2d** migration **`0029`** `asset.groups` + `asset.group_members`; `AssetStore` group API
+    (create/add/remove/members/groups_for_asset). *(commit `7971359`)*
+  - **Repo hygiene:** `.gitignore` was silently ignoring the `atlas/{documents,knowledge,models}`
+    **source** packages (unanchored runtime-data rules) — fixed + 25 core files now tracked.
+    *(commit `57deac9`)*
+  - **⚠ Deviations from plan (intentional, low-risk):**
+    (1) The Document Reader lives in the new neutral **`atlas/readers/`** package as planned, but the
+    **Derived Artifact Store was NOT physically relocated** out of `atlas/engineering/artifacts.py`;
+    the reader is **duck-typed** against `get/put` instead, so it doesn't couple to engineering. A
+    later mechanical relocation of `DerivedArtifactStore` (+ `ReaderRegistry`) to `atlas/artifacts/`
+    remains open.
+    (2) The Document Reader is **not registered in the code `ReaderRegistry`** (whose coverage matrix
+    is code-capability-specific); it exposes its own `supported_extensions()`. Unifying the registry
+    is deferred with the relocation above.
+    (3) **Prose "distilled findings" are deferred to C.3** (they must flow through the Consolidator,
+    which C.3 builds) — the bridge deliberately stops at the RAG/chunks product so C.3 adds the
+    finding path without reworking the seam. The C.2 acceptance's "findings" clause lands with C.3.
+    (4) Asset groups shipped as **`0029`** (next sequential slot), not the penciled `0035`.
 
-#### C.3 Consolidator as the single write path + hybrid dedup + candidates/lineage/lifecycle  ·  migrations `0029`, `0036`, `0037`, `0038`
+#### C.3 Consolidator as the single write path + hybrid dedup + candidates/lineage/lifecycle  ·  migrations `0030`, `0031`, `0032` *(renumbered from `0036`–`0038`; `0029` now taken by asset groups)*
 - **Single write path (CC3):** route the per-finding write of `EngineeringFindingWriter` (and all
   future extractors) through `KnowledgeLifecycleService.consolidate()`; keep its
   create/noop/revise/supersede/contested + confidence/freshness behavior. **Keep the repo-scoped,
@@ -328,9 +356,11 @@ Learning ledger, mission/config/schedule/worker). New objects created `AUTHORIZA
 
 | Migration | Objects |
 |---|---|
-| `0027_finding_provenance` | **Add** `knowledge.findings.mission_id UUID` + `job_id UUID` (nullable soft refs — verified absent in `0015`) + indexes for provenance lookups. *(No new tables; `source` rides existing `provenance` JSON.)* |
-| `0028_asset_documents` | (If needed) generic asset kinds are metadata-only (Asset Store is generic); a mapping so back-filled documents link `asset_id ↔ document_id`. |
-| `0029_finding_embeddings` | Prose-finding **embeddings** for NN dedup + retrieval (pgvector — already used by `knowledge.embeddings`); `embedding_id` provenance stamp. |
+| `0027_finding_provenance` ✅ | **Add** `knowledge.findings.mission_id UUID` + `job_id UUID` (nullable soft refs — verified absent in `0015`) + indexes for provenance lookups. *(No new tables; `source` rides existing `provenance` JSON.)* |
+| `0028_document_asset_link` ✅ | **Add** `knowledge.documents.asset_id UUID` + `asset_version INTEGER` (nullable soft refs) + index — link the chunked/embedded document back to the source Asset it was read from (P9). *(Shipped as C.2c; the planned "asset_documents mapping" realized as columns, not a join table.)* |
+| `0029_asset_groups` ✅ | `asset.groups` + `asset.group_members` — group related assets (repo + design doc + chat) (CC14). *(Shipped as C.2d; this is the table planned below as `0035_asset_relationships`.)* |
+| _(placeholders below)_ | **Note:** numbers `0030+` are **planning placeholders**; actual migration numbers are assigned sequentially at implementation time. `finding_embeddings`, `knowledge_coverage`, etc. now shift to `0030`, `0031`, … as the slots below are built. |
+| `00xx_finding_embeddings` | Prose-finding **embeddings** for NN dedup + retrieval (pgvector — already used by `knowledge.embeddings`); `embedding_id` provenance stamp. |
 | `0030_knowledge_coverage` | `knowledge.coverage` — per `(asset_id, asset_version, reader, reader_version)` extraction status/counts + rollup helpers. |
 | `0031_policy` | `policy.policies` — operator rules (scope/subject/rule/strength/enabled/provenance/created_by). |
 | `0032_experience_consolidation` | Extend `learning.experiences` with evidence list + confidence + corroboration count (consolidation fields). |
@@ -380,6 +410,8 @@ doc**, exactly as Phases A/B did.
 
 ---
 
-> **Plan frozen (2026-07-19).** **C.1 — P12 + provenance stamping is ✅ DONE.** **Next: C.2**
-> (unified ingestion + asset groups — the spine), then C.3 (Consolidator single path + hybrid dedup
-> + candidates/lineage/lifecycle). Land/test/smoke/update-doc per slice, exactly as Phases A/B.
+> **Plan frozen (2026-07-19).** **C.1 (P12 + provenance) ✅ DONE.** **C.2 (unified ingestion +
+> asset groups — the spine) ✅ DONE** (migrations `0028`, `0029`; commits `51927a5`, `5f0ee51`,
+> `cd6805f`, `7971359`, + gitignore hygiene `57deac9`; prose findings deferred to C.3 by design).
+> **Next: C.3** (Consolidator as the single write path + hybrid dedup + candidates/lineage/lifecycle;
+> migrations renumbered `0030`–`0032`). Land/test/smoke/update-doc per slice, exactly as Phases A/B.
