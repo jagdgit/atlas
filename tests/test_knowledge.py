@@ -59,7 +59,8 @@ class FakeDocRepo:
         self._n = 0
 
     def create(self, source, content, *, uri=None, title=None,
-               content_type="text/plain", metadata=None, domain="external"):
+               content_type="text/plain", metadata=None, domain="external",
+               asset_id=None, asset_version=None):
         import hashlib
 
         digest = hashlib.sha256(content.encode()).hexdigest()
@@ -76,6 +77,8 @@ class FakeDocRepo:
             title=title,
             uri=uri,
             metadata=metadata or {},
+            asset_id=asset_id,
+            asset_version=asset_version,
         )
         self.by_id[doc.id] = doc
         self.by_checksum[digest] = doc

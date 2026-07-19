@@ -33,18 +33,23 @@ class DocumentRepository(BaseRepository):
         content_type: str = "text/plain",
         metadata: dict[str, Any] | None = None,
         domain: str = "external",
+        asset_id: str | None = None,
+        asset_version: int | None = None,
     ) -> Document:
         """Insert a document, or return the existing one with the same content.
 
         Dedup is by checksum; identical content never creates a duplicate.
-        ``domain`` tags the knowledge universe (Stage 3 / D3.13).
+        ``domain`` tags the knowledge universe (Stage 3 / D3.13). ``asset_id``/
+        ``asset_version`` are the soft provenance link to the source Asset (§C.2); on a dedup
+        hit for a document that predates the link, the link is backfilled.
         """
         digest = checksum_of(content)
         row = self.fetch_one(
             """
             INSERT INTO knowledge.documents
-                (source, uri, title, content_type, content, checksum, metadata, domain)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (source, uri, title, content_type, content, checksum, metadata, domain,
+                 asset_id, asset_version)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (checksum) DO NOTHING
             RETURNING *
             """,
@@ -57,13 +62,59 @@ class DocumentRepository(BaseRepository):
                 digest,
                 Jsonb(metadata or {}),
                 domain or "external",
+                asset_id,
+                asset_version,
             ),
         )
         if row is None:  # already present
             existing = self.get_by_checksum(digest)
             assert existing is not None  # conflict implies the row exists
+            # Backfill the asset link if this content was first ingested without one.
+            if asset_id is not None and existing.asset_id is None:
+                linked = self.set_asset(existing.id, asset_id, asset_version)
+                if linked is not None:
+                    return linked
             return existing
         return Document.from_row(row)
+
+    def set_asset(
+        self, document_id: UUID | str, asset_id: str, asset_version: int | None = None
+    ) -> Document | None:
+        """Attach (or update) the source-asset provenance link on a document (§C.2)."""
+        row = self.fetch_one(
+            """
+            UPDATE knowledge.documents
+            SET asset_id = %s, asset_version = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (asset_id, asset_version, str(document_id)),
+        )
+        return Document.from_row(row) if row else None
+
+    def get_by_asset(
+        self, asset_id: str, asset_version: int | None = None
+    ) -> Document | None:
+        """The document read from a given asset (latest version unless specified)."""
+        if asset_version is not None:
+            row = self.fetch_one(
+                """
+                SELECT * FROM knowledge.documents
+                WHERE asset_id = %s AND asset_version = %s
+                """,
+                (asset_id, asset_version),
+            )
+        else:
+            row = self.fetch_one(
+                """
+                SELECT * FROM knowledge.documents
+                WHERE asset_id = %s
+                ORDER BY asset_version DESC NULLS LAST
+                LIMIT 1
+                """,
+                (asset_id,),
+            )
+        return Document.from_row(row) if row else None
 
     def get(self, document_id: UUID | str) -> Document | None:
         row = self.fetch_one(
@@ -96,7 +147,7 @@ class DocumentRepository(BaseRepository):
         rows = self.fetch_all(
             """
             SELECT id, source, uri, title, content_type, checksum, metadata,
-                   status, created_at, updated_at
+                   status, domain, asset_id, asset_version, created_at, updated_at
             FROM knowledge.documents
             ORDER BY created_at DESC
             LIMIT %s
