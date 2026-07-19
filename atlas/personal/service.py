@@ -35,6 +35,7 @@ class PersonalService:
         *,
         experiences: Any = None,
         intelligence: Any = None,
+        llm: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._repo = repo
@@ -42,6 +43,8 @@ class PersonalService:
         # profile is assembled from them, never the other way round.
         self._experiences = experiences
         self._intelligence = intelligence
+        # Optional LLM for best-effort resume/LinkedIn summary polish (deterministic-first).
+        self._llm = llm
         self._logger = logger or logging.getLogger("atlas.personal")
 
     # --- inference (Atlas → inferred facts) ----------------------------
@@ -281,6 +284,27 @@ class PersonalService:
         self, *, fact_id: str | None = None, limit: int = 100
     ) -> list[dict[str, Any]]:
         return self._repo.list_events(fact_id=fact_id, limit=limit)
+
+    # --- drafting (retrieval, not action; P10) -------------------------
+    def draft(
+        self, kind: str = "resume", *, name: str | None = None, include_inferred: bool = False
+    ) -> dict[str, Any]:
+        """Draft a resume/LinkedIn summary purely from the profile (defaults to verified facts only).
+
+        A resume should present confirmed facts, so ``include_inferred`` is False by default — pass
+        True to preview a draft from the not-yet-verified profile too.
+        """
+        from atlas.personal import draft as _draft
+
+        profile = self.profile(include_inferred=include_inferred)
+        if kind == "linkedin":
+            out = _draft.build_linkedin(profile, llm=self._llm)
+        elif kind == "resume":
+            out = _draft.build_resume(profile, name=name, llm=self._llm)
+        else:
+            raise ValueError(f"unknown draft kind: {kind}")
+        out["kind"] = kind
+        return out
 
     @staticmethod
     def _presentable(fact: dict[str, Any], include_inferred: bool) -> bool:
