@@ -19,11 +19,11 @@ their ``next_retry_at``. Every notable action is journaled on the owning mission
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from atlas.core.resources.arbiter import MissionArbiter, MissionDemand, demand_from_mission
 from atlas.exceptions.base import AtlasError
 from atlas.models.worker import (
     CRASH_PAUSE_AFTER,
@@ -66,6 +66,7 @@ class WorkerManager:
         schedule_service: Any | None = None,
         config_repo: Any | None = None,
         mission_repo: Any | None = None,
+        arbiter: MissionArbiter | None = None,
         events: "EventDispatcher | None" = None,
         clock: Any | None = None,
         logger: logging.Logger | None = None,
@@ -79,10 +80,11 @@ class WorkerManager:
         self._clock = clock
         self._logger = logger or logging.getLogger("atlas.workers")
         self._types: dict[str, PersistentWorker] = {}
-        # Per-mission concurrency gate for the Phase-A budget (B1: max_concurrent_tasks only).
-        # In-memory admission control (single-process Phase A); tracked as debt for multi-process.
-        self._inflight_lock = threading.Lock()
-        self._inflight: dict[str, int] = {}
+        # Cross-mission admission (A7/§D.4): the arbiter weighs effective_priority + deadline urgency +
+        # importance and enforces hard per-mission (and optional global) concurrency caps, with
+        # anti-starvation aging. A default arbiter (no global cap) preserves Phase-A per-mission-cap
+        # behaviour when none is injected. In-memory (single-process); multi-process is tracked debt.
+        self._arbiter = arbiter or MissionArbiter(clock=clock)
 
     # --- worker-type registry -------------------------------------------
 
@@ -203,10 +205,12 @@ class WorkerManager:
             )
             return {"skipped": "unknown type", "worker_id": worker.id}
 
-        # Budget admission (B1/A.6): skip this tick if the mission is at its concurrent cap.
-        cap = self._mission_cap(worker.mission_id)
-        if not self._acquire(worker.mission_id, cap):
-            self._emit("WorkerThrottled", worker, cap=cap)
+        # Cross-mission admission (A7/§D.4): defer this tick if the mission is over its concurrency cap
+        # or loses arbitration for a scarce global slot. Deferral is temporary + aged (never starved).
+        demand = self._demand_for(worker.mission_id)
+        verdict = self._arbiter.try_admit(demand)
+        if not verdict.admitted:
+            self._emit("WorkerThrottled", worker, reason=verdict.reason, score=round(verdict.score, 4))
             return {"skipped": "budget", "worker_id": worker.id}
         try:
             worker = self._maybe_upgrade(worker, impl)
@@ -227,7 +231,7 @@ class WorkerManager:
                 return self._on_failure(worker, exc)
             return self._on_success(worker, impl, result, config_version)
         finally:
-            self._release(worker.mission_id, cap)
+            self._arbiter.release(worker.mission_id)
 
     # --- tick outcome handling ------------------------------------------
 
@@ -308,35 +312,20 @@ class WorkerManager:
             )
         return dict(active.document), active.version
 
-    def _mission_cap(self, mission_id: str) -> int | None:
-        """The mission's ``max_concurrent_tasks`` budget (B1), or ``None`` = unlimited."""
-        if self._missions is None:
-            return None
-        try:
-            mission = self._missions.get(mission_id)
-        except Exception:  # noqa: BLE001 - budget lookup must not break a tick
-            return None
-        return mission.max_concurrent_tasks if mission is not None else None
+    def _demand_for(self, mission_id: str) -> MissionDemand:
+        """Project the mission's arbitration inputs (priority/deadline/importance/caps) for admission.
 
-    def _acquire(self, mission_id: str, cap: int | None) -> bool:
-        if not cap or cap <= 0:
-            return True
-        with self._inflight_lock:
-            current = self._inflight.get(mission_id, 0)
-            if current >= cap:
-                return False
-            self._inflight[mission_id] = current + 1
-            return True
-
-    def _release(self, mission_id: str, cap: int | None) -> None:
-        if not cap or cap <= 0:
-            return
-        with self._inflight_lock:
-            current = self._inflight.get(mission_id, 0)
-            if current <= 1:
-                self._inflight.pop(mission_id, None)
-            else:
-                self._inflight[mission_id] = current - 1
+        A missing mission (or repo) yields an unconstrained demand, so non-mission/uncapped work is
+        admitted exactly as before (back-compatible with the Phase-A per-mission-cap behaviour).
+        """
+        if self._missions is not None:
+            try:
+                mission = self._missions.get(mission_id)
+            except Exception:  # noqa: BLE001 - arbitration lookup must not break a tick
+                mission = None
+            if mission is not None:
+                return demand_from_mission(mission)
+        return MissionDemand(mission_id=str(mission_id))
 
     def _in_backoff(self, worker: Worker) -> bool:
         if worker.status != WORKER_RECOVERING or worker.next_retry_at is None:

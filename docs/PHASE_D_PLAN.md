@@ -194,7 +194,23 @@
   until `approve`; `apply` then `revert` restores prior state; a sim/retrieval decision bypasses the
   gate. Hermetic tests.
 
-### D.4 — Cross-mission Resource Manager arbitration (A7)
+### D.4 — Cross-mission Resource Manager arbitration (A7)  ·  ✅ DONE
+> **Delivered:** `atlas/core/resources/arbiter.py` — `MissionArbiter` (+ `MissionDemand`,
+> `ArbitrationVerdict`, `demand_from_mission`), the cross-mission layer that complements the machine-
+> level `ResourceManager`. It scores each competing mission by `effective_priority` + a **bounded
+> deadline-urgency boost** (grows toward the deadline; full when overdue) + **anti-starvation aging**
+> (each deferral raises standing, reset on admission), with **importance** then `mission_id` as
+> deterministic tiebreaks. Pure `rank`/`select` prove the ordering under contention; the stateful
+> `try_admit`/`release` gate enforces **hard per-mission caps** (`max_concurrent_tasks`) and an optional
+> **global** concurrency cap. Wired into `WorkerManager.worker_tick` (replacing the ad-hoc per-mission
+> in-flight gate); a missing/uncapped mission is admitted exactly as before (back-compatible). Machine-
+> level `ResourceManager.can_admit` is left intact as the complementary layer (cost/RAM/LLM), not
+> re-litigated here. Tests: `tests/test_arbiter.py` (10 hermetic — priority order, deadline urgency,
+> overdue, importance/id tiebreaks, select slot-filling + hard-cap skip, per-mission + global gate,
+> aging-not-starved, projection; + 1 live-DB through a real `WorkerManager` proving a lower mission is
+> deferred under a global cap and ticks once the slot frees). Two existing worker tests updated to the
+> arbiter's state. Registering the arbiter as a kernel capability is folded into D.5 wiring.
+
 - Add a **mission arbiter** feeding admission: extend the WorkerManager/Scheduler admission path (and
   `ResourceManager.can_admit`) to weigh **`effective_priority` + hard per-mission budget caps**, with
   deadline urgency as a bounded boost and `importance` as a tiebreak. Consumes the `budget`/`deadline`/
@@ -302,4 +318,7 @@ are incremental follow-ons.
 > **D.1 ✅ DONE** (`atlas/decision/` + `0039` + 11 tests). **D.2 ✅ DONE** (`IntelligenceContext`
 > composition + policy arbitration + 5 tests). **D.3 ✅ DONE** (`ApprovalService` + `ActionApplier` +
 > `0040` + 12 tests): propose → approve/reject → apply → revert, reversible + journaled (P14), gate
-> bypassed for read/advice/sim (DD3). **Next: D.4 — Cross-mission Resource Manager arbitration (A7).**
+> bypassed for read/advice/sim (DD3). **D.4 ✅ DONE** (`MissionArbiter` + WorkerManager admission +
+> 11 tests): effective_priority + deadline urgency + importance + hard/global caps + anti-starvation
+> aging (A7). **Next: D.5 — Surfaces + wiring (bootstrap capability registration, decision/approval
+> API + CLI).**

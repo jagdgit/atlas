@@ -26,6 +26,7 @@ from atlas.models.worker import (
     WorkerInput,
     backoff_for,
 )
+from atlas.core.resources.arbiter import MissionDemand
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 from atlas.workers.hello import HelloWatcher
 from atlas.workers.manager import WorkerError, WorkerManager
@@ -402,8 +403,8 @@ def test_tick_throttled_when_mission_at_budget_cap():
     m = WorkerManager(repo, cps, config_repo=FakeConfigRepo(), mission_repo=missions)
     m.register_worker_type(HelloWatcher())
     w = m.create_worker("mission-1", "hello_watcher", autostart=False)
-    # simulate one tick already in flight for this mission
-    m._inflight["mission-1"] = 1
+    # simulate one tick already in flight for this mission (mission is at its cap of 1)
+    m._arbiter.try_admit(MissionDemand(mission_id="mission-1", max_concurrent_tasks=1))
     out = m.worker_tick({"worker_id": w.id})
     assert out == {"skipped": "budget", "worker_id": w.id}
     assert cps.load("worker", w.id) is None  # never ran
@@ -418,4 +419,4 @@ def test_tick_proceeds_within_budget_and_releases_slot():
     w = m.create_worker("mission-1", "hello_watcher", autostart=False)
     out = m.worker_tick({"worker_id": w.id})
     assert out["ticked"] is True
-    assert m._inflight.get("mission-1", 0) == 0  # slot released after the tick
+    assert m._arbiter.inflight_for("mission-1") == 0  # slot released after the tick
