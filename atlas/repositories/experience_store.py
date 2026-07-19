@@ -163,6 +163,19 @@ class ExperienceStore(BaseRepository):
             (canonical_id,),
         ))
 
+    def list_active(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """All active/contested consolidated experiences (finding-dict shape) — skill enumeration."""
+        rows = self.fetch_all(
+            """
+            SELECT * FROM learning.experiences
+            WHERE status IN ('active', 'contested')
+            ORDER BY corroboration_count DESC, updated_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [self._as_finding(r) for r in rows]
+
     def find_active_by_identity(self, identity: tuple[Any, ...]) -> dict[str, Any] | None:
         return self._as_finding(self.fetch_one(
             """
