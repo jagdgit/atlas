@@ -1078,6 +1078,15 @@ def test_cmd_personal_infer_and_profile(capsys):
     assert "== skills" in capsys.readouterr().out
 
 
+def test_cmd_personal_dashboard(capsys):
+    app = FakeApp()
+    rc = cmd_personal(build_parser().parse_args(["personal", "dashboard"]), app=app)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "coverage (per domain)" in out
+    assert "== skills" in out
+
+
 def test_cmd_personal_confirm_and_missing(capsys):
     app = FakeApp()
     rc = cmd_personal(build_parser().parse_args(["personal", "confirm", "F-1"]), app=app)

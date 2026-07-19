@@ -1196,6 +1196,14 @@ def test_personal_draft_from_profile():
     assert "markdown" in resp.json()
 
 
+def test_personal_dashboard_combines_coverage_and_profile():
+    resp = _client().get("/v1/personal/dashboard", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["coverage"]["domains"][0]["domain"] == "code"
+    assert "skills" in body and "counts" in body
+
+
 def test_personal_requires_auth():
     assert _client().get("/v1/personal/profile").status_code == 401
 

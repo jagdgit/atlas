@@ -838,6 +838,33 @@ def personal_reject(fact_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail="personal fact not found")
 
 
+@v1_router.get("/personal/dashboard", tags=["personal"])
+def personal_dashboard(request: Request, include_inferred: bool = True) -> dict:
+    """The Personal/Owner console view (Phase C · §C.8): per-domain coverage + skills/timeline.
+
+    Combines the knowledge coverage map (C.4 — coverage% and understanding% per domain) with the
+    assembled owner profile (C.7). Live updates ride the shared SSE feed at /v1/events/stream.
+    """
+    container = _app(request).container
+    profile = container.resolve("personal").profile(include_inferred=include_inferred)
+    try:
+        coverage = container.resolve("coverage").summary()
+    except Exception:  # noqa: BLE001 - dashboard degrades gracefully without coverage
+        coverage = {}
+    return {
+        "coverage": coverage,
+        "identity": profile.get("identity", []),
+        "skills": profile.get("skills", []),
+        "timeline": profile.get("timeline", []),
+        "professional": profile.get("professional", []),
+        "counts": {
+            "skills": len(profile.get("skills", [])),
+            "timeline": len(profile.get("timeline", [])),
+            "professional": len(profile.get("professional", [])),
+        },
+    }
+
+
 @v1_router.get("/personal/draft", tags=["personal"])
 def personal_draft(request: Request, kind: str = "resume", include_inferred: bool = False) -> dict:
     """Draft a resume/LinkedIn summary purely from the profile (retrieval, not action; P10)."""

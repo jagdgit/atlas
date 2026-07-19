@@ -31,10 +31,17 @@ from atlas.engineering.architecture import ArchitectureGraphStore
 from atlas.engineering.artifacts import DerivedArtifactStore
 from atlas.engineering.design_review import DesignReviewer
 from atlas.engineering.findings import EngineeringFindingWriter
+from atlas.ingestion.acquire import AssetAcquirer
+from atlas.ingestion.service import IngestionService
+from atlas.knowledge.candidate_consumer import CandidateConsumer
+from atlas.knowledge.prose_extraction import ProseKnowledgeExtractor
 from atlas.learning.experience_extraction import ExperienceWriter
 from atlas.personal import PersonalService
+from atlas.readers import ConversationReader, DocumentReader
+from atlas.repositories.candidate_repo import CandidateRepository
 from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
+from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -817,6 +824,42 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.personal"),
     )
 
+    # Unified ingestion bridge (Phase C · §C.2–C.4) + non-code readers, wired for the Owner Knowledge
+    # Mission (C.8): acquire → read (Document/Conversation) → chunk + prose candidates → coverage.
+    asset_acquirer = AssetAcquirer(asset_store, logger=get_logger("atlas.ingestion.acquire"))
+    document_reader = DocumentReader(
+        asset_store, derived_artifacts, logger=get_logger("atlas.readers.document")
+    )
+    conversation_reader = ConversationReader(
+        asset_store, derived_artifacts, logger=get_logger("atlas.readers.conversation")
+    )
+    candidate_consumer = CandidateConsumer(
+        CandidateRepository(db_manager),
+        knowledge_lifecycle,
+        logger=get_logger("atlas.knowledge.candidate_consumer"),
+    )
+    ingestion_bridge = IngestionService(
+        asset_acquirer,
+        document_reader,
+        knowledge_service,
+        extractor=ProseKnowledgeExtractor(),
+        candidates=candidate_consumer,
+        coverage=coverage_service,
+        logger=get_logger("atlas.ingestion.service"),
+    )
+    # Owner Knowledge Mission worker (Phase C · §C.8): continuously reads the User Archive
+    # (code/docs/chats) into global knowledge + experience, then rebuilds the personal profile.
+    worker_manager.register_worker_type(
+        OwnerKnowledgeWorker(
+            ingestion=ingestion_bridge,
+            intelligence=intelligence_service,
+            personal=personal_service,
+            conversation_reader=conversation_reader,
+            candidates=candidate_consumer,
+            logger=get_logger("atlas.workers.owner_knowledge"),
+        )
+    )
+
     # Python Execution Sandbox (Sprint 16, D6 — hybrid): run analysis code in a
     # resource-limited child interpreter (subprocess default; docker swappable) with
     # network disabled by default; computed results can become L5 evidence (§5a.6).
@@ -895,6 +938,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("coverage", coverage_service)
     container.register_instance("policy", policy_service)
     container.register_instance("personal", personal_service)
+    container.register_instance("ingestion_bridge", ingestion_bridge)
+    container.register_instance("candidates", candidate_consumer)
 
     # Advertise capabilities so agents can query the kernel instead of importing
     # modules (ADR-0040). S11: attach typed contracts so the registry can verify a

@@ -50,12 +50,16 @@ class OwnerKnowledgeWorker(PersistentWorker):
         intelligence: Any,
         personal: Any = None,
         conversation_reader: Any = None,
+        candidates: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._ingestion = ingestion
         self._intel = intelligence
         self._personal = personal
         self._conversation_reader = conversation_reader
+        # CandidateConsumer: doc/chat ingests emit prose candidates; drain them into findings so the
+        # archive's understanding is materialized each tick (single write path stays the Consolidator).
+        self._candidates = candidates
         self._logger = logger or logging.getLogger("atlas.workers.owner_knowledge")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -103,6 +107,15 @@ class OwnerKnowledgeWorker(PersistentWorker):
                 self._logger.warning("owner archive root failed (%s): %s", path, exc)
 
         state["roots"] = root_state
+
+        # Drain the prose candidates the doc/chat ingests emitted into findings (P11/P13: the
+        # Consolidator is still the single write path; the worker just triggers the drain).
+        if self._candidates is not None and (changed_any or force):
+            try:
+                drained = self._candidates.consume_pending(limit=500)
+                totals["candidate_findings"] = len(drained)
+            except Exception as exc:  # noqa: BLE001 - draining is best-effort
+                self._logger.warning("owner candidate drain failed: %s", exc)
 
         profile_note = ""
         if bool(cfg.get("build_profile", True)) and self._personal is not None and (changed_any or force):

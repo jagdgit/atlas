@@ -307,8 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_personal.add_argument(
         "action",
-        choices=["infer", "profile", "facts", "skills", "confirm", "reject", "draft", "events"],
-        help="infer|profile|facts|skills|confirm <id>|reject <id>|draft|events [fact_id]",
+        choices=["infer", "profile", "dashboard", "facts", "skills", "confirm", "reject",
+                 "draft", "events"],
+        help="infer|profile|dashboard|facts|skills|confirm <id>|reject <id>|draft|events [fact_id]",
     )
     p_personal.add_argument("target", nargs="?", help="fact/event id (confirm/reject/events)")
     p_personal.add_argument(
@@ -1334,6 +1335,23 @@ def cmd_personal(args: argparse.Namespace, app: "Application | None" = None) -> 
             rows = profile.get(section, [])
             print(f"\n== {section} ({len(rows)}) ==")
             for f in rows:
+                print(f"  [{f['state']:<8}] {f.get('statement') or f['key']}")
+        return 0
+
+    if action == "dashboard":
+        profile = personal.profile(include_inferred=True)
+        try:
+            coverage = app.container.resolve("coverage").summary()
+        except Exception:  # noqa: BLE001
+            coverage = {}
+        print("== coverage (per domain) ==")
+        for row in (coverage.get("domains") or []):
+            print(f"  {row.get('domain', '?'):<14} coverage={row.get('coverage_pct', 0):>5}%  "
+                  f"understanding={row.get('understanding_pct', 0):>5}%")
+        for section in ("skills", "timeline", "professional"):
+            rows = profile.get(section, [])
+            print(f"\n== {section} ({len(rows)}) ==")
+            for f in rows[:20]:
                 print(f"  [{f['state']:<8}] {f.get('statement') or f['key']}")
         return 0
 
