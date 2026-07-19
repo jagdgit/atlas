@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-19 (after Phase C.2).
+> **Last updated:** 2026-07-19 (after Phase C.3).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -25,8 +25,8 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C2 | 🔴 | P2 | **Unify the Reader Registry** so non-code readers (Document, future chat/CAD/MATLAB) register there too. The current coverage matrix is code-capability-specific (`symbols`/`imports`/`call_graph`/…); needs a generic capability axis (e.g. `text`, `sections`, `tables`). Document Reader currently exposes its own `supported_extensions()` and is **not** in the registry. | C.2b | with OI-C1 |
 | OI-C3 | 🟡 | P2 | **Unified-pipeline idempotency on the non-embed path.** `KnowledgeService.ingest_text` only short-circuits a re-ingest when the doc is already `embedded`; with `embed=False` it **re-chunks** the same content (duplicate chunks). Asset + document rows are correctly deduped; only chunk regeneration is wasteful. Consider a status/asset-aware early-out in `IngestionService` or `ingest_text`. | C.2c | C.3/C.4 |
 | OI-C4 | 🔴 | P2 | **Back-fill existing documents to assets lazily.** The bridge makes *new* ingestion asset-first; pre-Phase-C `knowledge.documents` rows still have `asset_id IS NULL`. Plan calls for opportunistic/lazy back-fill (no big-bang migration) — not yet implemented. | C.2c | C.3–C.4 |
-| OI-C5 | 🔴 | P1 | **Wire `IngestionService` into the kernel + surfaces.** It is constructed only in tests. Needs bootstrap wiring (kernel service registry) and a CLI/API entrypoint (`atlas ingest <path>` / `POST /v1/ingest`) so operators/missions can drive it. | C.2c | C.3 or a small C.2e |
-| OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Deferred from C.2 **by design** — must flow through the Knowledge Consolidator. Resolved by C.3. | C.2c | **C.3** |
+| OI-C5 | 🔴 | P1 | **Wire `IngestionService` + `CandidateConsumer` into the kernel + surfaces.** Both are constructed only in tests. Needs bootstrap wiring (kernel service registry), a CLI/API entrypoint (`atlas ingest <path>` / `POST /v1/ingest` with `extract_findings`), and a scheduled **candidate-drain** job (`CandidateConsumer.consume_pending`) + candidate pruning (`CandidateRepository.prune_consumed`). Also wire the real embedder into `EmbeddingIdentityResolver` so prose NN dedup is live. | C.2c / C.3g | C.4 or a small C.3h |
+| OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
 | OI-C7 | 🟡 | P3 | **Migration-number placeholders.** The `PHASE_C_PLAN.md` data-model table lists planning placeholders (`00xx_finding_embeddings`, `knowledge_coverage`, …). Real numbers are assigned sequentially at build time — `0028`=document↔asset, `0029`=asset groups; C.3 uses `0030`–`0032`. Keep the table honest as slots are built. | C.2 | ongoing |
 
 ---
@@ -36,7 +36,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
 | OI-T1 | 🔴 | P1 | **Live-DB tests share one Postgres with no teardown.** e2e tests insert into `learning.repositories`, `knowledge.*`, `asset.*`, `audit.events` and don't clean up. After a reboot clears `/tmp` (tmpfs), pytest's temp counter restarts and fresh tmp paths **collide** with stale `active` rows (e.g. `uq_learning_repositories_root_active`). Needs a proper isolation strategy: per-test transaction rollback, a disposable schema/db per run, or session teardown fixtures. | Caused 3 false failures on 2026-07-19; mitigated by a manual cleanup of `/tmp/pytest%` rows. |
-| OI-T2 | 🟡 | P2 | **`test_event_lifecycle` flake.** `EventRepository.list_pending(limit=100)` can't see a newly-recorded event once >100 `pending` `audit.events` accumulate from prior test runs. Pre-existing; unrelated to feature code. Fix with the OI-T1 isolation work (or a scoped cleanup fixture / higher/keyed lookup in the test). | Known before Phase C. |
+| OI-T2 | 🟡 | P2 | **`test_event_lifecycle` flake.** `EventRepository.list_pending(limit=100)` is `ORDER BY created_at ASC LIMIT 100` (oldest-first), so once >100 **undispatched** `pending` `audit.events` accumulate in the shared dev DB the newly-recorded test event falls outside the window and the assertion fails. Confirmed 2026-07-19: 187 pending events from *real* subsystems (scheduler 75, kernel 54, recovery 40, …), not test rows — deleting them is a broader cleanup decision, not made unprompted. Pre-existing; unrelated to feature code (full suite otherwise 1339 green after C.3). Fix with OI-T1 isolation, a scoped cleanup fixture, or make the test query keyed/newest-first. | Known before Phase C. |
 | OI-T3 | 🔴 | P3 | **A `make test-clean` / cleanup helper** for the shared dev DB (delete `/tmp/pytest%` assets/repos, stale pending events) so contributors don't hit OI-T1/T2 manually. | Ties into OI-T1. |
 
 ---
@@ -63,7 +63,8 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 | ID | Item | Closed by |
 |----|------|-----------|
 | OI-G1 | **`.gitignore` silently ignored `atlas/{documents,knowledge,models}` source packages** (unanchored runtime-data rules) — 25 core source files were untracked. Anchored the rules to the repo root; source now tracked. | commit `57deac9` (2026-07-19) |
-| OI-C6 | Prose findings from documents (see §1). | **pending C.3** |
+| OI-C6 | Prose "distilled findings" from documents — now flow document → candidate → Consolidator → finding. | C.3g commit `4595ee8` (2026-07-19) |
+| (bug) | **`UNIQUE(canonical_id)` blocked the finding revision model** on the live DB (revise reused canonical_id). Relaxed to `UNIQUE(canonical_id, revision)`. | C.3e migration `0033` / commit `58f7c78` |
 
 ---
 

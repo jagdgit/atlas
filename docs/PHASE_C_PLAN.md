@@ -199,7 +199,45 @@
     finding path without reworking the seam. The C.2 acceptance's "findings" clause lands with C.3.
     (4) Asset groups shipped as **`0029`** (next sequential slot), not the penciled `0035`.
 
-#### C.3 Consolidator as the single write path + hybrid dedup + candidates/lineage/lifecycle  ·  migrations `0030`, `0031`, `0032` *(renumbered from `0036`–`0038`; `0029` now taken by asset groups)*
+#### C.3 Consolidator as the single write path + hybrid dedup + candidates/lineage/lifecycle  ·  ✅ **DONE (2026-07-19)**  ·  migrations `0030`, `0031`, `0032`, `0033`, `0034`
+
+> **✅ Delivered (2026-07-19).** Built in seven committed sub-steps (`7919464`, `de0522b`, `deaac08`,
+> `5f1634c`, `58f7c78`, `f5624b0`, `4595ee8`):
+> - **C.3a** `knowledge.candidates` inbox (migration `0030`) + `CandidateRepository` (CC11) —
+>   readers emit candidates; only the Consolidator consumes them; consumed rows prunable.
+> - **C.3b** `knowledge.lineage` append-only evidence graph (migration `0031`) + `LineageRepository`
+>   (CC12/P9) — created/supported/revised/superseded/contradicted_by edges; never pruned.
+> - **C.3c** maturity axis (migration `0032`): `candidate → verified → established` as a **separate**
+>   column (0015 status CHECK untouched; `contested` stays stored, "contradicted" is display) +
+>   `derive_maturity`/`independent_source_count` + `FindingRepository.set_maturity`/`update_evidence`.
+> - **C.3d** evidence accumulation + conflict in `consolidate()` — `body_fingerprint` separates
+>   statement/value changes from evidence-only changes; same fact + new source **merges in place**
+>   (no revision, grows confidence/maturity); same-statement contradiction → `contested`; body change
+>   routed evolution (newer → revise) vs conflict (same/older → contested) by timestamp (CC15).
+> - **C.3e** `EngineeringFindingWriter` routed through `consolidate()` (single write path, CC3);
+>   batch archival kept as a wrapper. **Migration `0033`** fixes a latent bug it exposed:
+>   `UNIQUE(canonical_id)` → `UNIQUE(canonical_id, revision)` so the revise path works on the live DB
+>   (benefits research promote too).
+> - **C.3f** hybrid identity (CC4): **migration `0034`** `knowledge.finding_embeddings`
+>   (vector(768), HNSW) + `FindingEmbeddingRepository` + `EmbeddingIdentityResolver`; prose paraphrases
+>   merge via cosine NN above a threshold (explainable via lineage `nn_similarity`). Optional +
+>   back-compatible (deterministic-only when no resolver wired).
+> - **C.3g** document → candidate → Consolidator → finding: `ProseKnowledgeExtractor` (bounded
+>   distillation, CC5) + `CandidateConsumer` (the single candidate→finding path); `IngestionService`
+>   emits **candidates only** under `extract_findings=True`. Enforcement test proves the bridge writes
+>   ZERO findings (P11); findings appear only after the Consolidator drains the inbox.
+>
+> **Deviations / notes:** (1) Migrations landed as `0030`–`0034` (candidates, lineage, maturity,
+> canonical-revision fix, finding-embeddings) — **five**, not the penciled three (the canonical-uniq
+> bug fix and the finding-embeddings table were surfaced during implementation). Downstream C.4–C.8
+> migration numbers below are **re-penciled to `0035`+** (assigned sequentially at build time).
+> (2) The maturity axis is a new column, so 0015's `status` CHECK was **not** altered (cleaner than
+> loosening it; `contested`/"contradicted" split preserved). (3) NN + prose extraction are wired as
+> **optional** collaborators so C.2/existing callers are byte-unchanged until explicitly enabled.
+> (4) Kernel/API wiring of `CandidateConsumer` + `IngestionService` is tracked as `OI-C5` (they're
+> constructed in tests today). See `docs/OPEN_ITEMS.md`.
+
+*(Original plan — migrations penciled `0030`–`0032`, renumbered from `0036`–`0038`.)*
 - **Single write path (CC3):** route the per-finding write of `EngineeringFindingWriter` (and all
   future extractors) through `KnowledgeLifecycleService.consolidate()`; keep its
   create/noop/revise/supersede/contested + confidence/freshness behavior. **Keep the repo-scoped,
@@ -260,7 +298,7 @@
   engineering findings still supersede correctly through the unified path. Hermetic tests per
   behavior + one live-DB test (mirrors the 5 GB scenario at small scale).
 
-#### C.4 Knowledge Coverage map (+ understanding quality)  ·  migration `0030`
+#### C.4 Knowledge Coverage map (+ understanding quality)  ·  migration `0035` *(re-penciled; `0030`–`0034` taken by C.3)*
 - **Coverage store** (`knowledge.coverage`): per `(asset_id, asset_version, reader, reader_version)`
   extraction status (pending/done/failed, counts, timestamps, extractor_version); a service that
   rolls up **per-domain / per-source coverage** ("Python 100%, MATLAB 20%").
@@ -275,7 +313,7 @@
   for re-extraction and leaves others untouched; a coverage summary **with both coverage % and
   understanding %** is queryable via API/console.
 
-#### C.5 Policy store  ·  migration `0031`
+#### C.5 Policy store  ·  migration `0036` *(re-penciled)*
 - **`policy.*` schema + service** (`atlas/policy/`): durable, editable, provenance-stamped operator
   rules — `{scope, subject, rule, strength, enabled, provenance, created_by, created_at}`. Governed
   (edits are journaled + reversible). Examples: *prefer momentum strategies*, *never trade crypto*,
@@ -289,7 +327,7 @@
 
 ### C-Personal (on the foundations)
 
-#### C.6 Experience extraction + consolidation (dual extraction)  ·  migration `0032`
+#### C.6 Experience extraction + consolidation (dual extraction)  ·  migration `0037` *(re-penciled)*
 - **Dual extraction (P12/P11):** one read of an asset feeds **two** extractors — engineering
   findings (existing) **and** an **experience** extractor that emits owner-experience records
   ("solo Django project, 2022, designed auth, production Celery/Redis"). No code/raw duplication;
@@ -307,7 +345,7 @@
   corroborating projects, rising confidence), each provenance-linked to the assets that evidenced
   it; hermetic + live-DB tests.
 
-#### C.7 Personal Intelligence domain (`atlas/personal/`)  ·  migration `0033`
+#### C.7 Personal Intelligence domain (`atlas/personal/`)  ·  migration `0038` *(re-penciled)*
 - **A model of you, not a memory dump.** `personal.*` schema for a curated profile: identity/profile
   facts, **skills** (from experience), **timeline** (projects/roles over years), professional
   profile (publications, patents, roles). Fed **indirectly** from Research + Engineering +
@@ -322,7 +360,7 @@
   confidence + `inferred/verified` status, readable by other missions; operator confirm/correct
   flows work; a resume/LinkedIn draft is generated purely from the experience profile.
 
-#### C.8 Owner Knowledge Mission + User Archive source + API/dashboard  ·  migration `0034`
+#### C.8 Owner Knowledge Mission + User Archive source + API/dashboard  ·  migration `0039` *(re-penciled)*
 - **User Archive** = a new **asset source** (not a job that finishes): a configured set of archive
   roots (code, docs, papers, notes, chats/Cursor exports). A **Conversation Reader**
   (`atlas/readers/conversation.py`) turns chat/Cursor exports into assets → artifacts → findings +
@@ -415,6 +453,9 @@ doc**, exactly as Phases A/B did.
 
 > **Plan frozen (2026-07-19).** **C.1 (P12 + provenance) ✅ DONE.** **C.2 (unified ingestion +
 > asset groups — the spine) ✅ DONE** (migrations `0028`, `0029`; commits `51927a5`, `5f0ee51`,
-> `cd6805f`, `7971359`, + gitignore hygiene `57deac9`; prose findings deferred to C.3 by design).
-> **Next: C.3** (Consolidator as the single write path + hybrid dedup + candidates/lineage/lifecycle;
-> migrations renumbered `0030`–`0032`). Land/test/smoke/update-doc per slice, exactly as Phases A/B.
+> `cd6805f`, `7971359`, + gitignore hygiene `57deac9`). **C.3 (Consolidator as the single write path +
+> candidates/lineage/maturity + evidence accumulation + hybrid NN dedup + prose pipeline) ✅ DONE**
+> (migrations `0030`–`0034`; commits `7919464`, `de0522b`, `deaac08`, `5f1634c`, `58f7c78`, `f5624b0`,
+> `4595ee8`; full suite 1339 green, 1 known pre-existing env flake `OI-T2`; leftovers `OI-C1`–`OI-C5`).
+> **Next: C.4** (Knowledge Coverage map + understanding quality; migration re-penciled `0035`).
+> Land/test/smoke/update-doc per slice, exactly as Phases A/B.
