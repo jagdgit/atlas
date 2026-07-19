@@ -38,6 +38,7 @@ class FindingRepository(BaseRepository):
         identity_key: list[Any] | None = None,
         mission_id: str | None = None,
         job_id: str | None = None,
+        maturity: str = "candidate",
     ) -> dict[str, Any]:
         cid = canonical_id or self.next_canonical_id()
         # P12 provenance columns: who *discovered* this finding (never ownership). Fall back to the
@@ -65,6 +66,7 @@ class FindingRepository(BaseRepository):
             Jsonb(identity_key) if identity_key is not None else None,
             mission_id,
             job_id,
+            maturity,
         )
         if finding_id:
             return self.fetch_one(
@@ -73,12 +75,12 @@ class FindingRepository(BaseRepository):
                     id, canonical_id, revision, statement, value, claim_type,
                     confidence, confidence_score, status, freshness, quality,
                     supporting, contradicting, provenance, domain, last_verified,
-                    supersedes, identity_key, mission_id, job_id
+                    supersedes, identity_key, mission_id, job_id, maturity
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
+                    %s, %s, %s, %s, %s
                 )
                 RETURNING *
                 """,
@@ -90,12 +92,12 @@ class FindingRepository(BaseRepository):
                 canonical_id, revision, statement, value, claim_type,
                 confidence, confidence_score, status, freshness, quality,
                 supporting, contradicting, provenance, domain, last_verified,
-                supersedes, identity_key, mission_id, job_id
+                supersedes, identity_key, mission_id, job_id, maturity
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
-                %s, %s, %s, %s
+                %s, %s, %s, %s, %s
             )
             RETURNING *
             """,
@@ -214,6 +216,68 @@ class FindingRepository(BaseRepository):
             RETURNING *
             """,
             (status, finding_id),
+        )
+
+    def set_maturity(self, finding_id: str, maturity: str) -> dict[str, Any] | None:
+        """Update the maturity axis (candidate/verified/established) in place (CC13)."""
+        return self.fetch_one(
+            """
+            UPDATE knowledge.findings
+            SET maturity = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (maturity, finding_id),
+        )
+
+    def update_evidence(
+        self,
+        finding_id: str,
+        *,
+        supporting: list[dict[str, Any]],
+        confidence: str | None = None,
+        confidence_score: float | None = None,
+        maturity: str | None = None,
+        contradicting: list[dict[str, Any]] | None = None,
+        status: str | None = None,
+        last_verified: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Merge accumulated evidence into a finding **in place** — NO new revision (C.3d).
+
+        Evidence accumulation (a new source corroborating the *same* statement) must strengthen the
+        existing finding without spawning a revision; revisions are reserved for genuine statement/
+        value changes. Only the mutable belief fields are touched; the statement body is never
+        rewritten here.
+        """
+        sets = ["supporting = %s", "updated_at = now()"]
+        params: list[Any] = [Jsonb(supporting)]
+        if confidence is not None:
+            sets.append("confidence = %s")
+            params.append(confidence)
+        if confidence_score is not None:
+            sets.append("confidence_score = %s")
+            params.append(confidence_score)
+        if maturity is not None:
+            sets.append("maturity = %s")
+            params.append(maturity)
+        if contradicting is not None:
+            sets.append("contradicting = %s")
+            params.append(Jsonb(contradicting))
+        if status is not None:
+            sets.append("status = %s")
+            params.append(status)
+        if last_verified is not None:
+            sets.append("last_verified = %s")
+            params.append(last_verified)
+        params.append(finding_id)
+        return self.fetch_one(
+            f"""
+            UPDATE knowledge.findings
+            SET {", ".join(sets)}
+            WHERE id = %s
+            RETURNING *
+            """,
+            tuple(params),
         )
 
     def set_supersedes(self, finding_id: str, supersedes: str) -> None:

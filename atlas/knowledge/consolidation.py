@@ -357,6 +357,7 @@ class InMemoryFindingStore:
             "supersedes": kwargs.get("supersedes"),
             "superseded_by": kwargs.get("superseded_by"),
             "identity_key": kwargs.get("identity_key"),
+            "maturity": kwargs.get("maturity", "candidate"),
             "created_at": _utcnow_iso(),
             "updated_at": _utcnow_iso(),
         }
@@ -450,6 +451,46 @@ class InMemoryFindingStore:
         if not row:
             return None
         row["freshness"] = freshness
+        row["updated_at"] = _utcnow_iso()
+        return dict(row)
+
+    def set_maturity(self, finding_id: str, maturity: str) -> dict[str, Any] | None:
+        row = self.rows.get(finding_id)
+        if not row:
+            return None
+        row["maturity"] = maturity
+        row["updated_at"] = _utcnow_iso()
+        return dict(row)
+
+    def update_evidence(
+        self,
+        finding_id: str,
+        *,
+        supporting: list[dict[str, Any]],
+        confidence: str | None = None,
+        confidence_score: float | None = None,
+        maturity: str | None = None,
+        contradicting: list[dict[str, Any]] | None = None,
+        status: str | None = None,
+        last_verified: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Merge evidence in place — no new revision (mirrors FindingRepository.update_evidence)."""
+        row = self.rows.get(finding_id)
+        if not row:
+            return None
+        row["supporting"] = list(supporting)
+        if confidence is not None:
+            row["confidence"] = confidence
+        if confidence_score is not None:
+            row["confidence_score"] = float(confidence_score)
+        if maturity is not None:
+            row["maturity"] = maturity
+        if contradicting is not None:
+            row["contradicting"] = list(contradicting)
+        if status is not None:
+            row["status"] = status
+        if last_verified is not None:
+            row["last_verified"] = last_verified
         row["updated_at"] = _utcnow_iso()
         return dict(row)
 

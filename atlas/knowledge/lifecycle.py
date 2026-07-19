@@ -22,6 +22,16 @@ STATUS_ARCHIVED = "archived"
 
 ACTIVE_STATUSES = frozenset({STATUS_ACTIVE, STATUS_CONTESTED})
 
+# Maturity axis (CC13) — orthogonal to the validity `status` machine. How well-corroborated the
+# understanding is, derived from the number of independent supporting sources + confidence.
+MATURITY_CANDIDATE = "candidate"
+MATURITY_VERIFIED = "verified"
+MATURITY_ESTABLISHED = "established"
+
+# Default corroboration thresholds (configurable by the Consolidator).
+ESTABLISHED_MIN_SOURCES = 3
+VERIFIED_MIN_SOURCES = 2
+
 _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
@@ -175,6 +185,45 @@ def decide_lifecycle_transition(
     if content_changed:
         return "revise"
     return "noop"
+
+
+def independent_source_count(supporting: Any) -> int:
+    """Count *distinct* supporting sources (by source_id, else the raw entry).
+
+    Corroboration is about independent sources, so two evidence entries from the same source_id
+    count once. Non-dict entries are counted by their string form.
+    """
+    seen: set[str] = set()
+    for entry in supporting or []:
+        if isinstance(entry, dict):
+            key = str(entry.get("source_id") or entry.get("source") or entry)
+        else:
+            key = str(entry)
+        if key:
+            seen.add(key)
+    return len(seen)
+
+
+def derive_maturity(
+    *,
+    supporting_count: int,
+    confidence: str | None,
+    established_min_sources: int = ESTABLISHED_MIN_SOURCES,
+    verified_min_sources: int = VERIFIED_MIN_SOURCES,
+) -> str:
+    """Two-axis maturity from corroboration count + confidence (CC13).
+
+    - ``established``: ≥ ``established_min_sources`` independent sources **and** decent confidence.
+    - ``verified``: ≥ ``verified_min_sources`` independent sources **or** HIGH/MEDIUM confidence.
+    - ``candidate``: otherwise (a single, uncorroborated observation).
+    """
+    conf = (confidence or "").upper()
+    decent = conf in {"HIGH", "MEDIUM"}
+    if supporting_count >= established_min_sources and decent:
+        return MATURITY_ESTABLISHED
+    if supporting_count >= verified_min_sources or decent:
+        return MATURITY_VERIFIED
+    return MATURITY_CANDIDATE
 
 
 def apply_freshness(data: dict[str, Any], *, now: datetime | None = None) -> str:
