@@ -112,7 +112,19 @@
 
 ## 2. D-Core — the shared brain (built no-compromise first)
 
-### D.1 — Decision Engine skeleton  ·  migration `0039`
+### D.1 — Decision Engine skeleton  ·  migration `0039`  ·  ✅ DONE
+> **Delivered:** `atlas/decision/` (`contracts.py` — `DecisionRequest`/`ScoredOption`/`Decision` +
+> `derive_confidence` softmax-margin confidence + action kinds `recommend`/`hold`/`capability_gap`;
+> `rules.py` — `DecisionRule` protocol + `DecisionRuleRegistry` + `CapabilityGap` + the
+> `apply_policy_influence` helper (DD5); `engine.py` — `DecisionEngine.decide` deterministic choice,
+> policy folding, P9 record assembly, `requires_approval` on side-effecting options (P14), the honest
+> `hold` and `capability_gap` outcomes (P15), and an LLM `narrator` seam that always falls back to
+> deterministic prose). Persistence: migration `0039_decision.sql` (`decision.decisions`) +
+> `DecisionRepository` (record/get/list/list_gaps). Tests: `tests/test_decision_engine.py` (9 hermetic
+> — top-option choice + full P9 record, confidence margins, no-rule gap, rule-raised gap, hold,
+> approval flag, policy reorder, narrator fallback, influence helper) + `tests/test_decision_repo.py`
+> (2 live-DB — record/read-back + gap backlog). Not wired into bootstrap/API/CLI yet — that's D.5.
+
 - **New** `atlas/decision/`: `contracts.py` (`DecisionRequest(mission_id, mission_type, config_version,
   context, now)`, `ScoredOption`, `Decision` = full P9 record), `engine.py` (`DecisionEngine`,
   `VERSION`), `rules.py` (`DecisionRule` protocol + `DecisionRuleRegistry`).
@@ -262,4 +274,5 @@ are incremental follow-ons.
 
 ---
 
-> **Next: D.1 — Decision Engine skeleton + `decision.decisions` (migration `0039`).**
+> **D.1 ✅ DONE** (`atlas/decision/` + `0039` + 11 tests). **Next: D.2 — Intelligence + Policy
+> composition (arbitration): fold Research/Engineering/Personal + policy into deterministic scoring.**
