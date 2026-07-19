@@ -140,6 +140,7 @@ class KnowledgeLifecycleService:
         *,
         enqueue=None,
         lineage=None,
+        nn_resolver=None,
         established_min_sources: int = 3,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -148,6 +149,9 @@ class KnowledgeLifecycleService:
         # Duck-typed lineage recorder (``.record(finding_id, edge_type, ...)``); None → no lineage
         # (back-compatible for callers that predate the evidence graph, C.3b).
         self._lineage = lineage
+        # Duck-typed embedding NN resolver (``.resolve(statement,...)`` / ``.index(id, statement)``)
+        # for prose semantic dedup (C.3f); None → deterministic identity only.
+        self._nn = nn_resolver
         self._established_min_sources = established_min_sources
         self._logger = logger or logging.getLogger("atlas.knowledge.lifecycle")
 
@@ -167,11 +171,27 @@ class KnowledgeLifecycleService:
         identity = finding_identity_key(data)
         existing = self._store.find_active_by_identity(identity)
 
+        # C.3f hybrid identity: no deterministic match for a *prose* finding → try semantic NN dedup.
+        nn_similarity: float | None = None
+        if existing is None and self._nn is not None and identity and identity[0] == "prose":
+            match = self._resolve_nn(data)
+            if match is not None:
+                candidate = self._store.get(str(match["finding_id"]))
+                if candidate is not None:
+                    existing = candidate
+                    nn_similarity = match.get("similarity")
+
         if existing is None:
             row = self._create_new(data)
+            self._index_embedding(row, data)
             self._record_lineage(row, EDGE_CREATED_BY, data)
             row["_transition"] = "create"
             return row
+
+        # A semantic (paraphrase) match is the SAME logical finding → merge evidence in place,
+        # keeping the established statement (never revise a paraphrase into a new revision).
+        if nn_similarity is not None:
+            return self._merge_nn(existing, data, similarity=nn_similarity)
 
         explicit = data.get("transition") or data.get("gold_transition")
         body_changed = body_fingerprint(_row_as_finding_dict(existing)) != body_fingerprint(data)
@@ -210,6 +230,7 @@ class KnowledgeLifecycleService:
 
         if transition == "supersede":
             row = self._supersede(existing, data)
+            self._index_embedding(row, data)
             self._record_lineage(row, EDGE_SUPERSEDED_BY, data,
                                  detail={"supersedes": str(existing["id"])})
             row["_transition"] = "supersede"
@@ -227,6 +248,7 @@ class KnowledgeLifecycleService:
         # revise (default for a genuine body change)
         row = self._store.append_revision(existing, data)
         row = dict(row)
+        self._index_embedding(row, data)
         self._record_lineage(row, EDGE_REVISED_BY, data,
                              detail={"supersedes": str(existing["id"])})
         row["_transition"] = "revise"
@@ -318,6 +340,81 @@ class KnowledgeLifecycleService:
             return row
 
         return None  # nothing new → defer to the machine (noop)
+
+    # --- C.3f semantic (embedding NN) identity ------------------------
+    def _resolve_nn(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            return self._nn.resolve(
+                str(data.get("statement", "")),
+                domain=str(data.get("domain", "research") or "research"),
+            )
+        except Exception as exc:  # noqa: BLE001 - NN is best-effort; fall back to create
+            self._logger.warning("nn resolve failed: %s", exc)
+            return None
+
+    def _index_embedding(self, row: dict[str, Any], data: dict[str, Any]) -> None:
+        if self._nn is None:
+            return
+        try:
+            self._nn.index(str(row["id"]), str(data.get("statement", "")))
+        except Exception as exc:  # noqa: BLE001 - never block a write on indexing
+            self._logger.warning("nn index failed: %s", exc)
+
+    def _merge_nn(
+        self, existing: dict[str, Any], data: dict[str, Any], *, similarity: float
+    ) -> dict[str, Any]:
+        """Merge a paraphrase's evidence into the matched finding (keep its statement)."""
+        existing_support = _sources(existing.get("supporting") or existing.get("supporting_sources"))
+        incoming_support = _sources(data.get("supporting_sources") or data.get("supporting"))
+        if not incoming_support:
+            # A document-derived prose finding often has no explicit sources — synthesize one from
+            # the evidence descriptor so the corroboration is still recorded.
+            ev = _evidence_ref(data)
+            sid = ev.get("asset_id") or ev.get("source") or str(data.get("statement", ""))[:48]
+            incoming_support = [{
+                "source_id": str(sid),
+                "evidence_level": 2,
+                "snippet": str(data.get("statement", ""))[:200],
+            }]
+        merged_support = _union_sources(existing_support, incoming_support)
+
+        if not hasattr(self._store, "update_evidence") or len(merged_support) <= len(existing_support):
+            row = dict(existing)
+            row["_transition"] = "noop"
+            return row
+
+        count = independent_source_count(merged_support)
+        confidence = merge_confidence(
+            existing=existing.get("confidence"),
+            incoming=data.get("confidence"),
+            source_count=count,
+        )
+        score = merge_confidence_score(
+            existing=float(existing.get("confidence_score") or 0),
+            incoming=float(data.get("confidence_score") or 0),
+            source_count=count,
+        )
+        maturity = derive_maturity(
+            supporting_count=count,
+            confidence=confidence,
+            established_min_sources=self._established_min_sources,
+        )
+        row = self._store.update_evidence(
+            str(existing["id"]),
+            supporting=merged_support,
+            confidence=confidence,
+            confidence_score=score,
+            maturity=maturity,
+            last_verified=data.get("last_verified"),
+        ) or existing
+        row = dict(row)
+        self._record_lineage(
+            row, EDGE_SUPPORTED_BY, data,
+            detail={"sources": count, "confidence": confidence,
+                    "maturity": maturity, "nn_similarity": similarity},
+        )
+        row["_transition"] = "merge_evidence"
+        return row
 
     def _record_lineage(
         self,
