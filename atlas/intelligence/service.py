@@ -37,6 +37,7 @@ from atlas.engineering.findings import (
     CLAIM_DEPENDENCY,
     CLAIM_PATTERN,
     CLAIM_STRUCTURE,
+    EXTRACTOR_VERSION,
     build_engineering_findings,
 )
 from atlas.knowledge.domains import DOMAIN_CODE
@@ -136,6 +137,7 @@ class IntelligenceService:
         design_reviewer: "DesignReviewer | None" = None,
         findings: "EngineeringFindingWriter | None" = None,
         finding_repo: "FindingRepository | None" = None,
+        coverage: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._code = code
@@ -148,6 +150,8 @@ class IntelligenceService:
         self._design_reviewer = design_reviewer
         self._findings = findings
         self._finding_repo = finding_repo
+        # C.4: when wired, record repo extraction into the coverage map (telemetry, never gates learn).
+        self._coverage = coverage
         self._enabled = getattr(config, "enabled", True)
         self._default_policy = getattr(config, "default_policy", "project")
         self._min_repos = getattr(config, "generalize_min_repos", 2)
@@ -289,6 +293,11 @@ class IntelligenceService:
         }
         if embed_result is not None:
             out["embedded_chunks"] = embed_result.get("ingested_chunks", 0)
+        self._record_coverage(
+            payload, reader=reader, reader_version=reader_version,
+            findings_count=out["findings"],
+            chunks_count=int((embed_result or {}).get("ingested_chunks", 0)),
+        )
         if graph_info is not None:
             out["architecture_graph"] = graph_info
         if acquired is not None:
@@ -304,6 +313,44 @@ class IntelligenceService:
             rec = self._repo.get_repository(ref)
             out["repository"] = rec.as_dict() if rec else None
         return out
+
+    def _record_coverage(
+        self,
+        payload: dict[str, Any],
+        *,
+        reader: str,
+        reader_version: str,
+        findings_count: int,
+        chunks_count: int,
+    ) -> None:
+        """Record what the code reader extracted from this repo asset (C.4).
+
+        Requires an Asset Store-backed learn (asset_id present); legacy local-path learns have no
+        asset to key coverage on and are skipped. Best-effort telemetry — never fails the learn."""
+        if self._coverage is None:
+            return
+        asset_id = payload.get("asset_id")
+        asset_version = payload.get("asset_version")
+        if not asset_id or asset_version is None:
+            return
+        try:
+            self._coverage.record(
+                asset_id,
+                int(asset_version),
+                reader,
+                reader_version,
+                status="done",
+                extractor_version=EXTRACTOR_VERSION,
+                domain=DOMAIN_CODE,
+                source=SOURCE_REPO,
+                repo_uid=payload.get("repo_uid"),
+                findings_count=findings_count,
+                chunks_count=chunks_count,
+            )
+        except Exception:  # noqa: BLE001 - coverage is best-effort telemetry
+            self._logger.warning(
+                "failed to record coverage for %s", asset_id, exc_info=True
+            )
 
     def _load_artifact(
         self,

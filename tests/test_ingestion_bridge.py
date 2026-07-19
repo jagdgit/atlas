@@ -122,6 +122,56 @@ def test_bridge_propagates_asset_reuse_flag():
     assert result.asset_reused is True and result.deduped is True
 
 
+class FakeCoverage:
+    def __init__(self):
+        self.records: list[dict] = []
+
+    def record(self, asset_id, asset_version, reader, reader_version, **kw):
+        self.records.append({"asset_id": asset_id, "asset_version": asset_version,
+                             "reader": reader, "reader_version": reader_version, **kw})
+        return {"id": "cov-1"}
+
+
+def test_bridge_records_coverage_on_success():
+    acq = FakeAcquirer(_acquired())
+    reader = FakeReader(_artifact())
+    know = FakeKnowledge({"document_id": "doc-1", "chunks": 3, "deduped": False})
+    cov = FakeCoverage()
+    svc = IngestionService(acq, reader, know, coverage=cov)
+
+    svc.ingest_bytes(b"hello world", filename="note.txt", domain="external", embed=False)
+    assert len(cov.records) == 1
+    rec = cov.records[0]
+    assert rec["asset_id"] == "asset-1" and rec["reader"] == "document"
+    assert rec["status"] == "done" and rec["chunks_count"] == 3
+    assert rec["domain"] == "external" and rec["source"] == "document"
+
+
+def test_bridge_records_failed_coverage_for_unreadable_input():
+    acq = FakeAcquirer(_acquired())
+    reader = FakeReader(_artifact(outcome="unsupported", text=""))
+    know = FakeKnowledge({"document_id": "doc-x"})
+    cov = FakeCoverage()
+    svc = IngestionService(acq, reader, know, coverage=cov)
+
+    svc.ingest_bytes(b"\x00\x01", filename="thing.zip")
+    assert len(cov.records) == 1
+    assert cov.records[0]["status"] == "unsupported"
+
+
+def test_bridge_coverage_failure_never_breaks_ingest():
+    class BoomCoverage:
+        def record(self, *a, **k):
+            raise RuntimeError("db down")
+
+    acq = FakeAcquirer(_acquired())
+    reader = FakeReader(_artifact())
+    know = FakeKnowledge({"document_id": "doc-1", "chunks": 1})
+    svc = IngestionService(acq, reader, know, coverage=BoomCoverage())
+    result = svc.ingest_bytes(b"hello world", filename="note.txt", embed=False)
+    assert result.ok  # coverage is best-effort telemetry, not a gate
+
+
 # --- live DB e2e ---------------------------------------------------------
 @pytest.fixture(scope="module")
 def db():

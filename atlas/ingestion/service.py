@@ -29,6 +29,10 @@ if TYPE_CHECKING:
     from atlas.readers.document import DocumentReader
 
 
+# Reader outcome → coverage status (C.4): "empty"/"unsupported" keep their names; everything else fails.
+_COVERAGE_STATUS = {"empty": "empty", "unsupported": "unsupported", "error": "failed"}
+
+
 @dataclass(frozen=True, slots=True)
 class IngestResult:
     """Outcome of ingesting one source through the unified pipeline."""
@@ -74,6 +78,7 @@ class IngestionService:
         *,
         extractor: "ProseKnowledgeExtractor | None" = None,
         candidates: "CandidateConsumer | None" = None,
+        coverage: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._acq = acquirer
@@ -82,6 +87,8 @@ class IngestionService:
         # C.3g: when both are wired, ingestion ALSO emits prose candidates (never findings).
         self._extractor = extractor
         self._candidates = candidates
+        # C.4: when wired, record what was read into the coverage map (telemetry, never gates ingest).
+        self._coverage = coverage
         self._logger = logger or logging.getLogger("atlas.ingestion.service")
 
     def ingest_file(
@@ -146,6 +153,11 @@ class IngestionService:
                 "no ingestible text from %s (%s): %s",
                 filename, artifact.get("outcome"), artifact.get("reason"),
             )
+            self._record_coverage(
+                acquired, domain=domain,
+                status=_COVERAGE_STATUS.get(str(artifact.get("outcome")), "failed"),
+                reason=artifact.get("reason"),
+            )
             return IngestResult(
                 asset_id=acquired.asset_id,
                 asset_version=acquired.asset_version,
@@ -183,6 +195,11 @@ class IngestionService:
             document_id=summary.get("document_id"),
         ) if extract_findings else 0
 
+        self._record_coverage(
+            acquired, domain=domain, status="done",
+            findings_count=candidates, chunks_count=int(summary.get("chunks") or 0),
+        )
+
         return IngestResult(
             asset_id=acquired.asset_id,
             asset_version=acquired.asset_version,
@@ -219,6 +236,35 @@ class IngestionService:
             return 0
         self._candidates.emit_many(payloads)
         return len(payloads)
+
+    def _record_coverage(
+        self,
+        acquired: "AcquiredAsset",
+        *,
+        domain: str,
+        status: str,
+        findings_count: int = 0,
+        chunks_count: int = 0,
+        reason: str | None = None,
+    ) -> None:
+        """Record what this reader saw of this asset (C.4). Telemetry only — never fails ingest."""
+        if self._coverage is None:
+            return
+        try:
+            self._coverage.record(
+                acquired.asset_id,
+                acquired.asset_version,
+                self._reader.id,
+                self._reader.VERSION,
+                status=status,
+                domain=domain,
+                source="document",
+                findings_count=findings_count,
+                chunks_count=chunks_count,
+                reason=reason,
+            )
+        except Exception:  # noqa: BLE001 - coverage is best-effort telemetry
+            self._logger.warning("failed to record coverage for %s", acquired.asset_id, exc_info=True)
 
     # --- lifecycle ------------------------------------------------------
     def start(self) -> None:

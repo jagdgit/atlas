@@ -336,6 +336,65 @@ def test_learn_repository_remote_url_requires_acquirer():
     assert "acquirer" in out["reason"]
 
 
+class _FakeCoverage:
+    def __init__(self):
+        self.records = []
+
+    def record(self, asset_id, asset_version, reader, reader_version, **kw):
+        self.records.append({"asset_id": asset_id, "asset_version": asset_version,
+                             "reader": reader, "reader_version": reader_version, **kw})
+        return {"id": "cov"}
+
+
+def test_learn_repository_records_coverage_for_asset_backed_learn(tmp_path):
+    """An asset-backed learn records code coverage (C.4): status done, domain code, source repo."""
+    from atlas.engineering.ingest import RepoAcquirer
+    from tests.test_engineering_ingest import FakeAssetStore, FakeGit, FakeStorage
+
+    repo = tmp_path / "svc"
+    repo.mkdir()
+    (repo / "a.py").write_text("print(1)\n")
+    root = str(repo)
+
+    code = FakeCodeService({root: _repo_fixture("svc", ["FastAPI"], {"python": 3}, ["Repo"])})
+    code._repos[root][0]["root"] = root
+
+    intel_repo = FakeIntelRepo()
+    learning = LearningService(FakeLearningRepo(), LearningConfig(auto_apply=False))
+    learning.register_sink("code", CodeStoreSink(intel_repo))
+    acquirer = RepoAcquirer(FakeAssetStore(), FakeStorage(tmp_path), git=FakeGit(root_commit="abc"))
+    cov = _FakeCoverage()
+    svc = IntelligenceService(
+        code, intel_repo, learning, IntelligenceConfig(), acquirer=acquirer, coverage=cov
+    )
+
+    out = svc.learn_repository(path=root)
+    assert out["outcome"] == "ok"
+    assert len(cov.records) == 1
+    rec = cov.records[0]
+    assert rec["asset_id"] == out["asset"]["asset_id"]
+    assert rec["reader"] == "code"
+    assert rec["status"] == "done"
+    assert rec["domain"] == "code"
+    assert rec["source"] == "repo"
+    assert rec["repo_uid"] == out["asset"]["repo_uid"]
+    assert rec["extractor_version"]  # stamped for targeted re-extraction (A10)
+
+
+def test_learn_repository_skips_coverage_without_asset():
+    """A legacy local-path learn (no acquirer/asset) has nothing to key coverage on — skipped."""
+    code = FakeCodeService({"/repos/api": _repo_fixture("api", ["FastAPI"], {"python": 3}, ["Repo"])})
+    intel_repo = FakeIntelRepo()
+    learning = LearningService(FakeLearningRepo(), LearningConfig(auto_apply=False))
+    learning.register_sink("code", CodeStoreSink(intel_repo))
+    cov = _FakeCoverage()
+    svc = IntelligenceService(code, intel_repo, learning, IntelligenceConfig(), coverage=cov)
+
+    out = svc.learn_repository("/repos/api")
+    assert out["outcome"] == "ok"
+    assert cov.records == []
+
+
 # --- engineering findings read side (B.7) ---------------------------------
 class _FakeFindingRepo:
     def __init__(self, rows):
