@@ -1,5 +1,8 @@
 # Phase C — Global Knowledge foundations + Personal & Professional Intelligence (implementation plan)
 
+> **Open items / leftovers / known issues:** tracked centrally in **[`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md)**
+> (Phase-C leftovers: `OI-C1`–`OI-C7`). When this plan says "deferred", the actionable item lives there.
+>
 > **Status:** 🟢 **FROZEN FOR IMPLEMENTATION (2026-07-19).** Derived from `docs/ATLAS_OS_ROADMAP.md`
 > §3 (**P12 — Knowledge is global**, **P13 — Knowledge is cumulative**), §5.9 (Asset relationships),
 > §5.12 (Knowledge Consolidator), §5.13 (Policy store), and §6 (Phase C). Builds on Phase 0 (Storage,
