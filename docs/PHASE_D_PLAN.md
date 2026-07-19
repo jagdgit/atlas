@@ -144,7 +144,18 @@
   provenance-stamped `Decision`; a mission type with **no** rule yields a `capability_gap` decision
   (not an error); hermetic unit tests for scoring, confidence, the P9 record shape, and the gap path.
 
-### D.2 — Intelligence + Policy composition (arbitration)
+### D.2 — Intelligence + Policy composition (arbitration)  ·  ✅ DONE
+> **Delivered:** `atlas/decision/context.py` — `IntelligenceContext`, a lazy, read-only access layer
+> over Engineering (`list_findings`/`recommend`/`search`), Personal (`profile`/`skills`) and Research
+> (`research`) + raw knowledge, resolved from injected capabilities (CC-D2). Reaching for an
+> unavailable intelligence raises `CapabilityGap` → an honest `capability_gap` decision (P15). The
+> `DecisionRule.score` protocol now takes `(request, context)`; `DecisionEngine` builds the context
+> per-decision and injects the three intelligences (`engineering`/`research`/`personal`/`knowledge`,
+> any may be `None`). Policy arbitration (DD5) folds signed influence into scoring and is named in the
+> `why` (P9). Tests: `tests/test_decision_composition.py` (5 hermetic, stubbed intelligences —
+> findings+profile refs on the decision, policy `prefer` flips equally-scored options, complete
+> decision with the LLM off, and two capability-gap paths). Wiring into bootstrap is D.5.
+
 - The engine assembles decision inputs from the three Intelligences via capabilities:
   Engineering (`IntelligenceService.recommend`/`list_findings`), Research (`ResearchService.research`
   where a mission needs fresh facts), Personal (`PersonalService.profile` for
@@ -274,5 +285,6 @@ are incremental follow-ons.
 
 ---
 
-> **D.1 ✅ DONE** (`atlas/decision/` + `0039` + 11 tests). **Next: D.2 — Intelligence + Policy
-> composition (arbitration): fold Research/Engineering/Personal + policy into deterministic scoring.**
+> **D.1 ✅ DONE** (`atlas/decision/` + `0039` + 11 tests). **D.2 ✅ DONE** (`IntelligenceContext`
+> composition + policy arbitration + 5 tests). **Next: D.3 — Human-approval gate
+> (`decision.approvals`, migration `0040`): propose → approve/reject → apply → revert (P14).**

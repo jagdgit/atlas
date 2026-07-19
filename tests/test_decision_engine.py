@@ -51,7 +51,7 @@ class _TwoOptionRule:
     def __init__(self, a_score: float = 0.9, b_score: float = 0.2, side_effecting: bool = False):
         self._a, self._b, self._side = a_score, b_score, side_effecting
 
-    def score(self, request: DecisionRequest) -> list[ScoredOption]:
+    def score(self, request: DecisionRequest, context) -> list[ScoredOption]:
         return [
             ScoredOption(key="alpha", score=self._a, tags=("momentum",), rationale="strong signal",
                          knowledge_refs=["k1"], side_effecting=self._side, payload={"n": 1}),
@@ -63,7 +63,7 @@ class _EmptyRule:
     mission_type = "demo"
     VERSION = "1.0.0"
 
-    def score(self, request: DecisionRequest) -> list[ScoredOption]:
+    def score(self, request: DecisionRequest, context) -> list[ScoredOption]:
         return []
 
 
@@ -71,7 +71,7 @@ class _GapRule:
     mission_type = "demo"
     VERSION = "1.0.0"
 
-    def score(self, request: DecisionRequest) -> list[ScoredOption]:
+    def score(self, request: DecisionRequest, context) -> list[ScoredOption]:
         raise CapabilityGap("market_data:NASDAQ", "no data source adapter configured")
 
 
@@ -162,7 +162,7 @@ def test_policy_influence_reorders_and_is_explained():
         mission_type = "demo"
         VERSION = "1.0.0"
 
-        def score(self, request):
+        def score(self, request, context):
             return [
                 ScoredOption(key="alpha", score=0.5, tags=("momentum",)),
                 ScoredOption(key="beta", score=0.5, tags=("index",)),

@@ -14,9 +14,12 @@ model) raises :class:`CapabilityGap` — the engine turns that into an honest ``
 from __future__ import annotations
 
 import re
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from atlas.decision.contracts import DecisionRequest, ScoredOption
+
+if TYPE_CHECKING:
+    from atlas.decision.context import IntelligenceContext
 
 _WORD_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
@@ -41,8 +44,15 @@ class DecisionRule(Protocol):
     mission_type: str
     VERSION: str
 
-    def score(self, request: DecisionRequest) -> list[ScoredOption]:
-        """Return scored candidate options for this request (may be empty → the engine holds)."""
+    def score(
+        self, request: DecisionRequest, context: "IntelligenceContext"
+    ) -> list[ScoredOption]:
+        """Return scored candidate options for this request (may be empty → the engine holds).
+
+        ``context`` gives read-only access to the intelligences (engineering/research/personal) +
+        knowledge; reaching for an unavailable one raises :class:`CapabilityGap` (P15). The method must
+        stay deterministic: no LLM in the choice, no persistence (Q7/DD2).
+        """
         ...
 
 

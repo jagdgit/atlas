@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from atlas.decision.context import IntelligenceContext
 from atlas.decision.contracts import (
     ACTION_CAPABILITY_GAP,
     ACTION_HOLD,
@@ -50,6 +51,10 @@ class DecisionEngine:
         *,
         rules: DecisionRuleRegistry | None = None,
         policy: Any = None,
+        engineering: Any = None,
+        research: Any = None,
+        personal: Any = None,
+        knowledge: Any = None,
         versions_provider: Callable[[], dict[str, Any]] | None = None,
         narrator: Any = None,
         events: Any = None,
@@ -59,6 +64,12 @@ class DecisionEngine:
         self._rules = rules or DecisionRuleRegistry()
         # Duck-typed PolicyService (``retrieval_influence``/``advice_influence``); None → no arbitration.
         self._policy = policy
+        # The three intelligences the engine composes (DD2/§D.2); any may be None → a rule that needs
+        # it gets an honest capability_gap (P15). Resolved via capabilities at wiring time (CC-D2, D.5).
+        self._engineering = engineering
+        self._research = research
+        self._personal = personal
+        self._knowledge = knowledge
         # Supplies real component versions from the Capability Registry (P2/CC-D3); None → {}.
         self._versions_provider = versions_provider
         # Optional LLM seam that only rewrites the ``why`` prose (CC-D1); never picks the action.
@@ -84,8 +95,9 @@ class DecisionEngine:
                 detail=f"no decision rule registered for mission type '{request.mission_type}'",
             )
 
+        context = self._intelligence_context()
         try:
-            options = list(rule.score(request) or [])
+            options = list(rule.score(request, context) or [])
         except CapabilityGap as gap:
             return self._capability_gap(request, capability=gap.capability, detail=gap.detail,
                                         rule=rule)
@@ -173,6 +185,16 @@ class DecisionEngine:
         return self._persist(decision, event="DecisionCapabilityGap")
 
     # --- internals ------------------------------------------------------
+    def _intelligence_context(self) -> IntelligenceContext:
+        """The lazy composed view of the intelligences a rule scores against (§D.2)."""
+        return IntelligenceContext(
+            engineering=self._engineering,
+            research=self._research,
+            personal=self._personal,
+            knowledge=self._knowledge,
+            logger=self._logger,
+        )
+
     def _influences(self, request: DecisionRequest) -> list[dict[str, Any]]:
         if self._policy is None:
             return []

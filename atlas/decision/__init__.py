@@ -16,6 +16,7 @@ from atlas.decision.contracts import (
     ScoredOption,
     derive_confidence,
 )
+from atlas.decision.context import IntelligenceContext
 from atlas.decision.engine import DecisionEngine
 from atlas.decision.rules import (
     CapabilityGap,
@@ -32,6 +33,7 @@ __all__ = [
     "derive_confidence",
     "DecisionRule",
     "DecisionRuleRegistry",
+    "IntelligenceContext",
     "CapabilityGap",
     "apply_policy_influence",
     "ACTION_RECOMMEND",
