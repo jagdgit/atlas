@@ -37,10 +37,12 @@ from atlas.engineering.findings import CLAIM_STRUCTURE, EngineeringFindingWriter
 from atlas.engineering.ingest import ASSET_KIND_REPO, RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
+from atlas.learning.experience_extraction import ExperienceWriter
 from atlas.missions import MissionRepository, MissionService
 from atlas.missions.templates import TemplateService
 from atlas.models.learning import SOURCE_REPO, STORE_CODE
 from atlas.recovery import CheckpointStore
+from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.finding_repo import FindingRepository
 from atlas.repositories.intelligence_repo import IntelligenceRepository
 from atlas.repositories.learning_repo import LearningRepository
@@ -140,11 +142,14 @@ class _Stack:
         self.finding_repo = FindingRepository(db)
         self.intel_repo = IntelligenceRepository(db)
         writer = EngineeringFindingWriter(self.finding_repo)
+        self.experience_store = ExperienceStore(db)
+        exp_writer = ExperienceWriter(self.experience_store)
         self.learning = LearningService(
             LearningRepository(db), LearningConfig(auto_apply=False)
         )
         self.learning.register_sink(
-            STORE_CODE, CodeStoreSink(self.intel_repo, findings=writer)
+            STORE_CODE,
+            CodeStoreSink(self.intel_repo, findings=writer, experiences=exp_writer),
         )
         code = CodeService(CodeParser(), readers=ReaderRegistry())
         self.graphs = ArchitectureGraphStore(assets)
@@ -342,6 +347,71 @@ def test_c1_mission_scoped_ingest_stamps_global_provenance(stack: _Stack, tmp_pa
     real = stack.missions.create_mission("C.1 provenance mission")
     stack.missions.archive(real.id, "C.1 cleanup")
     assert stack.finding_repo.list_active_by_repo_uid(repo_uid)  # findings survive untouched
+
+
+def _experiences_evidencing(stack: _Stack, *repo_uids: str) -> list[dict]:
+    """Active experiences whose accumulated evidence references *every* given repo_uid."""
+    from psycopg.rows import dict_row
+
+    clause = " AND ".join(["evidence::text LIKE %s"] * len(repo_uids))
+    params = tuple(f"%{u}%" for u in repo_uids)
+    with stack.db.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                f"SELECT * FROM learning.experiences WHERE status = 'active' AND {clause}",
+                params,
+            )
+            return cur.fetchall()
+
+
+def test_c6_dual_extraction_consolidates_experiences_across_projects(stack: _Stack, tmp_path):
+    """Phase-C · C.6/CC6/P13: the SAME governed repo reads that produce engineering findings also
+    distill owner experiences (dual extraction). Two distinct Python projects share skills, so those
+    experiences consolidate into ONE cumulative record — corroborated by both projects, rising
+    maturity — and re-learning a project does not inflate the corroboration."""
+    repo_a = _write(tmp_path / "xp_a", {
+        "app/__init__.py": "",
+        "app/main.py": "class Api:\n    pass\n",
+        "requirements.txt": "fastapi\n",
+    })
+    repo_b = _write(tmp_path / "xp_b", {
+        "svc/__init__.py": "",
+        "svc/api.py": "def handler():\n    return 1\n",
+        "requirements.txt": "fastapi\n",
+    })
+
+    out_a = stack.intel.learn_repository(path=repo_a)
+    out_b = stack.intel.learn_repository(path=repo_b)
+    assert out_a["outcome"] == "ok" and out_a["experiences"] > 0
+    assert out_b["outcome"] == "ok" and out_b["experiences"] > 0
+    uid_a = out_a["repository"]["repo_uid"]
+    uid_b = out_b["repository"]["repo_uid"]
+    assert uid_a != uid_b
+
+    # Dual extraction wired: experiences from repo A landed, provenance-linked to it.
+    assert _experiences_evidencing(stack, uid_a)
+
+    # Shared skills (both are Python projects declaring FastAPI) consolidate into ONE experience
+    # evidenced by BOTH projects — not two rows (P13). At least the Python-language skill overlaps.
+    shared = _experiences_evidencing(stack, uid_a, uid_b)
+    assert shared, "expected at least one experience corroborated by both projects"
+    exp = shared[0]
+    src_ids = {s.get("source_id") for s in (exp["evidence"] or [])}
+    assert {uid_a, uid_b} <= src_ids  # both projects corroborate the same experience
+    assert exp["corroboration_count"] >= 2
+    assert exp["maturity"] in ("verified", "established")  # ≥2 independent sources
+    payload = exp["payload"] or {}
+    assert payload.get("domain") == "experience"
+    assert (payload.get("provenance") or {}).get("source") == SOURCE_REPO
+
+    # Re-learning project A is a no-op: an already-known source must neither inflate corroboration
+    # nor spawn a revision (evidence-merge stays in place).
+    before = {str(e["id"]): (e["corroboration_count"], e["revision"]) for e in shared}
+    stack.intel.learn_repository(path=repo_a)
+    after = _experiences_evidencing(stack, uid_a, uid_b)
+    for e in after:
+        if str(e["id"]) in before:
+            assert (e["corroboration_count"], e["revision"]) == before[str(e["id"])]
 
 
 def test_repo_watcher_mission_runs_real_ingest_and_survives_reboot(stack: _Stack, tmp_path):

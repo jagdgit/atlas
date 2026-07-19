@@ -339,7 +339,14 @@ class KnowledgeLifecycleService:
             row["_transition"] = "merge_evidence"
             return row
 
-        return None  # nothing new → defer to the machine (noop)
+        # Same body, no new supporting/contradicting evidence (a repeat or a subset of what we already
+        # know) → a definitive no-op. We must handle it here rather than defer: the transition machine
+        # compares the *full* content fingerprint (which includes the supporting set), so a re-observation
+        # of one already-known source on a multi-source finding would otherwise look "changed" and spawn
+        # a spurious revision that discards the accumulated evidence.
+        existing = dict(existing)
+        existing["_transition"] = "noop"
+        return existing
 
     # --- C.3f semantic (embedding NN) identity ------------------------
     def _resolve_nn(self, data: dict[str, Any]) -> dict[str, Any] | None:

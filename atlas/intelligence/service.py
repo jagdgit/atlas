@@ -42,6 +42,7 @@ from atlas.engineering.findings import (
     build_engineering_findings,
 )
 from atlas.knowledge.domains import DOMAIN_CODE
+from atlas.learning.experience_extraction import build_repo_experiences
 from atlas.models.learning import (
     LEVEL_UNDERSTAND,
     SOURCE_REPO,
@@ -72,16 +73,23 @@ class CodeStoreSink:
 
     Applying also promotes the run's **engineering findings** into ``knowledge.findings``
     (domain=code) via the :class:`EngineeringFindingWriter`, so findings share the repo's
-    single governed, reversible ledger event — reverting archives both (B.2/BB9)."""
+    single governed, reversible ledger event — reverting archives both (B.2/BB9).
+
+    Dual extraction (C.6): the same run also consolidates the owner's **experiences** into
+    ``learning.experiences`` via the :class:`ExperienceWriter`. Unlike findings these are NOT archived
+    on revert — experiences are cross-project cumulative knowledge (P13), so retiring one learn must
+    not un-corroborate a skill that other projects also evidence."""
 
     def __init__(
         self,
         repo: "IntelligenceRepository",
         *,
         findings: "EngineeringFindingWriter | None" = None,
+        experiences: Any = None,
     ) -> None:
         self._repo = repo
         self._findings = findings
+        self._experiences = experiences
 
     def apply(self, payload: dict[str, Any], *, policy: str | None = None) -> str:
         rec = self._repo.add_repository(
@@ -111,6 +119,8 @@ class CodeStoreSink:
                 payload["engineering_findings"],
                 archive_claim_types=set(claim_types) if claim_types else None,
             )
+        if self._experiences is not None and payload.get("experiences"):
+            self._experiences.write(payload["experiences"])
         return rec.id
 
     def revert(self, ref_id: str) -> None:
@@ -240,6 +250,17 @@ class IntelligenceService:
                 mission_id=mission_id, job_id=job_id,
                 source=SOURCE_REPO,
             )
+            # Dual extraction (C.6): the SAME read also distills owner experiences (languages,
+            # frameworks, patterns). They ride the same governed event and are consolidated into
+            # learning.experiences by the sink, becoming cumulative across projects (P13/CC6).
+            payload["experiences"] = build_repo_experiences(
+                payload,
+                repo_uid=payload.get("repo_uid"),
+                asset_id=payload.get("asset_id"),
+                asset_version=payload.get("asset_version"),
+                mission_id=mission_id, job_id=job_id,
+                source=SOURCE_REPO,
+            )
             # The import/call/module graph is a diffable derived product (B.3/BB3).
             graph_doc = build_architecture_graph(artifact, repo_uid=payload["repo_uid"])
 
@@ -292,6 +313,7 @@ class IntelligenceService:
             "event": result.get("event"),
             "applied": result.get("applied", False),
             "findings": len(payload.get("engineering_findings", [])),
+            "experiences": len(payload.get("experiences", [])),
             "design_findings": len(design_info["findings"]),
             "design_review": {"ran": design_info["ran"], "reason": design_info["reason"]},
         }

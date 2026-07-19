@@ -434,6 +434,45 @@ def test_learn_repository_skips_coverage_without_asset():
     assert cov.records == []
 
 
+# --- dual extraction: experiences (C.6) ----------------------------------
+class _FakeExperienceWriter:
+    def __init__(self):
+        self.batches = []
+
+    def write(self, experiences):
+        self.batches.append(list(experiences))
+        return {"created": len(experiences), "revised": 0, "merged": 0, "noop": 0, "ids": []}
+
+
+def test_learn_repository_dual_extracts_and_consolidates_experiences():
+    """The same repo read distills experiences; the sink consolidates them (C.6)."""
+    code_repos = {
+        "/repos/api": _repo_fixture("api", ["FastAPI", "Celery"], {"python": 10, "html": 2},
+                                    ["Repository pattern"])
+    }
+    code = FakeCodeService(code_repos)
+    intel_repo = FakeIntelRepo()
+    learning = LearningService(FakeLearningRepo(), LearningConfig(auto_apply=False))
+    exp_writer = _FakeExperienceWriter()
+    learning.register_sink(
+        "code", CodeStoreSink(intel_repo, experiences=exp_writer)
+    )
+    svc = IntelligenceService(code, intel_repo, learning, IntelligenceConfig())
+
+    out = svc.learn_repository("/repos/api")
+    assert out["outcome"] == "ok" and out["applied"] is True
+    assert out["experiences"] > 0
+    # Sink consolidated exactly the experiences the read distilled.
+    assert len(exp_writer.batches) == 1
+    statements = {e["statement"] for e in exp_writer.batches[0]}
+    assert "Works with python" in statements
+    assert "Uses FastAPI" in statements
+    assert "Uses Celery" in statements
+    for e in exp_writer.batches[0]:
+        assert e["domain"] == "experience"
+        assert e["provenance"]["source"] == "repo"
+
+
 # --- engineering findings read side (B.7) ---------------------------------
 class _FakeFindingRepo:
     def __init__(self, rows):

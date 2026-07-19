@@ -31,6 +31,8 @@ from atlas.engineering.architecture import ArchitectureGraphStore
 from atlas.engineering.artifacts import DerivedArtifactStore
 from atlas.engineering.design_review import DesignReviewer
 from atlas.engineering.findings import EngineeringFindingWriter
+from atlas.learning.experience_extraction import ExperienceWriter
+from atlas.repositories.experience_store import ExperienceStore
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -742,6 +744,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     engineering_findings = EngineeringFindingWriter(
         finding_repo, logger=get_logger("atlas.engineering.findings")
     )
+    # Owner-experience consolidation (Phase C · §C.6, CC6): the same repo read that feeds engineering
+    # findings also distills experiences; the shared consolidator (bound to learning.experiences via
+    # ExperienceStore) makes them cumulative across projects — one skill, many corroborating repos.
+    experience_store = ExperienceStore(db_manager)
+    experience_writer = ExperienceWriter(
+        experience_store, logger=get_logger("atlas.learning.experience")
+    )
     # Architecture graph (Phase B · §B.3, BB3): persist the import/call/module graph as a
     # versioned `architecture_graph` asset linked to the repo asset, with version diffs.
     architecture_graphs = ArchitectureGraphStore(
@@ -783,7 +792,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.intelligence"),
     )
     learning_service.register_sink(
-        STORE_CODE, CodeStoreSink(intelligence_repo, findings=engineering_findings)
+        STORE_CODE,
+        CodeStoreSink(
+            intelligence_repo,
+            findings=engineering_findings,
+            experiences=experience_writer,
+        ),
     )
     # Repository-Learning worker (Phase B · §B.6, BB7): re-ingests a repo on its schedule via the
     # B.1–B.5 pipeline. Registered here (after Intelligence is built) so `repository_learning`
