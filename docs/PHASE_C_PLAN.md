@@ -1,9 +1,10 @@
 # Phase C — Global Knowledge foundations + Personal & Professional Intelligence (implementation plan)
 
 > **Open items / leftovers / known issues:** tracked centrally in **[`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md)**
-> (Phase-C leftovers: `OI-C1`–`OI-C7`). When this plan says "deferred", the actionable item lives there.
+> (Phase-C leftovers: `OI-C1`–`OI-C13`). When this plan says "deferred", the actionable item lives there.
 >
-> **Status:** 🟢 **FROZEN FOR IMPLEMENTATION (2026-07-19).** Derived from `docs/ATLAS_OS_ROADMAP.md`
+> **Status:** 🟢 **COMPLETE (2026-07-19).** All slices C.1–C.9 shipped, tested, and documented; see the
+> footer for the per-slice commit trail. Derived from `docs/ATLAS_OS_ROADMAP.md`
 > §3 (**P12 — Knowledge is global**, **P13 — Knowledge is cumulative**), §5.9 (Asset relationships),
 > §5.12 (Knowledge Consolidator), §5.13 (Policy store), and §6 (Phase C). Builds on Phase 0 (Storage,
 > Asset Store, Capability Registry, Clock, event bus + SSE), Phase A (Missions, Workers, Config,
@@ -539,7 +540,23 @@
 
 </details>
 
-#### C.9 End-to-end acceptance (the Phase-C gate)
+#### C.9 End-to-end acceptance (the Phase-C gate)  ·  ✅ DONE
+> **Delivered** as `tests/test_phase_c_e2e.py` (live-DB) — the knowledge-pipeline gate — plus the
+> per-item hermetic tests that landed with C.1–C.8, and `tests/test_phase_c_owner_e2e.py` (C.8e) for
+> the mission-on-schedule/reboot/config-versioned half. The gate module asserts, through the *one*
+> unified pipeline:
+> - **Global, deduplicated knowledge (P13):** the same fact stated in two distinct assets →
+>   **one finding, two evidence sources, rising maturity, merged in place** (`revision == 1`, not two
+>   rows) — **explainable** (lineage `created_by` + `supported_by`, P9) and **provenance-stamped**
+>   (both source assets, P12).
+> - **Experience + profile:** a code repo → engineering findings **and** owner experiences → inferred
+>   personal skills (C.6/C.7).
+> - **Coverage-driven re-extraction (A10):** re-reading an **unchanged** asset with a **bumped reader
+>   version** reuses the asset (no duplicate storage), mints a **new coverage row** for the new reader
+>   version, and the v1 row is enumerable as stale — delta attributable to the **reader**, not source.
+> - **Policy influence, reversibly (CC8):** a live `prefer` rule lifts the matching hit in the
+>   re-ranker; reverting the rule removes the influence (governed + reversible, P9).
+
 Mirrors `tests/test_phase_b_e2e.py` against the live DB: ingest a mixed archive (a real code repo +
 a document + a chat export) through the **one unified pipeline** → **global, deduplicated** findings
 (same fact from two sources = one finding + two evidence + higher confidence) **and** a
@@ -631,6 +648,12 @@ doc**, exactly as Phases A/B did.
 > **no migration** (template + config schema are code-seeded; archive roots ride mission config), so
 > slot `0039` stays free. New leftovers `OI-C12` (Personal/Owner SPA view), `OI-C13`
 > (conversation→experience extraction); `OI-C5` closed (ingestion bridge + candidate consumer wired).
-> **C-Personal complete. Next: C.9** — the Phase-C end-to-end gate (mixed-archive acceptance,
-> re-extraction delta, policy bias, owner mission on schedule; hermetic + one live-DB integration).
-> Land/test/smoke/update-doc per slice, exactly as Phases A/B.
+> **C.9 (Phase-C end-to-end gate) ✅ DONE** (`tests/test_phase_c_e2e.py`, 4 live-DB gate tests +
+> C.8e). Proves, through the one unified pipeline: global cross-source dedup (one finding, two
+> evidence, rising maturity) that is explainable (lineage) + provenance-stamped; experience → skills;
+> coverage-driven reader-version re-extraction (updates-not-duplicates, reader-vs-source delta); and
+> policy influence that is reversible.
+>
+> **🟢 PHASE C COMPLETE** (C.1–C.9). No migration was needed for C.8/C.9, so the next real migration
+> is `0039`. Leftovers tracked in `docs/OPEN_ITEMS.md` (`OI-C1`–`OI-C13`, none blocking). Full suite
+> green save the pre-existing `test_event_lifecycle` env flake (`OI-T2`). **Next: Phase D.**

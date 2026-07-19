@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-19 (after Phase C.8).
+> **Last updated:** 2026-07-19 (after Phase C.9 — **Phase C complete**).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
