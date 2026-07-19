@@ -60,10 +60,16 @@ class MissionService:
         repo: "MissionRepository",
         *,
         events: "EventDispatcher | None" = None,
+        schedule_repo: Any | None = None,
+        worker_repo: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._repo = repo
         self._events = events
+        # Optional (A.3/A.4): archiving a mission disables its schedules + stops its workers.
+        # Kept as loose dependencies so the Mission Manager has no hard import on those layers.
+        self._schedule_repo = schedule_repo
+        self._worker_repo = worker_repo
         self._logger = logger or logging.getLogger("atlas.missions")
 
     # --- creation -------------------------------------------------------
@@ -139,11 +145,34 @@ class MissionService:
     def archive(self, mission_id: UUID | str, reason: str = "") -> Mission:
         """Non-destructive stop (B5/B9): disable activity, keep everything produced.
 
-        Schedules/workers are disabled here once those subsystems land (A.3/A.4); this
-        never deletes configs, journal, findings, experiences, assets, or checkpoints.
+        Disables this mission's schedules (A.3) and stops its workers (A.4). Never deletes
+        configs, journal, findings, experiences, assets, or checkpoints.
         """
         mission = self._transition(mission_id, MISSION_ARCHIVED, "archived", reason)
-        # TODO(A.3/A.4): disable this mission's schedules + stop its workers.
+        if self._schedule_repo is not None:
+            try:
+                disabled = self._schedule_repo.disable_for_mission(mission_id)
+                if disabled:
+                    self._repo.add_journal(
+                        mission_id,
+                        "schedules_disabled",
+                        f"archival disabled {disabled} schedule(s)",
+                        {"count": disabled},
+                    )
+            except Exception:  # noqa: BLE001 - archival must not fail on schedule cleanup
+                self._logger.exception("failed to disable schedules for %s", mission_id)
+        if self._worker_repo is not None:
+            try:
+                stopped = self._worker_repo.stop_active_for_mission(mission_id)
+                if stopped:
+                    self._repo.add_journal(
+                        mission_id,
+                        "workers_stopped",
+                        f"archival stopped {stopped} worker(s)",
+                        {"count": stopped},
+                    )
+            except Exception:  # noqa: BLE001 - archival must not fail on worker cleanup
+                self._logger.exception("failed to stop workers for %s", mission_id)
         return mission
 
     def _transition(
@@ -215,18 +244,25 @@ class MissionService:
     # --- reads ----------------------------------------------------------
 
     def get_mission(self, mission_id: UUID | str, *, journal_limit: int = 50) -> dict[str, Any]:
-        """Aggregated on-demand view (Q2): mission + owned jobs + journal.
-
-        Owned workers land in A.4; the key is present now so the shape is stable.
-        """
+        """Aggregated on-demand view (Q2): mission + owned jobs + workers + journal."""
         mission = self._require(mission_id)
         return {
             "mission": mission.to_dict(),
             "effective_priority": mission.effective_priority,
             "job_ids": self._repo.list_job_ids(mission.id),
-            "workers": [],  # A.4
+            "workers": self._mission_workers(mission.id),
             "journal": [e.to_dict() for e in self._repo.list_journal(mission.id, limit=journal_limit)],
         }
+
+    def _mission_workers(self, mission_id: str) -> list[dict[str, Any]]:
+        """Owned workers for the aggregated view (A.4); empty if the layer isn't wired."""
+        if self._worker_repo is None:
+            return []
+        try:
+            return [w.to_dict() for w in self._worker_repo.list(mission_id=mission_id)]
+        except Exception:  # noqa: BLE001 - the view must not fail on the worker layer
+            self._logger.exception("failed to list workers for %s", mission_id)
+            return []
 
     def list_missions(
         self,

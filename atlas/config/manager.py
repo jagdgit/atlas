@@ -515,6 +515,11 @@ class IntelligenceConfig(BaseModel):
     generalize_min_repos: int = 2        # need ≥N learned repos before generalizing
     generalize_min_prevalence: float = 0.6  # "you *always* use X" threshold (L4)
     recommend_top_k: int = 5
+    embed_code: bool = False             # embed code chunks into knowledge on learn (BB4/§B.2)
+    embed_cap: int = 500                 # max code chunks embedded per repo (priority-ordered)
+    design_review: bool = True           # LLM design review on structural change (BB6/§B.5)
+    design_review_max_findings: int = 8  # cap design/risk findings per review (token budget)
+    design_review_timeout: float = 120.0  # per-call LLM timeout (seconds) for design review
 
 
 class ApiConfig(BaseModel):

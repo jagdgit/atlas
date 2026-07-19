@@ -19,8 +19,8 @@ from atlas.repositories.base import BaseRepository
 
 _REPO_COLS = (
     "id, name, root, languages, frameworks, entry_points, dependencies, file_count, "
-    "symbol_count, loc, summary, top_symbols, patterns, policy, status, created_at, "
-    "updated_at"
+    "symbol_count, loc, summary, top_symbols, patterns, policy, status, repo_uid, "
+    "root_commit, normalized_remote, asset_id, asset_version, created_at, updated_at"
 )
 _PAT_COLS = (
     "id, name, category, description, prevalence, repo_count, total_repos, confidence, "
@@ -46,19 +46,35 @@ class IntelligenceRepository(BaseRepository):
         top_symbols: list[Any] | None = None,
         patterns: list[Any] | None = None,
         policy: str = "project",
+        repo_uid: str | None = None,
+        root_commit: str | None = None,
+        normalized_remote: str | None = None,
+        asset_id: str | None = None,
+        asset_version: int | None = None,
     ) -> LearnedRepository:
-        # Re-learning a root replaces the previous active row (idempotent learn).
-        self.execute(
-            "UPDATE learning.repositories SET status = 'reverted', updated_at = now() "
-            "WHERE root = %s AND status = 'active'",
-            (root,),
-        )
+        # Re-learning a repository replaces its previous active row (idempotent learn).
+        # Identity is the stable repo_uid (BB12) when known — so re-cloning the same repo to
+        # a different path still supersedes the right row — else the filesystem root.
+        if repo_uid:
+            self.execute(
+                "UPDATE learning.repositories SET status = 'reverted', updated_at = now() "
+                "WHERE repo_uid = %s AND status = 'active'",
+                (repo_uid,),
+            )
+        else:
+            self.execute(
+                "UPDATE learning.repositories SET status = 'reverted', updated_at = now() "
+                "WHERE root = %s AND status = 'active'",
+                (root,),
+            )
         row = self.fetch_one(
             f"""
             INSERT INTO learning.repositories
                 (name, root, languages, frameworks, entry_points, dependencies,
-                 file_count, symbol_count, loc, summary, top_symbols, patterns, policy)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 file_count, symbol_count, loc, summary, top_symbols, patterns, policy,
+                 repo_uid, root_commit, normalized_remote, asset_id, asset_version)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s)
             RETURNING {_REPO_COLS}
             """,
             (
@@ -66,6 +82,7 @@ class IntelligenceRepository(BaseRepository):
                 Jsonb(entry_points or []), Jsonb(dependencies or {}), file_count,
                 symbol_count, loc, summary, Jsonb(top_symbols or []),
                 Jsonb(patterns or []), policy,
+                repo_uid, root_commit, normalized_remote, asset_id, asset_version,
             ),
         )
         return LearnedRepository.from_row(row)
@@ -74,6 +91,15 @@ class IntelligenceRepository(BaseRepository):
         row = self.fetch_one(
             f"SELECT {_REPO_COLS} FROM learning.repositories WHERE id = %s",
             (str(repo_id),),
+        )
+        return LearnedRepository.from_row(row) if row else None
+
+    def get_by_repo_uid(self, repo_uid: str) -> LearnedRepository | None:
+        """The active learned repository for a stable ``repo_uid`` (BB12), newest first."""
+        row = self.fetch_one(
+            f"SELECT {_REPO_COLS} FROM learning.repositories "
+            f"WHERE repo_uid = %s AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+            (str(repo_uid),),
         )
         return LearnedRepository.from_row(row) if row else None
 

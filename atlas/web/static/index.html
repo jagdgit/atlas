@@ -26,6 +26,8 @@
       <nav class="nav">
         <button class="nav-btn active" data-view="overview">Overview</button>
         <button class="nav-btn" data-view="chat">Chat</button>
+        <button class="nav-btn" data-view="missions">Missions</button>
+        <button class="nav-btn" data-view="engineering">Engineering</button>
         <button class="nav-btn" data-view="jobs">Jobs</button>
         <button class="nav-btn" data-view="system">System</button>
       </nav>
@@ -56,6 +58,40 @@
           <textarea id="composer-input" rows="1" placeholder="Ask Atlas anything…  (Enter to send, Shift+Enter for a new line)"></textarea>
           <button id="composer-send" type="submit">Send</button>
         </form>
+      </section>
+
+      <!-- Missions -->
+      <section id="view-missions" class="view hidden">
+        <div class="panel-head">
+          <h2>Missions</h2>
+          <button id="missions-refresh" class="link">refresh</button>
+        </div>
+        <form id="mission-form" class="job-form">
+          <select id="mission-template"></select>
+          <input id="mission-title" placeholder="Mission title (optional)" />
+          <button type="submit">Instantiate</button>
+        </form>
+        <div class="jobs-layout">
+          <div id="missions-list" class="jobs-list"></div>
+          <div id="mission-detail" class="job-detail"></div>
+        </div>
+      </section>
+
+      <!-- Engineering (Phase B · §B.7) -->
+      <section id="view-engineering" class="view hidden">
+        <div class="panel-head">
+          <h2>Engineering</h2>
+          <button id="eng-refresh" class="link">refresh</button>
+        </div>
+        <form id="eng-form" class="job-form">
+          <input id="eng-source" placeholder="Repository path or git URL to ingest, e.g. /data/atlas or https://github.com/…" />
+          <label class="eng-embed"><input id="eng-embed" type="checkbox" /> embed code</label>
+          <button type="submit">Ingest</button>
+        </form>
+        <div class="jobs-layout">
+          <div id="eng-list" class="jobs-list"></div>
+          <div id="eng-detail" class="job-detail"></div>
+        </div>
       </section>
 
       <!-- Jobs -->

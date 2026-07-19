@@ -128,7 +128,13 @@ DB migration where noted.
   `UNIQUE(mission_id, version)`).
 - **Acceptance:** create config v1 → edit → v2 (v1 immutable, retained); invalid document
   rejected with a clear error; `set_active` flips the mission's active version; a worker reads
-  the active version by number and sees its `schema_version`.
+  the active version by number and sees its `schema_version`. ✅ **DONE (2026-07-18)** —
+  `atlas/configuration/` (service + repo + Pydantic `SchemaRegistry`, `hello_watcher` shipped),
+  `atlas/models/config.py`, migration `0022` applied, wired in `bootstrap.py` (shares the
+  `MissionRepository` to flip active + journal), 13 hermetic tests + live-DB smoke pass; full
+  suite green (1152). First config auto-activates; `update_config` is inactive-by-default;
+  `set_active` flips explicitly (B6). Provenance/`mission_id` threading into config writers
+  is deferred to the worker slices (A.4/A.6).
 
 ### A.3 Recurring / interval scheduling (schedule table)  ·  *worker substrate*
 - **Build** promote the hand-rolled `delay_seconds` self-re-enqueue to a first-class
@@ -142,7 +148,15 @@ DB migration where noted.
 - **Migration** `0023_schedules.sql` — `scheduler.schedules`.
 - **Acceptance:** register an interval schedule → it fires on cadence across restarts (survives
   `kill -9` — `next_run_at` is durable); disabling a schedule stops it; deleting a mission
-  cascades/disables its schedules.
+  cascades/disables its schedules. ✅ **DONE (2026-07-18)** — `scheduler.schedules` (migration
+  `0023`), `atlas/repositories/schedule_repo.py` (atomic `claim_due` claim-and-advance),
+  `atlas/scheduler/schedules.py` (`ScheduleService` + durable `schedule_tick` that fires due
+  schedules, advances `next_run_at`, re-enqueues itself, self-heals if claiming fails), wired in
+  `bootstrap.py` (handler + container + capability + lifecycle; seeds the tick on boot). Mission
+  archive now disables the mission's schedules; mission delete cascades them. 10 hermetic tests +
+  live-DB smoke (tick advances, no immediate re-claim, archive disables, delete cascades) pass;
+  full suite green (1162). *Cron deferred (interval/continuous only, per B3); backup/ingestion
+  self-re-enqueue left untouched (migrate later).*
 
 ### A.4 Persistent Worker framework + Worker Manager  ·  *the payoff*
 - **Build** `atlas/workers/` — `WorkerManager` (registered service; supervises workers,
@@ -176,6 +190,18 @@ DB migration where noted.
   **pausable/resumable/stoppable**, **consumes a live operator input**, records its
   **`worker_version`** and resumes on that version after a simulated upgrade, transitions
   `recovering→paused` after repeated forced failures (backoff), and journals each tick.
+  ✅ **DONE (2026-07-18)** — `worker.workers` + `worker.inputs` (migration `0024`),
+  `atlas/models/worker.py`, `atlas/repositories/worker_repo.py`, `atlas/workers/`
+  (`PersistentWorker` base + `TickContext/TickResult`, `HelloWatcher`, `WorkerManager`), wired in
+  `bootstrap.py` (`worker_tick` handler; reuses Phase-0 `CheckpointStore` `owner_type='worker'`;
+  deps: schedule/config/mission/checkpoint/clock). Crash policy = `recovering` + backoff
+  10/30/60/300s, pause on the 5th failure (recovering ticks self-skip until `next_retry_at`).
+  Version upgrade journals `vN→vM` at tick start (B8); active config version picked up + journaled
+  next tick. Mission archive stops workers + disables schedules; mission delete cascades workers +
+  inputs. 16 hermetic tests + live-DB smoke (2 ticks→count 2, **new manager instance resumes to
+  3**, live input applied, config bumped + picked up, archive stopped worker, cascade) pass; full
+  suite green (1178). *`WorkerManager.stop_worker` names the operator stop to avoid clashing with
+  the service-lifecycle `stop`.*
 
 ### A.5 Mission Templates (instantiate → customize → run)
 - **Build** a **template registry** in `atlas/missions/templates/` — a `MissionTemplate`
@@ -196,43 +222,93 @@ DB migration where noted.
 - **Acceptance:** `instantiate("hello_watcher")` yields an active mission with a versioned
   config and a running `HelloWatcher`, stamped with `template_version`; overrides customize the
   config at instantiation; a built-in template bump does not mutate existing missions.
+  ✅ **DONE (2026-07-18)** — `mission.templates` (migration `0025`), `atlas/models/template.py`,
+  `atlas/repositories/template_repo.py` (`upsert_by_name`), `atlas/missions/templates/`
+  (`builtins.py` = HelloWatcher + 7 domain stubs; `TemplateService` seeds on boot + `instantiate`).
+  A permissive `generic` config schema backs the stubs (tightened to strict schema + new
+  `schema_version` when each Phase lands). Wired in `bootstrap.py` (container + capability +
+  lifecycle; seeds built-ins on start). 8 hermetic tests + live-DB smoke (instantiate hello_watcher
+  with overrides → active mission + config v1 + running worker → 2 ticks hit `tick_limit` → done;
+  bump+re-seed leaves existing mission stamp at v1; stub creates mission+generic config, no workers)
+  pass; full suite green (1186). *Deviation: instantiation is its own `TemplateService`
+  (composing Mission/Config/Worker managers) rather than `MissionService.instantiate`, so the
+  Mission Manager keeps no hard deps on config/worker layers.*
 
-### A.6 Priority arbitration (Mission ↔ Resource Manager)  ·  *A7*
-- **Wire** mission `scheduling_policy` + `priority` + `criticality` into task enqueue:
-  mission-owned tasks (job advance, worker ticks) get
-  `scheduler.tasks.priority = policy_band + priority + criticality_weight`. Update
-  `TaskRepository.claim_next` ordering to **`priority DESC, scheduled_at ASC, id ASC`** (B2 —
-  deterministic tie-break; today it's FIFO by `scheduled_at`). This changes ordering for **all**
-  task types; existing callers use `priority=0`, so equal-priority FIFO is preserved — add a
-  regression test on non-mission tasks.
-- **Budget (B1):** enforce **`max_concurrent_tasks` only** in Phase A at enqueue via the
-  Worker/Mission manager (skip/delay a tick when the mission is at its cap). `llm_units_per_window`
-  and host-resource caps are deferred (extensible JSONB). `deadline`/`importance` advisory.
-- **Acceptance:** under contention (two active missions, limited workers), the higher-policy/
-  priority mission's ticks are claimed first (deterministic with `id ASC`); a mission at its
-  `max_concurrent_tasks` cap is throttled (extra ticks wait) while a within-budget mission
-  proceeds; the choice is visible/explainable in the journal + dashboard.
+### A.6 Priority arbitration (Mission ↔ Resource Manager)  ·  *A7*  ✅ 2026-07-18
+- **Done — wired** the owning mission's **effective priority** (`policy_band + priority +
+  criticality_weight`, via `Mission.effective_priority`) into schedule-fired tasks:
+  `ScheduleService` now takes an optional `mission_repo` and stamps each fired task with its
+  mission's priority (`_priority_for`; non-mission schedules → `0`). Worker ticks flow through
+  schedules, so this covers the worker path. **Job-advance priority** threading is deferred (no
+  mission currently *owns* jobs until Phase D) — tracked in Architectural Debt.
+- **Done — claim ordering (B2):** `TaskRepository.claim_next` (and `list_by_status`) now order by
+  **`priority DESC, scheduled_at ASC, id ASC`** — deterministic tie-break. Equal-priority tasks
+  keep FIFO-by-`scheduled_at`; `id ASC` breaks exact ties. Verified on live DB (high-priority task
+  claimed first; two priority-5 tasks claimed in creation order).
+- **Done — budget (B1):** `WorkerManager` enforces **`max_concurrent_tasks` only** via an
+  in-memory per-mission concurrency gate (`_acquire`/`_release` under a lock). A tick whose mission
+  is at its cap is skipped (`{"skipped": "budget"}`) and emits `WorkerThrottled`; the slot is
+  released in a `finally`. `llm_units_per_window` and host-resource caps deferred (extensible
+  JSONB); `deadline`/`importance` advisory.
+- **Acceptance met:** higher-priority mission ticks are claimed first (deterministic with
+  `id ASC`); a mission at its `max_concurrent_tasks` cap is throttled while a within-budget mission
+  proceeds; the throttle is observable via the `WorkerThrottled` event. Unit tests:
+  `tests/test_workers.py` (budget throttle + release), `tests/test_schedules.py` (mission-priority
+  enqueue). Full suite **1190 passed**.
+- **Debt:** the budget gate is **in-memory (single-process Phase A)** — move to a durable/shared
+  counter when the scheduler runs multi-process. Job-advance priority threading pending Phase D.
 
-### A.7 API + Operations Dashboard surfacing
-- **API** (`atlas/api/routes.py`): `GET /v1/missions`, `GET /v1/missions/{id}` (aggregated
-  results/outcomes on demand — Q2), `POST /v1/missions` (create/instantiate from template),
-  mission lifecycle actions, `GET /v1/missions/{id}/journal`, `GET /v1/workers`,
-  `POST /v1/workers/{id}/input` (live operator input). All API-key gated; events over the
-  existing SSE stream.
-- **Dashboard** (`atlas/web/static/`): the Overview `counts` gain **real** `missions` +
-  `workers` (currently 0); a **Missions** view lists missions with status/priority + a journal
-  ("Explain this" foundation, P9). Mobile-first, consistent with Phase 0.
-- **Acceptance:** the operator can create/instantiate a mission, watch its workers tick live,
-  read its journal, and push an input — all from the console; `GET /v1/ops` shows non-zero
-  mission/worker counts.
+### A.7 API + Operations Dashboard surfacing  ✅ 2026-07-18
+- **Done — API** (`atlas/api/routes.py`, all API-key gated): `GET /v1/missions` (status/label
+  filter; adds derived `effective_priority` + `max_concurrent_tasks`), `POST /v1/missions`
+  (create; `activate:true` optional), `POST /v1/missions/instantiate` (from a built-in template →
+  mission + config v1 + workers), `GET /v1/missions/{id}` (aggregated view: mission + job_ids +
+  **workers** + journal, Q2), `GET /v1/missions/{id}/journal`, `POST /v1/missions/{id}/{action}`
+  (`activate|pause|resume|complete|archive` — illegal transitions → **409**), `GET /v1/templates`,
+  `GET /v1/workers` + `GET /v1/workers/{id}`, `POST /v1/workers/{id}/{action}`
+  (`pause|resume|stop`), and `POST /v1/workers/{id}/input` (live operator input, Q4 — declared
+  before the generic `{action}` route so `input` isn't captured). Domain errors mapped to
+  404/409/400. Events flow over the existing SSE stream (mission/worker `_emit`).
+- **Done — aggregated view:** `MissionService.get_mission` now populates **owned workers** (via
+  the optional `worker_repo`), replacing the A.4 placeholder.
+- **Done — dashboard** (`atlas/web/static/`): Overview `counts` now carry **real** `missions`,
+  `missions_active`, `workers`, `workers_total` (from the Mission Manager + Worker Manager health).
+  A new **Missions** view instantiates from a template, lists missions (status + effective
+  priority), and a detail pane shows lifecycle actions, per-worker cards (pause/resume/stop + a
+  JSON live-input box), and the **Journal** ("Explain this" foundation, P9). Mobile-first, vanilla
+  SPA consistent with Phase 0; new status badge colors for mission/worker states.
+- **Acceptance met:** operator can create/instantiate a mission, see its workers, read its
+  journal, push a live input, and drive lifecycle — all from the console; `GET /v1/ops` shows
+  non-zero mission/worker counts (verified live: `missions=1, missions_active=1, workers=1`).
+  Tests: `tests/test_api.py` (+10 mission/worker/template cases). Full suite **1200 passed**.
 
-### A.8 End-to-end acceptance (the Phase-A gate)
+### A.8 End-to-end acceptance (the Phase-A gate)  ✅ 2026-07-18
 Instantiate the **Hello Watcher** mission **from a template** with a versioned config → it owns
 a Persistent Worker that ticks on a schedule, **checkpoints**, **survives a `kill -9` + reboot**
 (resumes mid-count), is **pausable/resumable**, an **edited config bumps a version** (worker
 picks it up next tick), **priority influences scheduling under contention**, a **live input** is
 consumed, and **every action is journaled + explainable**. Covered by hermetic unit tests per
 item + one integration test exercising the full lifecycle against the live DB.
+
+- **Done — `tests/test_phase_a_e2e.py`** (live DB; whole module skips if PostgreSQL is
+  unreachable, matching `test_repositories`). Wires the **real** Mission / Configuration /
+  Schedule / Worker / Template stack exactly as `bootstrap` does, minus the running scheduler so
+  ticks are driven deterministically.
+- **`test_hello_watcher_full_lifecycle`** walks the entire gate: instantiate → mission `active` +
+  config v1 + running worker (journal has `created/config_created/activated/worker_created`);
+  tick → checkpoint `count=1`; **process-restart resume** via a *fresh* `WorkerManager` over the
+  same DB → `count=2` (proves the Postgres checkpoint is what survives `kill -9`); pause (tick
+  `skipped: paused`) → resume → `count=3`; **config bump** to v2 (`activate=True`) → next tick
+  journals `config_picked_up` and the checkpoint greeting changes; **live input** overrides the
+  greeting on the next tick (Q4); `tick_limit` bump → worker reports `done` + `stopped`
+  (`worker_done`); **non-destructive archive** keeps checkpoint + config v1; final journal asserts
+  all ten expected actions are present (P9).
+- **`test_priority_influences_scheduling_under_contention`**: two missions with a clear priority
+  gap (realtime+critical vs idle+low); enqueue LOW then HIGH via the schedule layer → deterministic
+  `claim_next` orders HIGH before LOW (`priority DESC, scheduled_at ASC, id ASC`).
+- **Result:** both pass on the live DB; full suite **1202 passed**. *(`kill -9` resume is proven
+  via the durable-checkpoint restart simulation rather than actually killing the process, which
+  isn't feasible in-process.)*
 
 ---
 
@@ -277,13 +353,13 @@ A.1 Mission Manager ──┬─> A.2 Configuration Manager ──┐
 ## 5. Progress checklist
 
 - [x] A.1 Mission Manager + Journal (+ labels/metadata/`waiting`) — migration `0021` (mission schema + `mission_id` provenance folded in) ✅ 2026-07-18
-- [ ] A.2 Configuration Manager (versioned per-mission + schema_version) — migration `0022`
-- [ ] A.3 Recurring/interval schedule table — migration `0023`
-- [ ] A.4 Persistent Worker framework + Worker Manager (+ `worker.inputs`) — migration `0024`
-- [ ] A.5 Mission Templates (instantiate → customize → run) — migration `0025`
-- [ ] A.6 Priority arbitration (scheduler claim ordering + budget)
-- [ ] A.7 API + Operations Dashboard surfacing (missions/workers/journal/input)
-- [ ] A.8 End-to-end: Hello Watcher mission from template (checkpoint/reboot/pause/priority/input)
+- [x] A.2 Configuration Manager (versioned per-mission + schema_version) — migration `0022` ✅ 2026-07-18
+- [x] A.3 Recurring/interval schedule table (`schedule_tick` driver, mission cascade/disable) — migration `0023` ✅ 2026-07-18
+- [x] A.4 Persistent Worker framework + Worker Manager (+ `worker.inputs`, HelloWatcher, crash backoff, B8 upgrade) — migration `0024` ✅ 2026-07-18
+- [x] A.5 Mission Templates (HelloWatcher + 7 stubs, versioned, instantiate → customize → run) — migration `0025` ✅ 2026-07-18
+- [x] A.6 Priority arbitration (mission-priority enqueue + `priority DESC, scheduled_at ASC, id ASC` claim ordering + in-memory `max_concurrent_tasks` budget) ✅ 2026-07-18
+- [x] A.7 API + Operations Dashboard surfacing (missions/workers/templates/journal/input endpoints + Missions console view + real ops counts) ✅ 2026-07-18
+- [x] A.8 End-to-end: Hello Watcher mission from template (checkpoint/reboot/pause/priority/input) — `tests/test_phase_a_e2e.py` ✅ 2026-07-18
 
 ---
 
@@ -363,5 +439,10 @@ visible instead of becoming permanent.
 - **Explicitly not added (P5 discipline):** no Trading/Finance/CAD/Security/Market
   "Intelligence" — those remain Knowledge Domains + Missions + Workers, forever.
 
-> **Next step:** A.1 ✅ landed (2026-07-18). Proceed to **A.2 — Configuration Manager (versioned,
-> per-mission; migration `0022`)**, then continue down §5 in order.
+> **Phase A COMPLETE ✅ (2026-07-18).** A.1–A.8 all landed; the Phase-A gate
+> (`tests/test_phase_a_e2e.py`) is green and the full suite is **1202 passed**. The Mission +
+> Persistent-Worker foundation (Mission Manager, Configuration Manager, Schedule table, Worker
+> framework, Templates, priority arbitration, API + Operations Dashboard) is in place and
+> exercised end-to-end. **Next:** open **Phase B — Engineering Intelligence** (repository
+> ingestion → code understanding → architecture graph), building missions/workers on this
+> foundation per the roadmap.

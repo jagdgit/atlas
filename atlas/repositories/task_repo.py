@@ -70,7 +70,7 @@ class TaskRepository(BaseRepository):
             """
             SELECT * FROM scheduler.tasks
             WHERE status = %s
-            ORDER BY priority DESC, scheduled_at ASC
+            ORDER BY priority DESC, scheduled_at ASC, id ASC
             LIMIT %s
             """,
             (status, limit),
@@ -115,7 +115,7 @@ class TaskRepository(BaseRepository):
             WHERE id = (
                 SELECT id FROM scheduler.tasks
                 WHERE status = 'pending' AND scheduled_at <= now()
-                ORDER BY priority DESC, scheduled_at ASC
+                ORDER BY priority DESC, scheduled_at ASC, id ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
             )

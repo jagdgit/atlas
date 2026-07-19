@@ -32,6 +32,11 @@ from atlas.api.schemas import (
     IngestResponse,
     InvokeToolRequest,
     InvokeToolResponse,
+    InstantiateMissionRequest,
+    CreateMissionRequest,
+    MissionActionRequest,
+    WorkerActionRequest,
+    WorkerInputRequest,
     JobDetailResponse,
     JobInputRequest,
     JobOut,
@@ -58,6 +63,7 @@ from atlas.api.schemas import (
     CodeParseRequest,
     CodeRepoRequest,
     CodeSymbolsRequest,
+    EngineeringIngestRequest,
     ExperienceRequest,
     GitRequest,
     LearningApplyRequest,
@@ -588,6 +594,16 @@ def intel_repository(repo_id: str, request: Request) -> dict:
     return rec
 
 
+@v1_router.post(
+    "/intelligence/repositories/{repo_uid}/design-review", tags=["intelligence"]
+)
+def intel_design_review(repo_uid: str, request: Request) -> dict:
+    """On-demand advice-only design review for a learned repo (B.5, structural-change-gated
+    during ingest; always available on demand here)."""
+    intel = _app(request).container.resolve("intelligence")
+    return intel.review_design(repo_uid)
+
+
 @v1_router.get("/intelligence/search", tags=["intelligence"])
 def intel_search(request: Request, q: str = "", limit: int = 20) -> dict:
     intel = _app(request).container.resolve("intelligence")
@@ -622,6 +638,122 @@ def intel_recommend(body: RecommendRequest, request: Request) -> dict:
 def intel_profile(request: Request) -> dict:
     intel = _app(request).container.resolve("intelligence")
     return intel.profile()
+
+
+# --- Engineering Intelligence (Phase B · §B.7) ---------------------------
+def _repo_uid_for(intel, repo_id: str) -> tuple[dict, str]:
+    """Resolve a learned-repository id → (record, repo_uid); 404 if unknown."""
+    rec = intel.get_repository(repo_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="repository not found")
+    repo_uid = rec.get("repo_uid")
+    if not repo_uid:
+        raise HTTPException(status_code=409, detail="repository has no stable repo_uid")
+    return rec, repo_uid
+
+
+@v1_router.get("/engineering/repositories", tags=["engineering"])
+def eng_repositories(request: Request, limit: int = 100) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    return {"repositories": intel.list_repositories(limit=limit)}
+
+
+@v1_router.get("/engineering/repositories/{repo_id}", tags=["engineering"])
+def eng_repository(repo_id: str, request: Request) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    rec, repo_uid = _repo_uid_for(intel, repo_id)
+    return {"repository": rec, "graph_versions": intel.architecture_graph_versions(repo_uid)}
+
+
+@v1_router.get("/engineering/repositories/{repo_id}/graph", tags=["engineering"])
+def eng_repository_graph(repo_id: str, request: Request, version: int | None = None) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    _, repo_uid = _repo_uid_for(intel, repo_id)
+    graph = intel.architecture_graph(repo_uid, version=version)
+    if graph is None:
+        raise HTTPException(status_code=404, detail="no architecture graph for this repository")
+    return graph
+
+
+@v1_router.get("/engineering/repositories/{repo_id}/graph/diff", tags=["engineering"])
+def eng_repository_graph_diff(
+    repo_id: str, request: Request, from_version: int, to_version: int
+) -> dict:
+    intel = _app(request).container.resolve("intelligence")
+    _, repo_uid = _repo_uid_for(intel, repo_id)
+    diff = intel.architecture_graph_diff(repo_uid, from_version, to_version)
+    if diff is None:
+        raise HTTPException(status_code=404, detail="graph version(s) not found")
+    return diff
+
+
+@v1_router.get("/engineering/findings", tags=["engineering"])
+def eng_findings(
+    request: Request,
+    repo_id: str | None = None,
+    claim_type: str | None = None,
+    mission_id: str | None = None,
+    job_id: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """Engineering findings, optionally scoped by repo, claim type, or **who discovered them**
+    (``mission_id``/``job_id`` — P12 provenance, a read-only lens, never ownership)."""
+    intel = _app(request).container.resolve("intelligence")
+    repo_uid = None
+    if repo_id:
+        _, repo_uid = _repo_uid_for(intel, repo_id)
+    return {
+        "findings": intel.list_findings(
+            repo_uid=repo_uid, claim_type=claim_type,
+            mission_id=mission_id, job_id=job_id, limit=limit,
+        )
+    }
+
+
+@v1_router.post("/engineering/ingest", tags=["engineering"])
+def eng_ingest(body: EngineeringIngestRequest, request: Request) -> dict:
+    if bool(body.path) == bool(body.url):
+        raise HTTPException(status_code=422, detail="provide exactly one of path or url")
+    app = _app(request)
+    intel = app.container.resolve("intelligence")
+    out = intel.learn_repository(
+        path=body.path, url=body.url, branch=body.branch,
+        mission_id=body.mission_id, policy=body.policy, embed=body.embed,
+    )
+    _emit_engineering_event(app, "EngineeringIngested", out)
+    return out
+
+
+@v1_router.post("/engineering/design-review/{repo_id}", tags=["engineering"])
+def eng_design_review(repo_id: str, request: Request) -> dict:
+    app = _app(request)
+    intel = app.container.resolve("intelligence")
+    _, repo_uid = _repo_uid_for(intel, repo_id)
+    out = intel.review_design(repo_uid)
+    _emit_engineering_event(app, "DesignReviewed", out)
+    return out
+
+
+def _emit_engineering_event(app, event_type: str, out: dict) -> None:
+    """Push an engineering event onto the bus so the console updates live (best-effort)."""
+    try:
+        events = app.container.resolve("events")
+    except Exception:  # noqa: BLE001 - events are optional; ingest still succeeds
+        return
+    try:
+        events.emit(
+            event_type,
+            {
+                "outcome": out.get("outcome"),
+                "repo_uid": (out.get("repository") or {}).get("repo_uid")
+                or out.get("repo_uid"),
+                "findings": out.get("findings"),
+                "design_findings": out.get("design_findings"),
+            },
+            source="engineering",
+        )
+    except Exception:  # noqa: BLE001 - telemetry must never fail the request
+        pass
 
 
 @v1_router.post("/verify", response_model=VerifyResponse, tags=["verification"])
@@ -691,6 +823,206 @@ def add_job_input(job_id: str, body: JobInputRequest, request: Request) -> JobDe
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+# --- missions / workers / templates (Phase A · §A.7) ---------------------
+def _missions(request: Request):
+    return _app(request).container.resolve("missions")
+
+
+def _workers(request: Request):
+    return _app(request).container.resolve("workers")
+
+
+def _templates(request: Request):
+    return _app(request).container.resolve("templates")
+
+
+def _mission_error(exc: Exception) -> HTTPException:
+    """Map a MissionError/WorkerError/TemplateError to a sensible HTTP status."""
+    msg = str(exc)
+    low = msg.lower()
+    if "not found" in low or "unknown template" in low or "unknown worker" in low:
+        return HTTPException(status_code=404, detail=msg)
+    if "illegal transition" in low:
+        return HTTPException(status_code=409, detail=msg)
+    return HTTPException(status_code=400, detail=msg)
+
+
+def _mission_row(m) -> dict:
+    """List projection of a Mission (adds the derived effective priority)."""
+    row = m.to_dict()
+    row["effective_priority"] = m.effective_priority
+    row["max_concurrent_tasks"] = m.max_concurrent_tasks
+    return row
+
+
+@v1_router.get("/missions", tags=["missions"])
+def list_missions(
+    request: Request, status: str | None = None, label: str | None = None, limit: int = 100
+) -> dict:
+    svc = _missions(request)
+    rows = svc.list_missions(status=status, label=label, limit=limit)
+    return {"missions": [_mission_row(m) for m in rows]}
+
+
+@v1_router.post("/missions", tags=["missions"])
+def create_mission(body: CreateMissionRequest, request: Request) -> dict:
+    svc = _missions(request)
+    deadline = None
+    if body.deadline:
+        from datetime import datetime
+
+        try:
+            deadline = datetime.fromisoformat(body.deadline)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="deadline must be ISO-8601")
+    try:
+        mission = svc.create_mission(
+            body.title,
+            body.objective,
+            scheduling_policy=body.scheduling_policy,
+            priority=body.priority,
+            criticality=body.criticality,
+            budget=body.budget,
+            deadline=deadline,
+            importance=body.importance,
+            labels=body.labels,
+            metadata=body.metadata,
+            knowledge_domains=body.knowledge_domains,
+            success_criteria=body.success_criteria,
+        )
+        if body.activate:
+            mission = svc.activate(mission.id, "activated on create")
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+    return svc.get_mission(mission.id)
+
+
+@v1_router.post("/missions/instantiate", tags=["missions"])
+def instantiate_mission(body: InstantiateMissionRequest, request: Request) -> dict:
+    """Create a Mission from a built-in template (mission + config v1 + workers)."""
+    templates = _templates(request)
+    try:
+        result = templates.instantiate(
+            body.template,
+            title=body.title,
+            objective=body.objective,
+            config_overrides=body.config_overrides,
+            labels=body.labels,
+            metadata=body.metadata,
+            scheduling_policy=body.scheduling_policy,
+            priority=body.priority,
+            criticality=body.criticality,
+            budget=body.budget,
+            activate=body.activate,
+            autostart=body.autostart,
+        )
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+    return _missions(request).get_mission(result["mission"].id)
+
+
+@v1_router.get("/missions/{mission_id}", tags=["missions"])
+def get_mission(mission_id: str, request: Request, journal_limit: int = 50) -> dict:
+    try:
+        return _missions(request).get_mission(mission_id, journal_limit=journal_limit)
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+
+
+@v1_router.get("/missions/{mission_id}/journal", tags=["missions"])
+def mission_journal(mission_id: str, request: Request, limit: int = 100) -> dict:
+    try:
+        entries = _missions(request).journal_entries(mission_id, limit=limit)
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+    return {"journal": [e.to_dict() for e in entries]}
+
+
+_MISSION_ACTIONS = {"activate", "pause", "resume", "complete", "archive"}
+
+
+@v1_router.post("/missions/{mission_id}/{action}", tags=["missions"])
+def mission_action(
+    mission_id: str, action: str, body: MissionActionRequest, request: Request
+) -> dict:
+    if action not in _MISSION_ACTIONS:
+        raise HTTPException(status_code=404, detail=f"unknown action: {action}")
+    svc = _missions(request)
+    try:
+        getattr(svc, action)(mission_id, body.reason)
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+    return svc.get_mission(mission_id)
+
+
+@v1_router.get("/templates", tags=["missions"])
+def list_templates(request: Request) -> dict:
+    templates = _templates(request)
+    return {
+        "templates": [
+            {
+                "name": t.name,
+                "template_version": t.template_version,
+                "description": t.description,
+                "worker_specs": t.worker_specs,
+                "config_schema_type": t.config_schema_type,
+                "knowledge_domains": t.knowledge_domains,
+                "default_config": t.default_config,
+            }
+            for t in templates.list_templates()
+        ]
+    }
+
+
+@v1_router.get("/workers", tags=["workers"])
+def list_workers(
+    request: Request, mission_id: str | None = None, status: str | None = None
+) -> dict:
+    workers = _workers(request)
+    rows = workers.list_workers(mission_id=mission_id, status=status)
+    return {"workers": [w.to_dict() for w in rows]}
+
+
+@v1_router.get("/workers/{worker_id}", tags=["workers"])
+def get_worker(worker_id: str, request: Request) -> dict:
+    worker = _workers(request).get_worker(worker_id)
+    if worker is None:
+        raise HTTPException(status_code=404, detail="worker not found")
+    return worker.to_dict()
+
+
+@v1_router.post("/workers/{worker_id}/input", tags=["workers"])
+def worker_input(worker_id: str, body: WorkerInputRequest, request: Request) -> dict:
+    """Queue a live operator input for a worker (drained at its next tick, Q4).
+
+    Declared before the generic ``/{action}`` route so ``input`` isn't captured as an action.
+    """
+    workers = _workers(request)
+    try:
+        workers.enqueue_input(worker_id, body.payload)
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+    return {"queued": True, "worker_id": worker_id}
+
+
+_WORKER_ACTIONS = {"pause", "resume", "stop"}
+
+
+@v1_router.post("/workers/{worker_id}/{action}", tags=["workers"])
+def worker_action(
+    worker_id: str, action: str, body: WorkerActionRequest, request: Request
+) -> dict:
+    if action not in _WORKER_ACTIONS:
+        raise HTTPException(status_code=404, detail=f"unknown action: {action}")
+    workers = _workers(request)
+    method = "stop_worker" if action == "stop" else action
+    try:
+        worker = getattr(workers, method)(worker_id, body.reason)
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+    return worker.to_dict()
 
 
 @v1_router.post("/knowledge/search", response_model=SearchResponse, tags=["knowledge"])

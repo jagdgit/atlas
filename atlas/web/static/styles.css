@@ -201,11 +201,15 @@ button { cursor: pointer; font: inherit; }
 
 /* status badges */
 .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
-.badge.ok, .badge.completed, .badge.done, .badge.ready { background: rgba(63,185,80,.16); color: var(--ok); }
-.badge.degraded, .badge.warn, .badge.running, .badge.queued, .badge.completed_with_blocks, .badge.pending, .badge.planning, .badge.planning_queued { background: rgba(210,153,34,.16); color: var(--warn); }
+.badge.ok, .badge.completed, .badge.done, .badge.ready, .badge.active { background: rgba(63,185,80,.16); color: var(--ok); }
+.badge.degraded, .badge.warn, .badge.running, .badge.queued, .badge.completed_with_blocks, .badge.pending, .badge.planning, .badge.planning_queued, .badge.waiting, .badge.recovering, .badge.paused { background: rgba(210,153,34,.16); color: var(--warn); }
 .badge.failed, .badge.cancelled { background: rgba(248,81,73,.16); color: var(--fail); }
-.badge.blocked, .badge.skipped { background: rgba(79,157,255,.16); color: var(--accent); }
+.badge.blocked, .badge.skipped, .badge.draft, .badge.stopped, .badge.archived { background: rgba(79,157,255,.16); color: var(--accent); }
 .badge.conf { background: var(--bg-elev2); color: var(--muted); }
+
+.eng-embed { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.eng-embed input { width: auto; }
+.eng-group { font-size: 12px; color: var(--text); margin: 14px 0 6px; font-weight: 600; }
 
 .status-cards { display: flex; gap: 14px; padding: 20px 22px; flex-wrap: wrap; }
 .card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; min-width: 120px; }

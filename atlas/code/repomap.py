@@ -48,6 +48,16 @@ _FRAMEWORK_BY_DEP = {
     "pandas": "pandas", "torch": "PyTorch", "tensorflow": "TensorFlow",
     "psycopg": "PostgreSQL", "psycopg2": "PostgreSQL", "asyncpg": "PostgreSQL",
     "redis": "Redis", "celery": "Celery", "uvicorn": "uvicorn",
+    # JS/TS ecosystem (B.4): frameworks, meta-frameworks, tooling.
+    "@nestjs/core": "NestJS", "nestjs": "NestJS", "nuxt": "Nuxt",
+    "@remix-run/react": "Remix", "remix": "Remix", "gatsby": "Gatsby",
+    "@sveltejs/kit": "SvelteKit", "solid-js": "SolidJS", "preact": "Preact",
+    "koa": "Koa", "fastify": "Fastify", "@hapi/hapi": "hapi",
+    "typescript": "TypeScript", "vite": "Vite", "webpack": "webpack",
+    "jest": "Jest", "vitest": "Vitest", "mocha": "Mocha",
+    "tailwindcss": "Tailwind CSS", "electron": "Electron",
+    "react-native": "React Native", "prisma": "Prisma", "typeorm": "TypeORM",
+    "mongoose": "Mongoose", "graphql": "GraphQL", "axios": "axios",
 }
 
 

@@ -1,7 +1,7 @@
 # Atlas — OS Roadmap (post–Stage 3): Intelligence Domains, Missions & Durable State
 
 > **Status:** 🟢 **FROZEN FOR IMPLEMENTATION (2026-07-18).** The top-level architecture and
-> principles (P1–P9) are locked; remaining items are non-blocking, per-phase design details
+> principles (P1–P13) are locked; remaining items are non-blocking, per-phase design details
 > (see §12). Next step is to spin out `docs/PHASE_0_PLAN.md` and begin Phase 0. No code yet.
 > **Created:** 2026-07-18 · **Review round 1:** 9/11 open questions resolved.
 > **Review round 2:** added **Storage Manager** + **Asset Store**, enriched **Capability
@@ -11,7 +11,19 @@
 > built: **Tailscale**); **hot/warm/cold tiering deferred** (single disk today); the name
 > **Engineering Intelligence is final**.
 > **Review round 3:** added **P9 — Everything is Explainable** (§3) and froze the plan.
-> See §11 for the full decision log and §12 for remaining ambiguities.
+> **Review round 4 (Phase-B planning):** formalized **P10 — No irreversible real-world action
+> without the operator** and added **P11 — Readers never own knowledge** (§3), with the
+> **Reader Registry** + **Asset → Reader → Artifact → Extraction → Knowledge** pipeline.
+> **Review round 5 (Phase-C planning, 2026-07-19):** Phases **0, A, B are implemented** (Phase B
+> complete — see `docs/PHASE_B_PLAN.md`). Added **P12 — Knowledge is global** + the five-things
+> model (§3), the **Knowledge Consolidator** (§5.12) and **Policy store** (§5.13), and
+> restructured **Phase C** into **C-Foundations → C-Personal** (`docs/PHASE_C_PLAN.md`).
+> **R5 refinements (pre-freeze):** added **P13 — Knowledge is cumulative** (§3); made
+> **Knowledge Candidate ≠ Finding** explicit (readers emit candidates, the Consolidator synthesizes
+> findings); added **Knowledge Lineage** (evidence graph), a **full lifecycle** (candidate →
+> verified → established → deprecated/contradicted/superseded → archived), **Asset
+> relationships/groups** (§5.9), **evolution-vs-conflict** routing, and **understanding quality** on
+> the coverage map. See §11 for the full decision log and §12 for remaining ambiguities.
 >
 > **Supersedes the framing of:** "Stage 4 / Stage 5". Those become **Phases** and
 > **Missions** here (see §1). The Stage 3 / 3.2 / 3B plans remain the *history* of the
@@ -30,7 +42,7 @@
 |---------|------|
 | §1 | The reframe: **Stages → Intelligence Domains + Missions** (locked top-level architecture) |
 | §2 | **Honest current state** — what already exists vs. what is absent (grounded in code) |
-| §3 | **Locked principles (P1–P9)** — durability, model-independence, remote access (deferred), design-for-failure, few-intelligences, everything-versioned, the **Architecture Constitution** (P7), **storage discipline** (P8), and **everything-explainable** (P9) |
+| §3 | **Locked principles (P1–P11)** — durability, model-independence, remote access (deferred), design-for-failure, few-intelligences, everything-versioned, the **Architecture Constitution** (P7), **storage discipline** (P8), **everything-explainable** (P9), **no irreversible real-world action without the operator** (P10), and **readers never own knowledge** (P11) |
 | §4 | Target architecture (frozen top level) + the four planes |
 | §5 | **New subsystems** to build — each with *what exists today*, proposed shape, data model, and open questions |
 | §6 | **Phase roadmap** (0 → A → B → C → D) with dependencies + acceptance criteria |
@@ -166,12 +178,13 @@ new knowledge domain, **never** a new subsystem.
 
 ---
 
-## 3. Locked principles (P1–P9)
+## 3. Locked principles (P1–P11)
 
 These are proposed as **non-negotiable architectural rules**. P1–P3 answer the operator's
-three questions (durability, model-independence, remote access); P4–P9 lock in
+three questions (durability, model-independence, remote access); P4–P11 lock in
 design-for-failure, the intelligence/mission split, versioning, the Architecture
-Constitution, storage discipline, and explainability. Confirmed in §11.
+Constitution, storage discipline, explainability, no-irreversible-action-without-the-operator,
+and readers-never-own-knowledge. Confirmed in §11.
 
 ### P1 — State durability: every long-lived object is durable
 
@@ -298,6 +311,95 @@ these fields; the Decision Engine returns them as a first-class part of its outp
 Operations Dashboard / Mission views can render an **"Explain this"** panel for any action.
 This is invaluable later for Engineering, Paper Trading, Job/Career recommendations,
 Research, and any future autonomous behavior — nothing is a black box.
+
+### P10 — No irreversible real-world action without the operator (formalized R4)
+
+Atlas never takes an **irreversible or real-world** action on its own. Anything that spends
+money, sends an outbound message on the operator's behalf, mutates an external system, or
+writes/edits source code is either **simulation-only** (e.g. Paper Trading — *no real money*,
+ever) or **requires explicit operator approval** first. Autonomous behaviour produces
+**recommendations + findings**, not side effects. (Previously referenced as "P10 non-goals";
+made a first-class principle here.)
+
+### P11 — Readers never own knowledge (R4)
+
+A **Reader** is a **stateless translator**: it turns an **Asset** into a structured
+**Artifact** (AST, parse tree, page text, entity list, …) and/or extracted **Knowledge**, and
+then it is done. A Reader **must never**:
+
+- store memory or state across runs,
+- make decisions,
+- own or mutate findings,
+- update missions/workers/config.
+
+Knowledge is owned by the **Knowledge OS**; decisions by the **Decision Engine**; state by the
+kernel services. This keeps every Reader **replaceable, testable, and independently
+upgradeable** — a better Python/MATLAB/CAD reader drops in without touching the knowledge it
+produces. The pipeline is always: **Asset → Reader → Artifact → Extraction → Knowledge**, so
+extraction can improve later **without re-parsing**. These Artifacts (AST, symbol tables,
+dependency graphs, parse trees) are **deterministic derived products**, kept in a **Derived
+Artifact Store** keyed by asset version + reader version (physical backing — cache vs. durable
+store — is an implementation detail). A parallel **Reader Registry** answers *"who can read
+`.mat`?"* and exposes each reader's version, coverage matrix, health, and priority — so Atlas fails
+**honestly** ("this reader can't produce a JS call graph") instead of silently.
+
+### P12 — Knowledge is global (R5)
+
+**Knowledge belongs to Atlas, not to Missions, Jobs, Workers, Readers, or Intelligences.** A
+Mission or Job *discovers* knowledge; it never *owns* it. The moment a finding lands in the
+Knowledge OS it is immediately available to every current mission and every future job (subject to
+access policy) — no copying, no per-mission silo, no import/export.
+
+Corollaries:
+
+- Missions produce knowledge but do not own it; **archiving/deleting a mission never deletes the
+  knowledge it produced** (soft references, no FK — already true in the schema).
+- Jobs and Readers produce/extract knowledge but do not own it.
+- **`mission_id`, `job_id`, and `asset_id` are provenance, not ownership** — they answer *"who
+  discovered this, from what, when, with which model/reader?"*, never *"who may keep it."*
+- Knowledge is deduplicated globally: the same fact discovered by three sources becomes **one
+  finding with three pieces of evidence and higher confidence**, never three findings (see the
+  Knowledge Consolidator, §5.12).
+
+**The five separate things.** Atlas keeps these strictly distinct — conflating them is the classic
+mistake this principle guards against:
+
+| Layer | What it is | Example | Home |
+|---|---|---|---|
+| **Knowledge** | What is *true* (global, deduped, versioned) | "RSI divergence predicts reversals." | Knowledge OS (`knowledge.findings`) |
+| **Experience** | What *the owner/Atlas has done/learned* | "Used Celery in production, 2022." | Learning OS (`learning.experiences`) |
+| **Policy** | What the *operator prefers/trusts/forbids* | "Prefer momentum strategies." / "Never trade crypto." | Policy store (§5.13, **new**) |
+| **Configuration** | A mission's *tunable parameters* | "Risk 2% per trade." | Configuration Manager (per-mission, versioned) |
+| **Mission State** | A mission's *runtime progress* | checkpoints, journal, worker status | Mission/Worker Managers |
+
+The decision pipeline is therefore **Knowledge → Policy → Decision**: knowledge says "RSI works",
+policy says "the operator prefers RSI", and only the **Decision Engine** (§5.5, Phase D) combines
+them into "use RSI first." Phase C builds the Knowledge/Policy/Experience layers; the arbitration
+stays in the Decision Engine.
+
+### P13 — Knowledge is cumulative (R5)
+
+**Atlas never intentionally stores the same understanding twice.** A new observation either
+**creates** new knowledge, **strengthens** existing knowledge (more evidence → higher confidence),
+**revises** it (the same claim evolved over time), or **contradicts** it (marked contested) — it is
+**never** blindly inserted as a duplicate. This one rule governs deduplication, confidence growth,
+revisions, evidence accumulation, and consolidation.
+
+Consequences that follow from P13 (all realized by the **Knowledge Consolidator**, §5.12):
+
+- **Readers emit *Knowledge Candidates*, not Findings.** Extraction (a reader's observation) is
+  separated from synthesis (the consolidator's decision). `Reader → Knowledge Candidate →
+  Consolidator → Finding`. Readers never write findings directly (reinforces P11).
+- **Lineage, not just provenance.** Every finding keeps an **evidence graph** — *what created me,
+  what strengthened me, what revised me, what superseded/contradicted me* — so confidence changes
+  are always traceable to the evidence that caused them (`supported_by` / `contradicted_by` /
+  `revised_by`, not merely `produced_by`).
+- **A full lifecycle, not just active/deprecated.** Knowledge moves through explicit states —
+  **candidate → active → verified → established → (deprecated | contradicted | superseded) →
+  archived** — combining a *maturity* ladder (corroboration/confidence) with a *validity* status.
+- **Evolution ≠ conflict.** "Redis is optional" (2025) → "Redis is required" (2027) is a **revision**
+  over time, not a contradiction. The consolidator uses recency/temporal signals to distinguish a
+  legitimate **revision/supersession** from a genuine **contradiction** (contested).
 
 ---
 
@@ -517,6 +619,12 @@ Each subsystem below is a proposal. Data-model details are collected in §8.
   `asset.assets` table (id, type, source_uri, checksum, version, tier, mission/domain refs)
   and `asset.versions`. Knowledge/provenance rows reference the **asset id + version** they
   were extracted from, so a re-extraction is fully auditable.
+- **Asset relationships / groups (R5, Phase C):** assets are **not** independent islands. A Git
+  repo, its design doc, its architecture PDF, the Cursor chat where it was built, and the meeting
+  notes all describe **the same project**. Add `asset.groups` (id, name, kind) + `asset.membership`
+  and/or pairwise `asset.related` (asset_a, asset_b, relation) so readers/consolidator can
+  **traverse across sources** — e.g. corroborate a code finding with the design doc that motivated
+  it. Group membership is itself provenance and flows into knowledge lineage (§5.12).
 - **Open questions:** §9 Q13 (retention/tiering of large binary assets).
 
 ### 5.10 Capability Registry (enrichment — R2)
@@ -553,6 +661,69 @@ Last backup: 02:00      Last checkpoint: 11s ago
   (§5.10) + Monitoring + Storage Manager, live over **SSE** (§5.6). **Localhost-first now**;
   it becomes the phone home screen once remote access (Tailscale, deferred) is added.
 - **Open questions:** §9 Q15 (which host metrics are in scope for v1 — e.g. temp/UPS sensors).
+
+### 5.12 Knowledge Consolidator (P12 in practice — R5, Phase C)
+
+- **Purpose:** the **single write path** into the Knowledge OS (P12/P13 in practice). Where the
+  Asset Store prevents duplicate raw *data*, the Consolidator prevents duplicate *understanding*.
+  **Readers emit Knowledge Candidates, never Findings** — extraction is separated from synthesis:
+
+```
+Asset → Reader → Artifact → Extraction → Knowledge Candidate → Consolidator → Global Knowledge
+```
+
+- **Candidate ≠ Finding (chosen, R5):** a **Knowledge Candidate** is a *temporary observation* by a
+  single reader ("this project uses Redis", "Redis appears optional", "Redis is only for caching").
+  The Consolidator alone turns candidates into/merges them into a **Finding** ("Redis is used for
+  distributed task coordination"). Candidates are transient (short-retention audit trail); Findings
+  are durable. This makes P11 concrete — readers **cannot** write knowledge directly.
+- **Operations:** **dedup** ("do I already know this?"), **merge** ("same fact, more evidence —
+  grow confidence + evidence list"), **revision** ("the claim evolved over time → new revision, not
+  a duplicate"), **conflict** ("new evidence disagrees at the same time → mark contested"),
+  **confidence update** ("three independent sources now agree").
+- **Lineage — evidence graph, not just provenance (R5):** every Finding keeps *what evidence
+  **created** me, **strengthened** me, **revised** me, **superseded/contradicted** me* — a
+  `knowledge.lineage` edge graph over (candidate, asset+version, source, job, mission) with
+  `edge_type ∈ {created_by, supported_by, revised_by, superseded_by, contradicted_by}`. When
+  confidence changes, the exact evidence that caused it is queryable (answers P9's *"what evidence?"*
+  precisely). Extends today's `provenance_edges`.
+- **Lifecycle — full state machine (R5):** knowledge carries an explicit lifecycle, not just
+  active/deprecated. Two orthogonal axes, reconciled with the existing `status` machine:
+  - **Maturity** (corroboration/confidence): **candidate → verified → established**
+    (established = multiple independent sources corroborate).
+  - **Validity** (status): **active → (deprecated | contradicted | superseded) → archived**
+    (`contradicted` = today's `contested`; `superseded` = a revision replaced it).
+- **Evolution ≠ conflict (R5):** "Redis is optional" (2025) → "Redis is required" (2027) is a
+  **revision over time**, not a contradiction. The Consolidator uses **recency/temporal signals**
+  (evidence timestamps + asset version order) to route same-claim-newer-state to
+  **revise/supersede**, and same-time-disagreement to **contested**.
+- **What exists:** `atlas/knowledge/consolidation.py::KnowledgeLifecycleService.consolidate()`
+  already does create/noop/revise/supersede/contested + freshness, keyed by
+  `finding_identity_key` (`atlas/knowledge/lifecycle.py`). **Gaps (Phase C):** (a) the engineering
+  finding writer bypasses it — route it through so it is the *single* path; (b) **prose identity is
+  weak** (normalized statement only), so paraphrases don't dedup; (c) no explicit candidate object,
+  lineage graph, maturity axis, or temporal evolution-vs-conflict routing.
+- **Scaling — hybrid identity (chosen):** deterministic `identity_key` for structured/engineering
+  findings, plus **embedding nearest-neighbor** (pgvector) for prose — if a candidate is within a
+  similarity threshold of an existing finding, merge/revise; else create. Never compare against
+  everything.
+- **Granularity (chosen):** findings are **selective distilled claims** worth remembering; the full
+  text lives as **RAG chunks** on the same asset. A 5 GB book → thousands of findings + searchable
+  chunks, never 100k atomic facts; re-reading with a better reader **updates**, never duplicates.
+
+### 5.13 Policy store (the operator's guidelines/trust — R5, Phase C)
+
+- **Purpose:** a durable, editable, provenance-stamped layer of **operator rules/preferences/
+  trust** — the "Policy" of the five-things model (P12). Examples: *"prefer momentum strategies"*,
+  *"never trade crypto"*, *"I trust finding F-1928."* This is **not** knowledge and **not** mission
+  config.
+- **What exists:** only a tiny, human-gated **soft-bias** rerank nudge
+  (`LearningService.enable_bias` → `KnowledgeService.retrieve(soft_bias_terms=…)`); there is no
+  first-class policy layer.
+- **Proposed shape:** a `policy.*` table (scope, subject, rule, strength, enabled, provenance,
+  created_by) that **retrieval and advice respect**. **Arbitration** ("use RSI *first*") stays in
+  the **Decision Engine** (§5.5, Phase D) — Phase C builds only the store + retrieval/advice
+  influence.
 
 ---
 
@@ -617,13 +788,42 @@ rest.
 - **Acceptance:** ingest a real repo → architecture graph + design findings retrievable and
   versioned; a second language supported through the same pipeline.
 
-### Phase C — Personal & Professional Intelligence (≈2–4 weeks)
-- **New** `atlas/personal/`: a **model of you**, not a memory dump. Personal profile +
-  Professional profile (career planner, publication manager, patent manager, resume/
-  LinkedIn/portfolio managers). Fed *indirectly* (Research + Engineering + Experience +
-  operator interaction), never by scraping everything.
-- **Acceptance:** a durable, editable personal/professional profile that Missions can read
-  (e.g. job-search constraints), with provenance for how each fact was learned.
+### Phase C — Global Knowledge foundations + Personal & Professional Intelligence (≈4–8 weeks)
+> Split into **C-Foundations** (the P12 base — *no compromise*, built first) then **C-Personal**
+> (the Personal domain on top). Detailed plan in `docs/PHASE_C_PLAN.md`.
+
+**C-Foundations** (formalizes P12, §5.12, §5.13):
+- **F1 — P12 + provenance stamping.** Add P12 (done above); make producers stamp
+  `mission_id`/`job_id`/`source` as **provenance** on findings (the `mission_id` column exists but
+  is unused today). Ownership stays absent.
+- **F2 — Unified ingestion (Asset-first, *bridge*).** One pipeline for every source —
+  `Asset → Reader → Artifact → Extraction → Consolidator → global findings` — with **chunks/
+  embeddings and findings both derived products of the same asset**. A generic (non-git) acquirer
+  registers any bytes as an asset (identity = content sha256); the existing Document/RAG path
+  becomes *a reader over an asset* and is back-filled lazily (existing docs keep working).
+- **F3 — Consolidator as the single write path** (§5.12): route the engineering writer through
+  `consolidate()`; add **hybrid dedup** (deterministic identity + pgvector NN for prose);
+  selective finding granularity.
+- **F4 — Coverage map.** Per `(asset, reader, reader_version)` extraction status + per-domain
+  rollups ("MATLAB 20%"); drives "reader improved → re-extract only affected assets."
+- **F5 — Policy store** (§5.13): durable, editable, provenance-stamped operator rules that
+  retrieval/advice respect; arbitration deferred to Phase-D Decision Engine.
+
+**C-Personal** (on the foundations):
+- **New** `atlas/personal/`: a **model of you**, not a memory dump. Fed *indirectly* via **dual
+  extraction** — one read of an asset yields **engineering findings** *and* an **experience**
+  record ("solo Django project, 2022, designed auth"). Experiences **consolidate** too (one "used
+  Celery" corroborated across projects → growing confidence). Inferred personal facts are
+  auto-inferred with confidence + provenance and **promoted to 'verified' only on operator
+  confirmation** (A9 — no silent scraping).
+- **Owner Knowledge Mission** (permanent) + a **User Archive** asset source: a long-running mission
+  that spawns per-domain jobs (Python, MATLAB, papers, chats…), maintains coverage, and re-extracts
+  with better readers. LinkedIn/resume/portfolio managers read from the experience profile, never
+  from code.
+- **Acceptance:** point the Owner Knowledge Mission at a sample archive → engineering findings +
+  an experience/skills/timeline profile appear, deduped and provenance-stamped, re-runnable with a
+  better reader **without duplication**; a durable, editable personal/professional profile Missions
+  can read.
 
 ### Phase D — Persistent Workers / Missions (ongoing)
 Each is a **Mission** composing the three intelligences + Decision Engine + config + workers:
@@ -822,13 +1022,26 @@ all long-lived (P1).
 | 2026-07-18 (R2) | Adopt the **Architecture Constitution** (P7): every new capability must be a Knowledge Domain, Mission, Persistent Worker, or Kernel Service | Keeps Atlas coherent long-term | **Accepted** |
 | 2026-07-18 (R3) | Add **P9 — Everything is Explainable**: every decision/action carries why, evidence, knowledge, experience, config, rule, model version, confidence, alternatives-rejected | Reproducible + interrogable results across Engineering, trading, jobs, career, research | **Accepted** |
 | 2026-07-18 (R3) | **Freeze the roadmap for implementation**; architecture + P1–P9 locked; remaining items are per-phase design details (§12) | Ready to spin out phase plans and start Phase 0 | **Accepted (frozen)** |
+| 2026-07-18 (R4) | Formalize **P10 — No irreversible real-world action without the operator** (was referenced as "P10 non-goals") | Autonomous behaviour must stay recommendation-only / simulation-only until approved | **Accepted** |
+| 2026-07-18 (R4) | Add **P11 — Readers never own knowledge** + the **Asset → Reader → Artifact → Extraction → Knowledge** pipeline and a **Reader Registry** (version, coverage matrix, health, priority) | Readers stay stateless/replaceable; extraction improves without re-parsing; honest failure instead of silent | **Accepted** |
+| 2026-07-19 (R5) | Add **P12 — Knowledge is global** (+ the five-things model: Knowledge/Experience/Policy/Configuration/Mission State). Missions/Jobs *discover*, never *own*; `mission_id`/`job_id`/`asset_id` are provenance | Keeps one coherent global knowledge layer every mission benefits from; no per-mission silos | **Accepted** |
+| 2026-07-19 (R5) | Add **Knowledge Consolidator** (§5.12) as the single write path; **hybrid dedup** (deterministic identity + pgvector NN for prose); findings = **selective distilled claims** (full text stays RAG chunks) | Prevents duplicate *understanding* even after years; a re-read updates, never duplicates | **Accepted** |
+| 2026-07-19 (R5) | Add a first-class **Policy store** (§5.13) in Phase C (operator rules/trust that retrieval/advice respect); decision **arbitration** stays in the Phase-D Decision Engine | The one genuinely new "layer"; separates *what's true* from *what the operator prefers* | **Accepted** |
+| 2026-07-19 (R5) | **Restructure Phase C** into **C-Foundations** (P12 base: unified Asset-first ingestion via *bridge*, consolidator-as-single-path, coverage map, policy store) **then C-Personal** (dual extraction → experience; Owner Knowledge Mission + User Archive; inferred facts operator-confirmed) | Build the global-knowledge foundations with no compromise before the Personal domain that rides on them | **Accepted** |
+| 2026-07-19 (R5) | Add **P13 — Knowledge is cumulative**: a new observation *creates / strengthens / revises / contradicts*, never blindly duplicates | One rule governs dedup, confidence growth, revisions, evidence accumulation — no repetition across the roadmap | **Accepted** |
+| 2026-07-19 (R5) | **Separate Knowledge Candidate from Finding**: readers emit *candidates* (transient observations); the Consolidator alone synthesizes *findings* | Cleanly splits extraction from synthesis; makes P11 concrete (readers can't write knowledge) | **Accepted** |
+| 2026-07-19 (R5) | Add **Knowledge Lineage** — an evidence graph (`created_by`/`supported_by`/`revised_by`/`superseded_by`/`contradicted_by`), not just provenance | When confidence changes, the exact evidence that caused it is queryable (P9) | **Accepted** |
+| 2026-07-19 (R5) | Adopt a **full knowledge lifecycle** — maturity (candidate → verified → established) × validity (active → deprecated/contradicted/superseded → archived), reconciled with the existing `status` machine | Scales once hundreds of missions contribute; richer than active/deprecated | **Accepted** |
+| 2026-07-19 (R5) | Add **Asset relationships / groups** (`asset.groups` + membership / pairwise `related`) so repo+doc+chat+PDF of one project link, and readers/consolidator traverse across sources | Assets aren't islands; cross-source corroboration strengthens knowledge | **Accepted** |
+| 2026-07-19 (R5) | Consolidator distinguishes **evolution (revision over time) from conflict (contradiction)** using recency/temporal signals | "Redis optional → required" is a revision, not a contradiction | **Accepted** |
+| 2026-07-19 (R5) | Coverage map also exposes **understanding quality** (confidence/comprehension) alongside coverage % | Coverage ≠ comprehension — Atlas may have read everything yet hold low confidence | **Accepted** |
 
 ---
 
 ## 12. Implementation readiness & remaining ambiguities
 
 **The plan is frozen.** The top-level architecture, the four planes, the subsystem set, the
-phase order (0 → A → B → C → D), and principles **P1–P9** are locked and should not be
+phase order (0 → A → B → C → D), and principles **P1–P13** are locked and should not be
 reopened without a new decision-log entry.
 
 **What is fully decided (no ambiguity):** the reframe to Intelligence Domains + Missions;
@@ -836,7 +1049,8 @@ Missions as first-class operator-created objects above Jobs; three permanent int
 Decision Engine as a Kernel Service; Storage Manager + Asset Store (Assets ≠ Knowledge);
 Capability Registry enrichment; Mission priorities + templates; durable event bus (web + SSE
 + email first); Clock service; Recovery Manager (idempotent/re-entrant); model-independence +
-artifact versioning; design-for-failure; explainability (P9). Deferred by explicit decision:
+artifact versioning; design-for-failure; explainability (P9); no-irreversible-action-without-
+the-operator (P10); readers-never-own-knowledge + Reader Registry (P11). Deferred by explicit decision:
 **remote access** (Tailscale when built) and **hot/warm/cold tiering** (single disk today).
 
 **Remaining ambiguities — all non-blocking, resolved at each phase's design step:**
@@ -852,8 +1066,9 @@ artifact versioning; design-for-failure; explainability (P9). Deferred by explic
 | A7 | **Mission priority arbitration formula** — how priority/criticality/budget/deadline combine into an RM allocation | Phase A (Mission Manager ↔ RM) | Start with a simple weighted priority + hard budget cap; refine empirically |
 | A8 | **P9 explanation storage cost/retention** — full explanation records per action can grow large | Phase A/D | Store structured refs (ids), not copies; prune/roll up old records |
 | A9 | **Personal Intelligence sourcing** — exactly how facts about the operator are elicited/confirmed | Phase C (greenfield) | Operator-curated + provenance per fact; no silent scraping (defer detail to Phase C plan) |
+| A10 (R4) | **Knowledge Conflict Resolver** — when a reader/extractor upgrade changes results, attribute the delta to *"reader improved"* vs *"repository evolved"* | Phase C/D | Phase B already stamps `reader`+`reader_version`+asset version so the delta is *reconstructable*; build the resolver that *reasons about* it later (Decision-Engine-adjacent). Don't build prematurely |
 
-None of A1–A9 block starting Phase 0. Each becomes a small decision recorded in the relevant
+None of A1–A10 block starting Phase 0. Each becomes a small decision recorded in the relevant
 `docs/PHASE_*_PLAN.md`.
 
 > **Next step:** spin out `docs/PHASE_0_PLAN.md` (Clock, Storage Manager, Asset Store,

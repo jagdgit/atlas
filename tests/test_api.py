@@ -365,6 +365,185 @@ class FakeOpsDashboard:
         }
 
 
+# --- missions / workers / templates (Phase A · §A.7) ---------------------
+class FakeMissionState:
+    """Shared in-memory store so missions/workers/templates fakes stay consistent."""
+
+    def __init__(self):
+        self.missions = {}
+        self.workers = {}
+        self.journal = {}
+        self.inputs = []
+
+
+class FakeMissions:
+    def __init__(self, state):
+        self.state = state
+
+    def list_missions(self, *, status=None, label=None, limit=100):
+        ms = list(self.state.missions.values())
+        if status:
+            ms = [m for m in ms if m.status == status]
+        return ms[:limit]
+
+    def create_mission(self, title, objective="", **kw):
+        import uuid as _uuid
+
+        from atlas.models.mission import Mission, MissionJournalEntry
+
+        mid = str(_uuid.uuid4())
+        m = Mission(
+            id=mid, title=title, objective=objective,
+            scheduling_policy=kw.get("scheduling_policy", "background"),
+            priority=kw.get("priority", 0), criticality=kw.get("criticality", "normal"),
+            budget=kw.get("budget") or {}, labels=kw.get("labels") or [],
+            metadata=kw.get("metadata") or {},
+            knowledge_domains=kw.get("knowledge_domains") or [],
+            success_criteria=kw.get("success_criteria") or {},
+        )
+        self.state.missions[mid] = m
+        self.state.journal[mid] = [
+            MissionJournalEntry(id=str(_uuid.uuid4()), mission_id=mid, action="created", reason=title)
+        ]
+        return m
+
+    def _set_status(self, mid, status, action):
+        import uuid as _uuid
+        from dataclasses import replace
+
+        from atlas.missions.service import MissionError
+        from atlas.models.mission import MISSION_TRANSITIONS, MissionJournalEntry
+
+        if mid not in self.state.missions:
+            raise MissionError("mission not found", mission_id=mid)
+        current = self.state.missions[mid].status
+        if status not in MISSION_TRANSITIONS.get(current, frozenset()):
+            raise MissionError(f"illegal transition {current} → {status}")
+        m2 = replace(self.state.missions[mid], status=status)
+        self.state.missions[mid] = m2
+        self.state.journal.setdefault(mid, []).append(
+            MissionJournalEntry(id=str(_uuid.uuid4()), mission_id=mid, action=action, reason="")
+        )
+        return m2
+
+    def activate(self, mid, reason=""):
+        return self._set_status(mid, "active", "activated")
+
+    def pause(self, mid, reason=""):
+        return self._set_status(mid, "paused", "paused")
+
+    def resume(self, mid, reason=""):
+        return self._set_status(mid, "active", "resumed")
+
+    def complete(self, mid, reason=""):
+        return self._set_status(mid, "completed", "completed")
+
+    def archive(self, mid, reason=""):
+        return self._set_status(mid, "archived", "archived")
+
+    def get_mission(self, mid, *, journal_limit=50):
+        from atlas.missions.service import MissionError
+
+        m = self.state.missions.get(mid)
+        if m is None:
+            raise MissionError("mission not found", mission_id=mid)
+        workers = [w.to_dict() for w in self.state.workers.values() if w.mission_id == mid]
+        return {
+            "mission": m.to_dict(), "effective_priority": m.effective_priority,
+            "job_ids": [], "workers": workers,
+            "journal": [e.to_dict() for e in self.state.journal.get(mid, [])[:journal_limit]],
+        }
+
+    def journal_entries(self, mid, *, limit=100):
+        from atlas.missions.service import MissionError
+
+        if mid not in self.state.missions:
+            raise MissionError("mission not found", mission_id=mid)
+        return self.state.journal.get(mid, [])[:limit]
+
+
+class FakeWorkers:
+    def __init__(self, state):
+        self.state = state
+
+    def list_workers(self, *, mission_id=None, status=None):
+        ws = list(self.state.workers.values())
+        if mission_id:
+            ws = [w for w in ws if w.mission_id == mission_id]
+        if status:
+            ws = [w for w in ws if w.status == status]
+        return ws
+
+    def get_worker(self, wid):
+        return self.state.workers.get(wid)
+
+    def _set(self, wid, status):
+        from dataclasses import replace
+
+        from atlas.workers.manager import WorkerError
+
+        if wid not in self.state.workers:
+            raise WorkerError("worker not found", worker_id=wid)
+        w2 = replace(self.state.workers[wid], status=status)
+        self.state.workers[wid] = w2
+        return w2
+
+    def pause(self, wid, reason=""):
+        return self._set(wid, "paused")
+
+    def resume(self, wid, reason=""):
+        return self._set(wid, "running")
+
+    def stop_worker(self, wid, reason=""):
+        return self._set(wid, "stopped")
+
+    def enqueue_input(self, wid, payload):
+        from atlas.workers.manager import WorkerError
+
+        if wid not in self.state.workers:
+            raise WorkerError("worker not found", worker_id=wid)
+        self.state.inputs.append((wid, payload))
+
+
+class FakeTemplates:
+    def __init__(self, state, missions):
+        self.state = state
+        self._missions = missions
+
+    def list_templates(self):
+        from atlas.models.template import MissionTemplate
+
+        return [
+            MissionTemplate(
+                id="tmpl-hello", name="hello_watcher", template_version=1,
+                description="A minimal reference worker.",
+                worker_specs=[{"type": "hello_watcher", "interval_seconds": 60}],
+                config_schema_type="hello_watcher", default_config={"target": 3},
+            )
+        ]
+
+    def instantiate(self, template, *, title=None, objective="", config_overrides=None,
+                    labels=None, metadata=None, scheduling_policy="background", priority=0,
+                    criticality="normal", budget=None, activate=True, autostart=True):
+        import uuid as _uuid
+
+        from atlas.missions.templates.service import TemplateError
+        from atlas.models.worker import Worker
+
+        if template != "hello_watcher":
+            raise TemplateError("unknown template", template=template)
+        mission = self._missions.create_mission(
+            title or template, objective, scheduling_policy=scheduling_policy,
+            priority=priority, criticality=criticality, budget=budget,
+            labels=labels, metadata=metadata,
+        )
+        if activate:
+            mission = self._missions.activate(mission.id, "")
+        wid = str(_uuid.uuid4())
+        self.state.workers[wid] = Worker(id=wid, mission_id=mission.id, type="hello_watcher")
+        return {"mission": mission, "config": {"version": 1}, "workers": [self.state.workers[wid]]}
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -380,9 +559,14 @@ class FakeApplication:
         self.config = cfg
         self.tools = FakeTools()
         self.capabilities = _fake_capabilities()
+        _mission_state = FakeMissionState()
+        _missions = FakeMissions(_mission_state)
         self.container = FakeContainer(
             {
                 "agent": FakeAgentService(),
+                "missions": _missions,
+                "workers": FakeWorkers(_mission_state),
+                "templates": FakeTemplates(_mission_state, _missions),
                 "knowledge": FakeKnowledge(),
                 "memory": FakeMemory(),
                 "chat": FakeChat(),
@@ -1197,6 +1381,60 @@ def test_intelligence_requires_auth():
     assert _client().get("/v1/intelligence/repositories").status_code == 401
 
 
+# --- Engineering Intelligence API (Phase B · §B.7) -----------------------
+def test_engineering_ingest_and_browse_flow():
+    c = _client()
+    out = c.post("/v1/engineering/ingest", headers=AUTH, json={"path": "/repos/api"})
+    assert out.status_code == 200
+    body = out.json()
+    assert body["outcome"] == "ok"
+    repo_id = body["repository"]["id"]
+
+    repos = c.get("/v1/engineering/repositories", headers=AUTH).json()["repositories"]
+    assert any(r["id"] == repo_id for r in repos)
+
+    detail = c.get(f"/v1/engineering/repositories/{repo_id}", headers=AUTH)
+    assert detail.status_code == 200
+    assert detail.json()["repository"]["name"] == "api"
+    assert "graph_versions" in detail.json()
+
+    # No graph store wired in the hermetic app → 404, not a crash.
+    assert c.get(f"/v1/engineering/repositories/{repo_id}/graph", headers=AUTH).status_code == 404
+
+    findings = c.get(f"/v1/engineering/findings?repo_id={repo_id}", headers=AUTH)
+    assert findings.status_code == 200
+    assert isinstance(findings.json()["findings"], list)
+
+
+def test_engineering_ingest_validates_exactly_one_source():
+    c = _client()
+    assert c.post("/v1/engineering/ingest", headers=AUTH, json={}).status_code == 422
+    both = c.post(
+        "/v1/engineering/ingest", headers=AUTH,
+        json={"path": "/repos/api", "url": "https://x/y"},
+    )
+    assert both.status_code == 422
+
+
+def test_engineering_unknown_repository_is_404():
+    c = _client()
+    assert c.get("/v1/engineering/repositories/nope", headers=AUTH).status_code == 404
+    assert c.post("/v1/engineering/design-review/nope", headers=AUTH).status_code == 404
+
+
+def test_engineering_design_review_unavailable_without_reviewer():
+    c = _client()
+    out = c.post("/v1/engineering/ingest", headers=AUTH, json={"path": "/repos/api"}).json()
+    repo_id = out["repository"]["id"]
+    review = c.post(f"/v1/engineering/design-review/{repo_id}", headers=AUTH)
+    assert review.status_code == 200
+    assert review.json()["outcome"] == "unavailable"
+
+
+def test_engineering_requires_auth():
+    assert _client().get("/v1/engineering/repositories").status_code == 401
+
+
 def test_blocked_jobs_endpoint():
     resp = _client().get("/v1/jobs/blocked", headers=AUTH)
     assert resp.status_code == 200
@@ -1303,6 +1541,96 @@ def test_openapi_docs_served():
     resp = _client().get("/openapi.json")
     assert resp.status_code == 200
     assert resp.json()["info"]["title"] == "Atlas API"
+
+
+# --- missions / workers / templates (Phase A · §A.7) ---------------------
+def test_missions_require_auth():
+    assert _client().get("/v1/missions").status_code == 401
+
+
+def test_list_templates():
+    resp = _client().get("/v1/templates", headers=AUTH)
+    assert resp.status_code == 200
+    names = [t["name"] for t in resp.json()["templates"]]
+    assert "hello_watcher" in names
+
+
+def test_create_mission_and_list():
+    client = _client()
+    resp = client.post("/v1/missions", headers=AUTH, json={"title": "Solar study", "priority": 10})
+    assert resp.status_code == 200
+    view = resp.json()
+    assert view["mission"]["title"] == "Solar study"
+    assert view["mission"]["status"] == "draft"
+    mid = view["mission"]["id"]
+
+    listed = client.get("/v1/missions", headers=AUTH).json()["missions"]
+    assert any(m["id"] == mid for m in listed)
+    assert listed[0]["effective_priority"] == 30  # background(20) + 10
+
+
+def test_mission_lifecycle_and_journal():
+    client = _client()
+    mid = client.post("/v1/missions", headers=AUTH, json={"title": "M"}).json()["mission"]["id"]
+
+    activated = client.post(f"/v1/missions/{mid}/activate", headers=AUTH, json={"reason": "go"})
+    assert activated.status_code == 200
+    assert activated.json()["mission"]["status"] == "active"
+
+    # illegal transition draft→resume style: completed→activate is illegal
+    client.post(f"/v1/missions/{mid}/complete", headers=AUTH, json={})
+    bad = client.post(f"/v1/missions/{mid}/activate", headers=AUTH, json={})
+    assert bad.status_code == 409
+
+    journal = client.get(f"/v1/missions/{mid}/journal", headers=AUTH).json()["journal"]
+    actions = [e["action"] for e in journal]
+    assert "created" in actions and "activated" in actions and "completed" in actions
+
+
+def test_mission_unknown_action_404():
+    client = _client()
+    mid = client.post("/v1/missions", headers=AUTH, json={"title": "M"}).json()["mission"]["id"]
+    assert client.post(f"/v1/missions/{mid}/frobnicate", headers=AUTH, json={}).status_code == 404
+
+
+def test_get_missing_mission_404():
+    assert _client().get("/v1/missions/does-not-exist", headers=AUTH).status_code == 404
+
+
+def test_instantiate_mission_creates_worker():
+    client = _client()
+    resp = client.post("/v1/missions/instantiate", headers=AUTH, json={"template": "hello_watcher"})
+    assert resp.status_code == 200
+    view = resp.json()
+    assert view["mission"]["status"] == "active"
+    assert len(view["workers"]) == 1
+    wid = view["workers"][0]["id"]
+
+    # worker shows up in the worker list and can take a live input
+    workers = client.get("/v1/workers", headers=AUTH).json()["workers"]
+    assert any(w["id"] == wid for w in workers)
+    q = client.post(f"/v1/workers/{wid}/input", headers=AUTH, json={"payload": {"note": "hi"}})
+    assert q.status_code == 200 and q.json()["queued"] is True
+
+
+def test_instantiate_unknown_template_404():
+    resp = _client().post("/v1/missions/instantiate", headers=AUTH, json={"template": "nope"})
+    assert resp.status_code == 404
+
+
+def test_worker_lifecycle_actions():
+    client = _client()
+    view = client.post("/v1/missions/instantiate", headers=AUTH, json={"template": "hello_watcher"}).json()
+    wid = view["workers"][0]["id"]
+    assert client.post(f"/v1/workers/{wid}/pause", headers=AUTH, json={}).json()["status"] == "paused"
+    assert client.post(f"/v1/workers/{wid}/resume", headers=AUTH, json={}).json()["status"] == "running"
+    assert client.post(f"/v1/workers/{wid}/stop", headers=AUTH, json={}).json()["status"] == "stopped"
+    assert client.post(f"/v1/workers/{wid}/frobnicate", headers=AUTH, json={}).status_code == 404
+
+
+def test_worker_input_missing_worker_404():
+    resp = _client().post("/v1/workers/nope/input", headers=AUTH, json={"payload": {}})
+    assert resp.status_code == 404
 
 
 def test_metrics_prometheus_public():

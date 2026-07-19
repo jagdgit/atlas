@@ -354,6 +354,17 @@ class RecommendRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=50)
 
 
+class EngineeringIngestRequest(BaseModel):
+    # Ingest a repository into Engineering Intelligence (Phase B · §B.7). Exactly one of
+    # path/url; optionally attach to a mission and toggle code embeddings.
+    path: str | None = None
+    url: str | None = None
+    branch: str | None = None
+    mission_id: str | None = None
+    policy: str | None = None
+    embed: bool | None = None
+
+
 class PythonRunRequest(BaseModel):
     code: str = Field(min_length=1)
     timeout: float | None = Field(default=None, gt=0)
@@ -443,3 +454,57 @@ class CapabilityInfo(BaseModel):
 
 class CapabilitiesResponse(BaseModel):
     capabilities: list[CapabilityInfo]
+
+
+# --- missions / workers / templates (Phase A · §A.7) ---------------------
+
+
+class CreateMissionRequest(BaseModel):
+    """Operator-created mission (Q1). Created in ``draft`` unless ``activate`` is set."""
+
+    title: str = Field(min_length=1, max_length=300)
+    objective: str = ""
+    scheduling_policy: str = "background"
+    priority: int = Field(default=0, ge=0, le=100)
+    criticality: str = "normal"
+    budget: dict[str, Any] | None = None
+    deadline: str | None = None
+    importance: str | None = None
+    labels: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+    knowledge_domains: list[str] | None = None
+    success_criteria: dict[str, Any] | None = None
+    activate: bool = False
+
+
+class InstantiateMissionRequest(BaseModel):
+    """Create a Mission + config v1 (+ workers) from a built-in template (B7)."""
+
+    template: str = Field(min_length=1)
+    title: str | None = None
+    objective: str = ""
+    config_overrides: dict[str, Any] | None = None
+    labels: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+    scheduling_policy: str = "background"
+    priority: int = Field(default=0, ge=0, le=100)
+    criticality: str = "normal"
+    budget: dict[str, Any] | None = None
+    activate: bool = True
+    autostart: bool = True
+
+
+class MissionActionRequest(BaseModel):
+    """Reason attached to a mission lifecycle action (journaled, P9)."""
+
+    reason: str = Field(default="", max_length=2000)
+
+
+class WorkerActionRequest(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+class WorkerInputRequest(BaseModel):
+    """A live operator input drained at the top of the worker's next tick (Q4)."""
+
+    payload: dict[str, Any] = Field(default_factory=dict)

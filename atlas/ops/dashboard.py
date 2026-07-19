@@ -81,6 +81,18 @@ class OperationsDashboard:
                     queued += 1
             counts["jobs_active"] = active
             counts["jobs_queued"] = queued
+
+        missions = self._resolve("missions")
+        if missions is not None and hasattr(missions, "list_missions"):
+            rows = missions.list_missions(limit=500)
+            counts["missions"] = len(rows)
+            counts["missions_active"] = sum(1 for m in rows if getattr(m, "status", None) == "active")
+
+        workers = self._resolve("workers")
+        if workers is not None and hasattr(workers, "health_check"):
+            wc = (workers.health_check().data or {}).get("counts", {})
+            counts["workers"] = wc.get("running", 0) + wc.get("recovering", 0)
+            counts["workers_total"] = sum(wc.values()) if wc else 0
         return counts
 
     def _backup(self) -> dict[str, Any]:

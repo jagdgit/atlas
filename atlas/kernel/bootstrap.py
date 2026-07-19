@@ -27,6 +27,12 @@ from atlas.repositories.event_repo import EventRepository
 from atlas.execution.executor import ToolExecutor
 from atlas.code.parser import CodeParser
 from atlas.code.service import CodeService
+from atlas.engineering.architecture import ArchitectureGraphStore
+from atlas.engineering.artifacts import DerivedArtifactStore
+from atlas.engineering.design_review import DesignReviewer
+from atlas.engineering.findings import EngineeringFindingWriter
+from atlas.engineering.ingest import RepoAcquirer
+from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
 from atlas.models.learning import STORE_CODE
 from atlas.sandbox.backends import create_backend
@@ -55,6 +61,13 @@ from atlas.assets import AssetRepository, AssetStore
 from atlas.recovery import CheckpointStore, RecoveryManager
 from atlas.repositories.recovery_repo import CheckpointRepository, RecoveryRepository
 from atlas.missions import MissionRepository, MissionService
+from atlas.configuration import ConfigRepository, ConfigurationService
+from atlas.repositories.schedule_repo import ScheduleRepository
+from atlas.scheduler.schedules import ScheduleService
+from atlas.repositories.worker_repo import WorkerRepository
+from atlas.workers import HelloWatcher, RepoWatcher, WorkerManager
+from atlas.repositories.template_repo import TemplateRepository
+from atlas.missions.templates import TemplateService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
 from atlas.repositories.agent_run_repo import AgentRunRepository
@@ -395,10 +408,68 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # operator-created objectives that own Jobs and (later) Persistent Workers, run off a
     # versioned Configuration, and journal every action for explainability (P9). Archival is
     # non-destructive (B5/B9). Emits Mission* events on the durable bus → dashboard.
+    mission_repo = MissionRepository(db_manager)
+    schedule_repo = ScheduleRepository(db_manager)
+    worker_repo = WorkerRepository(db_manager)
     mission_service = MissionService(
-        MissionRepository(db_manager),
+        mission_repo,
         events=events,
+        schedule_repo=schedule_repo,  # archive disables a mission's schedules (A.3)
+        worker_repo=worker_repo,      # archive stops a mission's workers (A.4)
         logger=get_logger("atlas.missions"),
+    )
+
+    # Configuration Manager (Phase A · §A.2, P6/B6): per-mission, DB-persisted, VERSIONED
+    # config validated by registered Pydantic schemas. Editing produces a new immutable
+    # version; the mission's active_config_id points at the version a worker reads. Shares the
+    # MissionRepository so it can flip the active pointer + journal on the same mission.
+    config_repo = ConfigRepository(db_manager)
+    configuration_service = ConfigurationService(
+        config_repo,
+        mission_repo,
+        events=events,
+        logger=get_logger("atlas.configuration"),
+    )
+
+    # Schedule service (Phase A · §A.3, P1/P4): durable recurrence. A single `schedule_tick`
+    # task claims due schedules, enqueues their task, advances next_run_at, and re-enqueues
+    # itself — so recurrence survives kill -9 + reboot. Phase A drives workers off this (B3).
+    schedule_service = ScheduleService(
+        schedule_repo,
+        task_repo,
+        tick_interval=cfg.scheduler.poll_interval * 5,
+        mission_repo=mission_repo,  # fire tasks at the owning mission's priority (A.6)
+        events=events,
+        logger=get_logger("atlas.scheduler.schedules"),
+    )
+    handlers.register("schedule_tick", schedule_service.tick)
+
+    # Worker Manager (Phase A · §A.4) — the payoff: supervises mission-owned Persistent Workers
+    # as short-task + checkpoint loops (reusing the Phase-0 CheckpointStore, owner_type='worker').
+    # The `worker_tick` handler is driven by the schedule table; crash backoff + version upgrade +
+    # live operator input + journaling are all handled here. Ships the HelloWatcher reference impl.
+    worker_manager = WorkerManager(
+        worker_repo,
+        checkpoint_store,
+        schedule_service=schedule_service,
+        config_repo=config_repo,
+        mission_repo=mission_repo,
+        events=events,
+        clock=clock,
+        logger=get_logger("atlas.workers"),
+    )
+    worker_manager.register_worker_type(HelloWatcher())
+    handlers.register("worker_tick", worker_manager.worker_tick)
+
+    # Template service (Phase A · §A.5, B7): seeds built-in mission blueprints on boot and
+    # instantiates a template → Mission + config v1 + worker rows in one call. Composes the
+    # Mission/Config/Worker managers so the Mission Manager keeps no hard deps on them.
+    template_service = TemplateService(
+        TemplateRepository(db_manager),
+        mission_service,
+        configuration_service,
+        worker_manager,
+        logger=get_logger("atlas.missions.templates"),
     )
 
     # Conversation + Chat orchestrator (Sprint 10): the shared spine (D1) that the
@@ -600,10 +671,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # others=tree-sitter) → repo map + symbol index + import/call graph + pattern
     # mining, with code-aware chunking into the knowledge base and a `code`-role LLM
     # explanation grounded on the parsed structure.
+    # Reader Registry (Phase B · §B.4, BB10): who can read which extension + coverage matrix.
+    reader_registry = ReaderRegistry(logger=get_logger("atlas.engineering.readers"))
     code_service = CodeService(
         CodeParser(max_file_bytes=cfg.code.max_file_bytes),
         knowledge=knowledge_service,
         llm=llm_service,
+        readers=reader_registry,
         max_files=cfg.code.max_files,
         logger=get_logger("atlas.code"),
     )
@@ -638,14 +712,61 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # recommend (L5). Repository learning is promoted through the S18b ledger via a
     # store sink registered on the learning service ("adds sinks, not schema").
     intelligence_repo = IntelligenceRepository(db_manager)
+    # Repo Acquirer (Phase B · §B.1, BB1/BB12): local path or read-only shallow clone →
+    # a versioned `git_repo` **asset** with a stable repo_uid, so learn_repository distills
+    # from the stored asset and a re-clone re-uses its version (Assets ≠ Knowledge, P8).
+    repo_acquirer = RepoAcquirer(
+        asset_store,
+        storage_manager,
+        logger=get_logger("atlas.engineering.ingest"),
+    )
+    # Derived Artifact Store (Phase B · §B.2, BB11): cache reader artifacts (repo map,
+    # graph, patterns) keyed by asset version + reader version so re-extraction skips
+    # re-parsing. Engineering findings writer promotes structural discoveries into
+    # knowledge.findings (domain=code) with supersession — governed via the same sink.
+    derived_artifacts = DerivedArtifactStore(
+        storage_manager, logger=get_logger("atlas.engineering.artifacts")
+    )
+    engineering_findings = EngineeringFindingWriter(
+        finding_repo, logger=get_logger("atlas.engineering.findings")
+    )
+    # Architecture graph (Phase B · §B.3, BB3): persist the import/call/module graph as a
+    # versioned `architecture_graph` asset linked to the repo asset, with version diffs.
+    architecture_graphs = ArchitectureGraphStore(
+        asset_store, logger=get_logger("atlas.engineering.architecture")
+    )
+    # Design reasoning (Phase B · §B.5, BB6/Q-B3): advice-only LLM design review, wired only
+    # when enabled; the service gates it on structural change and skips cleanly without an LLM.
+    design_reviewer = (
+        DesignReviewer(
+            llm_service,
+            max_findings=cfg.intelligence.design_review_max_findings,
+            timeout=cfg.intelligence.design_review_timeout,
+            logger=get_logger("atlas.engineering.design_review"),
+        )
+        if cfg.intelligence.design_review
+        else None
+    )
     intelligence_service = IntelligenceService(
         code_service,
         intelligence_repo,
         learning_service,
         cfg.intelligence,
+        acquirer=repo_acquirer,
+        artifacts=derived_artifacts,
+        graph_store=architecture_graphs,
+        design_reviewer=design_reviewer,
+        findings=engineering_findings,
+        finding_repo=finding_repo,
         logger=get_logger("atlas.intelligence"),
     )
-    learning_service.register_sink(STORE_CODE, CodeStoreSink(intelligence_repo))
+    learning_service.register_sink(
+        STORE_CODE, CodeStoreSink(intelligence_repo, findings=engineering_findings)
+    )
+    # Repository-Learning worker (Phase B · §B.6, BB7): re-ingests a repo on its schedule via the
+    # B.1–B.5 pipeline. Registered here (after Intelligence is built) so `repository_learning`
+    # missions instantiate a working RepoWatcher.
+    worker_manager.register_worker_type(RepoWatcher(intelligence_service))
 
     # Python Execution Sandbox (Sprint 16, D6 — hybrid): run analysis code in a
     # resource-limited child interpreter (subprocess default; docker swappable) with
@@ -700,6 +821,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("recovery", recovery_manager)
     container.register_instance("checkpoints", checkpoint_store)
     container.register_instance("missions", mission_service)
+    container.register_instance("configuration", configuration_service)
+    container.register_instance("schedules", schedule_service)
+    container.register_instance("workers", worker_manager)
+    container.register_instance("templates", template_service)
     container.register_instance("conversation", conversation_service)
     container.register_instance("planner", planner)
     container.register_instance("tool_executor", tool_executor)
@@ -770,6 +895,21 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         "missions", mission_service, kind="service", version=MissionService.VERSION
     )
     capabilities.register(
+        "configuration",
+        configuration_service,
+        kind="service",
+        version=ConfigurationService.VERSION,
+    )
+    capabilities.register(
+        "schedules", schedule_service, kind="service", version=ScheduleService.VERSION
+    )
+    capabilities.register(
+        "workers", worker_manager, kind="service", version=WorkerManager.VERSION
+    )
+    capabilities.register(
+        "templates", template_service, kind="service", version=TemplateService.VERSION
+    )
+    capabilities.register(
         "notifier", notifier, kind="kernel", version=Notifier.VERSION
     )
     capabilities.register(
@@ -785,6 +925,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "code", code_service, contract=caps.CodeCapability, kind="service"
+    )
+    capabilities.register(
+        "readers", reader_registry, kind="service", version=ReaderRegistry.VERSION
     )
     capabilities.register(
         "python", python_service, contract=caps.PythonExecutionCapability, kind="service"
@@ -823,11 +966,16 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(storage_manager)
     registry.register(asset_store)
     registry.register(mission_service)
+    registry.register(configuration_service)
+    registry.register(schedule_service)
+    registry.register(worker_manager)
+    registry.register(template_service)
     registry.register(notifier)
     registry.register(conversation_service)
     registry.register(assistant_service)
     registry.register(job_service)
     registry.register(document_service)
+    registry.register(reader_registry)
     registry.register(code_service)
     registry.register(python_service)
     registry.register(verification_service)

@@ -36,8 +36,15 @@ class FindingRepository(BaseRepository):
         finding_id: str | None = None,
         supersedes: str | None = None,
         identity_key: list[Any] | None = None,
+        mission_id: str | None = None,
+        job_id: str | None = None,
     ) -> dict[str, Any]:
         cid = canonical_id or self.next_canonical_id()
+        # P12 provenance columns: who *discovered* this finding (never ownership). Fall back to the
+        # provenance JSON so callers that only stamp the JSON still populate the indexed columns.
+        prov = provenance or {}
+        mission_id = mission_id or (prov.get("mission_id") if isinstance(prov, dict) else None)
+        job_id = job_id or (prov.get("job_id") if isinstance(prov, dict) else None)
         params_common = (
             cid,
             revision,
@@ -56,6 +63,8 @@ class FindingRepository(BaseRepository):
             last_verified,
             supersedes,
             Jsonb(identity_key) if identity_key is not None else None,
+            mission_id,
+            job_id,
         )
         if finding_id:
             return self.fetch_one(
@@ -64,12 +73,12 @@ class FindingRepository(BaseRepository):
                     id, canonical_id, revision, statement, value, claim_type,
                     confidence, confidence_score, status, freshness, quality,
                     supporting, contradicting, provenance, domain, last_verified,
-                    supersedes, identity_key
+                    supersedes, identity_key, mission_id, job_id
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s
+                    %s, %s, %s, %s
                 )
                 RETURNING *
                 """,
@@ -81,12 +90,12 @@ class FindingRepository(BaseRepository):
                 canonical_id, revision, statement, value, claim_type,
                 confidence, confidence_score, status, freshness, quality,
                 supporting, contradicting, provenance, domain, last_verified,
-                supersedes, identity_key
+                supersedes, identity_key, mission_id, job_id
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
-                %s, %s
+                %s, %s, %s, %s
             )
             RETURNING *
             """,
@@ -143,6 +152,11 @@ class FindingRepository(BaseRepository):
         """Append a new revision row; mark previous superseded. Never UPDATE statement."""
         from atlas.knowledge.lifecycle import finding_identity_key
 
+        # P12 provenance carries across revisions: prefer the incoming provenance, else the prior row.
+        prov = data.get("provenance") if isinstance(data.get("provenance"), dict) else {}
+        rev_mission_id = prov.get("mission_id") or previous.get("mission_id")
+        rev_job_id = prov.get("job_id") or previous.get("job_id")
+
         new = self.create(
             str(data.get("statement", previous.get("statement", ""))),
             canonical_id=str(previous["canonical_id"]),
@@ -173,6 +187,8 @@ class FindingRepository(BaseRepository):
             last_verified=data.get("last_verified"),
             supersedes=str(previous["id"]),
             identity_key=list(finding_identity_key(data)),
+            mission_id=rev_mission_id,
+            job_id=rev_job_id,
         )
         self.set_status(str(previous["id"]), "superseded", superseded_by=str(new["id"]))
         return new
@@ -240,6 +256,58 @@ class FindingRepository(BaseRepository):
             if str((r.get("provenance") or {}).get("component_version", ""))
             == str(version)
         ]
+
+    def list_by_mission(
+        self, mission_id: str, *, limit: int = 100, include_archive: bool = False
+    ) -> list[dict[str, Any]]:
+        """Findings *discovered* under a mission (P12 provenance — never an ownership filter).
+
+        Returns active head revisions (one row per canonical_id). Archiving the mission does not
+        touch these rows; this read is purely "who discovered this?".
+        """
+        archive_clause = "" if include_archive else "AND status <> 'archived'"
+        return self.fetch_all(
+            f"""
+            SELECT DISTINCT ON (canonical_id) *
+            FROM knowledge.findings
+            WHERE mission_id = %s
+              {archive_clause}
+            ORDER BY canonical_id, revision DESC
+            LIMIT %s
+            """,
+            (mission_id, limit),
+        )
+
+    def list_by_job(
+        self, job_id: str, *, limit: int = 100, include_archive: bool = False
+    ) -> list[dict[str, Any]]:
+        """Findings *discovered* under a job (P12 provenance — never an ownership filter)."""
+        archive_clause = "" if include_archive else "AND status <> 'archived'"
+        return self.fetch_all(
+            f"""
+            SELECT DISTINCT ON (canonical_id) *
+            FROM knowledge.findings
+            WHERE job_id = %s
+              {archive_clause}
+            ORDER BY canonical_id, revision DESC
+            LIMIT %s
+            """,
+            (job_id, limit),
+        )
+
+    def list_active_by_repo_uid(
+        self, repo_uid: str, *, domain: str = "code"
+    ) -> list[dict[str, Any]]:
+        """Active/contested/deprecated findings a repository produced (engineering B.2)."""
+        return self.fetch_all(
+            """
+            SELECT * FROM knowledge.findings
+            WHERE domain = %s
+              AND provenance->>'repo_uid' = %s
+              AND status IN ('active', 'contested', 'deprecated')
+            """,
+            (domain, repo_uid),
+        )
 
     def enqueue_review(
         self, finding_id: str, *, reason: str, component_id: str = ""

@@ -27,9 +27,13 @@ class FakeIntelRepo:
         return f"repo-{self._seq}"
 
     def add_repository(self, **kw):
-        # re-learning a root retires the previous active row
+        # re-learning retires the previous active row (by repo_uid when known, else root)
+        uid = kw.get("repo_uid")
         for rid, r in list(self._repos.items()):
-            if r.root == kw.get("root") and r.status == "active":
+            if r.status != "active":
+                continue
+            same = (r.repo_uid == uid) if uid else (r.root == kw.get("root"))
+            if same:
                 self._repos[rid] = dataclasses.replace(r, status="reverted")
         rid = self._id()
         rec = LearnedRepository(
@@ -41,12 +45,21 @@ class FakeIntelRepo:
             loc=kw.get("loc", 0), summary=kw.get("summary", ""),
             top_symbols=kw.get("top_symbols") or [], patterns=kw.get("patterns") or [],
             policy=kw.get("policy", "project"),
+            repo_uid=kw.get("repo_uid"), root_commit=kw.get("root_commit"),
+            normalized_remote=kw.get("normalized_remote"),
+            asset_id=kw.get("asset_id"), asset_version=kw.get("asset_version"),
         )
         self._repos[rid] = rec
         return rec
 
     def get_repository(self, rid):
         return self._repos.get(str(rid))
+
+    def get_by_repo_uid(self, repo_uid):
+        for r in self._repos.values():
+            if r.status == "active" and r.repo_uid == repo_uid:
+                return r
+        return None
 
     def list_repositories(self, *, limit=100):
         return [r for r in self._repos.values() if r.status == "active"][:limit]
@@ -91,6 +104,8 @@ class FakeIntelRepo:
 
 
 class FakeCodeService:
+    VERSION = "1.0.0"
+
     def __init__(self, repos=None):
         # root -> (repo_map, patterns, symbols)
         self._repos = repos or {}
@@ -105,6 +120,31 @@ class FakeCodeService:
 
     def search_symbols(self, query, *, root, limit=25):
         return self._repos[root][2][:limit]
+
+    def artifact(self, root, *, symbol_limit=200, refresh=False):
+        if root not in self._repos:
+            raise NotADirectoryError(root)
+        repo_map, patterns, symbols = self._repos[root]
+        return {
+            "root": repo_map.get("root", root),
+            "reader": "code",
+            "reader_version": self.VERSION,
+            "repo_map": repo_map,
+            "graph": {"import_edges": [], "call_edges": []},
+            "patterns": patterns,
+            "symbols": symbols[:symbol_limit],
+            "symbol_count": sum(
+                int(f.get("symbols", 0)) for f in repo_map.get("files", [])
+            ),
+        }
+
+    def index(self, root, *, ingest=False, refresh=False, embed_cap=None):
+        # Count non-class symbols as "chunks" so embed wiring is observable in tests.
+        _, _, symbols = self._repos[root]
+        chunks = [s for s in symbols if s.get("kind") != "class"]
+        if embed_cap is not None:
+            chunks = chunks[:embed_cap]
+        return {"root": root, "ingested_chunks": len(chunks) if ingest else 0}
 
 
 def _repo_fixture(name, frameworks, languages, patterns, symbols=None):
@@ -255,3 +295,129 @@ def test_relearning_same_root_replaces_active_row():
     svc.learn_repository("/repos/api")
     svc.learn_repository("/repos/api")
     assert intel_repo.count_repositories() == 1
+
+
+# --- B.1 asset-backed acquisition ----------------------------------------
+def test_learn_repository_with_acquirer_stamps_provenance(tmp_path):
+    """When an acquirer is wired, the learned row carries repo_uid + asset id/version (B.1)."""
+    from atlas.engineering.ingest import RepoAcquirer
+    from tests.test_engineering_ingest import FakeAssetStore, FakeGit, FakeStorage
+
+    repo = tmp_path / "svc"
+    repo.mkdir()
+    (repo / "a.py").write_text("print(1)\n")
+    root = str(repo)
+
+    code = FakeCodeService({root: _repo_fixture("svc", ["FastAPI"], {"python": 3}, ["Repo"])})
+    # FakeCodeService keys on root; align the fixture's advertised root with the real path.
+    code._repos[root][0]["root"] = root
+
+    intel_repo = FakeIntelRepo()
+    learning = LearningService(FakeLearningRepo(), LearningConfig(auto_apply=False))
+    learning.register_sink("code", CodeStoreSink(intel_repo))
+    acquirer = RepoAcquirer(FakeAssetStore(), FakeStorage(tmp_path), git=FakeGit(root_commit="abc"))
+    svc = IntelligenceService(code, intel_repo, learning, IntelligenceConfig(), acquirer=acquirer)
+
+    out = svc.learn_repository(path=root)
+    assert out["outcome"] == "ok"
+    assert out["asset"]["asset_version"] == 1
+    assert out["asset"]["reused"] is False
+    rec = out["repository"]
+    assert rec["repo_uid"] == out["asset"]["repo_uid"]
+    assert rec["root_commit"] == "abc"
+    assert rec["asset_id"] == out["asset"]["asset_id"]
+    assert rec["asset_version"] == 1
+
+
+def test_learn_repository_remote_url_requires_acquirer():
+    svc, _, _ = _svc({})
+    out = svc.learn_repository(url="https://github.com/x/y.git")
+    assert out["outcome"] == "error"
+    assert "acquirer" in out["reason"]
+
+
+# --- engineering findings read side (B.7) ---------------------------------
+class _FakeFindingRepo:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def list_active(self, *, domain="code", limit=50, include_archive=False):
+        return [r for r in self._rows if r.get("domain") == domain][:limit]
+
+    def list_active_by_repo_uid(self, repo_uid, *, domain="code"):
+        return [
+            r for r in self._rows
+            if r.get("domain") == domain
+            and (r.get("provenance") or {}).get("repo_uid") == repo_uid
+        ]
+
+    def list_by_mission(self, mission_id, *, limit=100, include_archive=False):
+        return [
+            r for r in self._rows
+            if (r.get("mission_id") or (r.get("provenance") or {}).get("mission_id"))
+            == mission_id
+        ][:limit]
+
+    def list_by_job(self, job_id, *, limit=100, include_archive=False):
+        return [
+            r for r in self._rows
+            if (r.get("job_id") or (r.get("provenance") or {}).get("job_id")) == job_id
+        ][:limit]
+
+
+def test_list_findings_scopes_by_repo_and_claim_type():
+    rows = [
+        {"id": "f1", "domain": "code", "claim_type": "structure", "statement": "s1",
+         "value": {"rationale": "r"}, "provenance": {"repo_uid": "u1", "reader": "code"}},
+        {"id": "f2", "domain": "code", "claim_type": "design", "statement": "s2",
+         "value": {}, "provenance": {"repo_uid": "u1"}},
+        {"id": "f3", "domain": "code", "claim_type": "structure", "statement": "s3",
+         "value": {}, "provenance": {"repo_uid": "u2"}},
+        {"id": "f4", "domain": "research", "claim_type": "prose", "statement": "s4"},
+    ]
+    svc, _, _ = _svc({})
+    svc._finding_repo = _FakeFindingRepo(rows)
+
+    # all code findings (research excluded)
+    everything = svc.list_findings()
+    assert {f["id"] for f in everything} == {"f1", "f2", "f3"}
+    assert everything[0]["provenance"]["reader"] == "code"
+
+    # scoped to a repo_uid
+    scoped = svc.list_findings(repo_uid="u1")
+    assert {f["id"] for f in scoped} == {"f1", "f2"}
+
+    # scoped to a repo + claim type
+    design = svc.list_findings(repo_uid="u1", claim_type="design")
+    assert [f["id"] for f in design] == ["f2"]
+
+
+def test_list_findings_scopes_by_mission_and_job():
+    """C.1/P12: mission/job are a read-only discovery lens, and surface in the view."""
+    rows = [
+        {"id": "f1", "domain": "code", "claim_type": "structure", "statement": "s1",
+         "value": {}, "mission_id": "m-1", "job_id": "j-1",
+         "provenance": {"repo_uid": "u1", "mission_id": "m-1", "job_id": "j-1"}},
+        {"id": "f2", "domain": "code", "claim_type": "design", "statement": "s2",
+         "value": {}, "mission_id": "m-2",
+         "provenance": {"repo_uid": "u1", "mission_id": "m-2"}},
+        {"id": "f3", "domain": "code", "claim_type": "structure", "statement": "s3",
+         "value": {}, "provenance": {"repo_uid": "u2", "mission_id": "m-1", "job_id": "j-1"}},
+    ]
+    svc, _, _ = _svc({})
+    svc._finding_repo = _FakeFindingRepo(rows)
+
+    by_mission = svc.list_findings(mission_id="m-1")
+    assert {f["id"] for f in by_mission} == {"f1", "f3"}
+    assert by_mission[0]["mission_id"] == "m-1"          # surfaced in the view
+
+    by_job = svc.list_findings(job_id="j-1")
+    assert {f["id"] for f in by_job} == {"f1", "f3"}
+
+    only_m2 = svc.list_findings(mission_id="m-2")
+    assert [f["id"] for f in only_m2] == ["f2"]
+
+
+def test_list_findings_empty_without_finding_repo():
+    svc, _, _ = _svc({})
+    assert svc.list_findings() == []

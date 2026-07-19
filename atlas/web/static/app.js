@@ -8,10 +8,14 @@ const state = {
   view: "overview",
   sessionId: null,
   jobId: null,
+  missionId: null,
+  missionPoll: null,
   sending: false,
   jobPoll: null,
   opsPoll: null,
   opsStream: null,
+  repoId: null,
+  engStream: null,
 };
 
 /* ---------- tiny DOM helper (textContent-only = XSS-safe) ---------- */
@@ -117,9 +121,13 @@ function switchView(view) {
   const extra = $("#sidebar-extra");
   extra.innerHTML = "";
   stopJobPoll();
+  if (view !== "missions") stopMissionPoll();
   if (view !== "overview") { stopOpsPoll(); stopOpsStream(); }
+  if (view !== "engineering") stopEngStream();
   if (view === "overview") loadOverview();
   else if (view === "chat") renderSessionSidebar();
+  else if (view === "missions") loadMissions();
+  else if (view === "engineering") loadEngineering();
   else if (view === "jobs") loadJobs();
   else if (view === "system") loadSystem();
 }
@@ -241,6 +249,199 @@ async function sendMessage(text) {
     state.sending = false;
     $("#composer-send").disabled = false;
   }
+}
+
+/* ---------- engineering (Phase B · §B.7) ---------- */
+async function loadEngineering() {
+  startEngStream();
+  try {
+    const data = await api("/v1/engineering/repositories?limit=100");
+    renderRepoList(data.repositories || []);
+    if (state.repoId) showRepoDetail(state.repoId);
+  } catch (err) { toast(err.message); }
+}
+
+function renderRepoList(repos) {
+  const list = $("#eng-list");
+  list.innerHTML = "";
+  if (!repos.length) {
+    list.append(el("div", { class: "muted", style: "padding:18px",
+      text: "No repositories learned yet — ingest one above." }));
+    return;
+  }
+  for (const r of repos) {
+    const langs = Object.keys(r.languages || {}).slice(0, 3).join(", ");
+    list.append(el("div", {
+      class: "job-row" + (r.id === state.repoId ? " active" : ""),
+      onclick: () => showRepoDetail(r.id),
+    },
+      el("div", { class: "obj", text: r.name }),
+      el("div", {},
+        el("span", { class: "badge ok", text: langs || "code" }),
+        el("span", { class: "muted small", text:
+          `  ${r.symbol_count || 0} symbols`
+          + (r.asset_version ? ` · asset v${r.asset_version}` : "") }),
+      ),
+    ));
+  }
+}
+
+async function ingestRepo(source, embed) {
+  const body = /^(https?:\/\/|git@)/.test(source) ? { url: source } : { path: source };
+  body.embed = !!embed;
+  try {
+    toast("Ingesting… this can take a moment");
+    const out = await api("/v1/engineering/ingest", { method: "POST", body });
+    if (out.outcome !== "ok") { toast("Ingest failed: " + (out.reason || "unknown")); return; }
+    $("#eng-source").value = "";
+    await loadEngineering();
+    if (out.repository && out.repository.id) showRepoDetail(out.repository.id);
+    toast("Repository ingested");
+  } catch (err) { toast(err.message); }
+}
+
+async function showRepoDetail(id) {
+  state.repoId = id;
+  document.querySelectorAll("#eng-list .job-row").forEach((r) => r.classList.remove("active"));
+  try {
+    const [detail, findings] = await Promise.all([
+      api(`/v1/engineering/repositories/${id}`),
+      api(`/v1/engineering/findings?repo_id=${id}&limit=200`),
+    ]);
+    let graph = null;
+    try { graph = await api(`/v1/engineering/repositories/${id}/graph`); } catch (_) { graph = null; }
+    renderRepoDetail(detail, graph, findings.findings || []);
+  } catch (err) { toast(err.message); }
+}
+
+const FINDING_GROUPS = [
+  ["structure", "Structure"],
+  ["dependency", "Dependencies"],
+  ["pattern", "Patterns"],
+  ["design", "Design"],
+  ["risk", "Risks"],
+];
+
+function renderRepoDetail(detail, graph, findings) {
+  const box = $("#eng-detail");
+  box.innerHTML = "";
+  const r = detail.repository || {};
+  box.append(el("div", { class: "obj-title", text: r.name || "repository" }));
+  const langs = Object.entries(r.languages || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
+  box.append(el("div", { class: "muted small", text:
+    `${r.file_count || 0} files · ${r.symbol_count || 0} symbols`
+    + (r.asset_version ? ` · asset v${r.asset_version}` : "")
+    + (r.repo_uid ? ` · uid ${String(r.repo_uid).slice(0, 8)}` : "") }));
+  if (langs) box.append(el("div", { class: "muted small", text: langs }));
+  if ((r.frameworks || []).length) {
+    const chips = el("div", { class: "chips" });
+    for (const f of r.frameworks) chips.append(el("span", { class: "chip", text: f }));
+    box.append(chips);
+  }
+
+  const actions = el("div", { class: "job-actions" });
+  actions.append(el("button", { onclick: () => designReview(r.id) }, "Run design review"));
+  actions.append(el("button", { onclick: () => showRepoDetail(r.id) }, "Refresh"));
+  box.append(actions);
+
+  // Architecture graph summary
+  box.append(el("h3", { class: "section-h", text: "Architecture graph" }));
+  if (graph) {
+    const c = graph.counts || {};
+    const cards = el("div", { class: "status-cards" });
+    for (const [k, v] of [["modules", c.modules], ["imports", c.import_edges],
+                          ["calls", c.call_edges], ["entry points", c.entry_points]]) {
+      cards.append(el("div", { class: "card" },
+        el("div", { class: "k", text: k }), el("div", { class: "v", text: v ?? 0 })));
+    }
+    box.append(cards);
+    const versions = detail.graph_versions || [];
+    if (versions.length) {
+      box.append(el("div", { class: "muted small", style: "margin-top:6px",
+        text: `${versions.length} graph version(s); latest v${versions[0].version}` }));
+    }
+  } else {
+    box.append(el("div", { class: "muted small", text: "No architecture graph yet." }));
+  }
+
+  // Findings grouped by claim type, each with the "why" (P9)
+  box.append(el("h3", { class: "section-h", text: `Findings (${findings.length})` }));
+  if (!findings.length) box.append(el("div", { class: "muted small", text: "No findings yet." }));
+  for (const [type, label] of FINDING_GROUPS) {
+    const group = findings.filter((f) => f.claim_type === type);
+    if (!group.length) continue;
+    box.append(el("h4", { class: "eng-group", text: `${label} (${group.length})` }));
+    for (const f of group) box.append(renderFindingCard(f));
+  }
+}
+
+function renderFindingCard(f) {
+  const card = el("details", { class: "step" });
+  card.append(el("summary", {},
+    el("span", { class: "intent", text: f.statement || f.claim_type }),
+    el("span", { class: "badge conf", text: f.confidence || "" }),
+  ));
+  const body = el("div", { class: "step-body" });
+  const v = f.value || {}, p = f.provenance || {};
+  if (v.rationale) body.append(el("div", { class: "step-desc muted", text: "Why: " + v.rationale }));
+  if ((v.evidence || []).length) {
+    body.append(el("div", { class: "step-label muted small", text: "evidence" }));
+    const chips = el("div", { class: "chips" });
+    for (const e of v.evidence) chips.append(el("span", { class: "chip", text: e }));
+    body.append(chips);
+  }
+  if ((v.rejected_alternatives || []).length) {
+    body.append(el("div", { class: "step-label muted small", text: "rejected alternatives" }));
+    const chips = el("div", { class: "chips" });
+    for (const a of v.rejected_alternatives) chips.append(el("span", { class: "chip gap", text: a }));
+    body.append(chips);
+  }
+  const prov = [p.reader && `reader ${p.reader}${p.reader_version ? " v" + p.reader_version : ""}`,
+                p.model && `model ${p.model}`, p.symbol && `symbol ${p.symbol}`]
+    .filter(Boolean).join(" · ");
+  if (prov) body.append(el("div", { class: "muted small", text: prov }));
+  card.append(body);
+  return card;
+}
+
+async function designReview(id) {
+  try {
+    toast("Running design review…");
+    const out = await api(`/v1/engineering/design-review/${id}`, { method: "POST" });
+    if (out.outcome !== "ok") { toast("Design review: " + (out.outcome || "unavailable")); }
+    else toast(`Design review: ${out.design_findings} finding(s)`);
+    showRepoDetail(id);
+  } catch (err) { toast(err.message); }
+}
+
+// Live refresh: re-load the current repo when an engineering event arrives over SSE.
+function startEngStream() {
+  stopEngStream();
+  const ctrl = new AbortController();
+  state.engStream = ctrl;
+  fetch("/v1/events/stream", {
+    headers: { "Authorization": `Bearer ${state.key}` }, signal: ctrl.signal,
+  }).then(async (res) => {
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        if (/event:\s*(EngineeringIngested|DesignReviewed|WorkerTick)/.test(frame)) {
+          if (state.view === "engineering") loadEngineering();
+        }
+      }
+    }
+  }).catch(() => { /* aborted on view switch */ });
+}
+function stopEngStream() {
+  if (state.engStream) { try { state.engStream.abort(); } catch (_) {} state.engStream = null; }
 }
 
 /* ---------- jobs ---------- */
@@ -526,6 +727,190 @@ function stopJobPoll() {
   state.jobPollFailures = 0;
 }
 
+/* ---------- missions (Phase A · §A.7) ---------- */
+let missionTemplates = [];
+
+async function loadMissions() {
+  try {
+    const [ms, tpls] = await Promise.all([
+      api("/v1/missions?limit=100"),
+      api("/v1/templates"),
+    ]);
+    missionTemplates = tpls.templates || [];
+    renderTemplateSelect();
+    renderMissionsList(ms.missions || []);
+    if (state.missionId) showMissionDetail(state.missionId);
+  } catch (err) { toast(err.message); }
+}
+
+function renderTemplateSelect() {
+  const sel = $("#mission-template");
+  if (!sel) return;
+  sel.innerHTML = "";
+  for (const t of missionTemplates) {
+    sel.append(el("option", { value: t.name },
+      `${t.name} (v${t.template_version})`));
+  }
+}
+
+function missionActive(m) {
+  return ["active", "waiting"].includes(m.status);
+}
+
+function renderMissionsList(missions) {
+  const list = $("#missions-list");
+  list.innerHTML = "";
+  if (!missions.length) {
+    list.append(el("div", { class: "muted", style: "padding:18px", text: "No missions yet — instantiate one above." }));
+    return;
+  }
+  for (const m of missions) {
+    list.append(el("div", {
+      class: "job-row" + (m.id === state.missionId ? " active" : ""),
+      onclick: () => showMissionDetail(m.id),
+    },
+      el("div", { class: "obj", text: m.title }),
+      el("div", {},
+        el("span", { class: "badge " + m.status, text: m.status }),
+        el("span", { class: "muted small", text: `  P${m.effective_priority} · ${m.scheduling_policy}` }),
+      ),
+    ));
+  }
+}
+
+async function instantiateMission(template, title) {
+  try {
+    const view = await api("/v1/missions/instantiate", {
+      method: "POST", body: { template, title: title || null },
+    });
+    $("#mission-title").value = "";
+    await loadMissions();
+    showMissionDetail(view.mission.id);
+    toast("Mission instantiated");
+  } catch (err) { toast(err.message); }
+}
+
+async function showMissionDetail(id) {
+  state.missionId = id;
+  document.querySelectorAll("#missions-list .job-row").forEach((r) => r.classList.remove("active"));
+  try {
+    const d = await api(`/v1/missions/${id}`);
+    renderMissionDetail(d);
+    if (missionActive(d.mission)) startMissionPoll(id); else stopMissionPoll();
+  } catch (err) { toast(err.message); }
+}
+
+const MISSION_ACTIONS = {
+  draft: ["activate", "archive"],
+  active: ["pause", "complete", "archive"],
+  waiting: ["resume", "pause", "archive"],
+  paused: ["resume", "complete", "archive"],
+  completed: ["archive"],
+  archived: [],
+};
+
+async function missionAction(id, action) {
+  try {
+    await api(`/v1/missions/${id}/${action}`, { method: "POST", body: { reason: "operator " + action } });
+    await loadMissions();
+    showMissionDetail(id);
+  } catch (err) { toast(err.message); }
+}
+
+async function workerAction(workerId, action) {
+  try {
+    await api(`/v1/workers/${workerId}/${action}`, { method: "POST", body: { reason: "operator " + action } });
+    showMissionDetail(state.missionId);
+  } catch (err) { toast(err.message); }
+}
+
+function renderMissionDetail(d) {
+  const box = $("#mission-detail");
+  box.innerHTML = "";
+  const m = d.mission;
+  box.append(el("div", { class: "obj-title", text: m.title }));
+  box.append(el("div", {},
+    el("span", { class: "badge " + m.status, text: m.status }),
+    el("span", { class: "muted small", text:
+      `  priority ${d.effective_priority} · ${m.scheduling_policy} · ${m.criticality}`
+      + (m.max_concurrent_tasks != null ? ` · cap ${m.max_concurrent_tasks}` : "") }),
+  ));
+  if (m.objective) box.append(el("div", { class: "muted", style: "margin:6px 0", text: m.objective }));
+
+  const actions = el("div", { class: "job-actions" });
+  for (const a of (MISSION_ACTIONS[m.status] || [])) {
+    actions.append(el("button", { onclick: () => missionAction(m.id, a) }, a));
+  }
+  actions.append(el("button", { onclick: () => showMissionDetail(m.id) }, "Refresh"));
+  box.append(actions);
+
+  // Workers
+  box.append(el("h3", { class: "section-h", text: `Workers (${(d.workers || []).length})` }));
+  const workers = el("div", { class: "steps" });
+  if (!(d.workers || []).length) workers.append(el("div", { class: "muted small", text: "No workers." }));
+  for (const w of (d.workers || [])) workers.append(renderWorkerCard(w));
+  box.append(workers);
+
+  // Journal ("Explain this" foundation, P9)
+  box.append(el("h3", { class: "section-h", text: `Journal (${(d.journal || []).length})` }));
+  const feed = el("div", { class: "feed" });
+  for (const j of (d.journal || [])) {
+    feed.append(el("div", { class: "feed-row" },
+      el("span", { class: "feed-time muted small", text: clockTime(j.ts) }),
+      el("span", { class: "feed-phase phase-step", text: j.action }),
+      el("span", { class: "feed-msg", text: j.reason || "" }),
+    ));
+  }
+  box.append(feed);
+}
+
+function renderWorkerCard(w) {
+  const card = el("details", { class: "step" });
+  card.append(el("summary", {},
+    el("span", { class: "intent", text: w.type }),
+    el("span", { class: "badge " + w.status, text: w.status }),
+    el("span", { class: "cap muted small", text: `health ${w.health} · v${w.worker_version}`
+      + (w.restart_count ? ` · ${w.restart_count} restart(s)` : "") }),
+  ));
+  const body = el("div", { class: "step-body" });
+  body.append(el("div", { class: "muted small", text: `id ${w.id}` }));
+
+  const wactions = el("div", { class: "job-actions" });
+  if (["running", "recovering"].includes(w.status)) wactions.append(el("button", { onclick: () => workerAction(w.id, "pause") }, "Pause"));
+  if (["paused"].includes(w.status)) wactions.append(el("button", { onclick: () => workerAction(w.id, "resume") }, "Resume"));
+  if (!["stopped"].includes(w.status)) wactions.append(el("button", { onclick: () => workerAction(w.id, "stop") }, "Stop"));
+  body.append(wactions);
+
+  // Live operator input (Q4)
+  const inp = el("div", { class: "job-input" });
+  const ta = el("textarea", { rows: "2", placeholder: 'Live input as JSON, e.g. {"note": "focus on NSE"}' });
+  const send = el("button", {
+    onclick: async () => {
+      let payload;
+      try { payload = ta.value.trim() ? JSON.parse(ta.value) : {}; }
+      catch (_) { toast("Input must be valid JSON"); return; }
+      send.disabled = true;
+      try {
+        await api(`/v1/workers/${w.id}/input`, { method: "POST", body: { payload } });
+        ta.value = ""; toast("Input queued for worker");
+      } catch (err) { toast(err.message); } finally { send.disabled = false; }
+    },
+  }, "Send input");
+  inp.append(ta, send);
+  body.append(inp);
+  card.append(body);
+  return card;
+}
+
+function startMissionPoll(id) {
+  stopMissionPoll();
+  state.missionPoll = setInterval(() => {
+    if (state.view !== "missions") return stopMissionPoll();
+    showMissionDetail(id);
+  }, 4000);
+}
+function stopMissionPoll() { if (state.missionPoll) { clearInterval(state.missionPoll); state.missionPoll = null; } }
+
 /* ---------- system ---------- */
 async function loadSystem() {
   try {
@@ -745,8 +1130,20 @@ function init() {
     if (obj) createJob(obj);
   });
   $("#jobs-refresh").addEventListener("click", loadJobs);
+  $("#missions-refresh").addEventListener("click", loadMissions);
+  $("#mission-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const tpl = $("#mission-template").value;
+    if (tpl) instantiateMission(tpl, $("#mission-title").value.trim());
+  });
   $("#system-refresh").addEventListener("click", loadSystem);
   $("#overview-refresh").addEventListener("click", refreshOps);
+  $("#eng-refresh").addEventListener("click", loadEngineering);
+  $("#eng-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const src = $("#eng-source").value.trim();
+    if (src) ingestRepo(src, $("#eng-embed").checked);
+  });
 
   if (state.key) {
     tryConnect(state.key).then((ok) => { if (!ok) { $("#login").classList.remove("hidden"); } });
