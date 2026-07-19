@@ -465,6 +465,31 @@ class FindingRepository(BaseRepository):
             return self.fetch_all(sql, (domain, limit))
         return self.fetch_all(sql, (limit,))
 
+    def understanding_by_domain(self) -> list[dict[str, Any]]:
+        """Per-(domain, maturity, status) rollup over active head revisions (C.4, CC15).
+
+        Backs the "understanding %" metric: coverage says how much was *read*, this says how well it
+        is *understood*. Grouped by maturity (candidate/verified/established) and status so the service
+        can weight corroboration and discount contested/low-confidence findings. One row per
+        canonical_id (head revision only) so revisions are not double-counted.
+        """
+        return self.fetch_all(
+            """
+            SELECT domain, maturity, status,
+                   count(*) AS n,
+                   AVG(confidence_score) AS avg_score
+            FROM (
+                SELECT DISTINCT ON (canonical_id)
+                    canonical_id, domain, maturity, status, confidence_score
+                FROM knowledge.findings
+                WHERE status IN ('active', 'contested', 'deprecated')
+                ORDER BY canonical_id, revision DESC
+            ) heads
+            GROUP BY domain, maturity, status
+            ORDER BY domain, maturity, status
+            """,
+        )
+
     def upsert_from_dict(self, data: dict[str, Any]) -> dict[str, Any]:
         """Legacy insert path — prefer KnowledgeLifecycleService.consolidate."""
         from atlas.knowledge.lifecycle import finding_identity_key
