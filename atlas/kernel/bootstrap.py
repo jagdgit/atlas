@@ -866,6 +866,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("intelligence", intelligence_service)
     container.register_instance("ingestion", ingestion_source)
     container.register_instance("coverage", coverage_service)
+    container.register_instance("policy", policy_service)
 
     # Advertise capabilities so agents can query the kernel instead of importing
     # modules (ADR-0040). S11: attach typed contracts so the registry can verify a
@@ -975,6 +976,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     capabilities.register("ingestion", ingestion_source, kind="service")
     capabilities.register(
         "coverage", coverage_service, kind="service", version=CoverageService.VERSION
+    )
+    capabilities.register(
+        "policy", policy_service, kind="service", version=PolicyService.VERSION
     )
 
     # 6. Core services (registration order = start order)

@@ -556,6 +556,39 @@ class _FakeCoverage:
         }
 
 
+class _FakePolicy:
+    def __init__(self):
+        self._rules = {}
+
+    def list_rules(self, *, scope=None, rule=None, enabled=None, limit=200):
+        return list(self._rules.values())
+
+    def create_rule(self, subject, rule, *, scope="global", strength=1.0,
+                    enabled=True, created_by=None, provenance=None):
+        row = {"id": f"P-{len(self._rules) + 1}", "subject": subject, "rule": rule,
+               "scope": scope, "strength": strength, "enabled": enabled}
+        self._rules[row["id"]] = row
+        return row
+
+    def get_rule(self, rule_id):
+        return self._rules.get(rule_id)
+
+    def set_enabled(self, rule_id, enabled):
+        if rule_id not in self._rules:
+            raise KeyError(rule_id)
+        self._rules[rule_id]["enabled"] = enabled
+        return self._rules[rule_id]
+
+    def list_events(self, *, rule_id=None, limit=100):
+        return [{"id": "E-1", "rule_id": rule_id, "action": "created",
+                 "before": None, "after": None, "created_at": "2026-07-19T00:00:00+00:00"}]
+
+    def revert(self, event_id):
+        if event_id == "missing":
+            raise KeyError(event_id)
+        return {"id": "P-1", "enabled": True}
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -592,6 +625,7 @@ class FakeApplication:
                 "learning": _fake_learning(),
                 "intelligence": _fake_intelligence(),
                 "coverage": _FakeCoverage(),
+                "policy": _FakePolicy(),
                 "plugins": FakePluginManager(),
                 "event_repo": FakeEventRepo(),
                 "notifier": FakeNotifier(),
@@ -1024,6 +1058,41 @@ def test_knowledge_coverage_summary():
 def test_knowledge_coverage_requires_auth():
     resp = _client().get("/v1/knowledge/coverage")
     assert resp.status_code == 401
+
+
+def test_policy_create_and_list_rule():
+    client = _client()
+    resp = client.post(
+        "/v1/policy/rules", headers=AUTH,
+        json={"subject": "momentum strategies", "rule": "prefer", "strength": 0.8},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["subject"] == "momentum strategies"
+
+    listed = client.get("/v1/policy/rules", headers=AUTH)
+    assert listed.status_code == 200
+    assert any(r["rule"] == "prefer" for r in listed.json()["rules"])
+
+
+def test_policy_create_rejects_bad_rule_kind():
+    resp = _client().post(
+        "/v1/policy/rules", headers=AUTH, json={"subject": "x", "rule": "obliterate"}
+    )
+    assert resp.status_code == 422  # pydantic pattern validation
+
+
+def test_policy_enable_missing_rule_404():
+    resp = _client().post("/v1/policy/rules/nope/enable?enabled=false", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_policy_revert_missing_event_404():
+    resp = _client().post("/v1/policy/events/missing/revert", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_policy_requires_auth():
+    assert _client().get("/v1/policy/rules").status_code == 401
 
 
 def test_document_formats_require_auth():

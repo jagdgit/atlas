@@ -16,6 +16,7 @@ from atlas.cli.main import (
     cmd_backup,
     cmd_capabilities,
     cmd_coverage,
+    cmd_policy,
     cmd_chat,
     cmd_code,
     cmd_download,
@@ -233,6 +234,37 @@ class _FakeCoverage:
         }
 
 
+class _FakePolicyCli:
+    def __init__(self):
+        self._rules = {}
+
+    def create_rule(self, subject, rule, *, scope="global", strength=1.0, created_by=None):
+        row = {"id": "P-1", "subject": subject, "rule": rule, "scope": scope,
+               "strength": strength, "enabled": True}
+        self._rules["P-1"] = row
+        return row
+
+    def list_rules(self, *, limit=50):
+        return list(self._rules.values())
+
+    def get_rule(self, rule_id):
+        return self._rules.get(rule_id)
+
+    def set_enabled(self, rule_id, enabled):
+        if rule_id not in self._rules:
+            raise KeyError(rule_id)
+        self._rules[rule_id]["enabled"] = enabled
+        return self._rules[rule_id]
+
+    def list_events(self, *, rule_id=None, limit=50):
+        return [{"created_at": "2026-07-19", "action": "created", "rule_id": "P-1"}]
+
+    def revert(self, event_id):
+        if event_id == "missing":
+            raise KeyError(event_id)
+        return None
+
+
 class FakeApp:
     def __init__(self):
         self.tools = FakeTools()
@@ -254,6 +286,7 @@ class FakeApp:
                 "learning": _fake_learning(),
                 "intelligence": _fake_intelligence(),
                 "coverage": _FakeCoverage(),
+                "policy": _FakePolicyCli(),
             }
         )
 
@@ -967,3 +1000,31 @@ def test_cmd_coverage_empty(capsys):
     rc = cmd_coverage(args, app=app)
     assert rc == 0
     assert "no coverage recorded yet" in capsys.readouterr().out
+
+
+def test_cmd_policy_set_then_list(capsys):
+    app = FakeApp()
+    rc = cmd_policy(
+        build_parser().parse_args(["policy", "set", "momentum", "--rule", "prefer",
+                                   "--strength", "0.8"]),
+        app=app,
+    )
+    assert rc == 0
+    assert "prefer 'momentum'" in capsys.readouterr().out
+
+    rc = cmd_policy(build_parser().parse_args(["policy", "list"]), app=app)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "momentum" in out and "[on ]" in out
+
+
+def test_cmd_policy_disable_and_revert(capsys):
+    app = FakeApp()
+    cmd_policy(build_parser().parse_args(["policy", "set", "crypto", "--rule", "avoid"]), app=app)
+    capsys.readouterr()
+    rc = cmd_policy(build_parser().parse_args(["policy", "disable", "P-1"]), app=app)
+    assert rc == 0
+    assert "enabled=False" in capsys.readouterr().out
+    rc = cmd_policy(build_parser().parse_args(["policy", "revert", "missing"]), app=app)
+    assert rc == 1
+    assert "not found" in capsys.readouterr().out

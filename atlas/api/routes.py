@@ -68,6 +68,7 @@ from atlas.api.schemas import (
     GitRequest,
     LearningApplyRequest,
     LearnRepositoryRequest,
+    PolicyRuleRequest,
     RecommendRequest,
     PythonRunRequest,
     ReportRequest,
@@ -716,6 +717,63 @@ def knowledge_coverage(request: Request) -> dict:
     **understanding %** (how well it is understood, from finding maturity/confidence), plus an overall
     rollup. Coverage ≠ comprehension — both are surfaced side by side."""
     return _app(request).container.resolve("coverage").summary()
+
+
+@v1_router.get("/policy/rules", tags=["policy"])
+def policy_rules(
+    request: Request,
+    scope: str | None = None,
+    rule: str | None = None,
+    enabled: bool | None = None,
+    limit: int = 200,
+) -> dict:
+    """List operator policy rules (Phase C · §C.5). Influence, not arbitration (CC8)."""
+    policy = _app(request).container.resolve("policy")
+    return {"rules": policy.list_rules(scope=scope, rule=rule, enabled=enabled, limit=limit)}
+
+
+@v1_router.post("/policy/rules", tags=["policy"])
+def policy_create_rule(body: PolicyRuleRequest, request: Request) -> dict:
+    """Create (or upsert) a policy rule. Journaled + reversible."""
+    policy = _app(request).container.resolve("policy")
+    return policy.create_rule(**body.model_dump(exclude_none=True))
+
+
+@v1_router.get("/policy/rules/{rule_id}", tags=["policy"])
+def policy_rule(rule_id: str, request: Request) -> dict:
+    policy = _app(request).container.resolve("policy")
+    rule = policy.get_rule(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="policy rule not found")
+    return rule
+
+
+@v1_router.post("/policy/rules/{rule_id}/enable", tags=["policy"])
+def policy_enable_rule(rule_id: str, request: Request, enabled: bool = True) -> dict:
+    """Enable or (with ?enabled=false) disable a rule."""
+    policy = _app(request).container.resolve("policy")
+    try:
+        return policy.set_enabled(rule_id, enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="policy rule not found")
+
+
+@v1_router.get("/policy/events", tags=["policy"])
+def policy_events(request: Request, rule_id: str | None = None, limit: int = 100) -> dict:
+    policy = _app(request).container.resolve("policy")
+    return {"events": policy.list_events(rule_id=rule_id, limit=limit)}
+
+
+@v1_router.post("/policy/events/{event_id}/revert", tags=["policy"])
+def policy_revert(event_id: str, request: Request) -> dict:
+    """Undo a policy change, restoring the prior state (governed + reversible)."""
+    policy = _app(request).container.resolve("policy")
+    try:
+        return {"reverted": policy.revert(event_id)}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="policy event not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @v1_router.post("/engineering/ingest", tags=["engineering"])

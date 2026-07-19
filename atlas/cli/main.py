@@ -285,6 +285,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="knowledge coverage map: per-domain coverage %% + understanding %% (C.4)",
     )
 
+    p_policy = sub.add_parser(
+        "policy", help="operator policy rules that influence retrieval/advice (C.5)"
+    )
+    p_policy.add_argument(
+        "action",
+        choices=["set", "list", "show", "enable", "disable", "revert", "events"],
+        help="set <subject>|list|show <id>|enable <id>|disable <id>|revert <event_id>|events [id]",
+    )
+    p_policy.add_argument("target", nargs="?", help="subject (set) | rule/event id")
+    p_policy.add_argument(
+        "--rule", choices=["prefer", "avoid", "trust", "distrust"], default="prefer"
+    )
+    p_policy.add_argument("--scope", default="global")
+    p_policy.add_argument("--strength", type=float, default=1.0)
+    p_policy.add_argument("--by", help="created_by (provenance)")
+    p_policy.add_argument("--limit", type=int, default=50)
+
     sub.add_parser("backup", help="run an on-demand database backup (pg_dump)")
 
     return parser
@@ -1203,6 +1220,84 @@ def cmd_coverage(args: argparse.Namespace, app: "Application | None" = None) -> 
     return 0
 
 
+def cmd_policy(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    policy = app.container.resolve("policy")
+    action = args.action
+
+    if action == "set":
+        if not args.target:
+            print("usage: atlas policy set <subject> --rule prefer|avoid|trust|distrust")
+            return 2
+        row = policy.create_rule(
+            args.target, args.rule, scope=args.scope, strength=args.strength, created_by=args.by
+        )
+        print(f"{row['id']}  {row['rule']} '{row['subject']}' "
+              f"(scope={row['scope']}, strength={row['strength']}, enabled={row['enabled']})")
+        return 0
+
+    if action == "list":
+        rules = policy.list_rules(limit=args.limit)
+        if not rules:
+            print("no policy rules yet")
+            return 0
+        for r in rules:
+            state = "on " if r["enabled"] else "off"
+            print(f"{r['id']}  [{state}] {r['rule']:<8} '{r['subject']}' "
+                  f"scope={r['scope']} strength={r['strength']}")
+        return 0
+
+    if action == "show":
+        if not args.target:
+            print("usage: atlas policy show <rule_id>")
+            return 2
+        r = policy.get_rule(args.target)
+        if r is None:
+            print("policy rule not found")
+            return 1
+        for key, val in r.items():
+            print(f"{key}: {val}")
+        return 0
+
+    if action in ("enable", "disable"):
+        if not args.target:
+            print(f"usage: atlas policy {action} <rule_id>")
+            return 2
+        try:
+            r = policy.set_enabled(args.target, action == "enable")
+        except KeyError:
+            print("policy rule not found")
+            return 1
+        print(f"{r['id']}  enabled={r['enabled']}")
+        return 0
+
+    if action == "revert":
+        if not args.target:
+            print("usage: atlas policy revert <event_id>")
+            return 2
+        try:
+            policy.revert(args.target)
+        except KeyError:
+            print("policy event not found")
+            return 1
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
+        print("reverted")
+        return 0
+
+    if action == "events":
+        events = policy.list_events(rule_id=args.target, limit=args.limit)
+        if not events:
+            print("no policy events")
+            return 0
+        for e in events:
+            print(f"{e['created_at']}  {e['action']:<9} rule={e['rule_id']}")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     backup = app.container.resolve("backup")
@@ -1228,6 +1323,7 @@ _HANDLERS = {
     "capabilities": cmd_capabilities,
     "tool": cmd_tool,
     "coverage": cmd_coverage,
+    "policy": cmd_policy,
     "jobs": cmd_jobs,
     "job": cmd_job,
     "formats": cmd_formats,

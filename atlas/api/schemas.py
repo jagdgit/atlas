@@ -365,6 +365,17 @@ class EngineeringIngestRequest(BaseModel):
     embed: bool | None = None
 
 
+class PolicyRuleRequest(BaseModel):
+    # Create/upsert an operator policy rule (Phase C · §C.5, CC8). Influence, not arbitration.
+    subject: str = Field(min_length=1)          # topic/source/finding the rule is about
+    rule: str = Field(pattern="^(prefer|avoid|trust|distrust)$")
+    scope: str = "global"
+    strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    enabled: bool = True
+    created_by: str | None = None
+    provenance: dict[str, Any] | None = None
+
+
 class PythonRunRequest(BaseModel):
     code: str = Field(min_length=1)
     timeout: float | None = Field(default=None, gt=0)
