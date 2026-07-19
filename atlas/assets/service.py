@@ -148,6 +148,53 @@ class AssetStore:
     def versions(self, asset_id: str) -> list[dict[str, Any]]:
         return self._repo.list_versions(asset_id)
 
+    # --- groups / relationships (§C.2) ----------------------------------
+
+    def create_group(
+        self, kind: str, name: str, *, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Get-or-create a named group of related assets (a repo + its design doc + a chat)."""
+        group = self._repo.create_group(kind=kind, name=name, metadata=metadata)
+        self._logger.info("asset group %s/%s ready (%s)", kind, name, group["id"])
+        return group
+
+    def get_group(self, group_id: str) -> dict[str, Any] | None:
+        return self._repo.get_group(group_id)
+
+    def get_group_by_name(self, kind: str, name: str) -> dict[str, Any] | None:
+        return self._repo.get_group_by_natural(kind, name)
+
+    def list_groups(self, kind: str | None = None) -> list[dict[str, Any]]:
+        return self._repo.list_groups(kind)
+
+    def add_to_group(
+        self,
+        group_id: str,
+        asset_id: str,
+        *,
+        role: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add an asset to a group (grouping is relationship, not ownership — P12)."""
+        if self._repo.get_group(group_id) is None:
+            raise AssetError(f"no such asset group: {group_id}")
+        if self._repo.get_asset(asset_id) is None:
+            raise AssetError(f"no such asset: {asset_id}")
+        return self._repo.add_member(
+            group_id=group_id, asset_id=asset_id, role=role, metadata=metadata
+        )
+
+    def remove_from_group(self, group_id: str, asset_id: str) -> bool:
+        return self._repo.remove_member(group_id, asset_id)
+
+    def group_members(self, group_id: str) -> list[dict[str, Any]]:
+        """The assets in a group (each carries its membership ``member_role``)."""
+        return self._repo.list_members(group_id)
+
+    def groups_for_asset(self, asset_id: str) -> list[dict[str, Any]]:
+        """The groups an asset belongs to."""
+        return self._repo.list_groups_for_asset(asset_id)
+
     # --- lifecycle ------------------------------------------------------
 
     def start(self) -> None:

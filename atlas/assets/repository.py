@@ -121,3 +121,96 @@ class AssetRepository(BaseRepository):
                 (kind,),
             )
         return self.fetch_all("SELECT * FROM asset.assets ORDER BY created_at DESC")
+
+    # --- groups / relationships (§C.2, migration 0029) -----------------
+
+    def create_group(
+        self, *, kind: str, name: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Get-or-create a group by its natural key ``(kind, name)``."""
+        row = self.fetch_one(
+            """
+            INSERT INTO asset.groups (kind, name, metadata)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (kind, name) DO NOTHING
+            RETURNING *
+            """,
+            (kind, name, Jsonb(metadata or {})),
+        )
+        if row is None:  # already present
+            existing = self.get_group_by_natural(kind, name)
+            assert existing is not None  # conflict implies the row exists
+            return existing
+        return row
+
+    def get_group(self, group_id: str) -> dict[str, Any] | None:
+        return self.fetch_one("SELECT * FROM asset.groups WHERE id = %s", (group_id,))
+
+    def get_group_by_natural(self, kind: str, name: str) -> dict[str, Any] | None:
+        return self.fetch_one(
+            "SELECT * FROM asset.groups WHERE kind = %s AND name = %s", (kind, name)
+        )
+
+    def list_groups(self, kind: str | None = None) -> list[dict[str, Any]]:
+        if kind is not None:
+            return self.fetch_all(
+                "SELECT * FROM asset.groups WHERE kind = %s ORDER BY created_at DESC",
+                (kind,),
+            )
+        return self.fetch_all("SELECT * FROM asset.groups ORDER BY created_at DESC")
+
+    def add_member(
+        self,
+        *,
+        group_id: str,
+        asset_id: str,
+        role: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add an asset to a group (idempotent: re-adding updates its role/metadata)."""
+        return self.fetch_one(
+            """
+            INSERT INTO asset.group_members (group_id, asset_id, role, metadata)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (group_id, asset_id)
+            DO UPDATE SET role = EXCLUDED.role, metadata = EXCLUDED.metadata
+            RETURNING *
+            """,
+            (group_id, asset_id, role, Jsonb(metadata or {})),
+        )
+
+    def remove_member(self, group_id: str, asset_id: str) -> bool:
+        return (
+            self.execute(
+                "DELETE FROM asset.group_members WHERE group_id = %s AND asset_id = %s",
+                (group_id, asset_id),
+            )
+            > 0
+        )
+
+    def list_members(self, group_id: str) -> list[dict[str, Any]]:
+        """Assets in a group (each asset row + its membership ``role``/``member_metadata``)."""
+        return self.fetch_all(
+            """
+            SELECT a.*, gm.role AS member_role, gm.metadata AS member_metadata,
+                   gm.added_at AS member_added_at
+            FROM asset.group_members gm
+            JOIN asset.assets a ON a.id = gm.asset_id
+            WHERE gm.group_id = %s
+            ORDER BY gm.added_at ASC
+            """,
+            (group_id,),
+        )
+
+    def list_groups_for_asset(self, asset_id: str) -> list[dict[str, Any]]:
+        """Groups an asset belongs to (each group row + this membership's ``role``)."""
+        return self.fetch_all(
+            """
+            SELECT g.*, gm.role AS member_role
+            FROM asset.group_members gm
+            JOIN asset.groups g ON g.id = gm.group_id
+            WHERE gm.asset_id = %s
+            ORDER BY g.created_at DESC
+            """,
+            (asset_id,),
+        )
