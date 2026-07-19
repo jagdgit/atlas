@@ -54,6 +54,7 @@ from atlas.kernel.service_container import ServiceContainer
 from atlas.kernel.tools import ToolRegistry
 from atlas.knowledge.coverage import CoverageService
 from atlas.knowledge.service import KnowledgeService
+from atlas.policy import PolicyService
 from atlas.llm.ollama_provider import OllamaProvider
 from atlas.llm.service import LLMService
 from atlas.ops.backup import BackupManager
@@ -84,6 +85,7 @@ from atlas.repositories.memory_repo import MemoryRepository
 from atlas.repositories.retrieval_diagnostics_repo import RetrievalDiagnosticsRepository
 from atlas.repositories.coverage_repo import CoverageRepository
 from atlas.repositories.finding_repo import FindingRepository
+from atlas.repositories.policy_repo import PolicyRepository
 from atlas.repositories.task_repo import TaskRepository
 from atlas.scheduler.handlers import HandlerRegistry
 from atlas.scheduler.service import SchedulerService
@@ -601,6 +603,14 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # Soft bias after apply+enable is loaded inside KnowledgeService.retrieve.
     knowledge_service._learning = learning_service  # noqa: SLF001
 
+    # Policy layer (Phase C · §C.5, CC8): durable operator rules that *influence* retrieval + advice
+    # (prefer/avoid/trust/distrust) — governed + reversible, never arbitration. Attached to
+    # KnowledgeService.retrieve (signed re-rank nudge) the same way soft-bias is.
+    policy_service = PolicyService(
+        PolicyRepository(db_manager), logger=get_logger("atlas.policy")
+    )
+    knowledge_service._policy = policy_service  # noqa: SLF001
+
     research_service = ResearchService(
         verification_service,
         report_service,
@@ -769,6 +779,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         findings=engineering_findings,
         finding_repo=finding_repo,
         coverage=coverage_service,
+        policy=policy_service,
         logger=get_logger("atlas.intelligence"),
     )
     learning_service.register_sink(

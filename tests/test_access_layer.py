@@ -92,6 +92,35 @@ def test_heuristic_rerank_and_context_builder():
     assert "rrf_score" in citations[0]
 
 
+def _hit(chunk_id, content, rrf=0.02):
+    return RankedHit(chunk_id=chunk_id, document_id=chunk_id, ordinal=0,
+                     content=content, rrf_score=rrf, score=rrf)
+
+
+def test_policy_prefer_boosts_matching_hit_and_records_rule():
+    # Two equally-ranked hits; a "prefer momentum" policy should lift the momentum hit.
+    hits = [_hit("c_index", "broad index fund"), _hit("c_mom", "a momentum strategy")]
+    policy_rules = [{"id": "P-1", "rule": "prefer", "terms": ["momentum"], "weight": 0.02}]
+    ranked = heuristic_rerank(hits, "", policy_rules=policy_rules)
+    assert ranked[0].chunk_id == "c_mom"
+    assert ranked[0].policy_boost > 0
+    assert ranked[0].policy_ids == ("P-1",)
+    # Explainability flows into citations ("boosted by policy P-1").
+    _, citations = build_context(ranked)
+    assert citations[0]["policy_ids"] == ["P-1"]
+
+
+def test_policy_avoid_deprioritizes_but_never_drops():
+    hits = [_hit("c_crypto", "crypto trading tips"), _hit("c_bonds", "government bonds")]
+    policy_rules = [{"id": "P-2", "rule": "avoid", "terms": ["crypto"], "weight": -0.02}]
+    ranked = heuristic_rerank(hits, "", policy_rules=policy_rules)
+    ids = [h.chunk_id for h in ranked]
+    assert ids == ["c_bonds", "c_crypto"]        # crypto pushed down
+    assert "c_crypto" in ids                       # influence, not arbitration — never removed
+    crypto = next(h for h in ranked if h.chunk_id == "c_crypto")
+    assert crypto.policy_boost < 0 and crypto.policy_ids == ("P-2",)
+
+
 def test_domains_for_role():
     assert domains_for_role("research") == ["external", "research", "experience"]
     assert domains_for_role("chat") is None

@@ -256,6 +256,45 @@ def test_recommend_auto_generalizes_and_ranks():
     assert "consider it here" in top["recommendation"]
 
 
+class _FakePolicy:
+    def __init__(self, influence):
+        self._influence = influence
+
+    def advice_influence(self, *, scope=None):
+        return self._influence
+
+
+def _two_equal_pattern_repos():
+    return {
+        "/repos/a": _repo_fixture("a", ["FastAPI"], {"python": 10}, ["Alpha pattern", "Beta pattern"]),
+        "/repos/b": _repo_fixture("b", ["FastAPI"], {"python": 8}, ["Alpha pattern", "Beta pattern"]),
+    }
+
+
+def test_recommend_respects_policy_influence():
+    # Both patterns have equal prevalence (1.0); a "prefer beta" policy should lift Beta to the top
+    # and annotate it — influence, not arbitration (the other rec is still present).
+    svc, _, _ = _svc(_two_equal_pattern_repos())
+    for r in ("/repos/a", "/repos/b"):
+        svc.learn_repository(r)
+    svc._policy = _FakePolicy([{"id": "P-9", "rule": "prefer", "terms": ["beta"], "weight": 0.02}])
+
+    out = svc.recommend("")
+    top = out["recommendations"][0]
+    assert top["pattern"] == "Beta pattern"
+    assert top["policy_boost"] > 0 and top["policy_ids"] == ["P-9"]
+    # Alpha is still recommended (not removed), just lower.
+    assert any(r["pattern"] == "Alpha pattern" for r in out["recommendations"])
+
+
+def test_recommend_without_policy_has_no_policy_annotation():
+    svc, _, _ = _svc(_two_equal_pattern_repos())
+    for r in ("/repos/a", "/repos/b"):
+        svc.learn_repository(r)
+    out = svc.recommend("")
+    assert "policy_boost" not in out["recommendations"][0]
+
+
 # --- L3 Connect -----------------------------------------------------------
 def test_search_and_connections_link_shared_frameworks():
     svc, _, _ = _svc(_three_repos())

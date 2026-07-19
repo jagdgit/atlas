@@ -67,6 +67,8 @@ class RankedHit:
     distance: float | None = None
     similarity: float | None = None
     tier: str = TIER_KNOWLEDGE
+    policy_boost: float = 0.0            # signed policy influence folded into `score` (C.5)
+    policy_ids: tuple[str, ...] = ()     # which enabled policy rules affected this hit (P9)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +83,8 @@ class RankedHit:
             "distance": self.distance,
             "similarity": self.similarity,
             "tier": self.tier,
+            "policy_boost": self.policy_boost,
+            "policy_ids": list(self.policy_ids),
         }
 
 
@@ -170,11 +174,17 @@ def heuristic_rerank(
     *,
     soft_bias_terms: Sequence[str] | None = None,
     soft_bias_boost: float = 0.005,
+    policy_rules: Sequence[dict[str, Any]] | None = None,
 ) -> list[RankedHit]:
     """Cheap token-overlap boost on top of RRF (swappable for cross-encoder later).
 
     Optional ``soft_bias_terms`` (from *applied + bias-enabled* experiences only)
     add a tiny extra boost — never filter or hide results (A3B.18 / A3B.25).
+
+    Optional ``policy_rules`` (signed influence from enabled operator policies, C.5/CC8) add a small
+    **signed** delta — prefer/trust push a matching hit up, avoid/distrust push it down — recording the
+    rule ids that affected each hit for explainability. **Influence, not arbitration:** a hit is never
+    removed or hard-filtered, only re-ordered.
     """
     q_tokens = set(_WORD_RE.findall((query or "").lower()))
     bias_tokens: set[str] = set()
@@ -189,7 +199,19 @@ def heuristic_rerank(
         if bias_tokens and soft_bias_boost > 0:
             # Tiny additive boost only; never removes or hard-filters hits.
             boost += soft_bias_boost * (len(bias_tokens & c_tokens) / max(len(bias_tokens), 1))
-        score = hit.rrf_score + boost
+        policy_delta = 0.0
+        applied_ids: list[str] = []
+        for pr in policy_rules or ():
+            terms = pr.get("terms") or ()
+            weight = float(pr.get("weight") or 0.0)
+            if not terms or weight == 0.0:
+                continue
+            tset = set(terms)
+            overlap = len(tset & c_tokens) / len(tset)
+            if overlap > 0:
+                policy_delta += weight * overlap
+                applied_ids.append(str(pr.get("id")))
+        score = hit.rrf_score + boost + policy_delta
         reranked.append(
             RankedHit(
                 chunk_id=hit.chunk_id,
@@ -203,6 +225,8 @@ def heuristic_rerank(
                 distance=hit.distance,
                 similarity=hit.similarity,
                 tier=hit.tier,
+                policy_boost=policy_delta,
+                policy_ids=tuple(applied_ids),
             )
         )
     reranked.sort(key=lambda h: h.score, reverse=True)
@@ -242,6 +266,8 @@ def build_context(
                 "score": hit.score,
                 "snippet": _snippet(hit.content),
                 "tier": hit.tier,
+                "policy_boost": hit.policy_boost,
+                "policy_ids": list(hit.policy_ids),
             }
         )
     return "\n\n".join(blocks), citations

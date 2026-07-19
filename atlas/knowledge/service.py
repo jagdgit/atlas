@@ -77,6 +77,7 @@ class KnowledgeService:
         persist_diagnostics: bool = True,
         diagnostics: "RetrievalDiagnosticsRepository | None" = None,
         learning: Any = None,
+        policy: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._documents = documents
@@ -95,6 +96,8 @@ class KnowledgeService:
         self._diagnostics = diagnostics
         # Optional LearningService: soft-bias terms after apply+enable (D3B.12).
         self._learning = learning
+        # Optional PolicyService: signed operator-policy influence on ranking (C.5/CC8).
+        self._policy = policy
         self._logger = logger or logging.getLogger("atlas.knowledge")
 
     # --- ingestion ------------------------------------------------------
@@ -275,6 +278,7 @@ class KnowledgeService:
         bias_terms = soft_bias_terms
         if bias_terms is None:
             bias_terms = self._soft_bias_terms()
+        policy_rules = self._policy_rules(role)
 
         with timer("knowledge.retrieve"):
             candidate_n = max(limit * self._candidate_multiplier, limit)
@@ -334,7 +338,7 @@ class KnowledgeService:
                 hits = [h for h in hits if h.tier != "archive"]
 
             ranked = heuristic_rerank(
-                hits, query, soft_bias_terms=bias_terms
+                hits, query, soft_bias_terms=bias_terms, policy_rules=policy_rules
             )[:limit]
             context, citations = build_context(
                 ranked, max_chars=self._max_context_chars
@@ -367,6 +371,10 @@ class KnowledgeService:
                 "live_tiers": list(resolved_tiers),
                 "deferred_tiers": list(deferred_tiers),
                 "soft_bias_term_count": len(bias_terms or []),
+                "policy_rules_considered": len(policy_rules),
+                "policy_rules_applied": sorted(
+                    {pid for h in ranked for pid in h.policy_ids}
+                ),
             },
         )
 
@@ -378,6 +386,16 @@ class KnowledgeService:
             return list(learning.soft_bias_terms() or [])
         except Exception:  # noqa: BLE001 — bias must never break retrieve
             self._logger.debug("soft_bias_terms failed", exc_info=True)
+            return []
+
+    def _policy_rules(self, role: str) -> list[dict[str, Any]]:
+        policy = getattr(self, "_policy", None)
+        if policy is None or not hasattr(policy, "retrieval_influence"):
+            return []
+        try:
+            return list(policy.retrieval_influence() or [])
+        except Exception:  # noqa: BLE001 — policy must never break retrieve
+            self._logger.debug("policy influence failed", exc_info=True)
             return []
 
     # --- scheduler integration -----------------------------------------

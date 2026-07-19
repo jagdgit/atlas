@@ -22,6 +22,7 @@ Everything is best-effort and returns structured outcomes; parsing errors become
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -138,6 +139,7 @@ class IntelligenceService:
         findings: "EngineeringFindingWriter | None" = None,
         finding_repo: "FindingRepository | None" = None,
         coverage: Any = None,
+        policy: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._code = code
@@ -152,6 +154,8 @@ class IntelligenceService:
         self._finding_repo = finding_repo
         # C.4: when wired, record repo extraction into the coverage map (telemetry, never gates learn).
         self._coverage = coverage
+        # C.5: when wired, operator policies influence advice ranking (influence, not arbitration).
+        self._policy = policy
         self._enabled = getattr(config, "enabled", True)
         self._default_policy = getattr(config, "default_policy", "project")
         self._min_repos = getattr(config, "generalize_min_repos", 2)
@@ -735,7 +739,7 @@ class IntelligenceService:
         ctx = (context or "").lower()
         ranked = sorted(pats, key=lambda p: -p.prevalence)
         recs: list[dict[str, Any]] = []
-        for p in ranked[:k]:
+        for p in ranked:
             relevant = (not ctx) or p.name.lower() in ctx or p.category in ctx
             recs.append({
                 "pattern": p.name,
@@ -748,7 +752,39 @@ class IntelligenceService:
                     f"({p.prevalence:.0%}) — consider it here for consistency."
                 ),
             })
+        # C.5: operator policies re-order advice (prefer/avoid) — influence, never removal (CC8).
+        self._apply_policy_to_recs(recs)
+        recs = recs[:k]
         return {"context": context, "recommendations": recs, "level": 5}
+
+    def _apply_policy_to_recs(self, recs: list[dict[str, Any]]) -> None:
+        policy = getattr(self, "_policy", None)
+        if policy is None or not hasattr(policy, "advice_influence"):
+            return
+        try:
+            influence = list(policy.advice_influence() or [])
+        except Exception:  # noqa: BLE001 - policy must never break advice
+            self._logger.debug("policy advice influence failed", exc_info=True)
+            return
+        if not influence:
+            return
+        for rec in recs:
+            text = f"{rec['pattern']} {rec['category']} {rec['recommendation']}".lower()
+            tokens = set(re.findall(r"[a-z0-9]+", text))
+            delta = 0.0
+            applied: list[str] = []
+            for pr in influence:
+                terms = set(pr.get("terms") or ())
+                weight = float(pr.get("weight") or 0.0)
+                if not terms or weight == 0.0:
+                    continue
+                overlap = len(terms & tokens) / len(terms)
+                if overlap > 0:
+                    delta += weight * overlap
+                    applied.append(str(pr.get("id")))
+            rec["policy_boost"] = round(delta, 4)
+            rec["policy_ids"] = applied
+        recs.sort(key=lambda r: -(r["prevalence"] + r.get("policy_boost", 0.0)))
 
     def profile(self) -> dict[str, Any]:
         """A summary of the user's engineering profile — 'Atlas learns *you*'."""
