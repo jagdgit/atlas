@@ -392,7 +392,33 @@
 
 ### C-Personal (on the foundations)
 
-#### C.6 Experience extraction + consolidation (dual extraction)  ·  migration `0037` *(re-penciled)*
+#### C.6 Experience extraction + consolidation (dual extraction)  ·  migration `0037`  ·  ✅ DONE
+> **Delivered.** Owner experiences are now cumulative like knowledge (P13), extracted from the *same*
+> governed repo read that produces engineering findings, and consolidated through the C.3 engine.
+> - **C.6a — schema + identity** (`0037_experience_consolidation.sql`): extended `learning.experiences`
+>   with the consolidator's lifecycle machinery — `identity_key`, `canonical_id` + `revision` chain,
+>   `evidence`/`contradicting` source lists, `confidence`/`confidence_score`, `corroboration_count`,
+>   `maturity`, `superseded_by` — and **widened the status CHECK** to `active/contested/deprecated/
+>   superseded/archived/reverted` (was `active/reverted`). Added an **`experience` branch to
+>   `finding_identity_key`**: identity = `(experience, skill, context)` so the same skill/technology in
+>   the same context is one identity regardless of surface wording.
+> - **C.6b — adapter** (`atlas/repositories/experience_store.py`): `ExperienceStore`, a
+>   `FindingStore`-shaped view over `learning.experiences` (statement⇄title, supporting⇄evidence,
+>   value/provenance in `payload`), so `KnowledgeLifecycleService` runs **unchanged** over experiences
+>   (store-agnostic, no core fork). Live-DB tests prove one skill across N projects → one experience.
+> - **C.6c — extractor + writer** (`atlas/learning/experience_extraction.py`): `build_repo_experiences`
+>   (stateless dual-extraction translator, P11) distills language/framework/pattern experiences from the
+>   distilled artifact, each seeded with a **repo-keyed** supporting source and P12 provenance;
+>   `ExperienceWriter` consolidates them (no batch archival — experiences are cross-project cumulative).
+> - **C.6d — wiring** in `learn_repository` (`payload["experiences"]`) + `CodeStoreSink.apply` +
+>   `bootstrap`. Reverting a learn does **not** un-corroborate a skill (P13). Also fixed a shared-
+>   consolidator bug the shared-identity experiences exposed: re-observing an already-known source on a
+>   multi-source finding (incoming supporting ⊆ existing, body unchanged) spawned a spurious revision
+>   that discarded accumulated evidence — `_accumulate` now returns an explicit no-op.
+> - **Deviations / leftovers:** dependency-package experiences are deferred (only language/framework/
+>   pattern signal today — `OI-C10`); experience revert-retraction is intentionally omitted (cumulative,
+>   `OI-C10`). Migration landed as the next sequential slot `0037` (the plan's re-penciled number held).
+
 - **Dual extraction (P12/P11):** one read of an asset feeds **two** extractors — engineering
   findings (existing) **and** an **experience** extractor that emits owner-experience records
   ("solo Django project, 2022, designed auth, production Celery/Redis"). No code/raw duplication;
@@ -469,7 +495,7 @@ Learning ledger, mission/config/schedule/worker). New objects created `AUTHORIZA
 | `00xx_finding_embeddings` | Prose-finding **embeddings** for NN dedup + retrieval (pgvector — already used by `knowledge.embeddings`); `embedding_id` provenance stamp. |
 | `0035_knowledge_coverage` ✅ | `knowledge.coverage` — per `(asset_id, asset_version, reader, reader_version)` extraction status/counts + `extractor_version`/`domain`/`source`/`repo_uid`. *(Shipped as C.4a at slot `0035`; understanding % is a `FindingRepository.understanding_by_domain()` aggregate + `CoverageService` policy, not columns on this table.)* |
 | `0036_policy` ✅ | `policy` schema — `policy.rules` (scope/subject/rule/strength/enabled/provenance/created_by, `prefer|avoid|trust|distrust`) + append-only `policy.events` before/after journal. *(Shipped as C.5a at slot `0036`; governance is a dedicated journal, not the learning ledger.)* |
-| `0032_experience_consolidation` | Extend `learning.experiences` with evidence list + confidence + corroboration count (consolidation fields). |
+| `0037_experience_consolidation` ✅ | Extend `learning.experiences` with the consolidator's lifecycle machinery (`identity_key`, `canonical_id`+`revision`, `evidence`/`contradicting`, `confidence`/`confidence_score`, `corroboration_count`, `maturity`, `superseded_by`) + widened status CHECK. *(Shipped as C.6a at slot `0037`; consumed via the `ExperienceStore` adapter over the shared consolidator, not a new store.)* |
 | `0033_personal` | `personal.*` — profile facts, skills, timeline, professional (publications/patents), each with provenance + confidence + `inferred/verified` status. |
 | `0034_owner_mission` | Owner Knowledge Mission built-in template + `user_archive` config schema; (worker types reuse Phase-A/B). |
 | `0035_asset_relationships` | `asset.groups` (id, name, kind) + `asset.membership`, and/or pairwise `asset.related` (asset_a, asset_b, relation) — tie a project's repo/doc/PDF/chat together (CC14). |
@@ -527,6 +553,8 @@ doc**, exactly as Phases A/B did.
 > `0035`. **C.5 (Policy store + retrieval/advice influence) ✅ DONE** (migration `0036`; commits
 > `7682a8b`, `ea69571`, `6c25809`, `b2ef4c7`; full suite 1385 green, same 1 known pre-existing env
 > flake `OI-T2`). C.5 consumed exactly `0036`, so C.6–C.8 keep `0037`–`0039`.
-> **C-Foundations complete.** **Next: C.6** (Experience extraction + consolidation — first C-Personal
-> slice; migration `0037`).
+> **C-Foundations complete; C.6 (first C-Personal slice) complete.** C.6 consumed exactly `0037`
+> (`0037_experience_consolidation`), so C.7–C.8 re-pencil to `0038`–`0039`. **Next: C.7** (Personal
+> Intelligence domain `atlas/personal/`; migration `0038`). Full suite green after C.6 (1394 passed;
+> only the pre-existing `test_event_lifecycle` flake `OI-T2`).
 > Land/test/smoke/update-doc per slice, exactly as Phases A/B.

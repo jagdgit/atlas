@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-19 (after Phase C.5).
+> **Last updated:** 2026-07-19 (after Phase C.6).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -27,9 +27,10 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C4 | 🔴 | P2 | **Back-fill existing documents to assets lazily.** The bridge makes *new* ingestion asset-first; pre-Phase-C `knowledge.documents` rows still have `asset_id IS NULL`. Plan calls for opportunistic/lazy back-fill (no big-bang migration) — not yet implemented. | C.2c | C.3–C.4 |
 | OI-C5 | 🔴 | P1 | **Wire `IngestionService` + `CandidateConsumer` into the kernel + surfaces.** Both are constructed only in tests. Needs bootstrap wiring (kernel service registry), a CLI/API entrypoint (`atlas ingest <path>` / `POST /v1/ingest` with `extract_findings`), and a scheduled **candidate-drain** job (`CandidateConsumer.consume_pending`) + candidate pruning (`CandidateRepository.prune_consumed`). Also wire the real embedder into `EmbeddingIdentityResolver` so prose NN dedup is live. **C.4 note:** `IngestionService` now *accepts* a `coverage` recorder (hermetically tested) but only records once the service is bootstrapped; `IntelligenceService` coverage is live. Pass `coverage=coverage_service` when wiring `IngestionService`. | C.2c / C.3g | C.5 or a small C.3h |
 | OI-C8 | 🔴 | P2 | **Scheduled coverage-driven re-extraction (A10).** C.4 delivers the *enumeration*: `CoverageService.stale_for_reader(...)` / `mark_stale_for_reextraction(...)` flag assets processed by an older reader/extractor version. Nothing yet *acts* on the flagged (`pending`) coverage rows — a worker/job that re-reads those assets through the pipeline and refreshes coverage is still needed (naturally the Owner Knowledge Mission's job in C.8). | C.4c | C.8 (or a small C.4 follow-up) |
+| OI-C10 | 🔴 | P3 | **Richer experience signal + revert-retraction.** C.6 extracts experiences only from **languages / frameworks / patterns**; dependency-package signal ("production Celery/Redis" from `requirements.txt`) and timeline/dates (roles/years) are not yet distilled. Also, reverting a learn intentionally does **not** retract that project's contribution to a (cross-project) experience — experiences are cumulative (P13) — so a revert can leave a stale supporting source on a still-corroborated skill. A future evidence-retraction path (drop one source, recompute confidence/maturity, archive when it hits zero) is deferred. | C.6c/C.6d | C.7/C.8 |
 | OI-C9 | 🟡 | P3 | **Policy scoping beyond `global`.** C.5 stores `scope` on every rule (`global | domain:<x> | mission:<id>`), but `PolicyService.retrieval_influence` only applies `global` rules unless a caller explicitly passes a `scope`, and no retrieval/advice caller threads a scope yet. Wire mission/domain scope from the retrieving surface so scoped rules actually take effect. Also: a hard-`DELETE` policy API route (rule removal is service/CLI-only today). | C.5b/C.5d | C.7/C.8 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
-| OI-C7 | 🟡 | P3 | **Migration-number placeholders.** The `PHASE_C_PLAN.md` data-model table lists planning placeholders. Real numbers are assigned sequentially at build time — `0028`=document↔asset, `0029`=asset groups, C.3 `0030`–`0034`, `0035`=knowledge_coverage. C.5–C.8 keep `0036`–`0039`. Keep the table honest as slots are built. | C.2 | ongoing |
+| OI-C7 | 🟡 | P3 | **Migration-number placeholders.** The `PHASE_C_PLAN.md` data-model table lists planning placeholders. Real numbers are assigned sequentially at build time — `0028`=document↔asset, `0029`=asset groups, C.3 `0030`–`0034`, `0035`=knowledge_coverage, `0036`=policy, `0037`=experience_consolidation. C.7–C.8 keep `0038`–`0039`. Keep the table honest as slots are built. | C.2 | ongoing |
 
 ---
 
@@ -67,6 +68,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 | OI-G1 | **`.gitignore` silently ignored `atlas/{documents,knowledge,models}` source packages** (unanchored runtime-data rules) — 25 core source files were untracked. Anchored the rules to the repo root; source now tracked. | commit `57deac9` (2026-07-19) |
 | OI-C6 | Prose "distilled findings" from documents — now flow document → candidate → Consolidator → finding. | C.3g commit `4595ee8` (2026-07-19) |
 | (bug) | **`UNIQUE(canonical_id)` blocked the finding revision model** on the live DB (revise reused canonical_id). Relaxed to `UNIQUE(canonical_id, revision)`. | C.3e migration `0033` / commit `58f7c78` |
+| (bug) | **Consolidator spuriously revised on subset re-observation.** Re-observing an already-known source on a multi-source finding (incoming supporting ⊆ existing, body unchanged) deferred to the transition machine, which saw the differing supporting-set and spawned a revision that discarded accumulated evidence. `_accumulate` now returns an explicit no-op. Surfaced by C.6 shared-identity experiences. | C.6d commit `2ed3771` |
 
 ---
 
