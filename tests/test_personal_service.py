@@ -150,6 +150,46 @@ def test_profile_assembles_categories(db):
     assert profile["timeline"]  # at least one project
 
 
+def test_e2e_experience_to_profile_to_draft(db):
+    """Acceptance: real consolidated experiences → inferred skill → confirm → resume draft."""
+    from atlas.knowledge.consolidation import KnowledgeLifecycleService
+    from atlas.repositories.experience_store import ExperienceStore
+
+    store = ExperienceStore(db)
+    life = KnowledgeLifecycleService(store)
+    skill = f"Airflow-{uuid.uuid4().hex[:8]}"
+
+    def obs(source):
+        return {
+            "statement": f"Uses {skill}",
+            "domain": "experience", "claim_type": "experience",
+            "value": {"kind": "experience", "skill": skill, "context": "python"},
+            "confidence": "LOW", "confidence_score": 0.4, "status": "active",
+            "supporting": [{"source_id": source, "evidence_level": 2}],
+            "provenance": {"source": "repo", "repo_uid": source},
+        }
+
+    # Two projects corroborate the same skill → one consolidated experience.
+    life.consolidate(obs(f"repoA-{uuid.uuid4().hex[:6]}"))
+    life.consolidate(obs(f"repoB-{uuid.uuid4().hex[:6]}"))
+
+    svc = PersonalService(PersonalRepository(db), experiences=store)
+    svc.infer()
+
+    fact = svc._repo.get_by_natural("skill", skill.lower(), "python")  # type: ignore[attr-defined]
+    assert fact is not None
+    assert fact["state"] == "inferred"
+    assert fact["provenance"]["maturity"] == "verified"  # 2 sources → verified maturity
+
+    # Inferred facts do NOT appear on a resume until confirmed (retrieval, not action).
+    resume_before = svc.draft("resume")
+    assert skill not in resume_before["markdown"]
+
+    svc.confirm(fact["id"])
+    resume_after = svc.draft("resume")
+    assert skill in resume_after["markdown"]
+
+
 def test_revert_confirm_restores_inferred(db):
     skill = f"scala-{uuid.uuid4().hex[:8]}"
     svc = _svc(db, experiences=_FakeExperiences([_exp(skill, "jvm")]))

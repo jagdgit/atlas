@@ -436,7 +436,37 @@
   corroborating projects, rising confidence), each provenance-linked to the assets that evidenced
   it; hermetic + live-DB tests.
 
-#### C.7 Personal Intelligence domain (`atlas/personal/`)  ·  migration `0038` *(re-penciled)*
+#### C.7 Personal Intelligence domain (`atlas/personal/`)  ·  migration `0038`  ·  ✅ DONE
+> **Delivered (2026-07-19).** Migration `0038_personal` (the correct next slot) added the `personal`
+> schema: `personal.facts` (a single curated store keyed on `(category, key, subject)` for
+> `identity | skill | timeline | professional`, each with `value` + provenance + `confidence`/
+> `confidence_score` and a governed `state` ∈ `inferred | verified | rejected`) plus an append-only
+> `personal.events` journal (before/after snapshots, P9/reversible) — mirroring the Policy store (C.5),
+> **not** the learning ledger.
+> - **C.7a** `PersonalRepository` — idempotent natural-key `upsert` whose `ON CONFLICT` **never
+>   downgrades an operator decision** (a `verified`/`rejected` fact keeps its body; only
+>   provenance/confidence telemetry refreshes), plus `set_state`/`update`/`delete`/`restore` and the
+>   journal. Live-DB tests.
+> - **C.7b** `PersonalService` (`atlas/personal/`): `infer()` distills **skills** from consolidated
+>   experiences (via a new `ExperienceStore.list_active`, weighted by maturity/corroboration,
+>   provenance-linked to the evidencing sources), an **identity** summary from
+>   `IntelligenceService.profile`, and a **timeline** from learned repositories — all held `inferred`
+>   (CC7/A9). Operator governance `confirm`/`correct`/`reject` + `add_fact` + journaled `revert`.
+>   Re-inference is idempotent and only journals a fact's first appearance.
+> - **C.7c** `atlas/personal/draft.py`: deterministic Markdown **resume**/**LinkedIn** builders that
+>   render purely from the profile (P10 — retrieval, not action), defaulting to **verified-only** facts,
+>   with an optional best-effort `llm.for_role("summarizer")` polish that always falls back to
+>   deterministic text.
+> - **C.7d** wired into bootstrap (fed by `ExperienceStore` + `IntelligenceService` + LLM), registered
+>   in the container + capability registry; `/v1/personal/*` routes (profile/facts/infer/confirm/
+>   correct/reject/draft/events/revert) + `PersonalFactRequest`/`PersonalCorrectRequest` schemas; an
+>   `atlas personal` CLI. Hermetic API + CLI tests + a live-DB e2e (real consolidated experiences →
+>   inferred skill → confirm → the skill appears on the resume, not before).
+> - **Deviations / notes:** professional-fact **auto-inference** (publications/patents/roles) has no
+>   reliable structured source yet, so professional facts are operator-authored via `add_fact` for now
+>   (auto-inference deferred → `OI-C11`). Timeline dates are coarse (repo first-learned), pending the
+>   User-Archive dating in C.8.
+
 - **A model of you, not a memory dump.** `personal.*` schema for a curated profile: identity/profile
   facts, **skills** (from experience), **timeline** (projects/roles over years), professional
   profile (publications, patents, roles). Fed **indirectly** from Research + Engineering +
@@ -496,7 +526,7 @@ Learning ledger, mission/config/schedule/worker). New objects created `AUTHORIZA
 | `0035_knowledge_coverage` ✅ | `knowledge.coverage` — per `(asset_id, asset_version, reader, reader_version)` extraction status/counts + `extractor_version`/`domain`/`source`/`repo_uid`. *(Shipped as C.4a at slot `0035`; understanding % is a `FindingRepository.understanding_by_domain()` aggregate + `CoverageService` policy, not columns on this table.)* |
 | `0036_policy` ✅ | `policy` schema — `policy.rules` (scope/subject/rule/strength/enabled/provenance/created_by, `prefer|avoid|trust|distrust`) + append-only `policy.events` before/after journal. *(Shipped as C.5a at slot `0036`; governance is a dedicated journal, not the learning ledger.)* |
 | `0037_experience_consolidation` ✅ | Extend `learning.experiences` with the consolidator's lifecycle machinery (`identity_key`, `canonical_id`+`revision`, `evidence`/`contradicting`, `confidence`/`confidence_score`, `corroboration_count`, `maturity`, `superseded_by`) + widened status CHECK. *(Shipped as C.6a at slot `0037`; consumed via the `ExperienceStore` adapter over the shared consolidator, not a new store.)* |
-| `0033_personal` | `personal.*` — profile facts, skills, timeline, professional (publications/patents), each with provenance + confidence + `inferred/verified` status. |
+| `0038_personal` ✅ | `personal` schema — `personal.facts` (single store keyed on `(category, key, subject)` for `identity/skill/timeline/professional`, with `value`+provenance+`confidence`+`state ∈ inferred/verified/rejected`) + append-only `personal.events` before/after journal. *(Shipped as C.7a at slot `0038`; governed like the Policy store, upsert never downgrades operator decisions.)* |
 | `0034_owner_mission` | Owner Knowledge Mission built-in template + `user_archive` config schema; (worker types reuse Phase-A/B). |
 | `0035_asset_relationships` | `asset.groups` (id, name, kind) + `asset.membership`, and/or pairwise `asset.related` (asset_a, asset_b, relation) — tie a project's repo/doc/PDF/chat together (CC14). |
 | `0036_knowledge_candidates` | `knowledge.candidates` — transient reader observations (statement, claim_type, identity_key, embedding, evidence_ref, ts); Consolidator input, pruned after consolidation (CC11). |
@@ -553,8 +583,8 @@ doc**, exactly as Phases A/B did.
 > `0035`. **C.5 (Policy store + retrieval/advice influence) ✅ DONE** (migration `0036`; commits
 > `7682a8b`, `ea69571`, `6c25809`, `b2ef4c7`; full suite 1385 green, same 1 known pre-existing env
 > flake `OI-T2`). C.5 consumed exactly `0036`, so C.6–C.8 keep `0037`–`0039`.
-> **C-Foundations complete; C.6 (first C-Personal slice) complete.** C.6 consumed exactly `0037`
-> (`0037_experience_consolidation`), so C.7–C.8 re-pencil to `0038`–`0039`. **Next: C.7** (Personal
-> Intelligence domain `atlas/personal/`; migration `0038`). Full suite green after C.6 (1394 passed;
-> only the pre-existing `test_event_lifecycle` flake `OI-T2`).
-> Land/test/smoke/update-doc per slice, exactly as Phases A/B.
+> **C-Foundations complete; C-Personal: C.6 (experience) + C.7 (personal domain) complete.** C.7
+> consumed exactly `0038` (`0038_personal`), so C.8 keeps `0039`. **Next: C.8** (Owner Knowledge
+> Mission + User Archive source + Conversation Reader + Personal/Owner dashboard; migration `0039`).
+> Full suite green after C.7 (see the C.7 commit run; only the pre-existing `test_event_lifecycle`
+> flake `OI-T2`). Land/test/smoke/update-doc per slice, exactly as Phases A/B.
