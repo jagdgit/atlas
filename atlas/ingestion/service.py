@@ -101,13 +101,20 @@ class IngestionService:
         embed: bool = True,
         extract_findings: bool = False,
         metadata: dict[str, Any] | None = None,
+        reader: Any = None,
+        source: str = "document",
     ) -> IngestResult:
-        """Acquire a file as an asset, read it, and ingest its text into the knowledge base."""
+        """Acquire a file as an asset, read it, and ingest its text into the knowledge base.
+
+        ``reader`` overrides the default DocumentReader (e.g. a ConversationReader for chat exports,
+        C.8) — any stateless reader with ``read()``/``id``/``VERSION`` works; ``source`` labels the
+        knowledge/coverage provenance (``document`` | ``conversation`` | …).
+        """
         p = Path(path).expanduser()
         acquired = self._acq.acquire_file(p, kind=kind, metadata=metadata)
         return self._ingest(
             acquired, filename=p.name, domain=domain, title=title, embed=embed,
-            extract_findings=extract_findings,
+            extract_findings=extract_findings, reader=reader, source=source,
         )
 
     def ingest_bytes(
@@ -122,6 +129,8 @@ class IngestionService:
         extract_findings: bool = False,
         source_uri: str | None = None,
         metadata: dict[str, Any] | None = None,
+        reader: Any = None,
+        source: str = "document",
     ) -> IngestResult:
         """Acquire raw bytes as an asset, read them, and ingest the text."""
         acquired = self._acq.acquire_bytes(
@@ -129,7 +138,7 @@ class IngestionService:
         )
         return self._ingest(
             acquired, filename=filename, domain=domain, title=title, embed=embed,
-            extract_findings=extract_findings,
+            extract_findings=extract_findings, reader=reader, source=source,
         )
 
     # --- internals ------------------------------------------------------
@@ -142,8 +151,11 @@ class IngestionService:
         title: str | None,
         embed: bool,
         extract_findings: bool = False,
+        reader: Any = None,
+        source: str = "document",
     ) -> IngestResult:
-        artifact = self._reader.read(
+        rdr = reader or self._reader
+        artifact = rdr.read(
             acquired.asset_id, acquired.asset_version, filename=filename
         )
         text = (artifact.get("text") or "").strip()
@@ -154,7 +166,7 @@ class IngestionService:
                 filename, artifact.get("outcome"), artifact.get("reason"),
             )
             self._record_coverage(
-                acquired, domain=domain,
+                acquired, domain=domain, reader=rdr, source=source,
                 status=_COVERAGE_STATUS.get(str(artifact.get("outcome")), "failed"),
                 reason=artifact.get("reason"),
             )
@@ -170,7 +182,7 @@ class IngestionService:
             )
 
         summary = self._knowledge.ingest_text(
-            source="document",
+            source=source,
             content=artifact["text"],
             uri=acquired.source_uri,
             title=title or filename,
@@ -179,8 +191,8 @@ class IngestionService:
                 "asset_id": acquired.asset_id,
                 "asset_version": acquired.asset_version,
                 "sha256": acquired.checksum,
-                "reader": self._reader.id,
-                "reader_version": self._reader.VERSION,
+                "reader": rdr.id,
+                "reader_version": rdr.VERSION,
                 "filename": filename,
             },
             domain=domain,
@@ -192,11 +204,11 @@ class IngestionService:
         # C.3g: emit distilled prose CANDIDATES (never findings) into the Consolidator's inbox.
         candidates = self._emit_candidates(
             text, acquired=acquired, filename=filename, domain=domain,
-            document_id=summary.get("document_id"),
+            document_id=summary.get("document_id"), reader=rdr, source=source,
         ) if extract_findings else 0
 
         self._record_coverage(
-            acquired, domain=domain, status="done",
+            acquired, domain=domain, reader=rdr, source=source, status="done",
             findings_count=candidates, chunks_count=int(summary.get("chunks") or 0),
         )
 
@@ -219,15 +231,18 @@ class IngestionService:
         filename: str,
         domain: str,
         document_id: str | None,
+        reader: Any = None,
+        source: str = "document",
     ) -> int:
         if self._extractor is None or self._candidates is None:
             return 0
+        rdr = reader or self._reader
         evidence_ref = {
             "asset_id": acquired.asset_id,
             "asset_version": acquired.asset_version,
-            "source": "document",
-            "reader": self._reader.id,
-            "reader_version": self._reader.VERSION,
+            "source": source,
+            "reader": rdr.id,
+            "reader_version": rdr.VERSION,
             "document_id": document_id,
             "filename": filename,
         }
@@ -243,6 +258,8 @@ class IngestionService:
         *,
         domain: str,
         status: str,
+        reader: Any = None,
+        source: str = "document",
         findings_count: int = 0,
         chunks_count: int = 0,
         reason: str | None = None,
@@ -250,15 +267,16 @@ class IngestionService:
         """Record what this reader saw of this asset (C.4). Telemetry only — never fails ingest."""
         if self._coverage is None:
             return
+        rdr = reader or self._reader
         try:
             self._coverage.record(
                 acquired.asset_id,
                 acquired.asset_version,
-                self._reader.id,
-                self._reader.VERSION,
+                rdr.id,
+                rdr.VERSION,
                 status=status,
                 domain=domain,
-                source="document",
+                source=source,
                 findings_count=findings_count,
                 chunks_count=chunks_count,
                 reason=reason,

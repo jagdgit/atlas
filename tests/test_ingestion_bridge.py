@@ -147,6 +147,39 @@ def test_bridge_records_coverage_on_success():
     assert rec["domain"] == "external" and rec["source"] == "document"
 
 
+def test_bridge_uses_override_reader_and_source_label():
+    """C.8b: a conversation export flows through the same pipeline via a per-call reader + source."""
+    acq = FakeAcquirer(_acquired())
+    default_reader = FakeReader(_artifact())
+
+    class ConvReader(FakeReader):
+        id = "conversation"
+        VERSION = "1.0.0"
+
+    conv = ConvReader({
+        "reader": "conversation", "reader_version": "1.0.0", "asset_id": "asset-1",
+        "asset_version": 1, "outcome": "ok", "content_type": "text/plain",
+        "text": "user: hi", "chars": 8, "reason": None, "sections": [],
+    })
+    know = FakeKnowledge({"document_id": "doc-9", "chunks": 1, "deduped": False})
+    cov = FakeCoverage()
+    svc = IngestionService(acq, default_reader, know, coverage=cov)
+
+    result = svc.ingest_bytes(
+        b'{"role":"user","content":"hi"}', filename="c.jsonl", kind="conversation",
+        domain="personal", embed=False, reader=conv, source="conversation",
+    )
+    assert result.ok
+    # The override reader was used, not the default.
+    assert conv.read_args == ("asset-1", 1, "c.jsonl")
+    assert default_reader.read_args is None
+    # Knowledge + coverage are tagged with the conversation source/reader (provenance).
+    assert know.ingest_kwargs["source"] == "conversation"
+    assert know.ingest_kwargs["metadata"]["reader"] == "conversation"
+    assert cov.records[0]["source"] == "conversation"
+    assert cov.records[0]["reader"] == "conversation"
+
+
 def test_bridge_records_failed_coverage_for_unreadable_input():
     acq = FakeAcquirer(_acquired())
     reader = FakeReader(_artifact(outcome="unsupported", text=""))
