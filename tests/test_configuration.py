@@ -132,6 +132,31 @@ def test_validate_rejects_unknown_type():
         reg.validate("nope", {})
 
 
+def test_owner_knowledge_schema_validates_archive_roots():
+    from atlas.configuration.schemas import default_registry
+
+    reg = default_registry()
+    doc, ver = reg.validate("owner_knowledge", {
+        "archive_roots": [
+            {"path": "/data/code", "kind": "code", "domain": "engineering"},
+            {"path": "/data/chats", "kind": "conversation"},
+        ],
+    })
+    assert ver == 1
+    assert doc["archive_roots"][0]["kind"] == "code"
+    assert doc["archive_roots"][1]["domain"] == "personal"  # default
+    assert doc["build_profile"] is True  # default
+
+
+def test_owner_knowledge_schema_rejects_bad_root_kind():
+    from atlas.configuration.schemas import default_registry
+
+    with pytest.raises(ConfigSchemaError):
+        default_registry().validate(
+            "owner_knowledge", {"archive_roots": [{"path": "/x", "kind": "video"}]}
+        )
+
+
 def test_validate_rejects_extra_keys():
     reg = SchemaRegistry()
 

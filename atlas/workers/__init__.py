@@ -10,6 +10,7 @@ from __future__ import annotations
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 from atlas.workers.hello import HelloWatcher
 from atlas.workers.manager import WorkerError, WorkerManager
+from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.repo_watcher import RepoWatcher
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "TickResult",
     "HelloWatcher",
     "RepoWatcher",
+    "OwnerKnowledgeWorker",
 ]

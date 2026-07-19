@@ -70,6 +70,40 @@ class RepoWatcherConfig(BaseModel):
     tick_interval_seconds: int = Field(default=3600, ge=1)
 
 
+class ArchiveRoot(BaseModel):
+    """One configured root of the User Archive (Phase C · §C.8).
+
+    A root is a durable *source* of assets (not a job that finishes): a directory Atlas keeps
+    reading. ``kind`` selects the pipeline — ``code`` → repository learning (findings + experience),
+    ``document`` → the Document Reader, ``conversation`` → the Conversation Reader (chat/Cursor
+    exports). ``domain`` labels the knowledge/coverage provenance; ``extensions`` optionally narrows
+    which files a document/conversation root ingests (defaults per kind)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    kind: str = Field(default="document", pattern="^(code|document|conversation)$")
+    domain: str = "personal"
+    extensions: list[str] | None = None
+
+
+class OwnerKnowledgeConfig(BaseModel):
+    """Config for the Owner Knowledge Mission's worker (Phase C · §C.8, CC7).
+
+    A permanent mission that continuously reads the operator's **User Archive** — code, docs, papers,
+    notes, chats — into global knowledge + experience, then rebuilds the personal profile. ``extra=
+    'forbid'`` (a real strict schema). Roots may be empty at instantiation and filled via a later
+    config edit (a new version — B6)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    archive_roots: list[ArchiveRoot] = Field(default_factory=list)
+    build_profile: bool = True
+    embed: bool = False
+    policy: str = "project"
+    tick_interval_seconds: int = Field(default=3600, ge=1)
+
+
 # --- registry ------------------------------------------------------------
 
 
@@ -132,4 +166,5 @@ def default_registry() -> SchemaRegistry:
     registry.register("hello_watcher", HelloWatcherConfig, schema_version=1)
     registry.register("generic", GenericConfig, schema_version=1)
     registry.register("repo_watcher", RepoWatcherConfig, schema_version=1)
+    registry.register("owner_knowledge", OwnerKnowledgeConfig, schema_version=1)
     return registry

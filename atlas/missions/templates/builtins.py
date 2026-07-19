@@ -84,6 +84,26 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": {},
     },
     {
+        # Real template as of Phase C (§C.8): the permanent Owner Knowledge Mission — an
+        # OwnerKnowledgeWorker that continuously reads the User Archive (code/docs/chats) into
+        # global knowledge + experience and rebuilds the personal profile. Never completes.
+        "name": "owner_knowledge",
+        "template_version": 1,
+        "description": "Continuously learn the owner from their archive (Phase C — Personal).",
+        "config_schema_type": "owner_knowledge",
+        "config_schema_version": 1,
+        "default_config": {
+            "archive_roots": [],
+            "build_profile": True,
+            "embed": False,
+            "policy": "project",
+            "tick_interval_seconds": 3600,
+        },
+        "worker_specs": [{"type": "owner_knowledge", "interval_seconds": 3600}],
+        "knowledge_domains": ["personal", "engineering", "experience"],
+        "success_criteria": {},
+    },
+    {
         "name": "technology_watch",
         "template_version": 1,
         "description": "Track breaking changes across chosen technologies (Phase B/D).",
