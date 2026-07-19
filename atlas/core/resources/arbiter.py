@@ -60,6 +60,7 @@ class ArbitrationVerdict:
 
 class MissionArbiter:
     name = "mission_arbiter"
+    VERSION = "1.0.0"
 
     def __init__(
         self,

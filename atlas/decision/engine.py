@@ -88,6 +88,29 @@ class DecisionEngine:
     def known_types(self) -> list[str]:
         return self._rules.known_types()
 
+    # --- journal reads (the P9 "explain this" surface, D.5) -------------
+    def list_decisions(
+        self,
+        *,
+        mission_id: Any = None,
+        mission_type: str | None = None,
+        action_kind: str | None = None,
+        requires_approval: bool | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return self._repo.list(
+            mission_id=mission_id, mission_type=mission_type, action_kind=action_kind,
+            requires_approval=requires_approval, limit=limit,
+        )
+
+    def get_decision(self, decision_id: Any) -> dict[str, Any] | None:
+        """The full P9 record for one decision — the 'Explain this' payload."""
+        return self._repo.get(decision_id)
+
+    def list_gaps(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """The capability-gap backlog (P15): what Atlas honestly couldn't do."""
+        return self._repo.list_gaps(limit=limit)
+
     # --- the one public API --------------------------------------------
     def decide(self, request: DecisionRequest) -> Decision:
         """Deterministically choose the next action for a mission and journal the P9 record."""

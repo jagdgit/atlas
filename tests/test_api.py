@@ -652,6 +652,77 @@ class _FakePersonal:
         return {"id": "F-1", "state": "inferred"}
 
 
+class _FakeDecision:
+    def __init__(self):
+        self._d = {
+            "D-1": {"id": "D-1", "mission_type": "paper_trading", "action_kind": "recommend",
+                    "action": {"kind": "recommend", "key": "buy"}, "why": "strong signal",
+                    "confidence": "high", "confidence_score": 0.9, "knowledge_refs": ["k1"],
+                    "model_versions": {"decision_engine": "1.0.0"}, "policy_ids": ["P-1"],
+                    "alternatives_rejected": [{"key": "sell", "score": 0.2}],
+                    "requires_approval": True, "status": "recorded"},
+            "D-2": {"id": "D-2", "mission_type": "paper_trading", "action_kind": "capability_gap",
+                    "action": {"kind": "capability_gap", "capability": "market_data:NASDAQ"},
+                    "why": "missing data", "confidence": "low"},
+        }
+
+    def list_decisions(self, *, mission_id=None, mission_type=None, action_kind=None, limit=100):
+        return [d for d in self._d.values()
+                if (action_kind is None or d["action_kind"] == action_kind)
+                and (mission_type is None or d["mission_type"] == mission_type)]
+
+    def list_gaps(self, *, limit=100):
+        return [d for d in self._d.values() if d["action_kind"] == "capability_gap"]
+
+    def get_decision(self, decision_id):
+        return self._d.get(decision_id)
+
+
+class _FakeApprovals:
+    def __init__(self):
+        from atlas.decision import ApprovalError
+        self._err = ApprovalError
+        self._a = {"A-1": {"id": "A-1", "status": "proposed", "mission_type": "paper_trading",
+                           "decision_id": "D-1", "action": {"key": "buy"}}}
+
+    def list(self, *, status=None, mission_id=None, limit=100):
+        return [a for a in self._a.values() if status is None or a["status"] == status]
+
+    def list_pending(self, *, limit=100):
+        return [a for a in self._a.values() if a["status"] == "proposed"]
+
+    def get(self, approval_id):
+        return self._a.get(approval_id)
+
+    def approve(self, approval_id, *, actor=None):
+        a = self._require(approval_id, "proposed")
+        a["status"] = "approved"
+        return a
+
+    def reject(self, approval_id, *, actor=None, note=None):
+        a = self._require(approval_id, "proposed")
+        a["status"], a["note"] = "rejected", note
+        return a
+
+    def apply(self, approval_id, *, actor=None):
+        a = self._require(approval_id, "approved")
+        a["status"] = "applied"
+        return a
+
+    def revert(self, approval_id, *, actor=None):
+        a = self._require(approval_id, "applied")
+        a["status"] = "reverted"
+        return a
+
+    def _require(self, approval_id, expected):
+        a = self._a.get(approval_id)
+        if a is None:
+            raise self._err(f"no approval {approval_id}")
+        if a["status"] != expected:
+            raise self._err(f"approval is '{a['status']}', expected '{expected}'")
+        return a
+
+
 class FakeContainer:
     def __init__(self, mapping):
         self._mapping = mapping
@@ -690,6 +761,8 @@ class FakeApplication:
                 "coverage": _FakeCoverage(),
                 "policy": _FakePolicy(),
                 "personal": _FakePersonal(),
+                "decision": _FakeDecision(),
+                "approvals": _FakeApprovals(),
                 "plugins": FakePluginManager(),
                 "event_repo": FakeEventRepo(),
                 "notifier": FakeNotifier(),
@@ -1206,6 +1279,64 @@ def test_personal_dashboard_combines_coverage_and_profile():
 
 def test_personal_requires_auth():
     assert _client().get("/v1/personal/profile").status_code == 401
+
+
+def test_decision_list_and_filter():
+    client = _client()
+    resp = client.get("/v1/decision/decisions", headers=AUTH)
+    assert resp.status_code == 200
+    assert len(resp.json()["decisions"]) == 2
+
+    gaps = client.get("/v1/decision/decisions?action_kind=capability_gap", headers=AUTH)
+    assert all(d["action_kind"] == "capability_gap" for d in gaps.json()["decisions"])
+
+
+def test_decision_explain_round_trips_full_p9_record():
+    resp = _client().get("/v1/decision/decisions/D-1", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    # The explain payload is the full P9 record.
+    for field in ("action", "why", "knowledge_refs", "model_versions", "policy_ids",
+                  "alternatives_rejected", "requires_approval", "confidence"):
+        assert field in body
+    assert body["action"]["key"] == "buy"
+    assert body["alternatives_rejected"][0]["key"] == "sell"
+
+
+def test_decision_explain_missing_404():
+    assert _client().get("/v1/decision/decisions/ghost", headers=AUTH).status_code == 404
+
+
+def test_decision_gaps_backlog():
+    resp = _client().get("/v1/decision/gaps", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["gaps"][0]["action"]["capability"] == "market_data:NASDAQ"
+
+
+def test_approvals_pending_queue_and_lifecycle():
+    client = _client()
+    pending = client.get("/v1/decision/approvals?status=proposed", headers=AUTH)
+    assert pending.status_code == 200
+    assert pending.json()["approvals"][0]["id"] == "A-1"
+
+    approved = client.post("/v1/decision/approvals/A-1/approve", headers=AUTH, json={"actor": "op"})
+    assert approved.status_code == 200 and approved.json()["status"] == "approved"
+
+    applied = client.post("/v1/decision/approvals/A-1/apply", headers=AUTH, json={})
+    assert applied.json()["status"] == "applied"
+
+    reverted = client.post("/v1/decision/approvals/A-1/revert", headers=AUTH, json={})
+    assert reverted.json()["status"] == "reverted"
+
+
+def test_approvals_illegal_transition_409():
+    # A fresh proposed approval cannot be applied before approval.
+    resp = _client().post("/v1/decision/approvals/A-1/apply", headers=AUTH, json={})
+    assert resp.status_code == 409
+
+
+def test_decision_requires_auth():
+    assert _client().get("/v1/decision/decisions").status_code == 401
 
 
 def test_document_formats_require_auth():

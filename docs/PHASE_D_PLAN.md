@@ -220,7 +220,22 @@
   allocated in the expected order; a mission over its hard budget cap is deferred, not starved
   indefinitely. Hermetic tests on the arbiter; a live-DB test through the WorkerManager.
 
-### D.5 — Surfaces + wiring
+### D.5 — Surfaces + wiring  ·  ✅ DONE
+> **Delivered:** `DecisionEngine` + `ApprovalService` + the cross-mission `MissionArbiter` are now
+> **kernel services** — built in `bootstrap.py` (engine composes policy/engineering/research/personal/
+> knowledge; `versions_provider` stamps real capability versions; approvals auto-propose on
+> side-effecting decisions), registered on the container and the capability registry (`kind="kernel"`),
+> and the shared arbiter is injected into the `WorkerManager`. REST (`tags=["decision"]`, D.5):
+> `GET /v1/decision/decisions` (+ `?mission_id/mission_type/action_kind`), `GET .../decisions/{id}`
+> (the full P9 "explain this" record), `GET .../gaps` (P15 backlog), `GET .../approvals` (+ `?status`),
+> `GET .../approvals/{id}`, and `POST .../approvals/{id}/approve|reject|apply|revert` (illegal
+> transitions → 409). Engine gained read passthroughs (`list_decisions`/`get_decision`/`list_gaps`);
+> `ApprovalActionRequest` schema added. CLI: `atlas decision list|show|gaps` and
+> `atlas approvals list|pending|show|approve|reject|apply|revert`. Tests: `tests/test_api.py`
+> (+8 — list/filter, explain round-trips the full P9 record, 404, gaps, approval lifecycle, 409, auth)
+> and `tests/test_cli.py` (+5 — decision list/gaps/show, approval lifecycle, illegal transition). Live
+> `build_application()` smoke confirms all three resolve with real capability versions.
+
 - Wire `DecisionEngine` + `ApprovalService` into `atlas/kernel/bootstrap.py` (container +
   **capability registry**, `kind="kernel"`); register any `decision_tick` handler if needed.
 - API: `GET /v1/decision/decisions` (+ `/{id}` = the "Explain this" payload), `GET/POST
@@ -320,5 +335,6 @@ are incremental follow-ons.
 > `0040` + 12 tests): propose → approve/reject → apply → revert, reversible + journaled (P14), gate
 > bypassed for read/advice/sim (DD3). **D.4 ✅ DONE** (`MissionArbiter` + WorkerManager admission +
 > 11 tests): effective_priority + deadline urgency + importance + hard/global caps + anti-starvation
-> aging (A7). **Next: D.5 — Surfaces + wiring (bootstrap capability registration, decision/approval
-> API + CLI).**
+> aging (A7). **D.5 ✅ DONE** (bootstrap capability wiring of decision/approvals/arbiter + decision/
+> approval REST API + `atlas decision`/`atlas approvals` CLI + 13 tests). **D-Core complete. Next:
+> D.6 — Paper-Trading Mission (simulation-only), the flagship D-Missions e2e.**

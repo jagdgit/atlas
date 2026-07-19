@@ -322,6 +322,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_personal.add_argument("--limit", type=int, default=50)
 
+    p_decision = sub.add_parser(
+        "decision", help="decision journal — the P9 'explain this' record (Phase D · D.5)"
+    )
+    p_decision.add_argument(
+        "action", choices=["list", "show", "gaps"],
+        help="list [--mission/--type/--kind] | show <id> | gaps (capability-gap backlog, P15)",
+    )
+    p_decision.add_argument("target", nargs="?", help="decision id (show)")
+    p_decision.add_argument("--mission", help="filter by mission id")
+    p_decision.add_argument("--type", dest="mission_type", help="filter by mission type")
+    p_decision.add_argument(
+        "--kind", dest="action_kind", choices=["recommend", "hold", "capability_gap"]
+    )
+    p_decision.add_argument("--limit", type=int, default=50)
+
+    p_approvals = sub.add_parser(
+        "approvals", help="human-approval gate for side-effecting decisions (Phase D · D.5, P14)"
+    )
+    p_approvals.add_argument(
+        "action", choices=["list", "pending", "show", "approve", "reject", "apply", "revert"],
+        help="list|pending|show <id>|approve <id>|reject <id>|apply <id>|revert <id>",
+    )
+    p_approvals.add_argument("target", nargs="?", help="approval id")
+    p_approvals.add_argument("--by", dest="actor", help="operator identity (provenance)")
+    p_approvals.add_argument("--note", help="reason (reject)")
+    p_approvals.add_argument("--limit", type=int, default=50)
+
     sub.add_parser("backup", help="run an on-demand database backup (pg_dump)")
 
     return parser
@@ -1399,6 +1426,90 @@ def cmd_personal(args: argparse.Namespace, app: "Application | None" = None) -> 
     return 2
 
 
+def cmd_decision(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    app = app or build_application()
+    decision = app.container.resolve("decision")
+    action = args.action
+
+    if action in ("list", "gaps"):
+        if action == "gaps":
+            rows = decision.list_gaps(limit=args.limit)
+        else:
+            rows = decision.list_decisions(
+                mission_id=args.mission, mission_type=args.mission_type,
+                action_kind=args.action_kind, limit=args.limit,
+            )
+        if not rows:
+            print("no decisions" if action == "list" else "no capability gaps")
+            return 0
+        for d in rows:
+            print(f"{d['id']}  {d['action_kind']:<14} {d['mission_type']:<16} "
+                  f"conf={d['confidence']:<6} {(d.get('why') or '')[:60]}")
+        return 0
+
+    if action == "show":
+        if not args.target:
+            print("usage: atlas decision show <decision_id>")
+            return 2
+        d = decision.get_decision(args.target)
+        if d is None:
+            print("decision not found")
+            return 1
+        for key, val in d.items():
+            print(f"{key}: {val}")
+        return 0
+
+    return 2
+
+
+def cmd_approvals(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    from atlas.decision import ApprovalError
+
+    app = app or build_application()
+    approvals = app.container.resolve("approvals")
+    action = args.action
+
+    if action in ("list", "pending"):
+        rows = (approvals.list_pending(limit=args.limit) if action == "pending"
+                else approvals.list(limit=args.limit))
+        if not rows:
+            print("no approvals" if action == "list" else "no pending approvals")
+            return 0
+        for a in rows:
+            print(f"{a['id']}  [{a['status']:<9}] {a['mission_type']:<16} "
+                  f"{(a.get('action') or {}).get('key', '')}")
+        return 0
+
+    if action == "show":
+        if not args.target:
+            print("usage: atlas approvals show <approval_id>")
+            return 2
+        a = approvals.get(args.target)
+        if a is None:
+            print("approval not found")
+            return 1
+        for key, val in a.items():
+            print(f"{key}: {val}")
+        return 0
+
+    if action in ("approve", "reject", "apply", "revert"):
+        if not args.target:
+            print(f"usage: atlas approvals {action} <approval_id>")
+            return 2
+        try:
+            if action == "reject":
+                a = approvals.reject(args.target, actor=args.actor, note=args.note)
+            else:
+                a = getattr(approvals, action)(args.target, actor=args.actor)
+        except ApprovalError as exc:
+            print(f"error: {exc}")
+            return 1
+        print(f"{a['id']}  status={a['status']}")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> int:
     app = app or build_application()
     backup = app.container.resolve("backup")
@@ -1426,6 +1537,8 @@ _HANDLERS = {
     "coverage": cmd_coverage,
     "policy": cmd_policy,
     "personal": cmd_personal,
+    "decision": cmd_decision,
+    "approvals": cmd_approvals,
     "jobs": cmd_jobs,
     "job": cmd_job,
     "formats": cmd_formats,

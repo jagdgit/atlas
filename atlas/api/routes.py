@@ -33,6 +33,7 @@ from atlas.api.schemas import (
     InvokeToolRequest,
     InvokeToolResponse,
     InstantiateMissionRequest,
+    ApprovalActionRequest,
     CreateMissionRequest,
     MissionActionRequest,
     WorkerActionRequest,
@@ -776,6 +777,102 @@ def policy_revert(event_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail="policy event not found")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+# --- Decision Engine (Phase D · §D.5) — the P9 "explain this" surface -------
+
+@v1_router.get("/decision/decisions", tags=["decision"])
+def decision_list(
+    request: Request,
+    mission_id: str | None = None,
+    mission_type: str | None = None,
+    action_kind: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """List journaled decisions (recommend-only; P14). Filter by mission/type/action_kind."""
+    decision = _app(request).container.resolve("decision")
+    return {
+        "decisions": decision.list_decisions(
+            mission_id=mission_id, mission_type=mission_type,
+            action_kind=action_kind, limit=limit,
+        )
+    }
+
+
+@v1_router.get("/decision/gaps", tags=["decision"])
+def decision_gaps(request: Request, limit: int = 100) -> dict:
+    """The capability-gap backlog (P15): what Atlas honestly reported it could not do."""
+    decision = _app(request).container.resolve("decision")
+    return {"gaps": decision.list_gaps(limit=limit)}
+
+
+@v1_router.get("/decision/decisions/{decision_id}", tags=["decision"])
+def decision_explain(decision_id: str, request: Request) -> dict:
+    """The full P9 record for one decision — action, why, refs, versions, alternatives rejected."""
+    decision = _app(request).container.resolve("decision")
+    row = decision.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="decision not found")
+    return row
+
+
+# --- Human-approval gate (Phase D · §D.5, P14) -----------------------------
+
+@v1_router.get("/decision/approvals", tags=["decision"])
+def approvals_list(
+    request: Request,
+    status: str | None = None,
+    mission_id: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """List approvals (default: all). Use ?status=proposed for the operator's pending queue."""
+    approvals = _app(request).container.resolve("approvals")
+    return {"approvals": approvals.list(status=status, mission_id=mission_id, limit=limit)}
+
+
+@v1_router.get("/decision/approvals/{approval_id}", tags=["decision"])
+def approval_get(approval_id: str, request: Request) -> dict:
+    approvals = _app(request).container.resolve("approvals")
+    row = approvals.get(approval_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return row
+
+
+def _approval_action(request: Request, approval_id: str, action: str, body: ApprovalActionRequest) -> dict:
+    from atlas.decision import ApprovalError
+
+    approvals = _app(request).container.resolve("approvals")
+    fn = getattr(approvals, action)
+    try:
+        if action == "reject":
+            return fn(approval_id, actor=body.actor, note=body.note)
+        return fn(approval_id, actor=body.actor)
+    except ApprovalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@v1_router.post("/decision/approvals/{approval_id}/approve", tags=["decision"])
+def approval_approve(approval_id: str, body: ApprovalActionRequest, request: Request) -> dict:
+    """Approve a proposed side-effecting decision (does not apply it yet)."""
+    return _approval_action(request, approval_id, "approve", body)
+
+
+@v1_router.post("/decision/approvals/{approval_id}/reject", tags=["decision"])
+def approval_reject(approval_id: str, body: ApprovalActionRequest, request: Request) -> dict:
+    return _approval_action(request, approval_id, "reject", body)
+
+
+@v1_router.post("/decision/approvals/{approval_id}/apply", tags=["decision"])
+def approval_apply(approval_id: str, body: ApprovalActionRequest, request: Request) -> dict:
+    """Execute an approved action via its registered applier, capturing before/after for revert."""
+    return _approval_action(request, approval_id, "apply", body)
+
+
+@v1_router.post("/decision/approvals/{approval_id}/revert", tags=["decision"])
+def approval_revert(approval_id: str, body: ApprovalActionRequest, request: Request) -> dict:
+    """Undo an applied action from its recorded snapshot (reversible, P14)."""
+    return _approval_action(request, approval_id, "revert", body)
 
 
 @v1_router.get("/personal/profile", tags=["personal"])

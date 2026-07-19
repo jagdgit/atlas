@@ -65,6 +65,10 @@ from atlas.kernel.service_container import ServiceContainer
 from atlas.kernel.tools import ToolRegistry
 from atlas.knowledge.coverage import CoverageService
 from atlas.knowledge.service import KnowledgeService
+from atlas.core.resources.arbiter import MissionArbiter
+from atlas.decision import ApprovalService, DecisionEngine, DecisionRuleRegistry
+from atlas.repositories.approval_repo import ApprovalRepository
+from atlas.repositories.decision_repo import DecisionRepository
 from atlas.policy import PolicyService
 from atlas.llm.ollama_provider import OllamaProvider
 from atlas.llm.service import LLMService
@@ -463,12 +467,16 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # as short-task + checkpoint loops (reusing the Phase-0 CheckpointStore, owner_type='worker').
     # The `worker_tick` handler is driven by the schedule table; crash backoff + version upgrade +
     # live operator input + journaling are all handled here. Ships the HelloWatcher reference impl.
+    # Cross-mission arbiter (Phase D · §D.4, A7): shared so worker admission weighs effective_priority
+    # + deadline urgency + importance and enforces hard/global caps with anti-starvation aging.
+    mission_arbiter = MissionArbiter(clock=clock, logger=get_logger("atlas.arbiter"))
     worker_manager = WorkerManager(
         worker_repo,
         checkpoint_store,
         schedule_service=schedule_service,
         config_repo=config_repo,
         mission_repo=mission_repo,
+        arbiter=mission_arbiter,
         events=events,
         clock=clock,
         logger=get_logger("atlas.workers"),
@@ -824,6 +832,32 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.personal"),
     )
 
+    # Decision Engine (Phase D · §D.1–D.5, roadmap §5.5): the shared Kernel Service every mission asks
+    # "what should I do next?". Deterministic core (Q7) over per-mission-type rules (registered by the
+    # missions themselves, D.6), composing Engineering/Research/Personal/Knowledge with Policy
+    # arbitration (DD5), recommend-only with a human gate (P14) + capability-gap honesty (P15). The
+    # ApprovalService is the P14 gate: a side-effecting decision auto-proposes an approval that the
+    # operator approves/rejects/applies/reverts. `versions_provider` stamps real component versions.
+    approval_service = ApprovalService(
+        ApprovalRepository(db_manager), events=events, logger=get_logger("atlas.decision.approvals")
+    )
+    decision_engine = DecisionEngine(
+        DecisionRepository(db_manager),
+        rules=DecisionRuleRegistry(),
+        policy=policy_service,
+        engineering=intelligence_service,
+        research=research_service,
+        personal=personal_service,
+        knowledge=knowledge_service,
+        versions_provider=lambda: {
+            "policy": capabilities.version_of("policy"),
+            "intelligence": capabilities.version_of("intelligence"),
+        },
+        approvals=approval_service,
+        events=events,
+        logger=get_logger("atlas.decision"),
+    )
+
     # Unified ingestion bridge (Phase C · §C.2–C.4) + non-code readers, wired for the Owner Knowledge
     # Mission (C.8): acquire → read (Document/Conversation) → chunk + prose candidates → coverage.
     asset_acquirer = AssetAcquirer(asset_store, logger=get_logger("atlas.ingestion.acquire"))
@@ -938,6 +972,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("coverage", coverage_service)
     container.register_instance("policy", policy_service)
     container.register_instance("personal", personal_service)
+    container.register_instance("arbiter", mission_arbiter)
+    container.register_instance("decision", decision_engine)
+    container.register_instance("approvals", approval_service)
     container.register_instance("ingestion_bridge", ingestion_bridge)
     container.register_instance("candidates", candidate_consumer)
 
@@ -1055,6 +1092,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "personal", personal_service, kind="service", version=PersonalService.VERSION
+    )
+    # Phase D · §D.5: the Decision Engine + human-approval gate + cross-mission arbiter as kernel
+    # services, so agents/missions ask the kernel "what should I do next?" and route side effects
+    # through the P14 gate rather than importing modules.
+    capabilities.register(
+        "arbiter", mission_arbiter, kind="kernel", version=MissionArbiter.VERSION
+    )
+    capabilities.register(
+        "decision", decision_engine, kind="kernel", version=DecisionEngine.VERSION
+    )
+    capabilities.register(
+        "approvals", approval_service, kind="kernel", version=ApprovalService.VERSION
     )
 
     # 6. Core services (registration order = start order)

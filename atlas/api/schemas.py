@@ -536,3 +536,10 @@ class WorkerInputRequest(BaseModel):
     """A live operator input drained at the top of the worker's next tick (Q4)."""
 
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ApprovalActionRequest(BaseModel):
+    """Operator decision on a proposed approval (Phase D · §D.3/D.5, P14). Journaled + reversible."""
+
+    actor: str | None = None
+    note: str | None = Field(default=None, max_length=2000)

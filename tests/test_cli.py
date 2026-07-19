@@ -12,10 +12,12 @@ from atlas.agents.base import AgentResult, Citation
 from atlas.cli.main import (
     build_parser,
     cmd_agents,
+    cmd_approvals,
     cmd_ask,
     cmd_backup,
     cmd_capabilities,
     cmd_coverage,
+    cmd_decision,
     cmd_personal,
     cmd_policy,
     cmd_chat,
@@ -266,6 +268,70 @@ class _FakePolicyCli:
         return None
 
 
+class _FakeDecisionCli:
+    def __init__(self):
+        self._d = {
+            "D-1": {"id": "D-1", "mission_type": "paper_trading", "action_kind": "recommend",
+                    "confidence": "high", "why": "strong signal", "action": {"key": "buy"}},
+            "D-2": {"id": "D-2", "mission_type": "paper_trading", "action_kind": "capability_gap",
+                    "confidence": "low", "why": "missing market data", "action": {"key": ""}},
+        }
+
+    def list_decisions(self, *, mission_id=None, mission_type=None, action_kind=None, limit=50):
+        return [d for d in self._d.values()
+                if (action_kind is None or d["action_kind"] == action_kind)
+                and (mission_type is None or d["mission_type"] == mission_type)]
+
+    def list_gaps(self, *, limit=50):
+        return [d for d in self._d.values() if d["action_kind"] == "capability_gap"]
+
+    def get_decision(self, decision_id):
+        return self._d.get(decision_id)
+
+
+class _FakeApprovalsCli:
+    def __init__(self):
+        from atlas.decision import ApprovalError
+        self._err = ApprovalError
+        self._a = {"A-1": {"id": "A-1", "status": "proposed", "mission_type": "paper_trading",
+                           "action": {"key": "buy"}}}
+
+    def list(self, *, status=None, mission_id=None, limit=50):
+        return [a for a in self._a.values() if status is None or a["status"] == status]
+
+    def list_pending(self, *, limit=50):
+        return [a for a in self._a.values() if a["status"] == "proposed"]
+
+    def get(self, approval_id):
+        return self._a.get(approval_id)
+
+    def approve(self, approval_id, *, actor=None):
+        if approval_id not in self._a:
+            raise self._err(f"no approval {approval_id}")
+        self._a[approval_id]["status"] = "approved"
+        return self._a[approval_id]
+
+    def reject(self, approval_id, *, actor=None, note=None):
+        if approval_id not in self._a:
+            raise self._err(f"no approval {approval_id}")
+        self._a[approval_id]["status"] = "rejected"
+        return self._a[approval_id]
+
+    def apply(self, approval_id, *, actor=None):
+        a = self._a.get(approval_id)
+        if a is None or a["status"] != "approved":
+            raise self._err("approval not approved")
+        a["status"] = "applied"
+        return a
+
+    def revert(self, approval_id, *, actor=None):
+        a = self._a.get(approval_id)
+        if a is None or a["status"] != "applied":
+            raise self._err("approval not applied")
+        a["status"] = "reverted"
+        return a
+
+
 class _FakePersonalCli:
     def __init__(self):
         self._facts = {"F-1": {"id": "F-1", "category": "skill", "key": "celery",
@@ -324,6 +390,8 @@ class FakeApp:
                 "coverage": _FakeCoverage(),
                 "policy": _FakePolicyCli(),
                 "personal": _FakePersonalCli(),
+                "decision": _FakeDecisionCli(),
+                "approvals": _FakeApprovalsCli(),
             }
         )
 
@@ -1103,3 +1171,53 @@ def test_cmd_personal_draft(capsys):
     rc = cmd_personal(build_parser().parse_args(["personal", "draft", "--kind", "resume"]), app=app)
     assert rc == 0
     assert "# Resume" in capsys.readouterr().out
+
+
+def test_cmd_decision_list_and_gaps(capsys):
+    app = FakeApp()
+    rc = cmd_decision(build_parser().parse_args(["decision", "list"]), app=app)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "paper_trading" in out and "recommend" in out
+
+    rc = cmd_decision(build_parser().parse_args(["decision", "gaps"]), app=app)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "capability_gap" in out
+
+
+def test_cmd_decision_show_and_missing(capsys):
+    app = FakeApp()
+    rc = cmd_decision(build_parser().parse_args(["decision", "show", "D-1"]), app=app)
+    assert rc == 0
+    assert "strong signal" in capsys.readouterr().out
+
+    rc = cmd_decision(build_parser().parse_args(["decision", "show", "ghost"]), app=app)
+    assert rc == 1
+    assert "not found" in capsys.readouterr().out
+
+
+def test_cmd_approvals_lifecycle(capsys):
+    app = FakeApp()
+    rc = cmd_approvals(build_parser().parse_args(["approvals", "pending"]), app=app)
+    assert rc == 0
+    assert "proposed" in capsys.readouterr().out
+
+    rc = cmd_approvals(build_parser().parse_args(["approvals", "approve", "A-1"]), app=app)
+    assert rc == 0
+    assert "status=approved" in capsys.readouterr().out
+
+    rc = cmd_approvals(build_parser().parse_args(["approvals", "apply", "A-1"]), app=app)
+    assert rc == 0
+    assert "status=applied" in capsys.readouterr().out
+
+    rc = cmd_approvals(build_parser().parse_args(["approvals", "revert", "A-1"]), app=app)
+    assert rc == 0
+    assert "status=reverted" in capsys.readouterr().out
+
+
+def test_cmd_approvals_apply_before_approve_errors(capsys):
+    app = FakeApp()
+    rc = cmd_approvals(build_parser().parse_args(["approvals", "apply", "A-1"]), app=app)
+    assert rc == 1
+    assert "error:" in capsys.readouterr().out
