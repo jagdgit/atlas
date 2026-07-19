@@ -156,3 +156,28 @@ def test_identity_key_quant_vs_prose():
     assert q[0] == "quant"
     assert p[0] == "prose"
     assert q != p
+
+
+def test_identity_key_experience_keys_on_skill_and_context():
+    # The SAME skill in the SAME context is one identity (corroboration across projects, C.6/CC6),
+    # regardless of the surface statement wording.
+    a = finding_identity_key({
+        "domain": "experience", "statement": "Uses Celery in a Django project",
+        "value": {"kind": "experience", "skill": "Celery", "context": "python"},
+    })
+    b = finding_identity_key({
+        "domain": "experience", "statement": "Relied on Celery for background jobs",
+        "value": {"kind": "experience", "skill": "celery", "context": "Python"},
+    })
+    assert a[0] == "experience"
+    assert a == b  # skill+context are normalized → same identity
+
+    # Different context (or skill) → different identity.
+    c = finding_identity_key({
+        "domain": "experience", "statement": "Uses Celery",
+        "value": {"kind": "experience", "skill": "celery", "context": "rust"},
+    })
+    assert c != a
+    # Falls back to the statement when no structured skill is supplied.
+    d = finding_identity_key({"domain": "experience", "statement": "Led a solo project"})
+    assert d[0] == "experience" and d[1]

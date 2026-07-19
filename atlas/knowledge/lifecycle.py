@@ -121,6 +121,16 @@ def finding_identity_key(data: dict[str, Any]) -> tuple[Any, ...]:
                 str(data.get("claim_type", "") or ""),
                 str(prov.get("reader", "")),
             )
+    if domain == "experience":
+        # Owner experiences (C.6/CC6) key on skill/technology + context so the *same* skill seen across
+        # many projects is ONE cumulative experience (evidence-merged), not N rows. Falls back to the
+        # normalized statement when no structured skill is supplied.
+        value = data.get("value") if isinstance(data.get("value"), dict) else {}
+        skill = str(value.get("skill") or value.get("kind") or "").strip().lower()
+        context = str(value.get("context") or "").strip().lower()
+        if not skill:
+            skill = normalize_statement(str(data.get("statement", "")))
+        return ("experience", skill, context)
     value = data.get("value")
     if isinstance(value, dict) and (value.get("kind") or "").strip():
         return (
