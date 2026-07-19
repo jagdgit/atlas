@@ -247,7 +247,7 @@
 
 ## 3. D-Missions — applied persistent missions (on the foundations)
 
-### D.6 — Paper-Trading Mission (simulation-only)  ·  migration `0041`  ·  **flagship e2e**
+### D.6 — Paper-Trading Mission (simulation-only)  ·  migration `0041`  ·  **flagship e2e**  ·  ✅ DONE
 - **`MarketDataReader`** (`atlas/readers/market_data.py`, BB-D6): fixture/replay OHLCV asset → artifact
   (Asset→Reader→Artifact, P8/P11); config-swappable to a live feed later (DD6).
 - **Indicator extraction** (`atlas/trading/indicators.py`): deterministic SMA/EMA/RSI/MACD/… → signals
@@ -327,6 +327,10 @@ are incremental follow-ons.
 - **OI-D3** Watchers D.7–D.10 are scoped but land after the Paper-Trading gate.
 - **OI-D4** Real-world side-effecting appliers (e.g. actually posting a job application draft) stay
   behind the approval gate and are **out of scope** until explicitly requested (P14).
+- **OI-D5** Decision-scale policy arbitration uses a fixed `influence_scale` (×50) to lift retrieval-
+  tuned policy weights (±0.02) to decision scale (DD5). It is currently tuned to the paper-trading
+  option-score magnitude; revisit with per-option-relative normalization when a second decision
+  mission with a different score scale lands.
 
 ---
 
@@ -336,5 +340,16 @@ are incremental follow-ons.
 > bypassed for read/advice/sim (DD3). **D.4 ✅ DONE** (`MissionArbiter` + WorkerManager admission +
 > 11 tests): effective_priority + deadline urgency + importance + hard/global caps + anti-starvation
 > aging (A7). **D.5 ✅ DONE** (bootstrap capability wiring of decision/approvals/arbiter + decision/
-> approval REST API + `atlas decision`/`atlas approvals` CLI + 13 tests). **D-Core complete. Next:
-> D.6 — Paper-Trading Mission (simulation-only), the flagship D-Missions e2e.**
+> approval REST API + `atlas decision`/`atlas approvals` CLI + 13 tests). **D-Core complete.**
+>
+> **D.6 ✅ DONE** (Paper-Trading Mission — the flagship D-Missions e2e, simulation only, P10):
+> `MarketDataReader` (OHLCV asset → bars, P8/P11) · `atlas/trading/indicators.py` (deterministic
+> SMA/EMA/RSI/MACD) · `StrategyDecisionRule` (MA-crossover + RSI → buy/sell/hold, policy-arbitrated
+> via `influence_scale` + constraint-bounded) · virtual portfolio (`sim.*`, migration `0041`;
+> `SimTradingRepository` + `PortfolioService` — realized/unrealized P&L, fills linked to decisions) ·
+> `PaperTradingWorker` (read → indicators → decide → apply → journal → learn → notify; checkpointed +
+> reboot-safe) · real `paper_trading` template + strict `PaperTradingConfig` · bootstrap wiring +
+> `portfolio` capability + 43 tests (indicators/reader/portfolio/strategy/worker hermetic + sim-repo
+> live smoke + Phase-D e2e gate: many journaled decisions, portfolio updates, live operator block,
+> policy `avoid` arbitration, reboot-resume, config-version pickup, notify). **Next: D.7 — Research
+> Watcher (reuses D-Core).**

@@ -104,6 +104,51 @@ class OwnerKnowledgeConfig(BaseModel):
     tick_interval_seconds: int = Field(default=3600, ge=1)
 
 
+class TradingInstrument(BaseModel):
+    """One instrument the Paper-Trading mission replays (Phase D · §D.6).
+
+    ``symbol`` is the ticker the strategy + policy reason about; ``asset`` names the OHLCV feed asset
+    (a ``market_data`` asset registered in the Asset Store) — defaults to the symbol if omitted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(min_length=1)
+    asset: str = ""
+
+
+class TradingStrategyParams(BaseModel):
+    """MA-crossover + RSI strategy parameters (Phase D · §D.6). All optional with sane defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sma_fast: int = Field(default=10, ge=1)
+    sma_slow: int = Field(default=30, ge=2)
+    rsi_period: int = Field(default=14, ge=2)
+    rsi_overbought: float = Field(default=70.0, ge=0, le=100)
+    rsi_oversold: float = Field(default=30.0, ge=0, le=100)
+    trade_fraction: float = Field(default=0.1, gt=0, le=1)
+    sell_fraction: float = Field(default=1.0, gt=0, le=1)
+
+
+class PaperTradingConfig(BaseModel):
+    """Config for the Paper-Trading mission's worker (Phase D · §D.6, P10 — SIMULATION ONLY).
+
+    ``extra='forbid'`` (a real strict schema, unlike the ``generic`` stub it replaces). Instruments +
+    strategy params + risk constraints + replay cadence are all versioned (an edit is a new version —
+    B6, and the worker picks it up on the next tick). NO real money, NO real broker (P10)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instruments: list[TradingInstrument] = Field(default_factory=list)
+    starting_cash: float = Field(default=100_000.0, gt=0)
+    strategy: TradingStrategyParams = Field(default_factory=TradingStrategyParams)
+    max_position_qty: float = Field(default=0.0, ge=0)     # 0 = unbounded
+    max_exposure_pct: float = Field(default=0.0, ge=0)     # 0 = unbounded (percent of equity)
+    bars_per_tick: int = Field(default=1, ge=1)
+    drawdown_alert_pct: float = Field(default=0.0, ge=0)   # 0 = no drawdown alert
+    tick_interval_seconds: int = Field(default=300, ge=1)
+
+
 # --- registry ------------------------------------------------------------
 
 
@@ -167,4 +212,5 @@ def default_registry() -> SchemaRegistry:
     registry.register("generic", GenericConfig, schema_version=1)
     registry.register("repo_watcher", RepoWatcherConfig, schema_version=1)
     registry.register("owner_knowledge", OwnerKnowledgeConfig, schema_version=1)
+    registry.register("paper_trading", PaperTradingConfig, schema_version=1)
     return registry

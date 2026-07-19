@@ -59,12 +59,19 @@ class DecisionEngine:
         narrator: Any = None,
         approvals: Any = None,
         events: Any = None,
+        influence_scale: float = 1.0,
         logger: logging.Logger | None = None,
     ) -> None:
         self._repo = repo
         self._rules = rules or DecisionRuleRegistry()
         # Duck-typed PolicyService (``retrieval_influence``/``advice_influence``); None → no arbitration.
         self._policy = policy
+        # Policy weights are **retrieval-tuned** (±POLICY_INFLUENCE_MAX ≈ 0.02 — a re-ranking nudge).
+        # A *decision's* option scores live on a larger scale (a trading signal ~O(1)), so the engine
+        # amplifies policy influence to **decision scale** before folding it in (DD5 — arbitration, not
+        # a hard veto: a strong-strength `avoid` overturns a typical signal, a weak one only nudges, and
+        # a strong enough signal can still survive a mild policy). Kept bounded + signed + journaled.
+        self._influence_scale = float(influence_scale)
         # The three intelligences the engine composes (DD2/§D.2); any may be None → a rule that needs
         # it gets an honest capability_gap (P15). Resolved via capabilities at wiring time (CC-D2, D.5).
         self._engineering = engineering
@@ -227,10 +234,15 @@ class DecisionEngine:
             return []
         scope = f"mission:{request.mission_id}" if request.mission_id else None
         try:
-            return self._policy.advice_influence(scope=scope)
+            influences = self._policy.advice_influence(scope=scope)
         except Exception as exc:  # noqa: BLE001 - policy is advisory; never block a decision
             self._logger.warning("policy influence failed: %s", exc)
             return []
+        if self._influence_scale != 1.0:
+            # Amplify retrieval-scale weights to decision scale (see __init__); signed + bounded.
+            for inf in influences:
+                inf["weight"] = float(inf.get("weight") or 0.0) * self._influence_scale
+        return influences
 
     def _model_versions(self) -> dict[str, Any]:
         base = {"decision_engine": self.VERSION}

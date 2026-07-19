@@ -18,6 +18,11 @@ from atlas.readers.document import (
     DOCUMENT_READER_VERSION,
     DocumentReader,
 )
+from atlas.readers.market_data import (
+    MARKET_DATA_READER_ID,
+    MARKET_DATA_READER_VERSION,
+    MarketDataReader,
+)
 
 __all__ = [
     "DocumentReader",
@@ -26,4 +31,7 @@ __all__ = [
     "ConversationReader",
     "CONVERSATION_READER_ID",
     "CONVERSATION_READER_VERSION",
+    "MarketDataReader",
+    "MARKET_DATA_READER_ID",
+    "MARKET_DATA_READER_VERSION",
 ]

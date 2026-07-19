@@ -37,11 +37,14 @@ from atlas.knowledge.candidate_consumer import CandidateConsumer
 from atlas.knowledge.prose_extraction import ProseKnowledgeExtractor
 from atlas.learning.experience_extraction import ExperienceWriter
 from atlas.personal import PersonalService
-from atlas.readers import ConversationReader, DocumentReader
+from atlas.readers import ConversationReader, DocumentReader, MarketDataReader
 from atlas.repositories.candidate_repo import CandidateRepository
 from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
+from atlas.repositories.sim_repo import SimTradingRepository
+from atlas.trading import PortfolioService, StrategyDecisionRule
 from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
+from atlas.workers.paper_trading import PaperTradingWorker
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -855,6 +858,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         },
         approvals=approval_service,
         events=events,
+        # Amplify retrieval-scale policy weights (±0.02) to decision scale so a strong operator
+        # `avoid`/`prefer` can arbitrate a discrete recommendation (DD5), while a weak one only nudges.
+        influence_scale=50.0,
         logger=get_logger("atlas.decision"),
     )
 
@@ -891,6 +897,30 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             conversation_reader=conversation_reader,
             candidates=candidate_consumer,
             logger=get_logger("atlas.workers.owner_knowledge"),
+        )
+    )
+
+    # Paper-Trading Mission (Phase D · §D.6, flagship D-Mission): SIMULATION ONLY (P10). A
+    # MarketDataReader turns OHLCV feed assets into bars; the StrategyDecisionRule (registered on the
+    # shared Decision Engine, DD2) scores buy/sell/hold — policy-arbitrated (DD5) + constraint-bounded;
+    # the PaperTradingWorker replays each tick → decide → apply to the virtual portfolio (no gate — a
+    # sim fill is not world-side-effecting, DD3) → journal (P9) → notify on notable events.
+    market_data_reader = MarketDataReader(
+        asset_store, derived_artifacts, logger=get_logger("atlas.readers.market_data")
+    )
+    portfolio_service = PortfolioService(
+        SimTradingRepository(db_manager), logger=get_logger("atlas.trading.portfolio")
+    )
+    decision_engine.register_rule(StrategyDecisionRule())
+    worker_manager.register_worker_type(
+        PaperTradingWorker(
+            assets=asset_store,
+            market_data=market_data_reader,
+            decision_engine=decision_engine,
+            portfolio=portfolio_service,
+            learning=learning_service,
+            events=events,
+            logger=get_logger("atlas.workers.paper_trading"),
         )
     )
 
@@ -975,6 +1005,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("arbiter", mission_arbiter)
     container.register_instance("decision", decision_engine)
     container.register_instance("approvals", approval_service)
+    container.register_instance("portfolio", portfolio_service)
     container.register_instance("ingestion_bridge", ingestion_bridge)
     container.register_instance("candidates", candidate_consumer)
 
@@ -1104,6 +1135,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "approvals", approval_service, kind="kernel", version=ApprovalService.VERSION
+    )
+    # Phase D · §D.6: the virtual portfolio behind the Paper-Trading Mission (simulation only, P10).
+    capabilities.register(
+        "portfolio", portfolio_service, kind="service", version=PortfolioService.VERSION
     )
 
     # 6. Core services (registration order = start order)

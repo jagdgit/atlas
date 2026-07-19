@@ -37,12 +37,25 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": {},
     },
     {
+        # Real template as of Phase D (§D.6): a strict PaperTradingConfig + a PaperTradingWorker that
+        # replays OHLCV feeds → indicators → DecisionEngine (policy-arbitrated) → virtual portfolio.
+        # SIMULATION ONLY — NO real money, NO real broker (P10).
         "name": "paper_trading",
-        "template_version": 1,
-        "description": "Simulation-only paper trading (Phase D; NO real money — P10).",
-        "config_schema_type": "generic",
-        "default_config": {"markets": [], "capital": 100000, "max_risk_pct": 2, "max_trades_per_day": 5},
-        "worker_specs": [],
+        "template_version": 2,
+        "description": "Simulation-only paper trading (Phase D — Decision Engine flagship; NO real money — P10).",
+        "config_schema_type": "paper_trading",
+        "config_schema_version": 1,
+        "default_config": {
+            "instruments": [],
+            "starting_cash": 100000,
+            "strategy": {"sma_fast": 10, "sma_slow": 30, "rsi_period": 14},
+            "max_position_qty": 0,
+            "max_exposure_pct": 0,
+            "bars_per_tick": 1,
+            "drawdown_alert_pct": 0,
+            "tick_interval_seconds": 300,
+        },
+        "worker_specs": [{"type": "paper_trading", "interval_seconds": 300}],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": {},
     },

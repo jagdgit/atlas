@@ -234,10 +234,11 @@ def test_instantiate_applies_config_overrides(svc):
 
 def test_instantiate_stub_creates_mission_and_config_no_workers(svc):
     service, *_ = svc
-    out = service.instantiate("paper_trading")
+    # patent_watch is still a domain stub (paper_trading became a real template in Phase D · §D.6).
+    out = service.instantiate("patent_watch")
     assert out["mission"].template_version == 1
     assert out["config"].schema_type == "generic"
-    assert out["workers"] == []  # stub: no workers until Phase D
+    assert out["workers"] == []  # stub: no workers until its phase lands
 
 
 def test_instantiate_unknown_template_raises(svc):
