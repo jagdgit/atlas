@@ -298,7 +298,39 @@
   engineering findings still supersede correctly through the unified path. Hermetic tests per
   behavior + one live-DB test (mirrors the 5 GB scenario at small scale).
 
-#### C.4 Knowledge Coverage map (+ understanding quality)  ·  migration `0035` *(re-penciled; `0030`–`0034` taken by C.3)*
+#### C.4 Knowledge Coverage map (+ understanding quality)  ·  ✅ **DONE (2026-07-19)**  ·  migration `0035`
+
+> **✅ Delivered (2026-07-19).** Built in five committed sub-steps (`4039739`, `b40ab0f`, `949a125`,
+> `c8b3b40`, `f3e0f91`):
+> - **C.4a** `knowledge.coverage` store (migration `0035`) + `CoverageRepository` — one row per the
+>   Derived-Artifact 4-tuple `(asset_id, asset_version, reader, reader_version)`; idempotent upsert
+>   `record()`, `get`/`list`, per-domain/source `summary()` rollups, and `stale()` enumeration.
+>   A **new reader_version mints a new row** (old read preserved for the reader-improved delta);
+>   `extractor_version` is stored (not keyed) so an extractor bump updates in place.
+> - **C.4b** `FindingRepository.understanding_by_domain()` — per-(domain, maturity, status) aggregate
+>   over active head revisions (one row per canonical_id) that backs **understanding %** (CC15).
+> - **C.4c** `CoverageService` (capability `coverage`) — combines coverage % (done/total) with a
+>   maturity/confidence-weighted, contested-discounted understanding % into a per-domain + overall
+>   summary (**coverage ≠ comprehension**), and enumerates/flags stale rows for targeted
+>   re-extraction (A10).
+> - **C.4d** recording wired at both extraction completion points: `IngestionService` (success +
+>   the unreadable/unsupported/empty path) and `IntelligenceService.learn_repository` (asset-backed
+>   learns, stamped with `extractor_version`). Coverage is **best-effort telemetry** — a recorder
+>   failure never breaks ingest/learn.
+> - **C.4e** bootstrap wiring (`CoverageRepository` + `CoverageService` → `IntelligenceService` +
+>   container/capability) + `GET /v1/knowledge/coverage` + `atlas coverage` CLI. Hermetic API/CLI
+>   tests + a bootstrap smoke.
+
+> **Deviations / notes:** (1) C.4 consumed exactly the one penciled migration `0035`, so downstream
+> C.5–C.8 numbers (`0036`–`0039`) are unchanged. (2) The unified `IngestionService` is not yet
+> constructed in the kernel (that bridge is still `OI-C5`), so its coverage recorder is wired +
+> hermetically tested but only takes effect once `IngestionService` is bootstrapped; the code path
+> for `IntelligenceService` is live now. (3) `understanding %` weighting (established 1.0 / verified
+> 0.66 / candidate 0.33, × status factor active 1.0 / contested 0.5 / deprecated 0.25) is a policy in
+> `atlas/knowledge/coverage.py`, kept out of SQL so it stays explainable and tunable.
+
+*(Original plan below.)*
+
 - **Coverage store** (`knowledge.coverage`): per `(asset_id, asset_version, reader, reader_version)`
   extraction status (pending/done/failed, counts, timestamps, extractor_version); a service that
   rolls up **per-domain / per-source coverage** ("Python 100%, MATLAB 20%").
@@ -402,7 +434,7 @@ Learning ledger, mission/config/schedule/worker). New objects created `AUTHORIZA
 | `0029_asset_groups` ✅ | `asset.groups` + `asset.group_members` — group related assets (repo + design doc + chat) (CC14). *(Shipped as C.2d; this is the table planned below as `0035_asset_relationships`.)* |
 | _(placeholders below)_ | **Note:** numbers `0030+` are **planning placeholders**; actual migration numbers are assigned sequentially at implementation time. `finding_embeddings`, `knowledge_coverage`, etc. now shift to `0030`, `0031`, … as the slots below are built. |
 | `00xx_finding_embeddings` | Prose-finding **embeddings** for NN dedup + retrieval (pgvector — already used by `knowledge.embeddings`); `embedding_id` provenance stamp. |
-| `0030_knowledge_coverage` | `knowledge.coverage` — per `(asset_id, asset_version, reader, reader_version)` extraction status/counts + rollup helpers. |
+| `0035_knowledge_coverage` ✅ | `knowledge.coverage` — per `(asset_id, asset_version, reader, reader_version)` extraction status/counts + `extractor_version`/`domain`/`source`/`repo_uid`. *(Shipped as C.4a at slot `0035`; understanding % is a `FindingRepository.understanding_by_domain()` aggregate + `CoverageService` policy, not columns on this table.)* |
 | `0031_policy` | `policy.policies` — operator rules (scope/subject/rule/strength/enabled/provenance/created_by). |
 | `0032_experience_consolidation` | Extend `learning.experiences` with evidence list + confidence + corroboration count (consolidation fields). |
 | `0033_personal` | `personal.*` — profile facts, skills, timeline, professional (publications/patents), each with provenance + confidence + `inferred/verified` status. |
@@ -457,5 +489,8 @@ doc**, exactly as Phases A/B did.
 > candidates/lineage/maturity + evidence accumulation + hybrid NN dedup + prose pipeline) ✅ DONE**
 > (migrations `0030`–`0034`; commits `7919464`, `de0522b`, `deaac08`, `5f1634c`, `58f7c78`, `f5624b0`,
 > `4595ee8`; full suite 1339 green, 1 known pre-existing env flake `OI-T2`; leftovers `OI-C1`–`OI-C5`).
-> **Next: C.4** (Knowledge Coverage map + understanding quality; migration re-penciled `0035`).
+> **C.4 (Knowledge Coverage map + understanding quality) ✅ DONE** (migration `0035`; commits
+> `4039739`, `b40ab0f`, `949a125`, `c8b3b40`, `f3e0f91`; full suite 1360 green, same 1 known
+> pre-existing env flake `OI-T2`). C.4 consumed exactly `0035`, so C.5–C.8 keep `0036`–`0039`.
+> **Next: C.5** (Policy store; migration `0036`).
 > Land/test/smoke/update-doc per slice, exactly as Phases A/B.
