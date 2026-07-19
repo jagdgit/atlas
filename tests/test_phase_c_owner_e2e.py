@@ -221,9 +221,11 @@ def test_owner_knowledge_mission_learns_archive_and_survives_reboot(stack: _Owne
         ),
     })
     chats = _write(tmp_path / "archive" / "chats", {
+        # Token keeps the content-addressed asset sha unique per run so a stale row from a prior
+        # run in the shared dev DB (OI-T1) can't be reused with now-deleted backing bytes.
         "session.jsonl": (
-            '{"role":"user","content":"I spent years optimizing PostgreSQL for analytics workloads."}\n'
-            '{"role":"assistant","content":"That is deep database expertise."}\n'
+            f'{{"role":"user","content":"I spent years optimizing PostgreSQL for analytics workloads. {token}"}}\n'
+            '{"role":"assistant","content":"That is deep database expertise across many projects."}\n'
         ),
     })
 

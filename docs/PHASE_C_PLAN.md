@@ -481,7 +481,46 @@
   confidence + `inferred/verified` status, readable by other missions; operator confirm/correct
   flows work; a resume/LinkedIn draft is generated purely from the experience profile.
 
-#### C.8 Owner Knowledge Mission + User Archive source + API/dashboard  ·  migration `0039` *(re-penciled)*
+#### C.8 Owner Knowledge Mission + User Archive source + API/dashboard  ·  ✅ DONE *(no migration needed)*
+> **Delivered** as C.8a–e (commits `c349a0c`, `6110c3e`, `1ad19af`, `8dc79fe`, `612f348`). The
+> Owner Knowledge Mission is a **built-in template + a persistent worker**, and its archive roots
+> ride the existing **versioned mission-config** store — both code-seeded — so **no migration `0039`
+> was required** (RepoWatcher/B.6 set the same precedent; slot `0039` stays free for the next real
+> schema). Details:
+> - **C.8a — Conversation Reader** (`atlas/readers/conversation.py`, reader `conversation@1.0.0`):
+>   turns chat/Cursor `.json`/`.jsonl` exports into a cached transcript Artifact (BB11) with
+>   per-message sections; tolerant parsing (role from role/type/sender/author, text from
+>   content/text/message/body incl. content-parts; malformed lines skipped); ok/unsupported/empty/
+>   error outcome vocab. Chats are now a first-class knowledge source.
+> - **C.8b — pluggable bridge**: `IngestionService.ingest_file/bytes` gained a per-call `reader` +
+>   `source` so conversations flow through the *same* Asset→Reader→Artifact→chunks+candidates+
+>   coverage pipeline; `source` propagates into the document/coverage/candidate provenance.
+> - **C.8c — Owner Knowledge Mission**: strict `owner_knowledge` config schema (`archive_roots:
+>   [{path, kind ∈ code|document|conversation, domain, extensions}]`, `build_profile`, `embed`,
+>   `policy`) registered in `default_registry`; a built-in `owner_knowledge` template; and the
+>   `OwnerKnowledgeWorker` that per tick drives the one pipeline per root (code → `learn_repository`
+>   → findings + experiences; doc → DocumentReader; chat → ConversationReader), drains prose
+>   candidates into findings, then rebuilds the personal profile (`PersonalService.infer`,
+>   inferred-only, CC7). Per-root content checksums make unchanged roots cheap no-ops and make the
+>   loop reboot-safe (checkpoint state); a bad root never crashes the tick; **never completes**.
+> - **C.8d — wiring + surfaces**: bootstrap now constructs the ingestion bridge (AssetAcquirer +
+>   Document/Conversation readers + ProseKnowledgeExtractor + CandidateConsumer + coverage) and
+>   registers the worker (**closes `OI-C5`**); `GET /v1/personal/dashboard` (per-domain coverage +
+>   understanding + assembled skills/timeline/professional; live updates ride the existing
+>   `/v1/events/stream` SSE feed); `atlas personal dashboard` CLI.
+> - **C.8e — live-DB e2e** (`tests/test_phase_c_owner_e2e.py`): instantiate the mission over a mixed
+>   archive (repo + doc + chat) → findings + experiences + inferred skills + coverage in one tick;
+>   a fresh WorkerManager resumes and no-ops the unchanged archive; a config edit is version-bumped +
+>   picked up (journaled); the profile survives mission archival (P12).
+>
+> **Deviations / leftovers:** the worker processes per-domain *roots directly per tick* (RepoWatcher
+> precedent) rather than spawning `JobService` child jobs — "per-domain jobs" realized as per-root
+> processing units; a standalone Personal/Owner **SPA view** was not added (the aggregator endpoint +
+> shared SSE are in place) — tracked as `OI-C12`. Conversation→experience extraction is deferred
+> (chats currently yield findings/candidates, not experiences) — `OI-C13`.
+
+<details><summary>Original C.8 plan (for reference)</summary>
+
 - **User Archive** = a new **asset source** (not a job that finishes): a configured set of archive
   roots (code, docs, papers, notes, chats/Cursor exports). A **Conversation Reader**
   (`atlas/readers/conversation.py`) turns chat/Cursor exports into assets → artifacts → findings +
@@ -497,6 +536,8 @@
   per-domain jobs, ingests code + docs + a chat export **once each**, produces engineering findings
   **and** a consolidated experience/skills/timeline profile, shows coverage, survives a restart, and
   is config-versioned — all journaled.
+
+</details>
 
 #### C.9 End-to-end acceptance (the Phase-C gate)
 Mirrors `tests/test_phase_b_e2e.py` against the live DB: ingest a mixed archive (a real code repo +
@@ -527,7 +568,7 @@ Learning ledger, mission/config/schedule/worker). New objects created `AUTHORIZA
 | `0036_policy` ✅ | `policy` schema — `policy.rules` (scope/subject/rule/strength/enabled/provenance/created_by, `prefer|avoid|trust|distrust`) + append-only `policy.events` before/after journal. *(Shipped as C.5a at slot `0036`; governance is a dedicated journal, not the learning ledger.)* |
 | `0037_experience_consolidation` ✅ | Extend `learning.experiences` with the consolidator's lifecycle machinery (`identity_key`, `canonical_id`+`revision`, `evidence`/`contradicting`, `confidence`/`confidence_score`, `corroboration_count`, `maturity`, `superseded_by`) + widened status CHECK. *(Shipped as C.6a at slot `0037`; consumed via the `ExperienceStore` adapter over the shared consolidator, not a new store.)* |
 | `0038_personal` ✅ | `personal` schema — `personal.facts` (single store keyed on `(category, key, subject)` for `identity/skill/timeline/professional`, with `value`+provenance+`confidence`+`state ∈ inferred/verified/rejected`) + append-only `personal.events` before/after journal. *(Shipped as C.7a at slot `0038`; governed like the Policy store, upsert never downgrades operator decisions.)* |
-| `0034_owner_mission` | Owner Knowledge Mission built-in template + `user_archive` config schema; (worker types reuse Phase-A/B). |
+| ~~`0034_owner_mission`~~ ✅ *(no migration)* | Owner Knowledge Mission (C.8): shipped as a **code-seeded** built-in template + the strict `owner_knowledge` config schema (archive roots ride the existing versioned mission-config store) + the `OwnerKnowledgeWorker`. **No new schema needed** — RepoWatcher/B.6 precedent; slot `0039` stays free for the next real migration. |
 | `0035_asset_relationships` | `asset.groups` (id, name, kind) + `asset.membership`, and/or pairwise `asset.related` (asset_a, asset_b, relation) — tie a project's repo/doc/PDF/chat together (CC14). |
 | `0036_knowledge_candidates` | `knowledge.candidates` — transient reader observations (statement, claim_type, identity_key, embedding, evidence_ref, ts); Consolidator input, pruned after consolidation (CC11). |
 | `0037_knowledge_lineage` | `knowledge.lineage` — evidence-graph edges `{finding_id, revision, edge_type (created_by/supported_by/revised_by/superseded_by/contradicted_by), evidence_ref, ts}` (CC12). |
@@ -584,7 +625,12 @@ doc**, exactly as Phases A/B did.
 > `7682a8b`, `ea69571`, `6c25809`, `b2ef4c7`; full suite 1385 green, same 1 known pre-existing env
 > flake `OI-T2`). C.5 consumed exactly `0036`, so C.6–C.8 keep `0037`–`0039`.
 > **C-Foundations complete; C-Personal: C.6 (experience) + C.7 (personal domain) complete.** C.7
-> consumed exactly `0038` (`0038_personal`), so C.8 keeps `0039`. **Next: C.8** (Owner Knowledge
-> Mission + User Archive source + Conversation Reader + Personal/Owner dashboard; migration `0039`).
-> Full suite green after C.7 (see the C.7 commit run; only the pre-existing `test_event_lifecycle`
-> flake `OI-T2`). Land/test/smoke/update-doc per slice, exactly as Phases A/B.
+> consumed exactly `0038` (`0038_personal`).
+> **C.8 (Owner Knowledge Mission + User Archive source + Conversation Reader + Personal/Owner
+> dashboard) ✅ DONE** (commits `c349a0c`, `6110c3e`, `1ad19af`, `8dc79fe`, `612f348`). C.8 needed
+> **no migration** (template + config schema are code-seeded; archive roots ride mission config), so
+> slot `0039` stays free. New leftovers `OI-C12` (Personal/Owner SPA view), `OI-C13`
+> (conversation→experience extraction); `OI-C5` closed (ingestion bridge + candidate consumer wired).
+> **C-Personal complete. Next: C.9** — the Phase-C end-to-end gate (mixed-archive acceptance,
+> re-extraction delta, policy bias, owner mission on schedule; hermetic + one live-DB integration).
+> Land/test/smoke/update-doc per slice, exactly as Phases A/B.
