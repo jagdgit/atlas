@@ -64,6 +64,27 @@ class FakeFindingRepo:
                 return row
         return None
 
+    def append_revision(self, previous, data):
+        """Revise in place: new row, same canonical_id, revision+1, old superseded (C.3e)."""
+        new = self.create(
+            str(data.get("statement", previous.get("statement", ""))),
+            canonical_id=previous["canonical_id"],
+            revision=int(previous.get("revision", 1)) + 1,
+            value=data.get("value", previous.get("value")),
+            claim_type=str(data.get("claim_type", previous.get("claim_type", "structure"))),
+            confidence=str(data.get("confidence", previous.get("confidence", "UNVERIFIED"))),
+            confidence_score=float(
+                data.get("confidence_score", previous.get("confidence_score", 0)) or 0
+            ),
+            status=str(data.get("status", "active") or "active"),
+            provenance=data.get("provenance") if isinstance(data.get("provenance"), dict)
+            else (previous.get("provenance") or {}),
+            domain=str(data.get("domain", previous.get("domain", "research"))),
+            identity_key=list(previous.get("identity_key") or []),
+        )
+        self.set_status(str(previous["id"]), "superseded", superseded_by=str(new["id"]))
+        return new
+
     def set_status(self, finding_id, status, *, superseded_by=None):
         row = self._rows.get(str(finding_id))
         if row is None:

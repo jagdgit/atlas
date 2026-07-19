@@ -11,7 +11,6 @@ writes findings; it owns no state and makes no decisions.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -27,21 +26,6 @@ EXTRACTOR_VERSION = "1.0.0"
 CLAIM_STRUCTURE = "structure"
 CLAIM_DEPENDENCY = "dependency"
 CLAIM_PATTERN = "pattern"
-
-
-def _content_key(data: dict[str, Any]) -> tuple[str, str, str]:
-    """Durable content of an engineering finding — change ⇒ a new revision (BB9).
-
-    Deliberately excludes volatile lifecycle fields (status/timestamps); an unchanged
-    re-ingest re-derives the same key and is a no-op instead of a spurious revision.
-    """
-    value = data.get("value")
-    value_key = json.dumps(value, sort_keys=True) if isinstance(value, dict) else str(value)
-    return (
-        str(data.get("statement", "")).strip(),
-        value_key,
-        str(data.get("confidence", "")),
-    )
 
 
 def _provenance(
@@ -174,16 +158,30 @@ def build_engineering_findings(
 
 
 class EngineeringFindingWriter:
-    """Governed, supersession-aware writer for engineering findings (B.2/BB9)."""
+    """Governed, supersession-aware writer for engineering findings (B.2/BB9).
+
+    C.3e — the per-finding write goes through the **Knowledge Consolidator**
+    (``KnowledgeLifecycleService.consolidate``) so there is a single create/noop/revise path for all
+    knowledge. This writer keeps only what the one-finding-at-a-time consolidator has *no* concept
+    of: the **repo-scoped batch archival** of findings that vanished from the current ingest
+    (``_archive_stale``), which stays as a distinct post-step wrapper.
+    """
 
     def __init__(
         self,
         finding_repo: "FindingRepository",
         *,
+        lifecycle: Any | None = None,
+        lineage: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._repo = finding_repo
         self._logger = logger or logging.getLogger("atlas.engineering.findings")
+        if lifecycle is None:
+            from atlas.knowledge.consolidation import KnowledgeLifecycleService
+
+            lifecycle = KnowledgeLifecycleService(finding_repo, lineage=lineage, logger=self._logger)
+        self._life = lifecycle
 
     def write(
         self,
@@ -191,12 +189,14 @@ class EngineeringFindingWriter:
         *,
         archive_claim_types: set[str] | None = None,
     ) -> dict[str, Any]:
-        """Create/supersede the given findings and archive stale ones for the repo.
+        """Consolidate the given findings and archive stale ones for the repo.
 
-        ``archive_claim_types`` scopes archival to the given claim types — so an ingest that
-        deliberately omits a family of findings (e.g. a doc-only re-ingest that **skips** the
-        LLM design review, B.5) does **not** archive the prior findings of the omitted family.
-        ``None`` (default) archives every stale finding for the repo (back-compatible).
+        Each finding is routed through the Consolidator (single write path, CC3): new → create,
+        unchanged → noop, changed body → revise (stable canonical). ``archive_claim_types`` scopes
+        the batch archival to the given claim types — so an ingest that deliberately omits a family
+        of findings (e.g. a doc-only re-ingest that **skips** the LLM design review, B.5) does **not**
+        archive the prior findings of the omitted family. ``None`` (default) archives every stale
+        finding for the repo (back-compatible).
         """
         if not findings:
             return {"created": 0, "revised": 0, "archived": 0, "noop": 0, "ids": []}
@@ -206,28 +206,19 @@ class EngineeringFindingWriter:
         seen: set[tuple[Any, ...]] = set()
 
         for data in findings:
-            identity = finding_identity_key(data)
-            seen.add(identity)
-            existing = self._repo.find_active_by_identity(identity)
-            if existing is None:
-                row = self._create(data, identity)
+            seen.add(finding_identity_key(data))
+            # Engineering findings are durable, active claims; stamp the axes the consolidator's
+            # fingerprint/identity expect so a byte-identical re-ingest is a true no-op.
+            incoming = {**data, "status": "active", "domain": DOMAIN_CODE}
+            row = self._life.consolidate(incoming)
+            transition = row.get("_transition")
+            if transition == "create":
                 created += 1
-                ids.append(str(row["id"]))
-            elif _content_key(existing) == _content_key(data):
+            elif transition == "noop":
                 noop += 1
-                ids.append(str(existing["id"]))
-            else:
-                # Content changed → supersede with a *new* canonical row (never reuse the
-                # canonical_id: knowledge.findings enforces UNIQUE(canonical_id)), mirroring
-                # KnowledgeLifecycleService._supersede so provenance links stay intact.
-                row = self._create(data, identity)
-                self._repo.set_status(
-                    str(existing["id"]), "superseded", superseded_by=str(row["id"])
-                )
-                if hasattr(self._repo, "set_supersedes"):
-                    self._repo.set_supersedes(str(row["id"]), str(existing["id"]))
+            else:  # revise / supersede / split_contested / contested / merge_evidence
                 revised += 1
-                ids.append(str(row["id"]))
+            ids.append(str(row["id"]))
 
         archived = self._archive_stale(
             repo_uid, keep=seen, claim_types=archive_claim_types
@@ -240,19 +231,6 @@ class EngineeringFindingWriter:
             "created": created, "revised": revised, "archived": archived,
             "noop": noop, "ids": ids,
         }
-
-    def _create(self, data: dict[str, Any], identity: tuple[Any, ...]) -> dict[str, Any]:
-        return self._repo.create(
-            str(data.get("statement", "")),
-            value=data.get("value"),
-            claim_type=str(data.get("claim_type", "structure")),
-            confidence=str(data.get("confidence", "UNVERIFIED")),
-            confidence_score=float(data.get("confidence_score", 0.0) or 0.0),
-            status="active",
-            provenance=data.get("provenance") or {},
-            domain=DOMAIN_CODE,
-            identity_key=list(identity),
-        )
 
     def archive_for_repo(self, repo_uid: str) -> int:
         """Archive every active engineering finding for a repo (revert path, BB9)."""
