@@ -19,10 +19,101 @@ from atlas.knowledge.lifecycle import (
     STATUS_DEPRECATED,
     STATUS_SUPERSEDED,
     apply_freshness,
+    body_fingerprint,
     content_fingerprint,
     decide_lifecycle_transition,
+    derive_maturity,
     finding_identity_key,
+    independent_source_count,
+    merge_confidence,
+    merge_confidence_score,
 )
+
+# Lineage edge types (mirror atlas.repositories.lineage_repo; kept as literals to avoid importing the
+# DB repo into the consolidation core — the lineage recorder is duck-typed).
+EDGE_CREATED_BY = "created_by"
+EDGE_SUPPORTED_BY = "supported_by"
+EDGE_REVISED_BY = "revised_by"
+EDGE_SUPERSEDED_BY = "superseded_by"
+EDGE_CONTRADICTED_BY = "contradicted_by"
+
+
+def _source_id(entry: Any) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("source_id") or entry.get("source") or "")
+    return str(entry)
+
+
+def _sources(raw: Any) -> list[dict[str, Any]]:
+    """Normalize a supporting/contradicting field to a list of dict entries."""
+    out: list[dict[str, Any]] = []
+    for entry in raw or []:
+        if isinstance(entry, dict):
+            out.append(entry)
+        elif entry:
+            out.append({"source_id": str(entry)})
+    return out
+
+
+def _union_sources(
+    existing: list[dict[str, Any]], incoming: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Union by source_id, preserving existing order then appending genuinely new sources."""
+    seen = {_source_id(e) for e in existing if _source_id(e)}
+    merged = list(existing)
+    for entry in incoming:
+        sid = _source_id(entry)
+        if sid and sid not in seen:
+            merged.append(entry)
+            seen.add(sid)
+    return merged
+
+
+def _evidence_ref(data: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort evidence descriptor for a lineage edge (asset/source/reader/provenance)."""
+    ref = data.get("evidence_ref")
+    if isinstance(ref, dict) and ref:
+        return dict(ref)
+    prov = data.get("provenance") if isinstance(data.get("provenance"), dict) else {}
+    keys = (
+        "asset_id", "asset_version", "source", "reader", "reader_version",
+        "candidate_id", "mission_id", "job_id", "repo_uid", "path",
+    )
+    return {k: prov[k] for k in keys if k in prov}
+
+
+def _observed_at(row: dict[str, Any]) -> Any:
+    return (
+        row.get("last_verified")
+        or row.get("observed_at")
+        or row.get("created_at")
+        or row.get("updated_at")
+    )
+
+
+def _parse_ts(ts: Any) -> datetime | None:
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_newer(data: dict[str, Any], existing: dict[str, Any]) -> bool:
+    """True only when the incoming observation is strictly newer than the existing finding.
+
+    Used to distinguish evolution (newer claim → revise) from same-time conflict (→ contested).
+    Unknown timestamps are treated as *not newer* (conservative: prefer contest over silent revise).
+    """
+    a = _parse_ts(_observed_at(data))
+    b = _parse_ts(_observed_at(existing))
+    if a is None or b is None:
+        return False
+    return a > b
 
 
 class FindingStore(Protocol):
@@ -48,32 +139,61 @@ class KnowledgeLifecycleService:
         store: FindingStore,
         *,
         enqueue=None,
+        lineage=None,
+        established_min_sources: int = 3,
         logger: logging.Logger | None = None,
     ) -> None:
         self._store = store
         self._enqueue = enqueue
+        # Duck-typed lineage recorder (``.record(finding_id, edge_type, ...)``); None → no lineage
+        # (back-compatible for callers that predate the evidence graph, C.3b).
+        self._lineage = lineage
+        self._established_min_sources = established_min_sources
         self._logger = logger or logging.getLogger("atlas.knowledge.lifecycle")
 
     # --- SynthesisCapability-adjacent consolidate API -------------------
     def consolidate(
         self, incoming: dict[str, Any], *, now: datetime | None = None
     ) -> dict[str, Any]:
-        """Create or append-revision a finding; never overwrites prior statement."""
+        """Single write path: create, strengthen (evidence-merge), revise, supersede or contest.
+
+        Never overwrites a prior statement body. Evidence accumulation (C.3d): the *same* statement
+        seen from a new source strengthens the finding **in place** — one finding, N evidence entries,
+        higher confidence, rising maturity — WITHOUT spawning a revision. Revisions are reserved for
+        genuine statement/value changes; same-time disagreements become ``contested``.
+        """
         data = dict(incoming)
         data["freshness"] = apply_freshness(data, now=now)
         identity = finding_identity_key(data)
         existing = self._store.find_active_by_identity(identity)
+
+        if existing is None:
+            row = self._create_new(data)
+            self._record_lineage(row, EDGE_CREATED_BY, data)
+            row["_transition"] = "create"
+            return row
+
+        explicit = data.get("transition") or data.get("gold_transition")
+        body_changed = body_fingerprint(_row_as_finding_dict(existing)) != body_fingerprint(data)
+
+        # C.3d evidence accumulation / contradiction — only for the implicit path (no explicit
+        # transition), so eval fixtures and the revise/supersede APIs keep their exact behavior.
+        if not explicit:
+            merged = self._accumulate(existing, data, body_changed=body_changed)
+            if merged is not None:
+                return merged
+
         changed = (
-            existing is not None
-            and content_fingerprint(_row_as_finding_dict(existing))
+            content_fingerprint(_row_as_finding_dict(existing))
             != content_fingerprint(data)
         )
         transition = decide_lifecycle_transition(
             existing=existing, incoming=data, content_changed=changed
         )
 
-        if transition == "create" or existing is None:
+        if transition == "create":
             row = self._create_new(data)
+            self._record_lineage(row, EDGE_CREATED_BY, data)
             row["_transition"] = "create"
             return row
 
@@ -90,6 +210,8 @@ class KnowledgeLifecycleService:
 
         if transition == "supersede":
             row = self._supersede(existing, data)
+            self._record_lineage(row, EDGE_SUPERSEDED_BY, data,
+                                 detail={"supersedes": str(existing["id"])})
             row["_transition"] = "supersede"
             return row
 
@@ -98,14 +220,126 @@ class KnowledgeLifecycleService:
             data["status"] = STATUS_CONTESTED
             row = self._store.append_revision(existing, data)
             row = dict(row)
+            self._record_lineage(row, EDGE_CONTRADICTED_BY, data)
             row["_transition"] = "split_contested"
             return row
 
-        # revise (default for content change)
+        # revise (default for a genuine body change)
         row = self._store.append_revision(existing, data)
         row = dict(row)
+        self._record_lineage(row, EDGE_REVISED_BY, data,
+                             detail={"supersedes": str(existing["id"])})
         row["_transition"] = "revise"
         return row
+
+    # --- C.3d evidence accumulation ------------------------------------
+    def _accumulate(
+        self, existing: dict[str, Any], data: dict[str, Any], *, body_changed: bool
+    ) -> dict[str, Any] | None:
+        """Strengthen/contest a finding in place when only the *evidence* changed.
+
+        Returns the updated row (with ``_transition``) when it handled the observation, else ``None``
+        to defer to the transition machine (create/noop/revise/supersede).
+        """
+        # In-place merge needs the richer store API; minimal stores fall back to the machine.
+        if not hasattr(self._store, "update_evidence"):
+            return None
+
+        existing_support = _sources(existing.get("supporting") or existing.get("supporting_sources"))
+        existing_contra = _sources(existing.get("contradicting") or existing.get("contradicting_sources"))
+        incoming_support = _sources(data.get("supporting_sources") or data.get("supporting"))
+        incoming_contra = _sources(data.get("contradicting_sources") or data.get("contradicting"))
+
+        if body_changed:
+            # A genuine body change: evolution (newer → revise via machine) vs conflict (same-time
+            # disagreement → contested). Only intervene when there's an actual contradiction signal.
+            if not (incoming_contra or data.get("conflict")):
+                return None
+            if _is_newer(data, existing):
+                return None  # newer claim → let the machine revise/supersede (evolution)
+            contested = {**data, "transition": "split_contested", "status": STATUS_CONTESTED}
+            row = self._store.append_revision(existing, contested)
+            row = dict(row)
+            self._record_lineage(row, EDGE_CONTRADICTED_BY, data)
+            row["_transition"] = "split_contested"
+            return row
+
+        # Same body — new contradicting evidence → contest in place, no averaging.
+        known_contra = {_source_id(c) for c in existing_contra}
+        new_contra = [c for c in incoming_contra if _source_id(c) not in known_contra]
+        if new_contra:
+            merged_contra = existing_contra + new_contra
+            merged_support = _union_sources(existing_support, incoming_support)
+            row = self._store.update_evidence(
+                str(existing["id"]),
+                supporting=merged_support,
+                contradicting=merged_contra,
+                status=STATUS_CONTESTED,
+                last_verified=data.get("last_verified"),
+            ) or existing
+            row = dict(row)
+            self._record_lineage(row, EDGE_CONTRADICTED_BY, data)
+            row["_transition"] = "contested"
+            return row
+
+        # Same body — new supporting evidence → strengthen in place (no revision).
+        merged_support = _union_sources(existing_support, incoming_support)
+        if len(merged_support) > len(existing_support):
+            count = independent_source_count(merged_support)
+            confidence = merge_confidence(
+                existing=existing.get("confidence"),
+                incoming=data.get("confidence"),
+                source_count=count,
+            )
+            score = merge_confidence_score(
+                existing=float(existing.get("confidence_score") or 0),
+                incoming=float(data.get("confidence_score") or 0),
+                source_count=count,
+            )
+            maturity = derive_maturity(
+                supporting_count=count,
+                confidence=confidence,
+                established_min_sources=self._established_min_sources,
+            )
+            row = self._store.update_evidence(
+                str(existing["id"]),
+                supporting=merged_support,
+                confidence=confidence,
+                confidence_score=score,
+                maturity=maturity,
+                last_verified=data.get("last_verified"),
+            ) or existing
+            row = dict(row)
+            self._record_lineage(
+                row, EDGE_SUPPORTED_BY, data,
+                detail={"sources": count, "confidence": confidence, "maturity": maturity},
+            )
+            row["_transition"] = "merge_evidence"
+            return row
+
+        return None  # nothing new → defer to the machine (noop)
+
+    def _record_lineage(
+        self,
+        row: dict[str, Any],
+        edge_type: str,
+        data: dict[str, Any],
+        *,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        if self._lineage is None:
+            return
+        try:
+            self._lineage.record(
+                str(row["id"]),
+                edge_type,
+                canonical_id=str(row.get("canonical_id") or "") or None,
+                revision=int(row.get("revision") or 1),
+                evidence_ref=_evidence_ref(data),
+                detail=detail or {},
+            )
+        except Exception as exc:  # noqa: BLE001 - lineage is best-effort audit, never blocks a write
+            self._logger.warning("lineage record failed: %s", exc)
 
     def revise(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """Capability contract: revise an existing finding with new evidence/content."""
@@ -263,18 +497,25 @@ class KnowledgeLifecycleService:
         return out
 
     def _create_new(self, data: dict[str, Any]) -> dict[str, Any]:
+        supporting = list(data.get("supporting_sources") or data.get("supporting") or [])
+        confidence = str(data.get("confidence", "UNVERIFIED"))
+        maturity = derive_maturity(
+            supporting_count=independent_source_count(supporting),
+            confidence=confidence,
+            established_min_sources=self._established_min_sources,
+        )
         return self._store.create(
             str(data.get("statement", "")),
             canonical_id=data.get("canonical_id") or None,
             revision=1,
             value=data.get("value"),
             claim_type=str(data.get("claim_type", "prose") or "prose"),
-            confidence=str(data.get("confidence", "UNVERIFIED")),
+            confidence=confidence,
             confidence_score=float(data.get("confidence_score", 0) or 0),
             status=str(data.get("status", STATUS_ACTIVE) or STATUS_ACTIVE),
             freshness=str(data.get("freshness", "current")),
             quality=data.get("quality") if isinstance(data.get("quality"), dict) else {},
-            supporting=list(data.get("supporting_sources") or data.get("supporting") or []),
+            supporting=supporting,
             contradicting=list(
                 data.get("contradicting_sources") or data.get("contradicting") or []
             ),
@@ -285,6 +526,7 @@ class KnowledgeLifecycleService:
             last_verified=data.get("last_verified") or _utcnow_iso(),
             finding_id=None,  # always new UUID for durable create
             identity_key=list(finding_identity_key(data)),
+            maturity=maturity,
         )
 
     def _supersede(self, existing: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:

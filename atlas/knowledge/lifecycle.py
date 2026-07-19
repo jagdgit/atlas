@@ -132,6 +132,56 @@ def finding_identity_key(data: dict[str, Any]) -> tuple[Any, ...]:
     return ("prose", domain, normalize_statement(str(data.get("statement", ""))))
 
 
+def body_fingerprint(data: dict[str, Any]) -> tuple[Any, ...]:
+    """Fingerprint of the durable claim **body only** — statement + value.
+
+    Unlike :func:`content_fingerprint`, this EXCLUDES supporting/contradicting sources, confidence
+    and status. A change here is a genuine statement/value change (→ revision); a change only in the
+    evidence set is *not* a body change (→ evidence-merge in place, C.3d).
+    """
+    value = data.get("value")
+    if isinstance(value, dict):
+        value_key: Any = (
+            value.get("number"),
+            normalize_unit(str(value.get("unit", ""))),
+            str(value.get("kind", "")).strip().lower(),
+        )
+    else:
+        value_key = None
+    return (normalize_statement(str(data.get("statement", ""))), value_key)
+
+
+_CONF_ORDER = {"": 0, "UNVERIFIED": 1, "INSUFFICIENT": 1, "LOW": 2, "MEDIUM": 3, "HIGH": 4}
+_CONF_LABELS = {0: "UNVERIFIED", 1: "UNVERIFIED", 2: "LOW", 3: "MEDIUM", 4: "HIGH"}
+
+
+def merge_confidence(
+    *, existing: str | None, incoming: str | None, source_count: int
+) -> str:
+    """Confidence after corroboration — monotonic, never downgrades on new support (C.3d).
+
+    Takes the stronger of the existing/incoming label, then bumps for independent corroboration:
+    ≥2 sources ⇒ at least MEDIUM, ≥3 ⇒ at least HIGH. Explainable and bounded.
+    """
+    base = max(
+        _CONF_ORDER.get((existing or "").upper(), 0),
+        _CONF_ORDER.get((incoming or "").upper(), 0),
+    )
+    if source_count >= 3:
+        base = max(base, 4)
+    elif source_count >= 2:
+        base = max(base, 3)
+    return _CONF_LABELS[base]
+
+
+def merge_confidence_score(
+    *, existing: float, incoming: float, source_count: int
+) -> float:
+    """Bounded, monotonic score that grows with corroboration (C.3d)."""
+    corroboration = 0.3 + 0.2 * max(0, source_count - 1)
+    return round(min(0.99, max(existing, incoming, corroboration)), 4)
+
+
 def content_fingerprint(data: dict[str, Any]) -> tuple[Any, ...]:
     """Fingerprint of durable content — change ⇒ new revision."""
     value = data.get("value")
