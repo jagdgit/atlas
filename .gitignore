@@ -23,17 +23,19 @@ config/local.yaml
 *.swp
 *.swo
 
-# Data (runtime — lives in /data/atlas_data)
-documents/
-knowledge/
-logs/
-models/
-state/
-cache/
-backups/
-checkpoints/
-experiments/
-tmp/
+# Data (runtime — lives in /data/atlas_data or at the repo root, NEVER source).
+# Anchored with a leading "/" so these match ONLY top-level runtime dirs and do
+# not swallow source packages like atlas/knowledge/, atlas/models/, atlas/documents/.
+/documents/
+/knowledge/
+/logs/
+/models/
+/state/
+/cache/
+/backups/
+/checkpoints/
+/experiments/
+/tmp/
 
 # Test / coverage
 .pytest_cache/
