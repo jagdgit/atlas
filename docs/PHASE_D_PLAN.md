@@ -273,7 +273,7 @@
   checkpoint), is **config-versioned** (an edit bumps the version and is picked up), and **notifies** on
   a notable event. Live-DB e2e + hermetic unit tests per component.
 
-### D.7 — Research Watcher
+### D.7 — Research Watcher  ·  ✅ DONE
 - A `research_watcher` worker driving `ResearchService.research` on a schedule → summaries into the
   Knowledge OS; Decision Engine ranks/what-to-read-next; notify on notable findings. Reuses D-Core.
 
@@ -324,7 +324,8 @@ are incremental follow-ons.
   fixtures first).
 - **OI-D2** RM arbitration refinements beyond weighted-priority + hard cap (preemption, fair-share) —
   A7 says refine empirically.
-- **OI-D3** Watchers D.7–D.10 are scoped but land after the Paper-Trading gate.
+- **OI-D3** Watchers D.8–D.10 (Job / Tech-Security / Self-Improvement) land after Research Watcher
+  (D.7 ✅).
 - **OI-D4** Real-world side-effecting appliers (e.g. actually posting a job application draft) stay
   behind the approval gate and are **out of scope** until explicitly requested (P14).
 - **OI-D5** Decision-scale policy arbitration uses a fixed `influence_scale` (×50) to lift retrieval-
@@ -351,5 +352,11 @@ are incremental follow-ons.
 > reboot-safe) · real `paper_trading` template + strict `PaperTradingConfig` · bootstrap wiring +
 > `portfolio` capability + 43 tests (indicators/reader/portfolio/strategy/worker hermetic + sim-repo
 > live smoke + Phase-D e2e gate: many journaled decisions, portfolio updates, live operator block,
-> policy `avoid` arbitration, reboot-resume, config-version pickup, notify). **Next: D.7 — Research
-> Watcher (reuses D-Core).**
+> policy `avoid` arbitration, reboot-resume, config-version pickup, notify).
+>
+> **D.7 ✅ DONE** (Research Watcher — continuous literature research, reuses D-Core):
+> `ResearchDecisionRule` (deterministic what-to-read-next over research candidates, policy-
+> arbitrated) · `ResearchWatcher` (`research` → `promote_research` → `decide` → journal → notify
+> on `ResearchFinding`/`ResearchRecommendation`; topic-fingerprint skip, reboot-safe) · real
+> `research` template + strict `ResearchWatcherConfig` · bootstrap wiring · 14 tests (rule +
+> worker hermetic + live decision-journal smoke). **Next: D.8 — Job Watcher.**

@@ -43,8 +43,10 @@ from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
 from atlas.repositories.sim_repo import SimTradingRepository
 from atlas.trading import PortfolioService, StrategyDecisionRule
+from atlas.research import ResearchDecisionRule
 from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
+from atlas.workers.research_watcher import ResearchWatcher
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -921,6 +923,22 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             learning=learning_service,
             events=events,
             logger=get_logger("atlas.workers.paper_trading"),
+        )
+    )
+
+    # Research Watcher (Phase D · §D.7): continuous literature research on a configured topic.
+    # ResearchService.research → promote_research (Knowledge OS) → DecisionEngine (what-to-read-next,
+    # policy-arbitrated) → journal (P9) → notify on notable findings. Recommend-only (DD3).
+    decision_engine.register_rule(ResearchDecisionRule())
+    worker_manager.register_worker_type(
+        ResearchWatcher(
+            research=research_service,
+            decision_engine=decision_engine,
+            knowledge=knowledge_service,
+            learning=learning_service,
+            events=events,
+            data_dir=str(cfg.paths.data),
+            logger=get_logger("atlas.workers.research_watcher"),
         )
     )
 

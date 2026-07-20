@@ -27,12 +27,23 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     # --- domain stubs (real behaviour lands in later phases) -------------
     {
+        # Real template as of Phase D (§D.7): continuous literature research via ResearchService,
+        # promote into Knowledge OS, Decision Engine ranks what-to-read-next, notify on notable findings.
         "name": "research",
-        "template_version": 1,
-        "description": "Continuous literature research on a topic (Phase B/D behaviour).",
-        "config_schema_type": "generic",
-        "default_config": {"topic": "", "depth": "high", "max_papers": 100, "alert_frequency": "daily"},
-        "worker_specs": [],
+        "template_version": 2,
+        "description": "Continuous literature research on a topic (Phase D — Research Watcher).",
+        "config_schema_type": "research_watcher",
+        "config_schema_version": 1,
+        "default_config": {
+            "topic": "",
+            "max_iterations": 3,
+            "max_documents": 12,
+            "per_query": 5,
+            "embed": False,
+            "alert_min_confidence": "medium",
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [{"type": "research_watcher", "interval_seconds": 86400}],
         "knowledge_domains": ["research"],
         "success_criteria": {},
     },

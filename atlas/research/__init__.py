@@ -24,9 +24,14 @@ from atlas.research.service import (
     extract_value,
     query_plan,
 )
+from atlas.research.decision_rule import MISSION_TYPE_RESEARCH, ResearchDecisionRule
+from atlas.research.learn import promote_research
 
 __all__ = [
     "ResearchService",
+    "ResearchDecisionRule",
+    "MISSION_TYPE_RESEARCH",
+    "promote_research",
     "query_plan",
     "extract_value",
     "RESEARCH_OK",

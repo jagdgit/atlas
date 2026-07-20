@@ -149,6 +149,26 @@ class PaperTradingConfig(BaseModel):
     tick_interval_seconds: int = Field(default=300, ge=1)
 
 
+class ResearchWatcherConfig(BaseModel):
+    """Config for the Research Watcher mission (Phase D · §D.7).
+
+    Continuously researches a topic via :class:`~atlas.research.service.ResearchService`,
+    promotes results into the Knowledge OS, and asks the Decision Engine what to read next.
+    ``extra='forbid'`` (a real strict schema). ``topic`` may be empty at instantiation and filled
+    via a later config edit (a new version — B6)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = ""
+    max_iterations: int = Field(default=3, ge=1)
+    max_documents: int = Field(default=12, ge=1)
+    per_query: int = Field(default=5, ge=1)
+    embed: bool = False
+    # Notify when a finding's confidence label is at least this high (high|medium|low|"" = any).
+    alert_min_confidence: str = Field(default="medium", pattern="^(high|medium|low|)$")
+    tick_interval_seconds: int = Field(default=86400, ge=1)
+
+
 # --- registry ------------------------------------------------------------
 
 
@@ -213,4 +233,5 @@ def default_registry() -> SchemaRegistry:
     registry.register("repo_watcher", RepoWatcherConfig, schema_version=1)
     registry.register("owner_knowledge", OwnerKnowledgeConfig, schema_version=1)
     registry.register("paper_trading", PaperTradingConfig, schema_version=1)
+    registry.register("research_watcher", ResearchWatcherConfig, schema_version=1)
     return registry
