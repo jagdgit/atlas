@@ -37,7 +37,7 @@ from atlas.knowledge.candidate_consumer import CandidateConsumer
 from atlas.knowledge.prose_extraction import ProseKnowledgeExtractor
 from atlas.learning.experience_extraction import ExperienceWriter
 from atlas.personal import PersonalService
-from atlas.readers import ConversationReader, DocumentReader, MarketDataReader, JobPostingsReader
+from atlas.readers import ConversationReader, DocumentReader, MarketDataReader, JobPostingsReader, AdvisoryFeedReader
 from atlas.repositories.candidate_repo import CandidateRepository
 from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
@@ -45,10 +45,12 @@ from atlas.repositories.sim_repo import SimTradingRepository
 from atlas.trading import PortfolioService, StrategyDecisionRule
 from atlas.research import ResearchDecisionRule
 from atlas.career import JobDecisionRule
+from atlas.watch import AdvisoryDecisionRule, MISSION_TYPE_SECURITY, MISSION_TYPE_TECHNOLOGY
 from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
+from atlas.workers.tech_security import TechSecurityWatcher
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -960,6 +962,24 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             personal=personal_service,
             events=events,
             logger=get_logger("atlas.workers.job_watcher"),
+        )
+    )
+
+    # Technology / Security Watcher (Phase D · §D.9): one worker pattern, two thin templates.
+    # AdvisoryFeedReader → AdvisoryDecisionRule (registered for both mission types) → notify.
+    # Recommend-only — never patches or remediates (P14).
+    advisory_feed_reader = AdvisoryFeedReader(
+        asset_store, derived_artifacts, logger=get_logger("atlas.readers.advisory_feed")
+    )
+    decision_engine.register_rule(AdvisoryDecisionRule(MISSION_TYPE_TECHNOLOGY))
+    decision_engine.register_rule(AdvisoryDecisionRule(MISSION_TYPE_SECURITY))
+    worker_manager.register_worker_type(
+        TechSecurityWatcher(
+            assets=asset_store,
+            advisory_reader=advisory_feed_reader,
+            decision_engine=decision_engine,
+            events=events,
+            logger=get_logger("atlas.workers.tech_security"),
         )
     )
 

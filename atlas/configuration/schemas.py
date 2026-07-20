@@ -189,6 +189,24 @@ class JobWatcherConfig(BaseModel):
     tick_interval_seconds: int = Field(default=86400, ge=1)
 
 
+class TechSecurityWatcherConfig(BaseModel):
+    """Config for Technology / Security watch missions (Phase D · §D.9) — recommend-only (P14).
+
+    Shared by the ``technology_watch`` and ``security_monitoring`` templates (one worker pattern).
+    ``mode`` selects scoring bias + Decision Engine mission type; ``technologies`` / ``components``
+    are focus aliases. ``extra='forbid'``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sources: list[str] = Field(default_factory=list)  # advisory_feed asset names
+    mode: str = Field(default="technology", pattern="^(technology|security)$")
+    technologies: list[str] = Field(default_factory=list)  # technology_watch focus
+    components: list[str] = Field(default_factory=list)    # security_monitoring focus
+    focus: list[str] = Field(default_factory=list)         # optional unified focus
+    severity_floor: str = Field(default="medium", pattern="^(critical|high|medium|low|info|)$")
+    tick_interval_seconds: int = Field(default=86400, ge=1)
+
+
 # --- registry ------------------------------------------------------------
 
 
@@ -255,4 +273,5 @@ def default_registry() -> SchemaRegistry:
     registry.register("paper_trading", PaperTradingConfig, schema_version=1)
     registry.register("research_watcher", ResearchWatcherConfig, schema_version=1)
     registry.register("job_watcher", JobWatcherConfig, schema_version=1)
+    registry.register("tech_security_watcher", TechSecurityWatcherConfig, schema_version=1)
     return registry

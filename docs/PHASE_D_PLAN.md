@@ -281,7 +281,7 @@
 - A `job_watcher` worker: sources → normalize postings (as assets/readers) → match against
   **Personal** profile + Policy → ranked matches → notify. Recommend-only (drafting, never applying).
 
-### D.9 — Technology / Security Watcher
+### D.9 — Technology / Security Watcher  ·  ✅ DONE
 - A `technology_watch` / `security_monitoring` worker: dependency/CVE/breaking-change feeds → findings →
   Decision Engine prioritization → notify. (Two thin templates over one worker pattern.)
 
@@ -324,7 +324,7 @@ are incremental follow-ons.
   fixtures first).
 - **OI-D2** RM arbitration refinements beyond weighted-priority + hard cap (preemption, fair-share) —
   A7 says refine empirically.
-- **OI-D3** Watchers D.9–D.10 (Tech-Security / Self-Improvement) land after Job Watcher (D.8 ✅).
+- **OI-D3** Watcher D.10 (Self-Improvement) lands after Tech/Security Watcher (D.9 ✅).
 - **OI-D4** Real-world side-effecting appliers (e.g. actually posting a job application draft) stay
   behind the approval gate and are **out of scope** until explicitly requested (P14).
 - **OI-D5** Decision-scale policy arbitration uses a fixed `influence_scale` (×50) to lift retrieval-

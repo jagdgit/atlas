@@ -28,6 +28,11 @@ from atlas.readers.job_postings import (
     JOB_POSTINGS_READER_VERSION,
     JobPostingsReader,
 )
+from atlas.readers.advisory_feed import (
+    ADVISORY_FEED_READER_ID,
+    ADVISORY_FEED_READER_VERSION,
+    AdvisoryFeedReader,
+)
 
 __all__ = [
     "DocumentReader",
@@ -42,4 +47,7 @@ __all__ = [
     "JobPostingsReader",
     "JOB_POSTINGS_READER_ID",
     "JOB_POSTINGS_READER_VERSION",
+    "AdvisoryFeedReader",
+    "ADVISORY_FEED_READER_ID",
+    "ADVISORY_FEED_READER_VERSION",
 ]

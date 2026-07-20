@@ -45,7 +45,7 @@ Forward-looking scope cuts recorded at plan time; opened for real as the slices 
 |----|--------|-----|------|-------|
 | OI-D1 | 🔴 | P2 | **Live market-data feed** (real provider) as a swappable `MarketDataReader`. | DD6 ships fixture/replay first. |
 | OI-D2 | 🔴 | P3 | **RM arbitration beyond weighted-priority + hard cap** (preemption, fair-share). | A7 — refine empirically. |
-| OI-D3 | 🟡 | P2 | **Applied watchers D.9–D.10** (Tech-Security/Self-Improvement) land after Job Watcher (D.8 ✅). | PHASE_D §3 |
+| OI-D3 | 🟡 | P2 | **Applied watcher D.10** (Self-Improvement) lands after Tech/Security Watcher (D.9 ✅). | PHASE_D §3 |
 | OI-D4 | ⚪ | — | **Real-world side-effecting appliers** (e.g. actually submitting a draft) stay behind the P14 approval gate — out of scope until explicitly requested. | PHASE_D DD3/P14 |
 
 ---
