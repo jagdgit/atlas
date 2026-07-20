@@ -289,7 +289,7 @@
 - A `self_improvement` worker over `atlas/eval/` benchmarks/regressions → findings + recommended
   actions (gated), surfaced on the Operations Dashboard.
 
-### D.11 — Phase-D end-to-end gate
+### D.11 — Phase-D end-to-end gate  ·  ✅ DONE
 - One integration test proving a Decision-driven Mission (Paper Trading) running across reboots,
   live-configurable, policy-arbitrated, notifying, with every decision provenance-stamped (P9),
   gated where side-effecting (P14), and reversible; plus the per-item hermetic tests from D.1–D.10.
@@ -324,7 +324,7 @@ are incremental follow-ons.
   fixtures first).
 - **OI-D2** RM arbitration refinements beyond weighted-priority + hard cap (preemption, fair-share) —
   A7 says refine empirically.
-- **OI-D3** Phase-D applied watchers D.7–D.10 are ✅; remaining follow-on is D.11 (Phase-D e2e gate).
+- **OI-D3** Phase D complete (D.1–D.11 ✅). Applied watchers + e2e gate landed.
 - **OI-D4** Real-world side-effecting appliers (e.g. actually posting a job application draft) stay
   behind the approval gate and are **out of scope** until explicitly requested (P14).
 - **OI-D5** Decision-scale policy arbitration uses a fixed `influence_scale` (×50) to lift retrieval-
@@ -376,4 +376,9 @@ are incremental follow-ons.
 > `run_baseline_suite` analysis (floor/regression findings) · `SelfImprovementDecisionRule`
 > (`investigate` / gated `propose_fix`) · `SelfImprovementWatcher` · `ImprovementBoard` +
 > `SelfImprovementApplier` (P14) · ops dashboard `self_improvement` section · real template +
-> config · tests. **Next: D.11 — Phase-D end-to-end gate.**
+> config · tests.
+>
+> **D.11 ✅ DONE** (Phase-D end-to-end gate — `tests/test_phase_d_gate.py`): Paper Trading across
+> reboots + live config pickup + policy `avoid` arbitration + P9 journal + notify; side-effecting
+> self-improvement propose → approve → apply → revert (P14) with dashboard board; bootstrap exposes
+> full D-Core + D-Missions inventory + P15 `capability_gap`. **Phase D complete.**

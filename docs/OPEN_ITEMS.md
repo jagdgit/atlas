@@ -37,15 +37,15 @@ These were introduced during Phase C and are the most likely to be picked up nex
 
 ---
 
-## 1c. Phase D (planned — seeded from `docs/PHASE_D_PLAN.md`)
+## 1c. Phase D (complete — seeded from `docs/PHASE_D_PLAN.md`)
 
-Forward-looking scope cuts recorded at plan time; opened for real as the slices land.
+Scope cuts recorded at plan time; remaining rows are post-Phase-D deferrals / follow-ons.
 
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
 | OI-D1 | 🔴 | P2 | **Live market-data feed** (real provider) as a swappable `MarketDataReader`. | DD6 ships fixture/replay first. |
 | OI-D2 | 🔴 | P3 | **RM arbitration beyond weighted-priority + hard cap** (preemption, fair-share). | A7 — refine empirically. |
-| OI-D3 | 🟢 | P2 | **Applied watchers D.7–D.10** ✅. Remaining Phase-D item: D.11 e2e gate. | PHASE_D §3 |
+| OI-D3 | 🟢 | P2 | **Phase D complete** (D.1–D.11 ✅), including applied watchers + e2e gate. | PHASE_D §3 |
 | OI-D4 | ⚪ | — | **Real-world side-effecting appliers** (e.g. actually submitting a draft) stay behind the P14 approval gate — out of scope until explicitly requested. | PHASE_D DD3/P14 |
 
 ---

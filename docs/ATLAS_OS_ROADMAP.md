@@ -2,7 +2,7 @@
 
 > **Status:** 🟢 **FROZEN FOR IMPLEMENTATION (2026-07-18).** The top-level architecture and
 > principles (P1–P15) are locked; remaining items are non-blocking, per-phase design details
-> (see §12). Phases 0/A/B/C are complete; **Phase D is in progress** (`docs/PHASE_D_PLAN.md`).
+> (see §12). Phases 0/A/B/C/D are complete (`docs/PHASE_D_PLAN.md`).
 > **Created:** 2026-07-18 · **Review round 1:** 9/11 open questions resolved.
 > **Review round 2:** added **Storage Manager** + **Asset Store**, enriched **Capability
 > Registry**, reclassified the **Decision Engine as a Kernel Service**, added **Mission
@@ -883,10 +883,11 @@ rest.
   better reader **without duplication**; a durable, editable personal/professional profile Missions
   can read.
 
-### Phase D — Decision Engine + applied persistent Missions (ongoing)
+### Phase D — Decision Engine + applied persistent Missions · ✅ DONE
 > Split into **D-Core** (the shared brain — *no compromise*, built first) then **D-Missions**
 > (applied missions on top). Detailed plan in `docs/PHASE_D_PLAN.md`. Decided (R6): D-Core first,
 > then **Paper Trading (simulation-only)** as the flagship end-to-end gate; other watchers follow.
+> **Acceptance met** via `tests/test_phase_d_gate.py` (D.11).
 
 **D-Core** (the Decision Engine as a Kernel Service, §5.5 + P14):
 - **Decision Engine** (`atlas/decision/`): typed `DecisionRequest → Decision` (full P9 record),
@@ -1107,7 +1108,6 @@ all long-lived (P1).
 | 2026-07-19 (R5) | Adopt a **full knowledge lifecycle** — maturity (candidate → verified → established) × validity (active → deprecated/contradicted/superseded → archived), reconciled with the existing `status` machine | Scales once hundreds of missions contribute; richer than active/deprecated | **Accepted** |
 | 2026-07-19 (R5) | Add **Asset relationships / groups** (`asset.groups` + membership / pairwise `related`) so repo+doc+chat+PDF of one project link, and readers/consolidator traverse across sources | Assets aren't islands; cross-source corroboration strengthens knowledge | **Accepted** |
 | 2026-07-19 (R5) | Consolidator distinguishes **evolution (revision over time) from conflict (contradiction)** using recency/temporal signals | "Redis optional → required" is a revision, not a contradiction | **Accepted** |
-| 2026-07-19 (R5) | Coverage map also exposes **understanding quality** (confidence/comprehension) alongside coverage % | Coverage ≠ comprehension — Atlas may have read everything yet hold low confidence | **Accepted** |
 | 2026-07-19 (R6) | **Phase C complete** (C.1–C.9); spin out **`docs/PHASE_D_PLAN.md`** (Decision Engine + applied Missions) | Foundations + Personal Intelligence shipped; Phase D is next | **Accepted** |
 | 2026-07-19 (R6) | Add **P14 — Atlas recommends; the operator decides** (formalizes the human-gate non-goal): record every decision, gate only side-effecting actions, reversible + journaled | Makes the human gate a first-class, buildable principle for Phase D | **Accepted** |
 | 2026-07-19 (R6) | **Structure Phase D** into **D-Core** (Decision Engine + human-gate + RM arbitration, no compromise) **then D-Missions**, with **Paper Trading (simulation-only)** as the flagship end-to-end gate | Prove the reusable spine before fanning out to watchers | **Accepted** |
@@ -1124,8 +1124,8 @@ all long-lived (P1).
 
 **The plan is frozen.** The top-level architecture, the four planes, the subsystem set, the
 phase order (0 → A → B → C → D), and principles **P1–P15** are locked and should not be
-reopened without a new decision-log entry. **Phases 0/A/B/C are complete; Phase D is in progress
-(plan: `docs/PHASE_D_PLAN.md`).** A5 (determinism split) and A7 (mission arbitration formula) are
+reopened without a new decision-log entry. **Phases 0/A/B/C/D are complete**
+(plan: `docs/PHASE_D_PLAN.md`). A5 (determinism split) and A7 (mission arbitration formula) are
 resolved in the Phase-D plan (DD4/DD7). Post-Phase-D **future maturity directions** are parked in §13
 (deferred by review discipline — execute the roadmap before adding new top-level concepts).
 
@@ -1156,8 +1156,8 @@ the-operator (P10); readers-never-own-knowledge + Reader Registry (P11). Deferre
 None of A1–A10 block starting Phase 0. Each becomes a small decision recorded in the relevant
 `docs/PHASE_*_PLAN.md`.
 
-> **Next step:** implement **Phase D** per `docs/PHASE_D_PLAN.md`, starting with **D.1 — Decision
-> Engine skeleton + `decision.decisions` (migration `0039`)**. (Phases 0/A/B/C are complete.)
+> **Next step:** Phase D is complete (D.1–D.11). Parked post-Phase-D maturity work lives in §13
+> (`OI-D*` deferrals remain open where noted). Promote a §13 item only via a new decision-log entry.
 
 ---
 
