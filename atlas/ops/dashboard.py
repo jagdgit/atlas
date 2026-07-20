@@ -50,6 +50,7 @@ class OperationsDashboard:
             "sse_subscribers": self._guard(self._sse_subscribers, 0),
             "recovery": self._guard(self._recovery, {}),
             "last_checkpoint": self._guard(self._last_checkpoint, None),
+            "self_improvement": self._guard(self._self_improvement, {}),
             "generated_at": self._now(),
         }
 
@@ -159,6 +160,13 @@ class OperationsDashboard:
             "label": row.get("label"),
             "updated_at": updated.isoformat() if hasattr(updated, "isoformat") else updated,
         }
+
+    def _self_improvement(self) -> dict[str, Any]:
+        """Phase D · §D.10: eval findings + gated recommendations for the operator."""
+        board = self._resolve("improvement_board")
+        if board is None or not hasattr(board, "snapshot"):
+            return {}
+        return board.snapshot()
 
     def _sse_subscribers(self) -> int:
         notifier = self._resolve("notifier")

@@ -46,11 +46,14 @@ from atlas.trading import PortfolioService, StrategyDecisionRule
 from atlas.research import ResearchDecisionRule
 from atlas.career import JobDecisionRule
 from atlas.watch import AdvisoryDecisionRule, MISSION_TYPE_SECURITY, MISSION_TYPE_TECHNOLOGY
+from atlas.improvement import ImprovementBoard, SelfImprovementDecisionRule
+from atlas.improvement.applier import SelfImprovementApplier
 from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
+from atlas.workers.self_improvement import SelfImprovementWatcher
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -983,6 +986,22 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         )
     )
 
+    # Self-Improvement Watcher (Phase D · §D.10): hermetic eval suite → Decision Engine →
+    # gated remediation intents (P14) on the ImprovementBoard, surfaced by the ops dashboard.
+    improvement_board = ImprovementBoard(
+        cfg.paths.data, logger=get_logger("atlas.improvement.board")
+    )
+    decision_engine.register_rule(SelfImprovementDecisionRule())
+    approval_service.register_applier(SelfImprovementApplier(improvement_board))
+    worker_manager.register_worker_type(
+        SelfImprovementWatcher(
+            decision_engine=decision_engine,
+            board=improvement_board,
+            events=events,
+            logger=get_logger("atlas.workers.self_improvement"),
+        )
+    )
+
     # Python Execution Sandbox (Sprint 16, D6 — hybrid): run analysis code in a
     # resource-limited child interpreter (subprocess default; docker swappable) with
     # network disabled by default; computed results can become L5 evidence (§5a.6).
@@ -1065,6 +1084,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("decision", decision_engine)
     container.register_instance("approvals", approval_service)
     container.register_instance("portfolio", portfolio_service)
+    container.register_instance("improvement_board", improvement_board)
     container.register_instance("ingestion_bridge", ingestion_bridge)
     container.register_instance("candidates", candidate_consumer)
 
@@ -1198,6 +1218,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # Phase D · §D.6: the virtual portfolio behind the Paper-Trading Mission (simulation only, P10).
     capabilities.register(
         "portfolio", portfolio_service, kind="service", version=PortfolioService.VERSION
+    )
+    # Phase D · §D.10: eval findings board for the Operations Dashboard.
+    capabilities.register(
+        "improvement_board", improvement_board, kind="service", version=ImprovementBoard.VERSION
     )
 
     # 6. Core services (registration order = start order)

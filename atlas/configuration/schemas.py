@@ -207,6 +207,22 @@ class TechSecurityWatcherConfig(BaseModel):
     tick_interval_seconds: int = Field(default=86400, ge=1)
 
 
+class SelfImprovementConfig(BaseModel):
+    """Config for the Self-Improvement Watcher (Phase D · §D.10) — gated recommendations (P14).
+
+    Runs the hermetic Stage-3B eval suite on a schedule, surfaces regressions on the Operations
+    Dashboard, and proposes remediations through the Decision Engine (side-effecting proposals
+    require human approval). ``extra='forbid'``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fixture_root: str = ""  # empty → default tests/fixtures/eval
+    metric_floors: dict[str, float] = Field(default_factory=dict)
+    regression_drop: float = Field(default=0.05, ge=0.0, le=1.0)
+    gate_fixes: bool = True  # propose_fix options require approval
+    tick_interval_seconds: int = Field(default=86400, ge=1)
+
+
 # --- registry ------------------------------------------------------------
 
 
@@ -274,4 +290,5 @@ def default_registry() -> SchemaRegistry:
     registry.register("research_watcher", ResearchWatcherConfig, schema_version=1)
     registry.register("job_watcher", JobWatcherConfig, schema_version=1)
     registry.register("tech_security_watcher", TechSecurityWatcherConfig, schema_version=1)
+    registry.register("self_improvement", SelfImprovementConfig, schema_version=1)
     return registry

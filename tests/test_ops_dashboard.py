@@ -157,8 +157,24 @@ class FakeCheckpoints:
 def test_dashboard_snapshot_shape():
     snap = _dashboard().snapshot()
     for key in ("atlas", "counts", "host", "backup", "storage", "capabilities",
-                "sse_subscribers", "recovery", "last_checkpoint", "generated_at"):
+                "sse_subscribers", "recovery", "last_checkpoint", "self_improvement",
+                "generated_at"):
         assert key in snap
+
+
+def test_dashboard_self_improvement_board(tmp_path):
+    from atlas.improvement.board import ImprovementBoard
+
+    board = ImprovementBoard(tmp_path)
+    board.record_run(
+        metrics={"retrieval_hermetic.precision_at_k": 0.9},
+        findings=[{"id": "f1", "metric": "x", "kind": "regression"}],
+        recommendation={"kind": "investigate", "finding_id": "f1"},
+        milestone="3B.0",
+    )
+    snap = _dashboard(mapping={"improvement_board": board}).snapshot()
+    assert snap["self_improvement"]["finding_count"] == 1
+    assert snap["self_improvement"]["last_run"]["milestone"] == "3B.0"
 
 
 def test_dashboard_reports_recovery_and_checkpoint():

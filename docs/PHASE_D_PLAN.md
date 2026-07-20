@@ -285,7 +285,7 @@
 - A `technology_watch` / `security_monitoring` worker: dependency/CVE/breaking-change feeds → findings →
   Decision Engine prioritization → notify. (Two thin templates over one worker pattern.)
 
-### D.10 — Atlas Self-Improvement Watcher
+### D.10 — Atlas Self-Improvement Watcher  ·  ✅ DONE
 - A `self_improvement` worker over `atlas/eval/` benchmarks/regressions → findings + recommended
   actions (gated), surfaced on the Operations Dashboard.
 
@@ -324,7 +324,7 @@ are incremental follow-ons.
   fixtures first).
 - **OI-D2** RM arbitration refinements beyond weighted-priority + hard cap (preemption, fair-share) —
   A7 says refine empirically.
-- **OI-D3** Watcher D.10 (Self-Improvement) lands after Tech/Security Watcher (D.9 ✅).
+- **OI-D3** Phase-D applied watchers D.7–D.10 are ✅; remaining follow-on is D.11 (Phase-D e2e gate).
 - **OI-D4** Real-world side-effecting appliers (e.g. actually posting a job application draft) stay
   behind the approval gate and are **out of scope** until explicitly requested (P14).
 - **OI-D5** Decision-scale policy arbitration uses a fixed `influence_scale` (×50) to lift retrieval-
@@ -364,5 +364,16 @@ are incremental follow-ons.
 > JSON asset → normalized postings, P8/P11) · `JobDecisionRule` (Personal skills + mission
 > constraints + policy-arbitrated matches; never side-effecting) · `JobWatcher` (read → decide →
 > journal → notify `JobMatchRecommended`; fingerprint skip, reboot-safe) · real `job_hunting`
-> template + strict `JobWatcherConfig` · bootstrap wiring · 20 tests. **Next: D.9 — Technology /
-> Security Watcher.**
+> template + strict `JobWatcherConfig` · bootstrap wiring · 20 tests.
+>
+> **D.9 ✅ DONE** (Technology / Security Watcher — two thin templates, one worker):
+> `AdvisoryFeedReader` · `AdvisoryDecisionRule` (registered for both `technology_watch` and
+> `security_monitoring`) · `TechSecurityWatcher` (mode-selected scoring + notify
+> `TechnologyAdvisoryRecommended` / `SecurityAdvisoryRecommended`; fingerprint skip,
+> reboot-safe) · shared `TechSecurityWatcherConfig` · 17 tests.
+>
+> **D.10 ✅ DONE** (Self-Improvement Watcher — hermetic eval → gated recommendations):
+> `run_baseline_suite` analysis (floor/regression findings) · `SelfImprovementDecisionRule`
+> (`investigate` / gated `propose_fix`) · `SelfImprovementWatcher` · `ImprovementBoard` +
+> `SelfImprovementApplier` (P14) · ops dashboard `self_improvement` section · real template +
+> config · tests. **Next: D.11 — Phase-D end-to-end gate.**

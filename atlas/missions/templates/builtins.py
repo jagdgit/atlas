@@ -182,4 +182,23 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "knowledge_domains": ["engineering", "security"],
         "success_criteria": {},
     },
+    {
+        # Real template as of Phase D (§D.10): hermetic eval → Decision Engine → gated
+        # remediation intents, surfaced on the Operations Dashboard.
+        "name": "self_improvement",
+        "template_version": 1,
+        "description": "Watch Atlas eval regressions and propose gated improvements (Phase D · P14).",
+        "config_schema_type": "self_improvement",
+        "config_schema_version": 1,
+        "default_config": {
+            "fixture_root": "",
+            "metric_floors": {},
+            "regression_drop": 0.05,
+            "gate_fixes": True,
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [{"type": "self_improvement", "interval_seconds": 86400}],
+        "knowledge_domains": ["engineering"],
+        "success_criteria": {},
+    },
 ]
