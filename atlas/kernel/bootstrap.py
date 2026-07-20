@@ -37,16 +37,18 @@ from atlas.knowledge.candidate_consumer import CandidateConsumer
 from atlas.knowledge.prose_extraction import ProseKnowledgeExtractor
 from atlas.learning.experience_extraction import ExperienceWriter
 from atlas.personal import PersonalService
-from atlas.readers import ConversationReader, DocumentReader, MarketDataReader
+from atlas.readers import ConversationReader, DocumentReader, MarketDataReader, JobPostingsReader
 from atlas.repositories.candidate_repo import CandidateRepository
 from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
 from atlas.repositories.sim_repo import SimTradingRepository
 from atlas.trading import PortfolioService, StrategyDecisionRule
 from atlas.research import ResearchDecisionRule
+from atlas.career import JobDecisionRule
 from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
 from atlas.workers.research_watcher import ResearchWatcher
+from atlas.workers.job_watcher import JobWatcher
 from atlas.engineering.ingest import RepoAcquirer
 from atlas.engineering.readers import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
@@ -939,6 +941,25 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             events=events,
             data_dir=str(cfg.paths.data),
             logger=get_logger("atlas.workers.research_watcher"),
+        )
+    )
+
+    # Job Watcher (Phase D · §D.8): continuous job matching — recommend-only (P14).
+    # JobPostingsReader turns posting-feed assets into normalized postings; JobDecisionRule scores
+    # them against Personal skills + mission constraints + Policy; the worker notifies on new
+    # matches and never applies.
+    job_postings_reader = JobPostingsReader(
+        asset_store, derived_artifacts, logger=get_logger("atlas.readers.job_postings")
+    )
+    decision_engine.register_rule(JobDecisionRule())
+    worker_manager.register_worker_type(
+        JobWatcher(
+            assets=asset_store,
+            postings_reader=job_postings_reader,
+            decision_engine=decision_engine,
+            personal=personal_service,
+            events=events,
+            logger=get_logger("atlas.workers.job_watcher"),
         )
     )
 

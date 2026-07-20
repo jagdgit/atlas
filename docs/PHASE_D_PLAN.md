@@ -277,7 +277,7 @@
 - A `research_watcher` worker driving `ResearchService.research` on a schedule → summaries into the
   Knowledge OS; Decision Engine ranks/what-to-read-next; notify on notable findings. Reuses D-Core.
 
-### D.8 — Job Watcher
+### D.8 — Job Watcher  ·  ✅ DONE
 - A `job_watcher` worker: sources → normalize postings (as assets/readers) → match against
   **Personal** profile + Policy → ranked matches → notify. Recommend-only (drafting, never applying).
 
@@ -324,8 +324,7 @@ are incremental follow-ons.
   fixtures first).
 - **OI-D2** RM arbitration refinements beyond weighted-priority + hard cap (preemption, fair-share) —
   A7 says refine empirically.
-- **OI-D3** Watchers D.8–D.10 (Job / Tech-Security / Self-Improvement) land after Research Watcher
-  (D.7 ✅).
+- **OI-D3** Watchers D.9–D.10 (Tech-Security / Self-Improvement) land after Job Watcher (D.8 ✅).
 - **OI-D4** Real-world side-effecting appliers (e.g. actually posting a job application draft) stay
   behind the approval gate and are **out of scope** until explicitly requested (P14).
 - **OI-D5** Decision-scale policy arbitration uses a fixed `influence_scale` (×50) to lift retrieval-
@@ -359,4 +358,11 @@ are incremental follow-ons.
 > arbitrated) · `ResearchWatcher` (`research` → `promote_research` → `decide` → journal → notify
 > on `ResearchFinding`/`ResearchRecommendation`; topic-fingerprint skip, reboot-safe) · real
 > `research` template + strict `ResearchWatcherConfig` · bootstrap wiring · 14 tests (rule +
-> worker hermetic + live decision-journal smoke). **Next: D.8 — Job Watcher.**
+> worker hermetic + live decision-journal smoke).
+>
+> **D.8 ✅ DONE** (Job Watcher — recommend-only job matching, P14): `JobPostingsReader` (fixture
+> JSON asset → normalized postings, P8/P11) · `JobDecisionRule` (Personal skills + mission
+> constraints + policy-arbitrated matches; never side-effecting) · `JobWatcher` (read → decide →
+> journal → notify `JobMatchRecommended`; fingerprint skip, reboot-safe) · real `job_hunting`
+> template + strict `JobWatcherConfig` · bootstrap wiring · 20 tests. **Next: D.9 — Technology /
+> Security Watcher.**

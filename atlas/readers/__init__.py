@@ -23,6 +23,11 @@ from atlas.readers.market_data import (
     MARKET_DATA_READER_VERSION,
     MarketDataReader,
 )
+from atlas.readers.job_postings import (
+    JOB_POSTINGS_READER_ID,
+    JOB_POSTINGS_READER_VERSION,
+    JobPostingsReader,
+)
 
 __all__ = [
     "DocumentReader",
@@ -34,4 +39,7 @@ __all__ = [
     "MarketDataReader",
     "MARKET_DATA_READER_ID",
     "MARKET_DATA_READER_VERSION",
+    "JobPostingsReader",
+    "JOB_POSTINGS_READER_ID",
+    "JOB_POSTINGS_READER_VERSION",
 ]

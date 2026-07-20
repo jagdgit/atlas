@@ -169,6 +169,26 @@ class ResearchWatcherConfig(BaseModel):
     tick_interval_seconds: int = Field(default=86400, ge=1)
 
 
+class JobWatcherConfig(BaseModel):
+    """Config for the Job Watcher mission (Phase D · §D.8) — recommend-only (P14).
+
+    Continuously reads configured job-posting feed assets, matches them against Personal skills +
+    mission constraints + Policy, and recommends ranked matches (never applies). ``extra='forbid'``.
+    ``sources`` may be empty at instantiation and filled via a later config edit (B6)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sources: list[str] = Field(default_factory=list)  # job_postings asset names
+    locations: list[str] = Field(default_factory=list)
+    companies: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    min_salary: float = Field(default=0.0, ge=0)
+    min_skill_overlap: int = Field(default=0, ge=0)
+    include_inferred_skills: bool = True
+    max_recommendations: int = Field(default=5, ge=1)
+    tick_interval_seconds: int = Field(default=86400, ge=1)
+
+
 # --- registry ------------------------------------------------------------
 
 
@@ -234,4 +254,5 @@ def default_registry() -> SchemaRegistry:
     registry.register("owner_knowledge", OwnerKnowledgeConfig, schema_version=1)
     registry.register("paper_trading", PaperTradingConfig, schema_version=1)
     registry.register("research_watcher", ResearchWatcherConfig, schema_version=1)
+    registry.register("job_watcher", JobWatcherConfig, schema_version=1)
     return registry
