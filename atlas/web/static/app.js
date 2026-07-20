@@ -790,12 +790,45 @@ async function instantiateMission(template, title) {
   } catch (err) { toast(err.message); }
 }
 
-async function showMissionDetail(id) {
+function missionDetailEditing() {
+  const box = $("#mission-detail");
+  if (!box) return false;
+  const ae = document.activeElement;
+  return !!(ae && box.contains(ae) && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT"));
+}
+
+function captureMissionUiState() {
+  const drafts = {};
+  const open = [];
+  document.querySelectorAll("#mission-detail details[data-worker-id]").forEach((det) => {
+    const wid = det.getAttribute("data-worker-id");
+    if (det.open) open.push(wid);
+    const ta = det.querySelector("textarea");
+    if (ta && ta.value) drafts[wid] = ta.value;
+  });
+  return { drafts, open };
+}
+
+function restoreMissionUiState(ui) {
+  if (!ui) return;
+  document.querySelectorAll("#mission-detail details[data-worker-id]").forEach((det) => {
+    const wid = det.getAttribute("data-worker-id");
+    if ((ui.open || []).includes(wid)) det.open = true;
+    const ta = det.querySelector("textarea");
+    if (ta && ui.drafts && ui.drafts[wid] != null) ta.value = ui.drafts[wid];
+  });
+}
+
+async function showMissionDetail(id, { preserve = false } = {}) {
   state.missionId = id;
   document.querySelectorAll("#missions-list .job-row").forEach((r) => r.classList.remove("active"));
+  // Poll refresh must not collapse the worker card / wipe mid-typed input.
+  if (preserve && missionDetailEditing()) return;
+  const ui = preserve ? captureMissionUiState() : null;
   try {
     const d = await api(`/v1/missions/${id}`);
     renderMissionDetail(d);
+    if (preserve) restoreMissionUiState(ui);
     if (missionActive(d.mission)) startMissionPoll(id); else stopMissionPoll();
   } catch (err) { toast(err.message); }
 }
@@ -865,7 +898,7 @@ function renderMissionDetail(d) {
 }
 
 function renderWorkerCard(w) {
-  const card = el("details", { class: "step" });
+  const card = el("details", { class: "step", "data-worker-id": w.id });
   card.append(el("summary", {},
     el("span", { class: "intent", text: w.type }),
     el("span", { class: "badge " + w.status, text: w.status }),
@@ -881,9 +914,12 @@ function renderWorkerCard(w) {
   if (!["stopped"].includes(w.status)) wactions.append(el("button", { onclick: () => workerAction(w.id, "stop") }, "Stop"));
   body.append(wactions);
 
-  // Live operator input (Q4)
+  // Live operator input (Q4) — JSON object drained at the top of the next tick.
   const inp = el("div", { class: "job-input" });
-  const ta = el("textarea", { rows: "2", placeholder: 'Live input as JSON, e.g. {"note": "focus on NSE"}' });
+  const hint = w.type === "paper_trading"
+    ? '{"block_symbol": "AAA"} or {"unblock_symbol": "AAA"}'
+    : '{"note": "operator guidance"}';
+  const ta = el("textarea", { rows: "2", placeholder: "Live input as JSON, e.g. " + hint });
   const send = el("button", {
     onclick: async () => {
       let payload;
@@ -906,7 +942,7 @@ function startMissionPoll(id) {
   stopMissionPoll();
   state.missionPoll = setInterval(() => {
     if (state.view !== "missions") return stopMissionPoll();
-    showMissionDetail(id);
+    showMissionDetail(id, { preserve: true });
   }, 4000);
 }
 function stopMissionPoll() { if (state.missionPoll) { clearInterval(state.missionPoll); state.missionPoll = null; } }
