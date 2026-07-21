@@ -40,6 +40,7 @@ CAP_OCR = "ocr"
 CAP_MAIL = "mail"
 CAP_BROWSER = "browser"
 CAP_RESEARCH = "research"
+CAP_SPEECH_TO_TEXT = "speech_to_text"
 # Stage 3B knowledge-OS capabilities (stubs until providers land; D3B.25).
 CAP_RETRIEVAL = "retrieval"
 CAP_SYNTHESIS = "synthesis"
@@ -202,6 +203,13 @@ class OCRCapability(Protocol):
     """Extract text from an image via OCR (S20c)."""
 
     def image(self, path: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class SpeechToTextCapability(Protocol):
+    """Optional local speech-to-text (Media Reader Family · M.5 / MD5)."""
+
+    def transcribe(self, path: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @runtime_checkable
@@ -387,6 +395,15 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Extract text from an image file (screenshot, photo, scan).",
         "Read pixels Atlas otherwise can't — completes the Document Reader.",
         "S20",
+    ),
+    CAP_SPEECH_TO_TEXT: CapabilitySpec(
+        CAP_SPEECH_TO_TEXT,
+        SpeechToTextCapability,
+        "Transcribe speech from a local audio/video file (Whisper or equivalent).",
+        "Caption-less media becomes Knowledge; optional — gap when off/missing (P15).",
+        "M.5",
+        cost_class=COST_EXPENSIVE,
+        quality_notes="Default off (plugins.speech.enabled). Evidence L1; model stamped on artifact.",
     ),
     CAP_MAIL: CapabilitySpec(
         CAP_MAIL,

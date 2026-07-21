@@ -332,6 +332,17 @@ class OCRPluginConfig(BaseModel):
     max_bytes: int = 10_485_760  # refuse to OCR images larger than this (10 MiB)
 
 
+class SpeechPluginConfig(BaseModel):
+    # Optional local speech-to-text (Media Reader Family · M.5 / MD5). Default OFF —
+    # missing Whisper must never block boot; operators opt in when the binary/model
+    # is installed. Evidence L1; model stamped on transcript artifacts (P9).
+    enabled: bool = False
+    model: str = "base"  # whisper model size: tiny|base|small|medium|large
+    language: str = ""  # empty => auto-detect
+    binary: str = "whisper"  # CLI name on PATH (openai-whisper); Python package is fallback
+    timeout: float = 600.0  # hard wall-clock per transcription
+
+
 class BrowserPluginConfig(BaseModel):
     # Headless browser automation (S20e). Degrades gracefully if Playwright/browser
     # binary are absent. Read-only: navigate + extract only, robots respected.
@@ -370,6 +381,7 @@ class PluginsConfig(BaseModel):
     git: GitPluginConfig = GitPluginConfig()
     sql: SQLPluginConfig = SQLPluginConfig()
     ocr: OCRPluginConfig = OCRPluginConfig()
+    speech: SpeechPluginConfig = SpeechPluginConfig()
     mail: MailPluginConfig = MailPluginConfig()
     browser: BrowserPluginConfig = BrowserPluginConfig()
 

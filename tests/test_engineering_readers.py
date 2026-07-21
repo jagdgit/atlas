@@ -69,7 +69,7 @@ def test_extension_map_and_metrics_and_health():
     emap = reg.extension_map()
     assert emap[".py"] == "python" and emap[".ts"] == "jsts" and emap[".go"] == "treesitter"
     metrics = reg.metrics()
-    assert metrics["readers"] == 6  # 3 code + 3 media (M.4)
+    assert metrics["readers"] == 7  # 3 code + 4 media (M.4/M.5)
     assert "python" in metrics["languages"] and "typescript" in metrics["languages"]
     assert emap[".vtt"] == "transcript_file"
     assert reg.health_check().healthy is True

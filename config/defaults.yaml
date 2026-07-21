@@ -251,6 +251,7 @@ plugins:
     - atlas.plugins.git_plugin
     - atlas.plugins.sql_plugin
     - atlas.plugins.ocr_plugin
+    - atlas.plugins.speech_plugin
     - atlas.plugins.mail_plugin
     - atlas.plugins.browser_plugin
   filesystem:
@@ -287,6 +288,12 @@ plugins:
     root: null              # sandbox root for images; null => paths.documents
     lang: eng               # default tesseract language code
     max_bytes: 10485760     # 10 MiB per-image cap
+  speech:                   # M.5: optional speech_to_text (Whisper); default OFF
+    enabled: false          # set true when whisper CLI/package is installed
+    model: base             # tiny|base|small|medium|large
+    language: ""            # empty => auto-detect
+    binary: whisper         # openai-whisper CLI on PATH
+    timeout: 600            # hard wall-clock per transcription
   mail:                     # S20d: read-only IMAP mailbox (degrades if unconfigured)
     host: ""                # IMAP host; empty => capability reports "unavailable"
     port: 993

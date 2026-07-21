@@ -46,8 +46,10 @@ from atlas.readers import (
     JobPostingsReader,
     MarketDataReader,
     MediaMetadataReader,
+    SpeechToTextReader,
     TranscriptFileReader,
 )
+from atlas.speech.engine import SpeechClient, WhisperEngine
 from atlas.repositories.candidate_repo import CandidateRepository
 from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
@@ -928,12 +930,27 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         acquirer=asset_acquirer,
         logger=get_logger("atlas.readers.audio_demux"),
     )
+    speech_cfg = cfg.plugins.speech
+    speech_client = SpeechClient(
+        WhisperEngine(binary=speech_cfg.binary, timeout=speech_cfg.timeout),
+        enabled=speech_cfg.enabled,
+        model=speech_cfg.model,
+        language=speech_cfg.language or None,
+        logger=get_logger("atlas.speech"),
+    )
+    speech_to_text_reader = SpeechToTextReader(
+        asset_store,
+        derived_artifacts,
+        speech_client,
+        logger=get_logger("atlas.readers.speech_to_text"),
+    )
     media_ingestor = MediaIngestor(
         asset_acquirer,
         knowledge_service,
         metadata_reader=media_metadata_reader,
         transcript_reader=transcript_file_reader,
         demux_reader=audio_demux_reader,
+        speech_reader=speech_to_text_reader,
         logger=get_logger("atlas.ingestion.media"),
     )
     # Owner Knowledge Mission worker (Phase C · §C.8): continuously reads the User Archive

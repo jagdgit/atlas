@@ -388,6 +388,30 @@ def test_ocr_capability_contract_verified(tmp_path):
     assert CAPABILITY_CATALOG[CAP_OCR].since == "S20"
 
 
+def test_speech_to_text_capability_contract_verified():
+    from atlas.capabilities import CAP_SPEECH_TO_TEXT, SpeechToTextCapability
+    from atlas.plugins.speech_plugin import SpeechPlugin
+    from atlas.speech.engine import SpeechClient
+
+    class _Eng:
+        name = "fake"
+        def available(self):
+            return False
+        def transcribe(self, path, *, model, language):
+            return {"text": "", "segments": [], "model": model, "language": language}
+
+    reg = CapabilityRegistry()
+    reg.register(
+        CAP_SPEECH_TO_TEXT,
+        SpeechPlugin(SpeechClient(_Eng(), enabled=False)),
+        contract=SpeechToTextCapability,
+        kind="plugin",
+    )
+    assert reg.verify(CAP_SPEECH_TO_TEXT) is True
+    assert CAPABILITY_CATALOG[CAP_SPEECH_TO_TEXT].contract is SpeechToTextCapability
+    assert CAPABILITY_CATALOG[CAP_SPEECH_TO_TEXT].since == "M.5"
+
+
 def test_mail_capability_contract_verified():
     from atlas.capabilities import CAP_MAIL, MailCapability
     from atlas.mail.client import IMAPBackend, MailClient

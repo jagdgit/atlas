@@ -1,14 +1,15 @@
-"""Local media ingest orchestration (Media Reader Family · M.4).
+"""Local media ingest orchestration (Media Reader Family · M.4/M.5).
 
 Asset-first path for operator files:
 
     local .vtt/.srt/.txt/.mp4/.mp3
         → AssetAcquirer (kind=video|audio|transcript)
         → MediaMetadataReader
-        → TranscriptFileReader (transcript kinds) and/or AudioDemuxReader (video)
+        → TranscriptFileReader (transcript kinds)
+        → AudioDemuxReader (video) + SpeechToTextReader (optional Whisper)
         → Knowledge (transcript text, or an honest metadata note for A/V)
 
-No YouTube-specific branches past the Asset boundary (MD8). Speech-to-text is M.5.
+No YouTube-specific branches past the Asset boundary (MD8).
 """
 
 from __future__ import annotations
@@ -18,22 +19,25 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from atlas.readers.media_kinds import (
+    ASSET_KIND_AUDIO,
     ASSET_KIND_TRANSCRIPT,
     ASSET_KIND_VIDEO,
     content_type_for,
     infer_media_kind,
 )
+from atlas.speech.engine import STT_OK
 
 if TYPE_CHECKING:
     from atlas.ingestion.acquire import AssetAcquirer
     from atlas.knowledge.service import KnowledgeService
     from atlas.readers.audio_demux import AudioDemuxReader
     from atlas.readers.media_metadata import MediaMetadataReader
+    from atlas.readers.speech_to_text import SpeechToTextReader
     from atlas.readers.transcript_file import TranscriptFileReader
 
 
 class MediaIngestor:
-    """Acquire → metadata → transcript/demux → knowledge for local media files."""
+    """Acquire → metadata → transcript/demux/speech → knowledge for local media files."""
 
     def __init__(
         self,
@@ -43,6 +47,7 @@ class MediaIngestor:
         metadata_reader: "MediaMetadataReader | None" = None,
         transcript_reader: "TranscriptFileReader | None" = None,
         demux_reader: "AudioDemuxReader | None" = None,
+        speech_reader: "SpeechToTextReader | None" = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._acq = acquirer
@@ -50,6 +55,7 @@ class MediaIngestor:
         self._meta = metadata_reader
         self._transcript = transcript_reader
         self._demux = demux_reader
+        self._speech = speech_reader
         self._logger = logger or logging.getLogger("atlas.ingestion.media")
 
     def ingest_file(
@@ -83,6 +89,7 @@ class MediaIngestor:
             "filename": p.name,
             "metadata": None,
             "demux": None,
+            "speech": None,
             "ingest": None,
         }
 
@@ -114,18 +121,51 @@ class MediaIngestor:
                 )
             return out
 
+        speech_asset_id = acquired.asset_id
+        speech_asset_version = acquired.asset_version
+        speech_filename = p.name
+
         if kind == ASSET_KIND_VIDEO and self._demux is not None:
             out["demux"] = self._demux.read(
                 acquired.asset_id, acquired.asset_version, filename=p.name
             )
+            demux = out["demux"] or {}
+            if demux.get("outcome") == "ok" and demux.get("audio_asset_id"):
+                speech_asset_id = str(demux["audio_asset_id"])
+                speech_asset_version = int(demux.get("audio_asset_version") or 1)
+                speech_filename = Path(p.name).stem + ".wav"
 
-        # A/V without speech-to-text (M.5): land an honest metadata note in Knowledge
-        # so the asset is findable — never a fabricated transcript.
+        if kind in (ASSET_KIND_VIDEO, ASSET_KIND_AUDIO) and self._speech is not None:
+            out["speech"] = self._speech.read(
+                speech_asset_id, speech_asset_version, filename=speech_filename
+            )
+            speech = out["speech"] or {}
+            if speech.get("outcome") == STT_OK and (speech.get("text") or "").strip():
+                out["ingest"] = self._to_knowledge(
+                    text=speech["text"],
+                    acquired=acquired,
+                    filename=p.name,
+                    title=title or (out.get("metadata") or {}).get("fields", {}).get("title") or p.name,
+                    domain=domain,
+                    embed=embed,
+                    reader_id=self._speech.id,
+                    reader_version=self._speech.VERSION,
+                    source="media_speech_to_text",
+                    extra_metadata={
+                        "model": speech.get("model"),
+                        "strategy": "speech_to_text",
+                        "evidence_level": speech.get("evidence_level", 1),
+                    },
+                )
+                return out
+
+        # A/V without usable speech: land an honest metadata note (never fabricate speech).
         note = _metadata_knowledge_note(
             filename=p.name,
             kind=kind,
             meta_artifact=out.get("metadata"),
             demux_artifact=out.get("demux"),
+            speech_artifact=out.get("speech"),
         )
         if note.strip():
             out["ingest"] = self._to_knowledge(
@@ -153,22 +193,25 @@ class MediaIngestor:
         reader_id: str,
         reader_version: str,
         source: str,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        meta = {
+            "asset_id": acquired.asset_id,
+            "asset_version": acquired.asset_version,
+            "sha256": acquired.checksum,
+            "reader": reader_id,
+            "reader_version": reader_version,
+            "filename": filename,
+            "media_kind": acquired.kind,
+            **(extra_metadata or {}),
+        }
         summary = self._knowledge.ingest_text(
             source=source,
             content=text,
             uri=acquired.source_uri,
             title=title,
             content_type="text/plain",
-            metadata={
-                "asset_id": acquired.asset_id,
-                "asset_version": acquired.asset_version,
-                "sha256": acquired.checksum,
-                "reader": reader_id,
-                "reader_version": reader_version,
-                "filename": filename,
-                "media_kind": acquired.kind,
-            },
+            metadata=meta,
             domain=domain,
             embed=embed,
         )
@@ -186,6 +229,7 @@ def _metadata_knowledge_note(
     kind: str,
     meta_artifact: dict[str, Any] | None,
     demux_artifact: dict[str, Any] | None,
+    speech_artifact: dict[str, Any] | None = None,
 ) -> str:
     fields = (meta_artifact or {}).get("fields") if isinstance(meta_artifact, dict) else {}
     fields = fields if isinstance(fields, dict) else {}
@@ -205,8 +249,17 @@ def _metadata_knowledge_note(
             f"audio_demux: {demux_artifact.get('outcome')} "
             f"({demux_artifact.get('reason') or demux_artifact.get('capability_gap') or ''})".strip()
         )
-    lines.append(
-        "Note: this is media metadata provenance, not a speech transcript "
-        "(speech_to_text is a separate capability)."
-    )
+    if speech_artifact and speech_artifact.get("outcome"):
+        gap = speech_artifact.get("capability_gap") or "speech_to_text"
+        lines.append(
+            f"speech_to_text: {speech_artifact.get('outcome')} "
+            f"({speech_artifact.get('reason') or gap})"
+        )
+        if speech_artifact.get("outcome") != STT_OK:
+            lines.append(f"capability_gap: {gap}")
+    else:
+        lines.append(
+            "Note: this is media metadata provenance, not a speech transcript "
+            "(speech_to_text is a separate capability)."
+        )
     return "\n".join(lines)

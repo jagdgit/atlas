@@ -57,6 +57,11 @@ from atlas.readers.audio_demux import (
     AUDIO_DEMUX_READER_VERSION,
     AudioDemuxReader,
 )
+from atlas.readers.speech_to_text import (
+    SPEECH_TO_TEXT_READER_ID,
+    SPEECH_TO_TEXT_READER_VERSION,
+    SpeechToTextReader,
+)
 from atlas.readers.strategy_chain import ChainResult, ReaderStrategyChain, StrategyResult
 
 __all__ = [
@@ -87,6 +92,9 @@ __all__ = [
     "AudioDemuxReader",
     "AUDIO_DEMUX_READER_ID",
     "AUDIO_DEMUX_READER_VERSION",
+    "SpeechToTextReader",
+    "SPEECH_TO_TEXT_READER_ID",
+    "SPEECH_TO_TEXT_READER_VERSION",
     "ASSET_KIND_VIDEO",
     "ASSET_KIND_AUDIO",
     "ASSET_KIND_TRANSCRIPT",

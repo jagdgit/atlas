@@ -139,6 +139,16 @@ def default_media_readers() -> list[Reader]:
             coverage={CAP_AUDIO: True, CAP_METADATA: False, CAP_TRANSCRIPT: False, CAP_TEXT: False},
             priority=30,
         ),
+        Reader(
+            id="speech_to_text", name="Speech-to-Text Reader", version="1.0.0",
+            extensions=(
+                ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".opus",
+                ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v",
+            ),
+            languages=("media",),
+            coverage={CAP_TRANSCRIPT: True, CAP_TEXT: True, CAP_METADATA: False, CAP_AUDIO: False},
+            priority=20,  # after file transcripts / metadata; optional capability
+        ),
     ]
 
 
