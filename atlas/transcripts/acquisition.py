@@ -8,8 +8,7 @@ defines a small, stable taxonomy + ``AcquisitionRecord`` so job reports, the ass
     stage=acquire → strategies_tried[] → outcome + reason_code + bytes_read
     → operator_summary ("acquisition failed before read: …")
 
-M.1 instruments the *current* single YouTube caption strategy; M.2+ adds more strategies
-without changing this record shape.
+M.1 instruments acquisition honesty; M.2 runs strategies through ``ReaderStrategyChain``.
 """
 
 from __future__ import annotations
@@ -33,8 +32,10 @@ REASON_UNKNOWN = "unknown"
 
 STAGE_ACQUIRE = "acquire"
 
-# Single strategy name for today's YouTube caption scrape (M.2 will add siblings).
+# Strategy names (M.1 single caption scrape; M.2 adds watch-page + per-language variants).
 STRATEGY_YOUTUBE_CAPTION_TRACKS = "youtube_caption_tracks"
+STRATEGY_YOUTUBE_WATCH_PAGE = "youtube_watch_page"
+STRATEGY_YOUTUBE_CAPTION_ANY = "youtube_caption_tracks:any"
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class AcquisitionRecord:
     strategies_tried: tuple[AcquisitionAttempt, ...] = ()
     source_url: str = ""
     source_kind: str = "video"
+    suggested_next_capability: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -86,10 +88,13 @@ class AcquisitionRecord:
             )
         detail = self.reason or self.reason_code or self.outcome
         tried = ", ".join(a.strategy for a in self.strategies_tried) or "none"
+        hint = ""
+        if self.suggested_next_capability:
+            hint = f" Suggested next capability: {self.suggested_next_capability}."
         return (
             f"Acquisition failed before read ({self.outcome}/{self.reason_code}): {detail}. "
             f"Strategies tried: {tried}. "
-            "No document was fabricated."
+            f"No document was fabricated.{hint}"
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -102,6 +107,7 @@ class AcquisitionRecord:
             "strategies_tried": [a.as_dict() for a in self.strategies_tried],
             "source_url": self.source_url,
             "source_kind": self.source_kind,
+            "suggested_next_capability": self.suggested_next_capability,
             "operator_summary": self.operator_summary,
             "read_started": False if not self.ok else True,
         }
@@ -113,6 +119,7 @@ class AcquisitionRecord:
         *,
         source_url: str = "",
         source_kind: str = "video",
+        suggested_next_capability: str | None = None,
     ) -> "AcquisitionRecord":
         """Build a record from ordered attempts: first ``ok`` wins; else last failure."""
         if not attempts:
@@ -122,6 +129,7 @@ class AcquisitionRecord:
                 reason="no acquisition strategy was attempted",
                 source_url=source_url,
                 source_kind=source_kind,
+                suggested_next_capability=suggested_next_capability,
             )
         winner = next((a for a in attempts if a.outcome == "ok"), None)
         chosen = winner or attempts[-1]
@@ -133,6 +141,9 @@ class AcquisitionRecord:
             strategies_tried=tuple(attempts),
             source_url=source_url,
             source_kind=source_kind,
+            suggested_next_capability=(
+                None if winner else suggested_next_capability
+            ),
         )
 
     @classmethod

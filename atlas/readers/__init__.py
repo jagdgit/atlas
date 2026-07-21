@@ -33,6 +33,7 @@ from atlas.readers.advisory_feed import (
     ADVISORY_FEED_READER_VERSION,
     AdvisoryFeedReader,
 )
+from atlas.readers.strategy_chain import ChainResult, ReaderStrategyChain, StrategyResult
 
 __all__ = [
     "DocumentReader",
@@ -50,4 +51,7 @@ __all__ = [
     "AdvisoryFeedReader",
     "ADVISORY_FEED_READER_ID",
     "ADVISORY_FEED_READER_VERSION",
+    "ReaderStrategyChain",
+    "StrategyResult",
+    "ChainResult",
 ]

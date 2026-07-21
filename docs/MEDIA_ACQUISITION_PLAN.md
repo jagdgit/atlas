@@ -152,7 +152,7 @@ That chain is the reusable pattern (`ReaderStrategyChain`); media is the first p
 - Hermetic tests for outcome taxonomy.
 - **Acceptance:** a blocked YouTube URL yields one explainable record and **0 fabricated docs**.
 
-### M.2 — `ReaderStrategyChain` (+ YouTube captions as first consumer)
+### M.2 — `ReaderStrategyChain` (+ YouTube captions as first consumer)  ·  ✅ DONE
 - Introduce a small reusable helper (name TBD in code: `ReaderStrategyChain` / `StrategyExecutor`) in
   a neutral package (e.g. under `atlas/readers/` or `atlas/acquisition/` — prefer readers-adjacent,
   not a new plane): ordered callables → first `ok` → `strategies_tried[]`.
@@ -272,7 +272,7 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 ## 9. Implementation checklist
 
 - [x] **M.1** Diagnose & instrument
-- [ ] **M.2** `ReaderStrategyChain` + YouTube caption strategies
+- [x] **M.2** `ReaderStrategyChain` + YouTube caption strategies
 - [ ] **M.3** Media assets + Metadata Reader
 - [ ] **M.4** Transcript / Audio / Speech Readers (Asset-first)
 - [ ] **M.5** Optional `speech_to_text` (Whisper)
@@ -284,7 +284,11 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 > **M.1 ✅ DONE** (`atlas/transcripts/acquisition.py` + YouTube `AcquisitionRecord` on every
 > `TranscriptResult`; Librarian video path uses `transcript_fetcher` and stamps acquisition into
 > skipped/blocked; pipeline traces prefer `operator_summary`; assistant surfaces acquire-vs-reason
-> copy; hermetic tests). **Next: M.2 — `ReaderStrategyChain`.**
+> copy; hermetic tests).
+>
+> **M.2 ✅ DONE** (`atlas/readers/strategy_chain.py` — reusable first-ok chain; YouTube per-language
+> caption strategies + `:any` fallback; `strategies_tried[]` audit; `suggested_next_capability=
+> speech_to_text` on caption failure). **Next: M.3 — Media assets + Metadata Reader.**
 >
 > Companion: [`OPEN_ITEMS.md`](OPEN_ITEMS.md) (`OI-M*`), roadmap P8/P11/P15,
 > `atlas/transcripts/youtube.py` + `YouTubePlugin`.

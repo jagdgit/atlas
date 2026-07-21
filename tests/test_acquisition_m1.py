@@ -8,6 +8,7 @@ from atlas.transcripts.acquisition import (
     REASON_NO_CAPTIONS,
     REASON_ROBOTS_DISALLOWED,
     STRATEGY_YOUTUBE_CAPTION_TRACKS,
+    STRATEGY_YOUTUBE_WATCH_PAGE,
     AcquisitionAttempt,
     AcquisitionRecord,
     normalize_reason_code,
@@ -59,7 +60,7 @@ def test_youtube_blocked_carries_acquisition_record():
     payload = result.as_dict()
     assert payload["reason_code"] == REASON_ROBOTS_DISALLOWED
     assert payload["bytes_read"] == 0
-    assert payload["strategies_tried"][0]["strategy"] == STRATEGY_YOUTUBE_CAPTION_TRACKS
+    assert payload["strategies_tried"][0]["strategy"] == STRATEGY_YOUTUBE_WATCH_PAGE
     assert "Acquisition failed before read" in payload["operator_summary"]
     assert payload["acquisition"]["stage"] == "acquire"
 
@@ -73,6 +74,9 @@ def test_youtube_no_captions_acquisition_record():
     assert result.outcome == OUTCOME_SKIPPED
     assert result.acquisition.reason_code == REASON_NO_CAPTIONS
     assert result.as_dict()["bytes_read"] > 0  # watch page was read
+    names = [a["strategy"] for a in result.as_dict()["strategies_tried"]]
+    assert STRATEGY_YOUTUBE_CAPTION_TRACKS in names
+    assert result.acquisition.suggested_next_capability == "speech_to_text"
 
 
 def test_youtube_ok_includes_strategy_audit():
@@ -95,4 +99,30 @@ def test_youtube_ok_includes_strategy_audit():
     assert result.ok
     assert result.acquisition.ok
     assert "Acquisition succeeded" in result.acquisition.operator_summary
-    assert result.as_dict()["strategies_tried"]
+    names = [a["strategy"] for a in result.as_dict()["strategies_tried"]]
+    assert any(n.startswith(STRATEGY_YOUTUBE_CAPTION_TRACKS) for n in names)
+
+
+def test_youtube_language_fallback_records_each_strategy():
+    """Prefer en; when missing, :any picks fr — both attempts appear in the audit."""
+    watch = (
+        '<html><script>{"title":"Multi","captionTracks":['
+        '{"baseUrl":"https://x/timedtext?lang=fr","languageCode":"fr"}]}</script></html>'
+    )
+    timed = (
+        '<?xml version="1.0"?><transcript>'
+        '<text start="0" dur="1">bonjour</text></transcript>'
+    )
+
+    class Client:
+        def get(self, url, **kw):
+            if "timedtext" in url:
+                return FetchResult(url, OUTCOME_OK, text=timed)
+            return FetchResult(url, OUTCOME_OK, text=watch)
+
+    result = YouTubeTranscriptProvider(Client(), languages=["en"]).fetch("abcdefghijk")
+    assert result.ok
+    assert "bonjour" in result.text
+    names = [a.strategy for a in result.acquisition.strategies_tried]
+    assert f"{STRATEGY_YOUTUBE_CAPTION_TRACKS}:en" in names
+    assert "youtube_caption_tracks:any" in names
