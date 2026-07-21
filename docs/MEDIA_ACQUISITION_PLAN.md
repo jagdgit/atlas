@@ -274,7 +274,7 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 - [x] **M.1** Diagnose & instrument
 - [x] **M.2** `ReaderStrategyChain` + YouTube caption strategies
 - [x] **M.3** Media assets + Metadata Reader
-- [ ] **M.4** Transcript / Audio / Speech Readers (Asset-first)
+- [x] **M.4** Transcript / Audio / Speech Readers (Asset-first)
 - [ ] **M.5** Optional `speech_to_text` (Whisper)
 - [ ] **M.6** Provider-agnostic source fetch → Asset
 - [ ] **M.7** Wiring + e2e gate → plan complete
@@ -292,7 +292,12 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 >
 > **M.3 ✅ DONE** (`atlas/readers/media_kinds.py` — `video`/`audio`/`transcript` kinds;
 > `MediaMetadataReader` — sidecar + optional ffprobe → metadata artifact, never invents fields;
-> mp4/mp3 metadata without transcription). **Next: M.4 — Transcript / Audio / Speech Readers.**
+> mp4/mp3 metadata without transcription).
+>
+> **M.4 ✅ DONE** (`TranscriptFileReader` / `AudioDemuxReader`; media entries in Reader Registry;
+> `MediaIngestor` + `atlas ingest` for local `.vtt`/`.mp4` → Asset → metadata → transcript/demux →
+> Knowledge with no YouTube-specific Knowledge branches; speech_to_text deferred to M.5).
+> **Next: M.5 — Optional `speech_to_text` (Whisper).**
 >
 > Companion: [`OPEN_ITEMS.md`](OPEN_ITEMS.md) (`OI-M*`), roadmap P8/P11/P15,
 > `atlas/transcripts/youtube.py` + `YouTubePlugin`.

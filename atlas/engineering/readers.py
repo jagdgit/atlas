@@ -26,10 +26,16 @@ CAP_CALL_GRAPH = "call_graph"
 CAP_DECORATORS = "decorators"
 CAP_TYPING = "typing"
 CAP_MODULES = "modules"
+# Media Reader Family (M.4 / OI-C2): non-code capabilities declared honestly.
+CAP_TEXT = "text"
+CAP_METADATA = "metadata"
+CAP_TRANSCRIPT = "transcript"
+CAP_AUDIO = "audio"
 
 ALL_CAPABILITIES = (
     CAP_SYMBOLS, CAP_IMPORTS, CAP_EXPORTS, CAP_CALL_GRAPH,
     CAP_DECORATORS, CAP_TYPING, CAP_MODULES,
+    CAP_TEXT, CAP_METADATA, CAP_TRANSCRIPT, CAP_AUDIO,
 )
 
 
@@ -105,6 +111,37 @@ def default_readers() -> list[Reader]:
     ]
 
 
+def default_media_readers() -> list[Reader]:
+    """Media Reader Family registrations (M.3/M.4) — honest coverage, no code caps."""
+    return [
+        Reader(
+            id="media_metadata", name="Media Metadata Reader", version="1.0.0",
+            extensions=(
+                ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v",
+                ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".opus",
+                ".vtt", ".srt", ".txt", ".json",
+            ),
+            languages=("media",),
+            coverage={CAP_METADATA: True, CAP_TEXT: False, CAP_TRANSCRIPT: False, CAP_AUDIO: False},
+            priority=40,
+        ),
+        Reader(
+            id="transcript_file", name="Transcript File Reader", version="1.0.0",
+            extensions=(".vtt", ".srt", ".txt"),
+            languages=("transcript",),
+            coverage={CAP_TRANSCRIPT: True, CAP_TEXT: True, CAP_METADATA: False, CAP_AUDIO: False},
+            priority=80,
+        ),
+        Reader(
+            id="audio_demux", name="Audio Demux Reader", version="1.0.0",
+            extensions=(".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"),
+            languages=("media",),
+            coverage={CAP_AUDIO: True, CAP_METADATA: False, CAP_TRANSCRIPT: False, CAP_TEXT: False},
+            priority=30,
+        ),
+    ]
+
+
 class ReaderRegistry:
     """Maps extensions/languages → reader and answers coverage questions honestly (BB10)."""
 
@@ -119,7 +156,9 @@ class ReaderRegistry:
     ) -> None:
         self._by_id: dict[str, Reader] = {}
         self._logger = logger or logging.getLogger("atlas.engineering.readers")
-        for reader in readers if readers is not None else default_readers():
+        if readers is None:
+            readers = [*default_readers(), *default_media_readers()]
+        for reader in readers:
             self.register(reader)
 
     def register(self, reader: Reader) -> None:

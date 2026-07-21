@@ -12,8 +12,11 @@ import pytest
 from atlas.engineering.readers import (
     CAP_CALL_GRAPH,
     CAP_EXPORTS,
+    CAP_METADATA,
+    CAP_TRANSCRIPT,
     Reader,
     ReaderRegistry,
+    default_media_readers,
     default_readers,
 )
 
@@ -66,8 +69,9 @@ def test_extension_map_and_metrics_and_health():
     emap = reg.extension_map()
     assert emap[".py"] == "python" and emap[".ts"] == "jsts" and emap[".go"] == "treesitter"
     metrics = reg.metrics()
-    assert metrics["readers"] == 3
+    assert metrics["readers"] == 6  # 3 code + 3 media (M.4)
     assert "python" in metrics["languages"] and "typescript" in metrics["languages"]
+    assert emap[".vtt"] == "transcript_file"
     assert reg.health_check().healthy is True
 
 
@@ -95,6 +99,19 @@ def test_default_readers_have_versions_and_coverage():
         assert r.extensions
         d = r.as_dict()
         assert "coverage" in d and "call_graph" in d["coverage"]
+
+
+def test_default_media_readers_registered():
+    reg = ReaderRegistry()
+    assert reg.get("media_metadata") is not None
+    assert reg.get("transcript_file") is not None
+    assert reg.get("audio_demux") is not None
+    assert reg.reader_for_extension(".vtt").id == "transcript_file"
+    assert reg.supports(CAP_TRANSCRIPT, extension=".vtt") is True
+    assert reg.supports(CAP_METADATA, extension=".mp3") is True
+    for r in default_media_readers():
+        assert r.version and r.extensions
+        assert CAP_CALL_GRAPH not in r.coverage or r.coverage.get(CAP_CALL_GRAPH) is False
 
 
 # --- JS/TS end-to-end through the same pipeline ---------------------------

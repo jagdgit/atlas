@@ -97,7 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--limit", type=int, default=5)
 
     p_ingest = sub.add_parser("ingest", help="ingest a file into the knowledge base")
-    p_ingest.add_argument("path", help="path to a .txt/.md/.pdf/.html file")
+    p_ingest.add_argument(
+        "path",
+        help="path to a document (.txt/.md/.pdf/…) or media file (.mp4/.vtt/.mp3/…)",
+    )
 
     p_remember = sub.add_parser("remember", help="store a memory")
     p_remember.add_argument("content")
@@ -475,11 +478,33 @@ def cmd_search(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 def cmd_ingest(args: argparse.Namespace, app: "Application | None" = None) -> int:
     from atlas.ingestion.extractors import content_type_for, extract
+    from atlas.readers.media_kinds import infer_media_kind
 
     path = Path(args.path)
     if not path.is_file():
         print(f"error: not a file: {path}", file=sys.stderr)
         return 1
+
+    # Media Reader Family (M.4): Asset → metadata → transcript/demux → Knowledge.
+    if infer_media_kind(path.name) is not None:
+        app = app or build_application()
+        media = app.container.resolve("media_ingestor")
+        result = media.ingest_file(path, embed=True)
+        ingest = result.get("ingest") or {}
+        if ingest.get("outcome") == "ok":
+            print(
+                f"ingested media {path.name}: asset={result['asset_id']} "
+                f"kind={result['kind']} document={ingest.get('document_id')} "
+                f"chunks={ingest.get('chunks', 0)} deduped={ingest.get('deduped')}"
+            )
+            return 0
+        print(
+            f"error: media ingest produced no knowledge for {path.name} "
+            f"(kind={result.get('kind')})",
+            file=sys.stderr,
+        )
+        return 1
+
     text = extract(path)
     if not text:
         print(f"error: no extractable text in {path}", file=sys.stderr)

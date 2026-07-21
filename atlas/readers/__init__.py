@@ -47,6 +47,16 @@ from atlas.readers.media_metadata import (
     MEDIA_METADATA_READER_VERSION,
     MediaMetadataReader,
 )
+from atlas.readers.transcript_file import (
+    TRANSCRIPT_FILE_READER_ID,
+    TRANSCRIPT_FILE_READER_VERSION,
+    TranscriptFileReader,
+)
+from atlas.readers.audio_demux import (
+    AUDIO_DEMUX_READER_ID,
+    AUDIO_DEMUX_READER_VERSION,
+    AudioDemuxReader,
+)
 from atlas.readers.strategy_chain import ChainResult, ReaderStrategyChain, StrategyResult
 
 __all__ = [
@@ -71,6 +81,12 @@ __all__ = [
     "MediaMetadataReader",
     "MEDIA_METADATA_READER_ID",
     "MEDIA_METADATA_READER_VERSION",
+    "TranscriptFileReader",
+    "TRANSCRIPT_FILE_READER_ID",
+    "TRANSCRIPT_FILE_READER_VERSION",
+    "AudioDemuxReader",
+    "AUDIO_DEMUX_READER_ID",
+    "AUDIO_DEMUX_READER_VERSION",
     "ASSET_KIND_VIDEO",
     "ASSET_KIND_AUDIO",
     "ASSET_KIND_TRANSCRIPT",

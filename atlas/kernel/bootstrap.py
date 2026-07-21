@@ -32,12 +32,22 @@ from atlas.engineering.artifacts import DerivedArtifactStore
 from atlas.engineering.design_review import DesignReviewer
 from atlas.engineering.findings import EngineeringFindingWriter
 from atlas.ingestion.acquire import AssetAcquirer
+from atlas.ingestion.media import MediaIngestor
 from atlas.ingestion.service import IngestionService
 from atlas.knowledge.candidate_consumer import CandidateConsumer
 from atlas.knowledge.prose_extraction import ProseKnowledgeExtractor
 from atlas.learning.experience_extraction import ExperienceWriter
 from atlas.personal import PersonalService
-from atlas.readers import ConversationReader, DocumentReader, MarketDataReader, JobPostingsReader, AdvisoryFeedReader
+from atlas.readers import (
+    AdvisoryFeedReader,
+    AudioDemuxReader,
+    ConversationReader,
+    DocumentReader,
+    JobPostingsReader,
+    MarketDataReader,
+    MediaMetadataReader,
+    TranscriptFileReader,
+)
 from atlas.repositories.candidate_repo import CandidateRepository
 from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
@@ -905,6 +915,27 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         coverage=coverage_service,
         logger=get_logger("atlas.ingestion.service"),
     )
+    # Media Reader Family (M.3/M.4): metadata → transcript/demux → knowledge for local media.
+    media_metadata_reader = MediaMetadataReader(
+        asset_store, derived_artifacts, logger=get_logger("atlas.readers.media_metadata")
+    )
+    transcript_file_reader = TranscriptFileReader(
+        asset_store, derived_artifacts, logger=get_logger("atlas.readers.transcript_file")
+    )
+    audio_demux_reader = AudioDemuxReader(
+        asset_store,
+        derived_artifacts,
+        acquirer=asset_acquirer,
+        logger=get_logger("atlas.readers.audio_demux"),
+    )
+    media_ingestor = MediaIngestor(
+        asset_acquirer,
+        knowledge_service,
+        metadata_reader=media_metadata_reader,
+        transcript_reader=transcript_file_reader,
+        demux_reader=audio_demux_reader,
+        logger=get_logger("atlas.ingestion.media"),
+    )
     # Owner Knowledge Mission worker (Phase C · §C.8): continuously reads the User Archive
     # (code/docs/chats) into global knowledge + experience, then rebuilds the personal profile.
     worker_manager.register_worker_type(
@@ -1095,6 +1126,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("portfolio", portfolio_service)
     container.register_instance("improvement_board", improvement_board)
     container.register_instance("ingestion_bridge", ingestion_bridge)
+    container.register_instance("media_ingestor", media_ingestor)
     container.register_instance("candidates", candidate_consumer)
 
     # Advertise capabilities so agents can query the kernel instead of importing
