@@ -33,6 +33,20 @@ from atlas.readers.advisory_feed import (
     ADVISORY_FEED_READER_VERSION,
     AdvisoryFeedReader,
 )
+from atlas.readers.media_kinds import (
+    ASSET_KIND_AUDIO,
+    ASSET_KIND_TRANSCRIPT,
+    ASSET_KIND_VIDEO,
+    MEDIA_ASSET_KINDS,
+    content_type_for,
+    infer_media_kind,
+    media_extensions,
+)
+from atlas.readers.media_metadata import (
+    MEDIA_METADATA_READER_ID,
+    MEDIA_METADATA_READER_VERSION,
+    MediaMetadataReader,
+)
 from atlas.readers.strategy_chain import ChainResult, ReaderStrategyChain, StrategyResult
 
 __all__ = [
@@ -54,4 +68,14 @@ __all__ = [
     "ReaderStrategyChain",
     "StrategyResult",
     "ChainResult",
+    "MediaMetadataReader",
+    "MEDIA_METADATA_READER_ID",
+    "MEDIA_METADATA_READER_VERSION",
+    "ASSET_KIND_VIDEO",
+    "ASSET_KIND_AUDIO",
+    "ASSET_KIND_TRANSCRIPT",
+    "MEDIA_ASSET_KINDS",
+    "infer_media_kind",
+    "content_type_for",
+    "media_extensions",
 ]

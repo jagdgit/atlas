@@ -163,7 +163,7 @@ That chain is the reusable pattern (`ReaderStrategyChain`); media is the first p
 - **Acceptance:** unit tests for captions ok / no captions / robots blocked, each with
   `strategies_tried[]`.
 
-### M.3 — Media assets + Metadata Reader
+### M.3 — Media assets + Metadata Reader  ·  ✅ DONE
 - Asset kinds: `video`, `audio`, `transcript` (align with Asset Store conventions).
 - **MediaMetadataReader** — from asset bytes and/or provider sidecar info → metadata artifact:
   duration, language, title, description, tags, channel/uploader, upload/created date,
@@ -273,7 +273,7 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 
 - [x] **M.1** Diagnose & instrument
 - [x] **M.2** `ReaderStrategyChain` + YouTube caption strategies
-- [ ] **M.3** Media assets + Metadata Reader
+- [x] **M.3** Media assets + Metadata Reader
 - [ ] **M.4** Transcript / Audio / Speech Readers (Asset-first)
 - [ ] **M.5** Optional `speech_to_text` (Whisper)
 - [ ] **M.6** Provider-agnostic source fetch → Asset
@@ -288,7 +288,11 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 >
 > **M.2 ✅ DONE** (`atlas/readers/strategy_chain.py` — reusable first-ok chain; YouTube per-language
 > caption strategies + `:any` fallback; `strategies_tried[]` audit; `suggested_next_capability=
-> speech_to_text` on caption failure). **Next: M.3 — Media assets + Metadata Reader.**
+> speech_to_text` on caption failure).
+>
+> **M.3 ✅ DONE** (`atlas/readers/media_kinds.py` — `video`/`audio`/`transcript` kinds;
+> `MediaMetadataReader` — sidecar + optional ffprobe → metadata artifact, never invents fields;
+> mp4/mp3 metadata without transcription). **Next: M.4 — Transcript / Audio / Speech Readers.**
 >
 > Companion: [`OPEN_ITEMS.md`](OPEN_ITEMS.md) (`OI-M*`), roadmap P8/P11/P15,
 > `atlas/transcripts/youtube.py` + `YouTubePlugin`.
