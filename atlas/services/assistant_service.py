@@ -688,14 +688,25 @@ class AssistantService:
                 "capability": "transcript",
                 "ok": result.ok,
                 "outcome": outcome,
+                "reason_code": data.get("reason_code"),
+                "bytes_read": data.get("bytes_read"),
+                "acquisition": data.get("acquisition"),
             }
         )
         if not result.ok:
             return _Outcome(answer=f"I couldn't fetch that transcript: {result.error}")
         if outcome != "ok":
+            summary = data.get("operator_summary") or ""
+            if summary:
+                return _Outcome(answer=summary)
             reason = data.get("reason") or outcome
+            code = data.get("reason_code") or ""
             return _Outcome(
-                answer=f"No transcript available ({outcome}): {reason}."
+                answer=(
+                    f"Acquisition failed before read ({outcome}"
+                    + (f"/{code}" if code else "")
+                    + f"): {reason}. No document was fabricated."
+                )
             )
         text = (data.get("text") or "").strip()
         title = data.get("title") or data.get("video_id")

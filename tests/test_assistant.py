@@ -381,7 +381,10 @@ def test_youtube_no_transcript_is_honest():
             "title": "", "language": "", "text": "", "segments": [],
             "reason": "no captions available"}
     turn = _assistant(youtube_result=none).chat("transcript of https://youtu.be/abcdefghijk")
-    assert "no transcript" in turn.answer.lower()
+    answer = turn.answer.lower()
+    assert "acquisition failed before read" in answer
+    assert "no document was fabricated" in answer
+    assert "no captions" in answer
 
 
 def test_youtube_gap_when_no_tool():

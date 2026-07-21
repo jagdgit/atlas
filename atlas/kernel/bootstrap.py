@@ -587,9 +587,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         ocr_dpi=cfg.resources.ocr_dpi,
     )
     pools = resource_manager.recommend_pool_sizes()
+    from atlas.transcripts import YouTubeTranscriptProvider
+
+    yt_languages = list(getattr(cfg.plugins.youtube, "languages", None) or ["en"])
+    youtube_transcripts = YouTubeTranscriptProvider(
+        fetch_client,
+        languages=yt_languages,
+        logger=get_logger("atlas.transcripts.youtube"),
+    )
     librarian = Librarian(
         fetch_client,
         reader=reader,
+        transcript_fetcher=youtube_transcripts.fetch,
         max_documents=cfg.research.max_documents,
         max_workers=pools.acquire_workers,
         global_max_workers=cfg.resources.max_worker_threads,

@@ -9,6 +9,9 @@ Two polite fetches through the resilient net layer, never raising (R2/R3):
 
 Every failure mode is an **outcome**, not an exception: no video id ⇒ ``error``; a
 blocked/rate-limited fetch ⇒ the net layer's outcome; no captions ⇒ ``skipped``.
+
+Media Reader Family · M.1: every result carries an ``AcquisitionRecord`` so reports can
+say *acquisition failed before read* instead of looking like a reasoning failure (P15).
 """
 
 from __future__ import annotations
@@ -23,6 +26,12 @@ from urllib.parse import parse_qs, urlparse
 
 from atlas.evidence.models import LEVEL_FORUM, level_name
 from atlas.net import OUTCOME_ERROR, OUTCOME_OK, OUTCOME_SKIPPED
+from atlas.transcripts.acquisition import (
+    STRATEGY_YOUTUBE_CAPTION_TRACKS,
+    AcquisitionAttempt,
+    AcquisitionRecord,
+    normalize_reason_code,
+)
 
 if TYPE_CHECKING:
     from atlas.net import FetchClient
@@ -55,12 +64,14 @@ class TranscriptResult:
     segments: list[TranscriptSegment] = field(default_factory=list)
     reason: str | None = None
     evidence_level: int = LEVEL_FORUM
+    acquisition: AcquisitionRecord | None = None
 
     @property
     def ok(self) -> bool:
         return self.outcome == OUTCOME_OK
 
     def as_dict(self) -> dict[str, object]:
+        acq = self.acquisition or self._default_acquisition()
         return {
             "video_id": self.video_id,
             "url": self.url,
@@ -72,6 +83,11 @@ class TranscriptResult:
             "reason": self.reason,
             "evidence_level": self.evidence_level,
             "level_name": level_name(self.evidence_level),
+            "bytes_read": acq.bytes_read,
+            "strategies_tried": [a.as_dict() for a in acq.strategies_tried],
+            "reason_code": acq.reason_code,
+            "acquisition": acq.as_dict(),
+            "operator_summary": acq.operator_summary,
         }
 
     def as_source(self) -> dict[str, object]:
@@ -82,6 +98,17 @@ class TranscriptResult:
             "evidence_level": self.evidence_level,
             "kind": "video",
         }
+
+    def _default_acquisition(self) -> AcquisitionRecord:
+        code = normalize_reason_code(self.outcome, self.reason)
+        attempt = AcquisitionAttempt(
+            strategy=STRATEGY_YOUTUBE_CAPTION_TRACKS,
+            outcome=self.outcome,
+            reason=self.reason,
+            reason_code=code,
+            bytes_read=len((self.text or "").encode("utf-8")),
+        )
+        return AcquisitionRecord.from_attempts([attempt], source_url=self.url)
 
 
 class YouTubeTranscriptProvider:
@@ -103,62 +130,114 @@ class YouTubeTranscriptProvider:
     def fetch(self, url_or_id: str) -> TranscriptResult:
         video_id = self._video_id((url_or_id or "").strip())
         watch_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+        attempts: list[AcquisitionAttempt] = []
         if not video_id:
-            return TranscriptResult(
-                "", url_or_id or "", OUTCOME_ERROR,
-                reason="could not parse a YouTube video id",
-                evidence_level=self._evidence_level,
+            reason = "could not parse a YouTube video id"
+            attempts.append(self._attempt(OUTCOME_ERROR, reason, 0))
+            return self._result(
+                "", url_or_id or "", OUTCOME_ERROR, reason=reason, attempts=attempts,
             )
         page = self._client.get(watch_url)
+        page_bytes = self._bytes_of(page)
         if page.outcome != OUTCOME_OK:
-            return TranscriptResult(
-                video_id, watch_url, page.outcome, reason=page.reason,
-                evidence_level=self._evidence_level,
+            attempts.append(self._attempt(page.outcome, page.reason, page_bytes))
+            return self._result(
+                video_id, watch_url, page.outcome, reason=page.reason, attempts=attempts,
             )
         try:
-            return self._extract(video_id, watch_url, page.text)
+            return self._extract(video_id, watch_url, page.text, page_bytes, attempts)
         except Exception as exc:  # noqa: BLE001 - fragile scrape must not crash the job
             self._logger.exception("youtube transcript extraction failed")
-            return TranscriptResult(
-                video_id, watch_url, OUTCOME_ERROR, reason=str(exc),
-                evidence_level=self._evidence_level,
+            attempts.append(self._attempt(OUTCOME_ERROR, str(exc), page_bytes))
+            return self._result(
+                video_id, watch_url, OUTCOME_ERROR, reason=str(exc), attempts=attempts,
             )
 
     # --- internals ------------------------------------------------------
-    def _extract(self, video_id: str, watch_url: str, page: str) -> TranscriptResult:
+    def _extract(
+        self,
+        video_id: str,
+        watch_url: str,
+        page: str,
+        page_bytes: int,
+        attempts: list[AcquisitionAttempt],
+    ) -> TranscriptResult:
         title = self._title(page)
         tracks_match = _CAPTION_TRACKS_RE.search(page)
         if not tracks_match:
-            return TranscriptResult(
-                video_id, watch_url, OUTCOME_SKIPPED, title=title,
-                reason="no captions available for this video",
-                evidence_level=self._evidence_level,
+            reason = "no captions available for this video"
+            attempts.append(self._attempt(OUTCOME_SKIPPED, reason, page_bytes))
+            return self._result(
+                video_id, watch_url, OUTCOME_SKIPPED, title=title, reason=reason,
+                attempts=attempts,
             )
         tracks = json.loads(tracks_match.group(1))
         track = self._pick_track(tracks)
         if track is None or not track.get("baseUrl"):
-            return TranscriptResult(
-                video_id, watch_url, OUTCOME_SKIPPED, title=title,
-                reason="no usable caption track",
-                evidence_level=self._evidence_level,
+            reason = "no usable caption track"
+            attempts.append(self._attempt(OUTCOME_SKIPPED, reason, page_bytes))
+            return self._result(
+                video_id, watch_url, OUTCOME_SKIPPED, title=title, reason=reason,
+                attempts=attempts,
             )
         base_url = track["baseUrl"].replace("\\u0026", "&")
         language = str(track.get("languageCode", ""))
         cues = self._client.get(base_url)
+        cue_bytes = self._bytes_of(cues)
+        total_bytes = page_bytes + cue_bytes
         if cues.outcome != OUTCOME_OK:
-            return TranscriptResult(
+            attempts.append(self._attempt(cues.outcome, cues.reason, total_bytes))
+            return self._result(
                 video_id, watch_url, cues.outcome, title=title, language=language,
-                reason=cues.reason, evidence_level=self._evidence_level,
+                reason=cues.reason, attempts=attempts,
             )
         segments = self._parse_cues(cues.text)
         text = " ".join(s.text for s in segments).strip()
         outcome = OUTCOME_OK if text else OUTCOME_SKIPPED
-        return TranscriptResult(
+        reason = None if text else "transcript was empty"
+        attempts.append(self._attempt(outcome, reason, total_bytes))
+        return self._result(
             video_id, watch_url, outcome, title=title, language=language,
-            text=text, segments=segments,
-            reason=None if text else "transcript was empty",
-            evidence_level=self._evidence_level,
+            text=text, segments=segments, reason=reason, attempts=attempts,
         )
+
+    def _result(
+        self,
+        video_id: str,
+        url: str,
+        outcome: str,
+        *,
+        title: str = "",
+        language: str = "",
+        text: str = "",
+        segments: list[TranscriptSegment] | None = None,
+        reason: str | None = None,
+        attempts: list[AcquisitionAttempt],
+    ) -> TranscriptResult:
+        acq = AcquisitionRecord.from_attempts(attempts, source_url=url)
+        return TranscriptResult(
+            video_id, url, outcome, title=title, language=language, text=text,
+            segments=list(segments or []), reason=reason,
+            evidence_level=self._evidence_level, acquisition=acq,
+        )
+
+    @staticmethod
+    def _attempt(outcome: str, reason: str | None, bytes_read: int) -> AcquisitionAttempt:
+        return AcquisitionAttempt(
+            strategy=STRATEGY_YOUTUBE_CAPTION_TRACKS,
+            outcome=outcome,
+            reason=reason,
+            reason_code=normalize_reason_code(outcome, reason),
+            bytes_read=max(0, int(bytes_read or 0)),
+        )
+
+    @staticmethod
+    def _bytes_of(fetch_result: object) -> int:
+        content = getattr(fetch_result, "content", None)
+        if isinstance(content, (bytes, bytearray)) and content:
+            return len(content)
+        text = getattr(fetch_result, "text", None) or ""
+        return len(str(text).encode("utf-8"))
 
     def _pick_track(self, tracks: list[dict]) -> dict | None:
         if not tracks:

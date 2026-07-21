@@ -8,7 +8,8 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-19 (after Phase C.9 — **Phase C complete**; **Phase D planned**, see `docs/PHASE_D_PLAN.md`; **P15 capability-gap honesty** + post-Phase-D future directions recorded after external review).
+> **Last updated:** 2026-07-21 (Phase D complete; **Media Reader Family** plan frozen —
+> `docs/MEDIA_ACQUISITION_PLAN.md`, `OI-M*`; start M.1).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -66,6 +67,26 @@ implementation exposes a genuine limit. Mirrored in `ATLAS_OS_ROADMAP.md` §13.
 | OI-F3 | 🔴 | P3 | **System Introspection mission** — periodic self-analysis (what do I know / am uncertain about / which readers fail most / mission cost / policies blocking decisions / what to improve). | Generalizes the D.10 Self-Improvement Watcher + the P15 capability-gap self-report. |
 | OI-F4 | 🔴 | P3 | **Standardized post-decision feedback loops** — `Recommendation → Outcome → Difference → Learning` as a cross-mission convention (not just D.6 Paper Trading). | Architecture already supports it; make it a convention once ≥2 applied missions run. |
 | OI-F5 | 🟡 | P2 | **Capability-gap honesty (P15)** — surface *what Atlas can't do* (missing reader/data-source/rule/tool) to the operator. Partially realized today (honest-failure readers `unsupported`/`empty`, coverage map). To first-class: a Capability Registry gap self-report + the Decision-Engine `capability_gap` outcome (D.1). | Requested by the operator 2026-07-19. Land the `capability_gap` outcome in D.1; the registry self-report is a small Phase-D add. |
+
+---
+
+## 1e. Media Reader Family (frozen — `docs/MEDIA_ACQUISITION_PLAN.md`)
+
+Post–Phase D. Triggered by a live YouTube run that failed at **Acquire** (no transcript /
+`robots.txt` / 0 B) — honest P15 failure, thin Reader strategies. Extends the **Media Reader
+family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-approved 2026-07-21
+(strategy-chain generalized; Metadata Reader; media non-special). **Plan frozen — start M.1.**
+
+| ID | Status | Pri | Item | Notes |
+|----|--------|-----|------|-------|
+| OI-M0 | 🔴 | P1 | **Media Reader Family plan** — slices M.1–M.7 (strategy chain, metadata, Asset-first readers, optional Whisper, provider-agnostic fetch, e2e gate). | `MEDIA_ACQUISITION_PLAN.md` · frozen 2026-07-21 |
+| OI-M1 | 🔴 | P3 | Official YouTube Data API captions (API key) as an extra polite strategy. | defer |
+| OI-M2 | 🔴 | P3 | Speaker diarization on transcripts. | defer |
+| OI-M3 | 🔴 | P3 | Streaming / live caption ingest. | defer |
+| OI-M4 | ⚪ | — | CCTV / continuous video missions. | out of scope until requested |
+| OI-M5 | 🔴 | P3 | Cloud STT providers (only if local Whisper insufficient). | defer |
+| OI-M6 | 🔴 | P3 | **Video frames → Image/OCR Readers** (slides/diagrams aligned with speech). | Architecture allows; not now |
+| OI-M7 | 🔴 | P3 | Reuse `ReaderStrategyChain` for non-media Readers (documents, git, OCR, CAD). | After media proves the pattern |
 
 ---
 

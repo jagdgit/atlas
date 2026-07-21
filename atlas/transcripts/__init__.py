@@ -7,10 +7,22 @@ of crashing the job (R2/R3). Transcripts are informal sources ⇒ **L1** evidenc
 
 from __future__ import annotations
 
+from atlas.transcripts.acquisition import (
+    AcquisitionAttempt,
+    AcquisitionRecord,
+    normalize_reason_code,
+)
 from atlas.transcripts.youtube import (
     TranscriptResult,
     TranscriptSegment,
     YouTubeTranscriptProvider,
 )
 
-__all__ = ["YouTubeTranscriptProvider", "TranscriptResult", "TranscriptSegment"]
+__all__ = [
+    "AcquisitionAttempt",
+    "AcquisitionRecord",
+    "YouTubeTranscriptProvider",
+    "TranscriptResult",
+    "TranscriptSegment",
+    "normalize_reason_code",
+]

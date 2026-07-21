@@ -153,11 +153,72 @@ def test_one_source_read_exception_does_not_discard_batch(monkeypatch):
     assert any(s.get("failure_code") == "parse_error" for s in result.skipped)
 
 
-def test_video_source_skipped():
+def test_video_source_without_fetcher_has_acquisition_record():
     lib = Librarian(FakeFetcher())
     result = lib.acquire([_src("s1", "https://www.youtube.com/watch?v=abcdefghijk")])
     assert len(result.skipped) == 1
-    assert "video" in result.skipped[0]["reason"].lower()
+    sk = result.skipped[0]
+    assert sk.get("acquisition")
+    assert sk["acquisition"]["reason_code"] == "strategy_not_attempted"
+    assert "Acquisition failed before read" in sk["acquisition"]["operator_summary"]
+
+
+def test_video_source_with_blocked_transcript_fetcher():
+    from atlas.transcripts.youtube import TranscriptResult
+    from atlas.transcripts.acquisition import (
+        REASON_ROBOTS_DISALLOWED,
+        STRATEGY_YOUTUBE_CAPTION_TRACKS,
+        AcquisitionAttempt,
+        AcquisitionRecord,
+    )
+
+    attempt = AcquisitionAttempt(
+        STRATEGY_YOUTUBE_CAPTION_TRACKS, "skipped",
+        reason="robots.txt disallows this URL",
+        reason_code=REASON_ROBOTS_DISALLOWED, bytes_read=0,
+    )
+    acq = AcquisitionRecord.from_attempts(
+        [attempt], source_url="https://www.youtube.com/watch?v=abcdefghijk"
+    )
+
+    def fetch(_url):
+        return TranscriptResult(
+            "abcdefghijk", "https://www.youtube.com/watch?v=abcdefghijk",
+            "skipped", reason="robots.txt disallows this URL", acquisition=acq,
+        )
+
+    lib = Librarian(FakeFetcher(), transcript_fetcher=fetch)
+    result = lib.acquire([_src("s1", "https://www.youtube.com/watch?v=abcdefghijk")])
+    assert result.documents == []
+    assert result.skipped
+    assert result.skipped[0]["acquisition"]["reason_code"] == REASON_ROBOTS_DISALLOWED
+
+
+def test_video_source_with_ok_transcript_becomes_document():
+    from atlas.transcripts.youtube import TranscriptResult
+    from atlas.transcripts.acquisition import (
+        STRATEGY_YOUTUBE_CAPTION_TRACKS,
+        AcquisitionAttempt,
+        AcquisitionRecord,
+    )
+
+    attempt = AcquisitionAttempt(
+        STRATEGY_YOUTUBE_CAPTION_TRACKS, "ok", reason_code="ok", bytes_read=12,
+    )
+    acq = AcquisitionRecord.from_attempts([attempt])
+
+    def fetch(_url):
+        return TranscriptResult(
+            "abcdefghijk", "https://www.youtube.com/watch?v=abcdefghijk",
+            "ok", title="Talk", text="loss is 0.3%/day under soiling",
+            acquisition=acq,
+        )
+
+    lib = Librarian(FakeFetcher(), transcript_fetcher=fetch)
+    result = lib.acquire([_src("s1", "https://www.youtube.com/watch?v=abcdefghijk")])
+    assert result.stats["read"] == 1
+    assert "0.3%/day" in result.documents[0].text
+    assert result.documents[0].reader_id == "youtube_transcript"
 
 
 def test_document_cap_limits_downloads():

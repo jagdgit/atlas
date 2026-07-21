@@ -282,6 +282,7 @@ class ResearchService:
         candidates: dict[str, _Gathered] = {}
         documents: dict[str, Any] = {}
         blocked: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
         raw: list[Claim] = []
         rounds_log: list[dict[str, Any]] = []
         recommendations: list[dict[str, Any]] = []
@@ -357,15 +358,16 @@ class ResearchService:
             )
             unread = [g.source for g in kept]
             if remaining > 0 and unread:
-                new_docs, new_blocked, n_full = self._acquire_unread(
+                new_docs, new_blocked, new_skipped, n_full = self._acquire_unread(
                     unread, remaining, workspace, activity
                 )
                 documents.update(new_docs)
                 blocked.extend(new_blocked)
+                skipped.extend(new_skipped)
                 acquired_full += n_full
-                blocked_ids = {
+                refuse_ids = {
                     str(b.get("source_id") or b.get("url") or "")
-                    for b in new_blocked
+                    for b in list(new_blocked) + list(new_skipped)
                     if isinstance(b, dict)
                 }
                 # Tier-1 fallback: usable abstracts only — never for paywalled
@@ -374,7 +376,7 @@ class ResearchService:
                     sid = g.source.id
                     if sid in documents or len(documents) >= self._max_documents:
                         continue
-                    if sid in blocked_ids or g.source.url in blocked_ids:
+                    if sid in refuse_ids or g.source.url in refuse_ids:
                         continue
                     text = (g.full_text or "").strip()
                     if len(text) >= _MIN_TIER1_CHARS:
@@ -536,7 +538,7 @@ class ResearchService:
         # every source — search → acquire → read → extract → verify → findings —
         # so a regression in any stage is diagnosable in minutes, per source.
         trace = self._build_source_traces(
-            candidates, documents, raw, graph, findings, blocked
+            candidates, documents, raw, graph, findings, blocked, skipped
         )
         pipeline["trace"] = trace
         self._record_trace(activity, workspace, trace)
@@ -593,6 +595,7 @@ class ResearchService:
             "report": report,
             "pipeline": pipeline,
             "blocked": blocked,
+            "skipped": skipped,
             "gaps": status.as_dict() if status else {},
             "recommendations": recommendations,
             "findings": [f.as_dict() for f in findings],
@@ -756,13 +759,18 @@ class ResearchService:
         remaining: int,
         workspace: Any,
         activity: Any,
-    ) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
-        """Acquire up to ``remaining`` unread sources. Returns (docs, blocked, n_full)."""
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], int]:
+        """Acquire up to ``remaining`` unread sources.
+
+        Returns ``(docs, blocked, skipped, n_full)``. ``skipped`` carries structured
+        acquisition records for video/transcript failures (Media Reader Family · M.1).
+        """
         documents: dict[str, Any] = {}
         blocked: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
         acquired_full = 0
         if self._librarian is None or remaining <= 0:
-            return documents, blocked, acquired_full
+            return documents, blocked, skipped, acquired_full
         ordered_unread = self._order_execution_items(
             unread,
             kind="download",
@@ -790,10 +798,11 @@ class ResearchService:
             for doc in sorted(acq.documents, key=lambda d: d.source_id):
                 documents[doc.source_id] = doc
             blocked = list(getattr(acq, "blocked", []) or [])
+            skipped = list(getattr(acq, "skipped", []) or [])
             acquired_full = len(documents)
         except Exception:  # noqa: BLE001
             self._logger.exception("acquisition failed; falling back to abstracts")
-        return documents, blocked, acquired_full
+        return documents, blocked, skipped, acquired_full
 
     def _extract_parallel(
         self,
@@ -1023,6 +1032,7 @@ class ResearchService:
         graph: EvidenceGraph,
         findings: list | None,
         blocked: list[dict[str, Any]],
+        skipped: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """One structured state object per source, across every pipeline stage.
 
@@ -1031,6 +1041,10 @@ class ResearchService:
         → verified → findings, plus an explicit ``status`` and ``failure_reason`` when
         a stage stopped. This is the trace the operator asked for — debugging by
         reading one row instead of correlating log lines.
+
+        Media Reader Family · M.1: ``skipped``/``blocked`` rows may carry an
+        ``acquisition`` record; when present, ``failure_reason`` prefers its
+        ``operator_summary`` so acquisition-vs-reasoning is obvious.
         """
         from collections import defaultdict
 
@@ -1069,17 +1083,17 @@ class ResearchService:
             for sid in sids:
                 finding_by_sid[sid] += 1
 
-        blocked_by_sid: dict[str, dict[str, Any]] = {}
-        for b in blocked or []:
+        acquire_by_sid: dict[str, dict[str, Any]] = {}
+        for b in list(blocked or []) + list(skipped or []):
             if not isinstance(b, dict):
                 continue
             key = str(b.get("source_id") or b.get("url") or "")
             if key:
-                blocked_by_sid.setdefault(key, b)
+                acquire_by_sid.setdefault(key, b)
 
-        # Stable order: candidates first (discovery order), then any doc/blocked-only ids.
+        # Stable order: candidates first (discovery order), then any doc/acquire-only ids.
         order: list[str] = list(candidates.keys())
-        for sid in list(documents.keys()) + list(blocked_by_sid.keys()):
+        for sid in list(documents.keys()) + list(acquire_by_sid.keys()):
             if sid not in order:
                 order.append(sid)
 
@@ -1091,13 +1105,13 @@ class ResearchService:
             title = ((src.title if src else "") or sid) or ""
             url = (src.url if src else "") or ""
             lvl = getattr(src, "evidence_level", None) if src else None
-            blk = blocked_by_sid.get(sid) or blocked_by_sid.get(url)
+            acq_row = acquire_by_sid.get(sid) or acquire_by_sid.get(url)
             acquired = doc is not None
             read = bool(doc and getattr(doc, "has_text", False))
             n_num = numeric.get(sid, 0)
             n_prose = prose.get(sid, 0)
             n_inf = inferred.get(sid, 0)
-            row = {
+            row: dict[str, Any] = {
                 "source_id": sid,
                 "title": title[:120],
                 "url": url,
@@ -1116,10 +1130,28 @@ class ResearchService:
                 "verified_claims": verified.get(sid, 0),
                 "findings": finding_by_sid.get(sid, 0),
             }
-            if blk:
-                row["status"] = "blocked"
+            if acq_row and isinstance(acq_row.get("acquisition"), dict):
+                row["acquisition"] = acq_row["acquisition"]
+            if acq_row and not acquired:
+                acq = (
+                    acq_row.get("acquisition")
+                    if isinstance(acq_row.get("acquisition"), dict)
+                    else {}
+                )
+                code = str(acq_row.get("failure_code") or "")
+                if code == "paywall" or (
+                    not acq and "paywall" in str(acq_row.get("reason") or "").lower()
+                ):
+                    row["status"] = "blocked"
+                elif acq:
+                    row["status"] = "not_acquired"
+                else:
+                    row["status"] = "blocked"
                 row["failure_reason"] = str(
-                    blk.get("reason") or blk.get("failure_code") or "blocked"
+                    (acq or {}).get("operator_summary")
+                    or acq_row.get("reason")
+                    or acq_row.get("failure_code")
+                    or "acquisition failed before read"
                 )
             elif not acquired:
                 row["status"] = "not_acquired"

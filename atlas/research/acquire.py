@@ -16,7 +16,7 @@ import logging
 import re
 import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from atlas.evidence.models import Source, level_name
@@ -29,10 +29,15 @@ from atlas.research.classifier import (
     classify,
 )
 from atlas.research.reader import Document, Reader
+from atlas.transcripts.acquisition import AcquisitionRecord
 
 if TYPE_CHECKING:
     from atlas.jobs.activity import ActivityRecorder
     from atlas.jobs.workspace import JobWorkspace
+    from atlas.transcripts.youtube import TranscriptResult
+
+# Optional: url_or_id → TranscriptResult (Media Reader Family · M.1).
+TranscriptFetcher = Callable[[str], "TranscriptResult"]
 
 # Extension to save a fetched artifact under, so the Reader's extension-keyed
 # extractors fire. Keyed by a coarse content-type family.
@@ -229,6 +234,7 @@ class Librarian:
         fetcher: _Fetcher,
         *,
         reader: Reader | None = None,
+        transcript_fetcher: TranscriptFetcher | None = None,
         max_documents: int = 12,
         open_access_first: bool = True,
         prefer_ar5iv: bool = True,
@@ -238,6 +244,7 @@ class Librarian:
     ) -> None:
         self._fetcher = fetcher
         self._reader = reader or Reader()
+        self._transcript_fetcher = transcript_fetcher
         self._max_documents = max_documents
         self._open_access_first = open_access_first
         self._prefer_ar5iv = prefer_ar5iv
@@ -341,16 +348,7 @@ class Librarian:
         out = _OneOutcome(source_id=source.id, title=title)
 
         if cls.access_method == ACCESS_VIDEO:
-            out.skipped.append(
-                {
-                    "source_id": source.id,
-                    "url": source.url,
-                    "reason": "video source (transcript not acquired here)",
-                    "failure_code": "unsupported",
-                }
-            )
-            out.stages.append("found")
-            return out
+            return self._acquire_video(source, out)
         if cls.access_method == ACCESS_PAYWALL:
             out.blocked.append(
                 {
@@ -454,6 +452,78 @@ class Librarian:
             out.stages.append("found")
         return out
 
+    def _acquire_video(self, source: Source, out: _OneOutcome) -> _OneOutcome:
+        """Media Reader Family · M.1: try transcript acquisition; never fabricate text."""
+        url = source.url or ""
+        out.stages.append("found")
+        if self._transcript_fetcher is None:
+            acq = AcquisitionRecord.not_attempted(
+                source_url=url,
+                reason="video source — transcript fetcher not configured",
+            )
+            out.skipped.append(
+                {
+                    "source_id": source.id,
+                    "url": url,
+                    "reason": acq.reason,
+                    "failure_code": "unsupported",
+                    "acquisition": acq.as_dict(),
+                }
+            )
+            return out
+
+        try:
+            result = self._transcript_fetcher(url or source.id)
+        except Exception as exc:  # noqa: BLE001 - acquisition must never abort the batch
+            self._logger.debug("transcript fetch failed for %s: %s", url, exc)
+            acq = AcquisitionRecord.not_attempted(
+                source_url=url, reason=f"transcript fetch error: {exc}"
+            )
+            out.skipped.append(
+                {
+                    "source_id": source.id,
+                    "url": url,
+                    "reason": str(exc),
+                    "failure_code": "parse_error",
+                    "acquisition": acq.as_dict(),
+                }
+            )
+            return out
+
+        acq = result.acquisition or AcquisitionRecord.not_attempted(source_url=url)
+        entry = {
+            "source_id": source.id,
+            "url": url,
+            "reason": result.reason or acq.reason or result.outcome,
+            "failure_code": acq.reason_code,
+            "acquisition": acq.as_dict(),
+        }
+        if not result.ok or not (result.text or "").strip():
+            if result.outcome == OUTCOME_BLOCKED:
+                out.blocked.append(entry)
+            else:
+                out.skipped.append(entry)
+            return out
+
+        title = result.title or source.title or source.url or source.id
+        doc = self._reader.read_text(
+            result.text,
+            source_id=source.id,
+            title=title,
+            url=url,
+            content_type="text/plain",
+            metadata={
+                "kind": "video_transcript",
+                "video_id": result.video_id,
+                "language": result.language,
+                "acquisition": acq.as_dict(),
+            },
+            reader_id="youtube_transcript",
+        )
+        out.documents.append(doc)
+        out.stages.extend(["downloaded", "read"] if doc.has_text else ["downloaded"])
+        return out
+
     def _emit_activity(
         self,
         activity: "ActivityRecorder",
@@ -462,16 +532,39 @@ class Librarian:
     ) -> None:
         title = outcome.title
         if outcome.blocked:
+            blk = outcome.blocked[0]
+            acq = blk.get("acquisition") if isinstance(blk.get("acquisition"), dict) else None
+            if acq and acq.get("operator_summary"):
+                activity.record(
+                    "acquire",
+                    str(acq["operator_summary"])[:240],
+                    source_id=outcome.source_id,
+                    url=blk.get("url"),
+                    failure_code=blk.get("failure_code"),
+                    reason_code=acq.get("reason_code"),
+                )
+                return
             activity.record(
                 "acquire",
                 f"Paywalled, skipping: {title[:80]}",
                 source_id=outcome.source_id,
-                url=outcome.blocked[0].get("url"),
+                url=blk.get("url"),
                 failure_code="paywall",
             )
             return
         if outcome.skipped and not outcome.documents:
             sk = outcome.skipped[0]
+            acq = sk.get("acquisition") if isinstance(sk.get("acquisition"), dict) else None
+            if acq and acq.get("operator_summary"):
+                activity.record(
+                    "acquire",
+                    str(acq["operator_summary"])[:240],
+                    source_id=outcome.source_id,
+                    url=sk.get("url"),
+                    failure_code=sk.get("failure_code"),
+                    reason_code=acq.get("reason_code"),
+                )
+                return
             if sk.get("failure_code") == "unsupported":
                 return
             activity.record(
