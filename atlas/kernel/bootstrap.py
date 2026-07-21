@@ -34,6 +34,7 @@ from atlas.engineering.findings import EngineeringFindingWriter
 from atlas.ingestion.acquire import AssetAcquirer
 from atlas.ingestion.media import MediaIngestor
 from atlas.ingestion.service import IngestionService
+from atlas.ingestion.source_fetch import SourceFetcher
 from atlas.knowledge.candidate_consumer import CandidateConsumer
 from atlas.knowledge.prose_extraction import ProseKnowledgeExtractor
 from atlas.learning.experience_extraction import ExperienceWriter
@@ -944,6 +945,11 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         speech_client,
         logger=get_logger("atlas.readers.speech_to_text"),
     )
+    source_fetcher = SourceFetcher(
+        asset_acquirer,
+        fetch_client,
+        logger=get_logger("atlas.ingestion.source_fetch"),
+    )
     media_ingestor = MediaIngestor(
         asset_acquirer,
         knowledge_service,
@@ -951,6 +957,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         transcript_reader=transcript_file_reader,
         demux_reader=audio_demux_reader,
         speech_reader=speech_to_text_reader,
+        source_fetcher=source_fetcher,
         logger=get_logger("atlas.ingestion.media"),
     )
     # Owner Knowledge Mission worker (Phase C · §C.8): continuously reads the User Archive

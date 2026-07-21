@@ -1,13 +1,12 @@
-"""Local media ingest orchestration (Media Reader Family · M.4/M.5).
+"""Local / remote media ingest orchestration (Media Reader Family · M.4–M.6).
 
-Asset-first path for operator files:
+Asset-first path:
 
-    local .vtt/.srt/.txt/.mp4/.mp3
-        → AssetAcquirer (kind=video|audio|transcript)
+    local file | URL
+        → SourceFetcher (M.6; provider-specific HERE only)
         → MediaMetadataReader
-        → TranscriptFileReader (transcript kinds)
-        → AudioDemuxReader (video) + SpeechToTextReader (optional Whisper)
-        → Knowledge (transcript text, or an honest metadata note for A/V)
+        → TranscriptFileReader / AudioDemuxReader / SpeechToTextReader
+        → Knowledge
 
 No YouTube-specific branches past the Asset boundary (MD8).
 """
@@ -17,6 +16,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from atlas.readers.media_kinds import (
     ASSET_KIND_AUDIO,
@@ -28,7 +28,8 @@ from atlas.readers.media_kinds import (
 from atlas.speech.engine import STT_OK
 
 if TYPE_CHECKING:
-    from atlas.ingestion.acquire import AssetAcquirer
+    from atlas.ingestion.acquire import AssetAcquirer, AcquiredAsset
+    from atlas.ingestion.source_fetch import SourceFetcher
     from atlas.knowledge.service import KnowledgeService
     from atlas.readers.audio_demux import AudioDemuxReader
     from atlas.readers.media_metadata import MediaMetadataReader
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
 
 
 class MediaIngestor:
-    """Acquire → metadata → transcript/demux/speech → knowledge for local media files."""
+    """Acquire (file or URL) → metadata → transcript/demux/speech → knowledge."""
 
     def __init__(
         self,
@@ -48,6 +49,7 @@ class MediaIngestor:
         transcript_reader: "TranscriptFileReader | None" = None,
         demux_reader: "AudioDemuxReader | None" = None,
         speech_reader: "SpeechToTextReader | None" = None,
+        source_fetcher: "SourceFetcher | None" = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._acq = acquirer
@@ -56,6 +58,7 @@ class MediaIngestor:
         self._transcript = transcript_reader
         self._demux = demux_reader
         self._speech = speech_reader
+        self._fetcher = source_fetcher
         self._logger = logger or logging.getLogger("atlas.ingestion.media")
 
     def ingest_file(
@@ -81,12 +84,110 @@ class MediaIngestor:
             content_type=content_type_for(p.name),
             metadata=meta,
         )
+        return self._after_acquire(
+            acquired,
+            kind=kind,
+            filename=p.name,
+            domain=domain,
+            title=title,
+            embed=embed,
+        )
+
+    def ingest_url(
+        self,
+        url: str,
+        *,
+        domain: str = "external",
+        title: str | None = None,
+        embed: bool = False,
+    ) -> dict[str, Any]:
+        """Fetch a remote/local source via SourceFetcher, then the same Reader path."""
+        if self._fetcher is None:
+            return {
+                "outcome": "unsupported",
+                "source_url": url,
+                "reason": "SourceFetcher not configured",
+                "operator_hint": "upload a local file or a transcript asset",
+                "ingest": None,
+            }
+        fetched = self._fetcher.fetch(url)
+        out: dict[str, Any] = {
+            "source_url": url,
+            "fetch": fetched.as_dict(),
+            "outcome": fetched.outcome,
+            "operator_hint": fetched.operator_hint,
+            "asset_id": fetched.asset_id,
+            "asset_version": fetched.asset_version,
+            "kind": fetched.kind,
+            "filename": fetched.filename,
+            "metadata": None,
+            "demux": None,
+            "speech": None,
+            "ingest": None,
+        }
+        if not fetched.ok:
+            return out
+
+        # Rebuild a lightweight acquired view for the shared Reader path.
+        from atlas.ingestion.acquire import AcquiredAsset
+
+        acquired = AcquiredAsset(
+            asset_id=str(fetched.asset_id),
+            asset_version=int(fetched.asset_version or 1),
+            kind=str(fetched.kind),
+            name="",
+            checksum="",
+            content_type=content_type_for(fetched.filename),
+            source_uri=url,
+            size_bytes=fetched.bytes_read,
+            reused=fetched.reused,
+            source=fetched.filename or url,
+        )
+        processed = self._after_acquire(
+            acquired,
+            kind=str(fetched.kind),
+            filename=fetched.filename or "media",
+            domain=domain,
+            title=title,
+            embed=embed,
+        )
+        out.update(processed)
+        out["fetch"] = fetched.as_dict()
+        out["outcome"] = "ok" if processed.get("ingest") else fetched.outcome
+        return out
+
+    def ingest(
+        self,
+        source: str | Path,
+        *,
+        domain: str = "external",
+        title: str | None = None,
+        embed: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Route a path or URL to the appropriate ingest entrypoint."""
+        s = str(source).strip()
+        parsed = urlparse(s)
+        if parsed.scheme in ("http", "https"):
+            return self.ingest_url(s, domain=domain, title=title, embed=embed)
+        return self.ingest_file(s, domain=domain, title=title, embed=embed, metadata=metadata)
+
+    def _after_acquire(
+        self,
+        acquired: "AcquiredAsset",
+        *,
+        kind: str,
+        filename: str,
+        domain: str,
+        title: str | None,
+        embed: bool,
+    ) -> dict[str, Any]:
         out: dict[str, Any] = {
             "asset_id": acquired.asset_id,
             "asset_version": acquired.asset_version,
             "asset_reused": acquired.reused,
             "kind": kind,
-            "filename": p.name,
+            "filename": filename,
             "metadata": None,
             "demux": None,
             "speech": None,
@@ -95,12 +196,12 @@ class MediaIngestor:
 
         if self._meta is not None:
             out["metadata"] = self._meta.read(
-                acquired.asset_id, acquired.asset_version, filename=p.name
+                acquired.asset_id, acquired.asset_version, filename=filename
             )
 
         if kind == ASSET_KIND_TRANSCRIPT and self._transcript is not None:
             art = self._transcript.read(
-                acquired.asset_id, acquired.asset_version, filename=p.name
+                acquired.asset_id, acquired.asset_version, filename=filename
             )
             out["transcript"] = {
                 "outcome": art.get("outcome"),
@@ -111,8 +212,10 @@ class MediaIngestor:
                 out["ingest"] = self._to_knowledge(
                     text=art["text"],
                     acquired=acquired,
-                    filename=p.name,
-                    title=title or (out.get("metadata") or {}).get("fields", {}).get("title") or p.name,
+                    filename=filename,
+                    title=title
+                    or (out.get("metadata") or {}).get("fields", {}).get("title")
+                    or filename,
                     domain=domain,
                     embed=embed,
                     reader_id=self._transcript.id,
@@ -123,17 +226,17 @@ class MediaIngestor:
 
         speech_asset_id = acquired.asset_id
         speech_asset_version = acquired.asset_version
-        speech_filename = p.name
+        speech_filename = filename
 
         if kind == ASSET_KIND_VIDEO and self._demux is not None:
             out["demux"] = self._demux.read(
-                acquired.asset_id, acquired.asset_version, filename=p.name
+                acquired.asset_id, acquired.asset_version, filename=filename
             )
             demux = out["demux"] or {}
             if demux.get("outcome") == "ok" and demux.get("audio_asset_id"):
                 speech_asset_id = str(demux["audio_asset_id"])
                 speech_asset_version = int(demux.get("audio_asset_version") or 1)
-                speech_filename = Path(p.name).stem + ".wav"
+                speech_filename = Path(filename).stem + ".wav"
 
         if kind in (ASSET_KIND_VIDEO, ASSET_KIND_AUDIO) and self._speech is not None:
             out["speech"] = self._speech.read(
@@ -144,8 +247,10 @@ class MediaIngestor:
                 out["ingest"] = self._to_knowledge(
                     text=speech["text"],
                     acquired=acquired,
-                    filename=p.name,
-                    title=title or (out.get("metadata") or {}).get("fields", {}).get("title") or p.name,
+                    filename=filename,
+                    title=title
+                    or (out.get("metadata") or {}).get("fields", {}).get("title")
+                    or filename,
                     domain=domain,
                     embed=embed,
                     reader_id=self._speech.id,
@@ -159,9 +264,8 @@ class MediaIngestor:
                 )
                 return out
 
-        # A/V without usable speech: land an honest metadata note (never fabricate speech).
         note = _metadata_knowledge_note(
-            filename=p.name,
+            filename=filename,
             kind=kind,
             meta_artifact=out.get("metadata"),
             demux_artifact=out.get("demux"),
@@ -171,8 +275,10 @@ class MediaIngestor:
             out["ingest"] = self._to_knowledge(
                 text=note,
                 acquired=acquired,
-                filename=p.name,
-                title=title or (out.get("metadata") or {}).get("fields", {}).get("title") or p.name,
+                filename=filename,
+                title=title
+                or (out.get("metadata") or {}).get("fields", {}).get("title")
+                or filename,
                 domain=domain,
                 embed=embed,
                 reader_id=(self._meta.id if self._meta else "media_metadata"),

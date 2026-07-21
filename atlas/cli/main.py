@@ -99,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest = sub.add_parser("ingest", help="ingest a file into the knowledge base")
     p_ingest.add_argument(
         "path",
-        help="path to a document (.txt/.md/.pdf/…) or media file (.mp4/.vtt/.mp3/…)",
+        help="path or http(s) URL: document (.txt/.md/.pdf/…) or media (.mp4/.vtt/.mp3/…)",
     )
 
     p_remember = sub.add_parser("remember", help="store a memory")
@@ -479,8 +479,41 @@ def cmd_search(args: argparse.Namespace, app: "Application | None" = None) -> in
 def cmd_ingest(args: argparse.Namespace, app: "Application | None" = None) -> int:
     from atlas.ingestion.extractors import content_type_for, extract
     from atlas.readers.media_kinds import infer_media_kind
+    from urllib.parse import urlparse
 
-    path = Path(args.path)
+    raw = str(args.path).strip()
+    parsed = urlparse(raw)
+
+    # Media Reader Family (M.6): remote URL → SourceFetcher → Asset → Readers → Knowledge.
+    if parsed.scheme in ("http", "https"):
+        app = app or build_application()
+        media = app.container.resolve("media_ingestor")
+        result = media.ingest_url(raw, embed=True)
+        fetch = result.get("fetch") or {}
+        if not fetch.get("ok"):
+            hint = result.get("operator_hint") or fetch.get("operator_hint") or ""
+            print(
+                f"error: media fetch {fetch.get('outcome') or result.get('outcome')}: "
+                f"{fetch.get('reason') or result.get('reason') or 'failed'}"
+                + (f" — {hint}" if hint else ""),
+                file=sys.stderr,
+            )
+            return 1
+        ingest = result.get("ingest") or {}
+        if ingest.get("outcome") == "ok":
+            print(
+                f"ingested media url: asset={result.get('asset_id')} "
+                f"kind={result.get('kind')} document={ingest.get('document_id')} "
+                f"chunks={ingest.get('chunks', 0)}"
+            )
+            return 0
+        print(
+            f"error: media fetch ok but no knowledge produced for {raw}",
+            file=sys.stderr,
+        )
+        return 1
+
+    path = Path(raw)
     if not path.is_file():
         print(f"error: not a file: {path}", file=sys.stderr)
         return 1
