@@ -139,4 +139,8 @@ Structured fields (API / JSON report) should mirror this so UI and markdown stay
 > operator strategies, and `speech_to_text` status `ready|disabled|missing`. Hermetic
 > tests: `tests/test_media_report_honesty.py`.
 >
+> **Amendment (2026-07-22):** Job/`media.learn` path still renders empty Verification
+> reports — see [`MEDIA_REPORT_HONESTY_AMENDMENT.md`](MEDIA_REPORT_HONESTY_AMENDMENT.md)
+> (RH.5+). Research path honesty does not automatically cover Job finalize.
+>
 > **Frozen decisions RH1–RH5 must not be reopened without a plan amendment.**

@@ -140,6 +140,35 @@ button { cursor: pointer; font: inherit; }
 
 /* jobs */
 .job-form { display: flex; gap: 10px; padding: 14px 22px; border-bottom: 1px solid var(--border); }
+.mission-form { flex-wrap: wrap; }
+.mission-config-panel {
+  padding: 0 22px 14px; border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.mission-config-panel textarea {
+  width: 100%; min-height: 110px; resize: vertical;
+  background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  font-family: var(--mono); font-size: 12.5px;
+}
+.mission-feed-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mission-feed-row input {
+  background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  min-width: 140px;
+}
+.mission-feed-row button, .mission-config-save {
+  background: var(--bg-elev2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+}
+.mission-feed-row button:hover, .mission-config-save:hover { border-color: var(--accent); }
+.mission-config-edit { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.mission-config-edit textarea {
+  width: 100%; min-height: 120px; resize: vertical;
+  background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  font-family: var(--mono); font-size: 12.5px;
+}
 .jobs-layout { flex: 1; display: grid; grid-template-columns: 380px 1fr; overflow: hidden; }
 .jobs-list { overflow-y: auto; border-right: 1px solid var(--border); }
 .job-row {

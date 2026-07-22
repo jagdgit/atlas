@@ -12,6 +12,8 @@ const state = {
   missionPoll: null,
   sending: false,
   jobPoll: null,
+  jobPollGen: 0,
+  jobPollFailures: 0,
   opsPoll: null,
   opsStream: null,
   repoId: null,
@@ -699,31 +701,54 @@ async function jobAction(id, action) {
   } catch (err) { toast(err.message); }
 }
 
-// Keep polling through transient errors (a slow LLM planning step or a single
-// failed/late GET must NOT freeze the status at "planning" forever). Only give up
-// after several consecutive failures; otherwise re-render each tick until the job
-// reaches a terminal state.
+// Sequential job polling (not setInterval+async). Overlapping GETs raced: a late
+// "planning" response could overwrite a newer "running/completed" render and leave
+// the UI stuck until manual refresh. One in-flight request at a time + generation
+// guard discards stale responses.
 const JOB_POLL_MAX_FAILURES = 8;
+const JOB_POLL_MS = 1500;
+
 function startJobPoll(id) {
   stopJobPoll();
   state.jobPollFailures = 0;
-  state.jobPoll = setInterval(async () => {
-    if (state.view !== "jobs") return stopJobPoll();
+  state.jobPollGen = (state.jobPollGen || 0) + 1;
+  const gen = state.jobPollGen;
+  const tick = async () => {
+    if (state.jobPollGen !== gen) return;
+    if (state.view !== "jobs" || state.jobId !== id) {
+      stopJobPoll();
+      return;
+    }
     try {
       const d = await api(`/v1/jobs/${id}`);
+      if (state.jobPollGen !== gen || state.jobId !== id) return;
       state.jobPollFailures = 0;
       renderJobDetail(d);
-      loadJobs();
-      if (!jobIsActive(d.job)) stopJobPoll();
+      try { await loadJobs(); } catch (_) { /* list refresh is best-effort */ }
+      if (!jobIsActive(d.job)) {
+        stopJobPoll();
+        return;
+      }
     } catch (_) {
-      // Tolerate transient failures; only stop after a sustained outage.
       state.jobPollFailures = (state.jobPollFailures || 0) + 1;
-      if (state.jobPollFailures >= JOB_POLL_MAX_FAILURES) stopJobPoll();
+      if (state.jobPollFailures >= JOB_POLL_MAX_FAILURES) {
+        stopJobPoll();
+        return;
+      }
     }
-  }, 2000);
+    if (state.jobPollGen !== gen) return;
+    state.jobPoll = setTimeout(tick, JOB_POLL_MS);
+  };
+  state.jobPoll = setTimeout(tick, JOB_POLL_MS);
 }
+
 function stopJobPoll() {
-  if (state.jobPoll) { clearInterval(state.jobPoll); state.jobPoll = null; }
+  if (state.jobPoll) {
+    clearTimeout(state.jobPoll);
+    state.jobPoll = null;
+  }
+  // Bump generation so any in-flight tick abandons its render.
+  state.jobPollGen = (state.jobPollGen || 0) + 1;
   state.jobPollFailures = 0;
 }
 
@@ -746,11 +771,70 @@ async function loadMissions() {
 function renderTemplateSelect() {
   const sel = $("#mission-template");
   if (!sel) return;
+  const prev = sel.value;
   sel.innerHTML = "";
   for (const t of missionTemplates) {
     sel.append(el("option", { value: t.name },
       `${t.name} (v${t.template_version})`));
   }
+  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  seedMissionConfigFromTemplate();
+}
+
+function seedMissionConfigFromTemplate() {
+  const ta = $("#mission-config");
+  const sel = $("#mission-template");
+  if (!ta || !sel) return;
+  const t = missionTemplates.find((x) => x.name === sel.value);
+  const doc = t && t.default_config ? t.default_config : {};
+  // Don't clobber in-progress edits unless empty / still matching a prior seed.
+  if (!ta.dataset.touched || ta.value.trim() === "" || ta.dataset.seeded === "1") {
+    ta.value = JSON.stringify(doc, null, 2);
+    ta.dataset.seeded = "1";
+    ta.dataset.touched = "";
+  }
+}
+
+function parseMissionConfigOverrides() {
+  const raw = ($("#mission-config")?.value || "").trim();
+  if (!raw) return {};
+  try { return JSON.parse(raw); }
+  catch (_) { throw new Error("Config overrides must be valid JSON"); }
+}
+
+async function registerSampleMarketData() {
+  const name = ($("#mission-feed-name")?.value || "").trim() || "demo-feed";
+  const symbol = ($("#mission-feed-symbol")?.value || "").trim() || "DEMO";
+  try {
+    const info = await api("/v1/assets", {
+      method: "POST",
+      body: { kind: "market_data", name, symbol, generate_sample: true },
+    });
+    toast(`Registered feed ${info.name} (${info.symbol})`);
+    // Merge into the config textarea if paper_trading-shaped.
+    try {
+      const cfg = parseMissionConfigOverrides();
+      cfg.instruments = [{ symbol: info.symbol, asset: info.name }];
+      const ta = $("#mission-config");
+      if (ta) { ta.value = JSON.stringify(cfg, null, 2); ta.dataset.touched = "1"; }
+      if ($("#mission-feed-name")) $("#mission-feed-name").value = info.name;
+      if ($("#mission-feed-symbol")) $("#mission-feed-symbol").value = info.symbol;
+    } catch (_) { /* ignore merge failures */ }
+  } catch (err) { toast(err.message); }
+}
+
+async function instantiateMission(template, title) {
+  try {
+    const config_overrides = parseMissionConfigOverrides();
+    const view = await api("/v1/missions/instantiate", {
+      method: "POST",
+      body: { template, title: title || null, config_overrides },
+    });
+    $("#mission-title").value = "";
+    await loadMissions();
+    showMissionDetail(view.mission.id);
+    toast("Mission instantiated");
+  } catch (err) { toast(err.message); }
 }
 
 function missionActive(m) {
@@ -776,18 +860,6 @@ function renderMissionsList(missions) {
       ),
     ));
   }
-}
-
-async function instantiateMission(template, title) {
-  try {
-    const view = await api("/v1/missions/instantiate", {
-      method: "POST", body: { template, title: title || null },
-    });
-    $("#mission-title").value = "";
-    await loadMissions();
-    showMissionDetail(view.mission.id);
-    toast("Mission instantiated");
-  } catch (err) { toast(err.message); }
 }
 
 function missionDetailEditing() {
@@ -876,6 +948,38 @@ function renderMissionDetail(d) {
   }
   actions.append(el("button", { onclick: () => showMissionDetail(m.id) }, "Refresh"));
   box.append(actions);
+
+  // Active config editor (versioned; PUT creates next version)
+  const cfg = d.config || {};
+  const cfgDoc = cfg.document || {};
+  box.append(el("h3", { class: "section-h", text:
+    cfg.version != null ? `Config (v${cfg.version} · ${cfg.schema_type || "?"})` : "Config" }));
+  const cfgEdit = el("div", { class: "mission-config-edit" });
+  const cfgTa = el("textarea", { rows: "8", spellcheck: "false" });
+  cfgTa.value = JSON.stringify(cfgDoc, null, 2);
+  const cfgSave = el("button", {
+    class: "mission-config-save",
+    onclick: async () => {
+      let document;
+      try { document = cfgTa.value.trim() ? JSON.parse(cfgTa.value) : {}; }
+      catch (_) { toast("Config must be valid JSON"); return; }
+      cfgSave.disabled = true;
+      try {
+        await api(`/v1/missions/${m.id}/config`, {
+          method: "PUT",
+          body: { document, change_note: "operator UI edit", activate: true },
+        });
+        toast("Config saved (new version)");
+        showMissionDetail(m.id);
+      } catch (err) { toast(err.message); }
+      finally { cfgSave.disabled = false; }
+    },
+  }, "Save config");
+  cfgEdit.append(cfgTa, cfgSave);
+  if (!cfg.version) {
+    cfgEdit.append(el("div", { class: "muted small", text: "No active config on this mission." }));
+  }
+  box.append(cfgEdit);
 
   // Workers
   box.append(el("h3", { class: "section-h", text: `Workers (${(d.workers || []).length})` }));
@@ -1172,6 +1276,16 @@ function init() {
     const tpl = $("#mission-template").value;
     if (tpl) instantiateMission(tpl, $("#mission-title").value.trim());
   });
+  const tplSel = $("#mission-template");
+  if (tplSel) tplSel.addEventListener("change", () => {
+    const ta = $("#mission-config");
+    if (ta) { ta.dataset.seeded = "1"; ta.dataset.touched = ""; }
+    seedMissionConfigFromTemplate();
+  });
+  const cfgTa = $("#mission-config");
+  if (cfgTa) cfgTa.addEventListener("input", () => { cfgTa.dataset.touched = "1"; cfgTa.dataset.seeded = ""; });
+  const feedBtn = $("#mission-feed-sample");
+  if (feedBtn) feedBtn.addEventListener("click", registerSampleMarketData);
   $("#system-refresh").addEventListener("click", loadSystem);
   $("#overview-refresh").addEventListener("click", refreshOps);
   $("#eng-refresh").addEventListener("click", loadEngineering);

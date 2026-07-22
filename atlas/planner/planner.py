@@ -24,6 +24,7 @@ from atlas.capabilities import (
     CAP_KNOWLEDGE,
     CAP_LLM,
     CAP_MAIL,
+    CAP_MEDIA_LEARN,
     CAP_MEMORY,
     CAP_OCR,
     CAP_PYTHON,
@@ -44,6 +45,7 @@ class Intent:
     WEB_SEARCH = "web_search"
     SCHOLAR_SEARCH = "scholar_search"
     YOUTUBE_TRANSCRIPT = "youtube_transcript"
+    MEDIA_LEARN = "media_learn"
     RUN_PYTHON = "run_python"
     GIT_STATUS = "git_status"
     SQL_QUERY = "sql_query"
@@ -56,6 +58,8 @@ class Intent:
     ASK_KNOWLEDGE = "ask_knowledge"
     ANSWER = "answer"  # fast fallback: a single chat-model call, no tools (RC/D3.12)
     REACT = "react"  # escalation: open-ended reasoning + tools via the ReAct strategy
+    INSTANTIATE_MISSION = "instantiate_mission"
+    REGISTER_MARKET_DATA = "register_market_data"
 
 
 @dataclass(frozen=True)
@@ -147,9 +151,20 @@ _YOUTUBE_URL_RE = re.compile(
     r"|youtu\.be/)[\w\-]{11}[^\s<>\"')]*",
     re.IGNORECASE,
 )
-_YOUTUBE_RE = re.compile(
-    r"youtu\.?be|youtube\.com/(?:watch|shorts|embed|v/)"
-    r"|\b(?:transcript|transcribe|subtitles?|captions?)\b",
+# Caption-only: explicit transcript/subtitle language (not "learn from video").
+_YOUTUBE_TRANSCRIPT_RE = re.compile(
+    r"\b(?:transcript|transcribe|subtitles?|captions?)\b",
+    re.IGNORECASE,
+)
+# Learn-from-media: bare YouTube URL, learn/summarize/ingest + video, or local media file.
+_MEDIA_LEARN_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?[^\s]*v=|shorts/|embed/|v/)"
+    r"|youtu\.be/)[\w\-]{11}"
+    r"|\b(?:learn|ingest|understand|summarize|summarise)\b.{0,60}\b"
+    r"(?:video|youtube|talk|lecture|podcast|media|recording)\b"
+    r"|\b(?:video|youtube|talk|lecture|podcast|media|recording)\b.{0,60}\b"
+    r"(?:learn|ingest|understand|summarize|summarise)\b"
+    r"|\b[\w./~\-]+\.(?:mp4|mp3|wav|m4a|webm|mkv|vtt|srt)\b",
     re.IGNORECASE,
 )
 # A fenced ```python code block, or an explicit "run this python …" instruction.
@@ -323,6 +338,22 @@ def _youtube_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"video": video}
 
 
+def _media_learn_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    match = _YOUTUBE_URL_RE.search(message)
+    if match:
+        return {"source": match.group(0).rstrip(".,);")}
+    media_file = re.search(
+        r"((?:~|\.{0,2}/)?[\w./\-]+\.(?:mp4|mp3|wav|m4a|webm|mkv|vtt|srt))",
+        message,
+        re.IGNORECASE,
+    )
+    if media_file:
+        return {"source": media_file.group(1)}
+    # Same fallback as youtube args for bare 11-char ids in learn phrasing.
+    token = re.search(r"\b[A-Za-z0-9_-]{11}\b", message)
+    return {"source": token.group(0) if token else ""}
+
+
 def _python_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     fence = _PYTHON_FENCE_RE.search(message)
     if fence:
@@ -410,6 +441,104 @@ def _research_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     return {"objective": objective or message.strip()}
 
 
+_TEMPLATE_ALIASES = {
+    "paper trading": "paper_trading",
+    "paper-trading": "paper_trading",
+    "paper_trading": "paper_trading",
+    "research": "research",
+    "job hunting": "job_hunting",
+    "job search": "job_hunting",
+    "job_hunting": "job_hunting",
+    "repository learning": "repository_learning",
+    "repo learning": "repository_learning",
+    "repository_learning": "repository_learning",
+    "owner knowledge": "owner_knowledge",
+    "technology watch": "technology_watch",
+    "security monitoring": "security_monitoring",
+    "self improvement": "self_improvement",
+    "hello watcher": "hello_watcher",
+    "hello": "hello_watcher",
+}
+
+
+def _instantiate_mission_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    """Extract template + common paper-trading overrides from natural language."""
+    text = message.strip()
+    low = text.lower()
+    template = "paper_trading"
+    for alias, name in sorted(_TEMPLATE_ALIASES.items(), key=lambda kv: -len(kv[0])):
+        if alias in low:
+            template = name
+            break
+
+    overrides: dict[str, Any] = {}
+    cash = re.search(
+        r"(?:\$|₹|rs\.?\s*)?\s*(\d[\d,]*(?:\.\d+)?)\s*(?:k|thousand)?\s*"
+        r"(?:(?:starting|virtual|paper)?\s*(?:cash|capital|budget|dollars?))?"
+        r"|(?:starting|with|assume)\s+(?:\$|₹)?\s*(\d[\d,]*(?:\.\d+)?)",
+        low,
+        re.IGNORECASE,
+    )
+    if cash:
+        raw = (cash.group(1) or cash.group(2) or "").replace(",", "")
+        try:
+            val = float(raw)
+            if "k" in (cash.group(0) or "").lower() and val < 1000:
+                val *= 1000
+            if val > 0:
+                overrides["starting_cash"] = val
+        except ValueError:
+            pass
+
+    sym = re.search(
+        r"\b(?:symbol|ticker|instrument|stock)\s*[:=]?\s*([A-Za-z][A-Za-z0-9.\-]{0,11})\b"
+        r"|\bon\s+([A-Z]{1,6})\b",
+        text,
+    )
+    symbol = None
+    if sym:
+        symbol = next((g for g in sym.groups() if g), None)
+    if symbol:
+        overrides["instruments"] = [{"symbol": symbol.upper(), "asset": ""}]
+        overrides["_auto_sample_feed"] = True
+
+    if template == "paper_trading" and "_auto_sample_feed" not in overrides:
+        overrides["_auto_sample_feed"] = True
+        overrides.setdefault("instruments", [{"symbol": "DEMO", "asset": ""}])
+
+    return {
+        "template": template,
+        "title": None,
+        "objective": text[:300],
+        "config_overrides": overrides,
+        "activate": True,
+    }
+
+
+def _register_market_data_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    text = message.strip()
+    sym = re.search(
+        r"\b(?:symbol|ticker)\s*[:=]?\s*([A-Za-z][A-Za-z0-9.\-]{0,11})\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not sym:
+        sym = re.search(r"\bfor\s+([A-Z]{1,6})\b", text)
+    symbol = (sym.group(1) if sym else "DEMO").upper()
+    if symbol in {"SYMBOL", "TICKER", "FOR", "NAME", "ASSET", "SAMPLE", "FEED"}:
+        sym2 = re.search(r"\b([A-Z]{2,6})\b", text)
+        symbol = (sym2.group(1) if sym2 else "DEMO")
+    name_m = re.search(r"\b(?:name|asset)\s*[:=]?\s*([A-Za-z0-9_\-]+)\b", text, re.IGNORECASE)
+    name = name_m.group(1) if name_m else f"{symbol.lower()}-feed"
+    if name.lower() in {"symbol", "ticker", "name", "asset"}:
+        name = f"{symbol.lower()}-feed"
+    return {
+        "name": name,
+        "symbol": symbol,
+        "generate_sample": True,
+    }
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -423,6 +552,29 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
             re.IGNORECASE,
         ),
         _query_args,
+    ),
+    (
+        Intent.INSTANTIATE_MISSION,
+        "templates",
+        re.compile(
+            r"\b(start|create|instantiate|spin\s*up|launch|set\s*up)\b.{0,40}"
+            r"\b(mission|paper\s*trad(?:e|ing)|job\s*hunt(?:ing)?|research\s*watcher|"
+            r"repo(?:sitory)?\s*learn(?:ing)?|hello\s*watcher)\b"
+            r"|\bpaper\s*trad(?:e|ing)\b.{0,40}\b(mission|with|\$|\d)",
+            re.IGNORECASE,
+        ),
+        _instantiate_mission_args,
+    ),
+    (
+        Intent.REGISTER_MARKET_DATA,
+        "assets",
+        re.compile(
+            r"\b(register|upload|add|create)\b.{0,40}"
+            r"\b(market\s*data|ohlcv|price\s*feed|trading\s*feed)\b"
+            r"|\b(sample|fixture|demo)\b.{0,20}\b(market\s*data|ohlcv|feed)\b",
+            re.IGNORECASE,
+        ),
+        _register_market_data_args,
     ),
     (
         Intent.RECALL,
@@ -482,8 +634,14 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
     (
         Intent.YOUTUBE_TRANSCRIPT,
         CAP_TRANSCRIPT,
-        _YOUTUBE_RE,
+        _YOUTUBE_TRANSCRIPT_RE,
         _youtube_args,
+    ),
+    (
+        Intent.MEDIA_LEARN,
+        CAP_MEDIA_LEARN,
+        _MEDIA_LEARN_RE,
+        _media_learn_args,
     ),
     (
         Intent.RESEARCH,
@@ -559,6 +717,7 @@ _DESCRIPTIONS = {
     Intent.WEB_SEARCH: "Search the web for sources.",
     Intent.SCHOLAR_SEARCH: "Search academic sources (arXiv, Semantic Scholar).",
     Intent.YOUTUBE_TRANSCRIPT: "Fetch a YouTube video transcript.",
+    Intent.MEDIA_LEARN: "Learn from media.",
     Intent.RUN_PYTHON: "Run Python code in the sandbox.",
     Intent.GIT_STATUS: "Inspect a local git repository (read-only).",
     Intent.SQL_QUERY: "Run a read-only SQL query on a local database.",
@@ -571,6 +730,8 @@ _DESCRIPTIONS = {
     Intent.ASK_KNOWLEDGE: "Answer from the knowledge base (RAG).",
     Intent.ANSWER: "Answer the question directly (fast, single model call).",
     Intent.REACT: "Reason and use tools to answer (ReAct).",
+    Intent.INSTANTIATE_MISSION: "Instantiate a mission from a template (with config overrides).",
+    Intent.REGISTER_MARKET_DATA: "Register a market_data OHLCV feed asset (fixture/sample).",
 }
 
 

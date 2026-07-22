@@ -746,8 +746,10 @@ class JobService:
                             }
                         )
         # If research already wrote a full report and we have no claims to
-        # re-render, keep that markdown rather than clobbering it.
-        if not claims:
+        # re-render, keep that markdown rather than clobbering it — unless this
+        # job stopped at acquire / interactive recovery (RH.5).
+        termination = self._acquire_termination_from_steps(steps)
+        if not claims and termination is None:
             existing = self._existing_research_report(job_id)
             if existing is not None:
                 return existing
@@ -761,6 +763,7 @@ class JobService:
                 notes=answer[:600],
                 reasoning=reasoning or None,
                 pipeline=pipeline or None,
+                termination=termination,
             )
         except Exception:  # noqa: BLE001 - a report must never fail the job
             self._logger.exception("job %s report generation failed", job_id)
@@ -930,12 +933,69 @@ class JobService:
 
     @staticmethod
     def _answer(steps: list[JobStep]) -> str:
-        answers = [
-            (s.result or {}).get("answer", "")
-            for s in steps
-            if s.status == STEP_DONE and (s.result or {}).get("answer")
-        ]
-        return "\n\n".join(a for a in answers if a)
+        parts: list[str] = []
+        for s in steps:
+            result = s.result or {}
+            ans = result.get("answer") or ""
+            if not ans:
+                continue
+            if s.status == STEP_DONE:
+                parts.append(ans)
+            elif s.status == STEP_BLOCKED:
+                # RH.6: blocked / waiting steps carry the operator summary.
+                parts.append(ans)
+        return "\n\n".join(parts)
+
+    def _acquire_termination_from_steps(
+        self, steps: list[JobStep]
+    ) -> dict[str, Any] | None:
+        """Build ReportGenerator termination for media.learn / acquire wait (RH.5)."""
+        for step in steps:
+            if step.status != STEP_BLOCKED:
+                continue
+            result = step.result if isinstance(step.result, dict) else {}
+            interactive = bool(result.get("interactive_recovery"))
+            acq = result.get("acquisition") if isinstance(result.get("acquisition"), dict) else {}
+            strategies = result.get("strategies") or acq.get("strategies_tried") or []
+            suggestions = (
+                result.get("suggested_next_strategies")
+                or acq.get("suggested_next_strategies")
+                or []
+            )
+            reason = (
+                step.blocked_reason
+                or result.get("blocked_reason")
+                or acq.get("reason_code")
+                or "interactive_recovery_required"
+            )
+            if not interactive and step.intent not in ("media_learn",) and not acq:
+                # Generic blocked (needs file / capability) — still report honestly
+                # if media.learn-shaped extras exist; otherwise skip.
+                if step.intent != "media_learn" and "interactive_recovery" not in reason:
+                    continue
+            status = "waiting" if (
+                interactive
+                or reason in (
+                    "interactive_recovery_required",
+                    "operator_upload_required",
+                )
+            ) else "blocked"
+            return {
+                "stage": "acquire",
+                "status": status,
+                "reason": reason,
+                "reason_code": acq.get("reason_code") or reason,
+                "knowledge_produced": 0,
+                "reasoning": "not_started",
+                "verification": "not_executed",
+                "waiting_for": result.get("waiting_for") or "media_asset",
+                "suggested_next_strategies": list(suggestions) if suggestions else None,
+                "speech_to_text_status": result.get("speech_to_text_status")
+                or acq.get("speech_to_text_status"),
+                "strategies_tried": strategies,
+                "audience": "job",
+            }
+        return None
 
     def _build_context(self, job: Job) -> ConversationContext:
         # Stage 3 (C0/RL + C4): attach the live activity recorder + workspace so

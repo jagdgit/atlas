@@ -1407,13 +1407,15 @@ class ResearchService:
         )
         return {
             "stage": "acquire",
+            "status": "blocked",
+            "audience": "research",
             "outcome": acq.get("outcome") or chosen.get("failure_code") or "blocked",
             "reason_code": acq.get("reason_code")
             or chosen.get("failure_code")
             or "unknown",
             "reason": acq.get("reason") or chosen.get("reason"),
             "knowledge_produced": 0,
-            "reasoning": "not_attempted",
+            "reasoning": "not_started",
             "verification": "not_executed",
             "suggested_next_capability": acq.get("suggested_next_capability") or "speech_to_text",
             "suggested_next_strategies": strategies,

@@ -237,6 +237,7 @@ class Librarian:
         reader: Reader | None = None,
         transcript_fetcher: TranscriptFetcher | None = None,
         media_ingestor: "MediaIngestor | None" = None,
+        media_learn: Any | None = None,
         events: Any | None = None,
         max_documents: int = 12,
         open_access_first: bool = True,
@@ -249,6 +250,7 @@ class Librarian:
         self._reader = reader or Reader()
         self._transcript_fetcher = transcript_fetcher
         self._media = media_ingestor
+        self._media_learn = media_learn
         self._events = events
         self._max_documents = max_documents
         self._open_access_first = open_access_first
@@ -458,7 +460,7 @@ class Librarian:
         return out
 
     def _acquire_video(self, source: Source, out: _OneOutcome) -> _OneOutcome:
-        """Media Reader Family · M.1–M.7: captions first, then Asset-first media path.
+        """Media learn / Reader Family: prefer shared ``media.learn`` orchestrator (MO.3).
 
         Never fabricates transcript text. Provider logic stops once bytes/text exist;
         Documents are stamped with a stable ``source_id`` (P13), not YouTube-specific
@@ -475,7 +477,86 @@ class Librarian:
         source_id = stable_source_id(url or source.id)
         out.stages.append("found")
 
-        # --- 1) Caption / transcript strategy chain (existing YouTube captions) ---
+        # Preferred path: shared media.learn orchestrator (Job/Assistant + Research).
+        if self._media_learn is not None and (url or source.id):
+            try:
+                learned = self._media_learn.learn(
+                    url or source.id, to_knowledge=False, title=source.title
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("media.learn failed for %s: %s", url, exc)
+                learned = {
+                    "outcome": "error",
+                    "text": "",
+                    "reason": str(exc),
+                    "acquisition": AcquisitionRecord.not_attempted(
+                        source_url=url, reason=str(exc)
+                    ).as_dict(),
+                }
+            text = (learned.get("text") or "").strip()
+            acq = learned.get("acquisition") if isinstance(learned.get("acquisition"), dict) else {}
+            if learned.get("outcome") == "ok" and text:
+                title = learned.get("title") or source.title or url or source.id
+                doc = self._reader.read_text(
+                    text,
+                    source_id=source.id,
+                    title=title,
+                    url=url,
+                    content_type="text/plain",
+                    metadata={
+                        "kind": "transcript",
+                        "source_id": source_id,
+                        "strategy": "media.learn",
+                        "acquisition": acq,
+                        "strategies": learned.get("strategies") or [],
+                    },
+                    reader_id="media_transcript",
+                )
+                out.documents.append(doc)
+                out.stages.extend(
+                    ["downloaded", "read"] if doc.has_text else ["downloaded"]
+                )
+                emit_media_event(
+                    self._events,
+                    EVENT_TRANSCRIPT_ACQUIRED,
+                    {
+                        "source_url": url,
+                        "source_id": source_id,
+                        "strategy": "media.learn",
+                        "char_count": len(text),
+                        "job_source_id": source.id,
+                    },
+                )
+                return out
+
+            entry = {
+                "source_id": source.id,
+                "url": url,
+                "reason": learned.get("operator_summary")
+                or acq.get("reason")
+                or learned.get("reason")
+                or "media.learn did not acquire spoken content",
+                "failure_code": acq.get("reason_code")
+                or learned.get("blocked_reason")
+                or "interactive_recovery_required",
+                "acquisition": acq or learned,
+                "strategies": learned.get("strategies") or [],
+            }
+            out.blocked.append(entry)
+            emit_media_event(
+                self._events,
+                EVENT_MEDIA_READ_FAILED,
+                {
+                    "source_url": url,
+                    "source_id": source_id,
+                    "reason": entry["reason"],
+                    "reason_code": entry["failure_code"],
+                    "job_source_id": source.id,
+                },
+            )
+            return out
+
+        # --- Legacy path (no media.learn wired): captions then MediaIngestor ---
         caption_entry: dict[str, Any]
         if self._transcript_fetcher is not None:
             try:

@@ -509,6 +509,7 @@ class FakeTemplates:
     def __init__(self, state, missions):
         self.state = state
         self._missions = missions
+        self._configs = {}
 
     def list_templates(self):
         from atlas.models.template import MissionTemplate
@@ -518,8 +519,15 @@ class FakeTemplates:
                 id="tmpl-hello", name="hello_watcher", template_version=1,
                 description="A minimal reference worker.",
                 worker_specs=[{"type": "hello_watcher", "interval_seconds": 60}],
-                config_schema_type="hello_watcher", default_config={"target": 3},
-            )
+                config_schema_type="hello_watcher", default_config={"greeting": "hello", "tick_limit": 0},
+            ),
+            MissionTemplate(
+                id="tmpl-paper", name="paper_trading", template_version=2,
+                description="Simulation-only paper trading.",
+                worker_specs=[{"type": "paper_trading", "interval_seconds": 300}],
+                config_schema_type="paper_trading",
+                default_config={"instruments": [], "starting_cash": 100000},
+            ),
         ]
 
     def instantiate(self, template, *, title=None, objective="", config_overrides=None,
@@ -530,7 +538,8 @@ class FakeTemplates:
         from atlas.missions.templates.service import TemplateError
         from atlas.models.worker import Worker
 
-        if template != "hello_watcher":
+        known = {t.name for t in self.list_templates()}
+        if template not in known:
             raise TemplateError("unknown template", template=template)
         mission = self._missions.create_mission(
             title or template, objective, scheduling_policy=scheduling_policy,
@@ -540,8 +549,78 @@ class FakeTemplates:
         if activate:
             mission = self._missions.activate(mission.id, "")
         wid = str(_uuid.uuid4())
-        self.state.workers[wid] = Worker(id=wid, mission_id=mission.id, type="hello_watcher")
-        return {"mission": mission, "config": {"version": 1}, "workers": [self.state.workers[wid]]}
+        wtype = "paper_trading" if template == "paper_trading" else "hello_watcher"
+        self.state.workers[wid] = Worker(id=wid, mission_id=mission.id, type=wtype)
+        doc = dict(next(t.default_config for t in self.list_templates() if t.name == template))
+        if config_overrides:
+            doc.update(config_overrides)
+        self._configs[mission.id] = {
+            "id": str(_uuid.uuid4()), "mission_id": mission.id, "version": 1,
+            "schema_type": template if template != "hello_watcher" else "hello_watcher",
+            "schema_version": 1, "document": doc, "change_note": "instantiate",
+        }
+        return {"mission": mission, "config": self._configs[mission.id], "workers": [self.state.workers[wid]]}
+
+
+class FakeConfiguration:
+    def __init__(self, templates: FakeTemplates):
+        self._templates = templates
+
+    def get_active(self, mission_id):
+        row = self._templates._configs.get(str(mission_id)) or self._templates._configs.get(mission_id)
+        if row is None:
+            return None
+        from atlas.models.config import MissionConfig
+        return MissionConfig(
+            id=row["id"], mission_id=row["mission_id"], version=row["version"],
+            schema_type=row["schema_type"], schema_version=row["schema_version"],
+            document=dict(row["document"]), change_note=row.get("change_note", ""),
+        )
+
+    def update_config(self, mission_id, document, *, change_note="", activate=False):
+        import uuid as _uuid
+        from atlas.models.config import MissionConfig
+        mid = str(mission_id)
+        prev = self._templates._configs.get(mid) or {"version": 0, "schema_type": "generic"}
+        row = {
+            "id": str(_uuid.uuid4()), "mission_id": mid, "version": int(prev["version"]) + 1,
+            "schema_type": prev.get("schema_type", "generic"), "schema_version": 1,
+            "document": dict(document or {}), "change_note": change_note,
+        }
+        self._templates._configs[mid] = row
+        return MissionConfig(
+            id=row["id"], mission_id=row["mission_id"], version=row["version"],
+            schema_type=row["schema_type"], schema_version=1,
+            document=row["document"], change_note=change_note,
+        )
+
+
+class FakeAssets:
+    def __init__(self):
+        self._assets = {}
+
+    def list_assets(self, kind=None):
+        rows = list(self._assets.values())
+        if kind:
+            rows = [r for r in rows if r["kind"] == kind]
+        return rows
+
+    def register(self, kind, name, data, *, source_uri=None, content_type=None, metadata=None):
+        import uuid as _uuid
+        key = (kind, name)
+        prev = self._assets.get(key)
+        version = (prev["current_version"] + 1) if prev else 1
+        asset_id = prev["id"] if prev else str(_uuid.uuid4())
+        asset = {
+            "id": asset_id, "kind": kind, "name": name,
+            "current_version": version, "content_type": content_type,
+            "metadata": metadata or {},
+        }
+        self._assets[key] = asset
+        return {"asset": asset, "version": {"version": version, "asset_id": asset_id}}
+
+    def get_by_name(self, kind, name):
+        return self._assets.get((kind, name))
 
 
 class _FakeCoverage:
@@ -740,12 +819,15 @@ class FakeApplication:
         self.capabilities = _fake_capabilities()
         _mission_state = FakeMissionState()
         _missions = FakeMissions(_mission_state)
+        _templates = FakeTemplates(_mission_state, _missions)
         self.container = FakeContainer(
             {
                 "agent": FakeAgentService(),
                 "missions": _missions,
                 "workers": FakeWorkers(_mission_state),
-                "templates": FakeTemplates(_mission_state, _missions),
+                "templates": _templates,
+                "configuration": FakeConfiguration(_templates),
+                "assets": FakeAssets(),
                 "knowledge": FakeKnowledge(),
                 "memory": FakeMemory(),
                 "chat": FakeChat(),
@@ -2001,3 +2083,50 @@ def test_metrics_disabled_returns_404():
     client = TestClient(create_app(app))
     assert client.get("/metrics").status_code == 404
     assert client.get("/v1/metrics", headers=AUTH).status_code == 404
+
+
+def test_register_sample_market_data_asset():
+    client = _client()
+    resp = client.post(
+        "/v1/assets",
+        headers=AUTH,
+        json={"kind": "market_data", "name": "demo-feed", "symbol": "DEMO", "generate_sample": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "demo-feed"
+    assert body["symbol"] == "DEMO"
+    assert body["generated_sample"] is True
+    listed = client.get("/v1/assets?kind=market_data", headers=AUTH)
+    assert listed.status_code == 200
+    names = [a["name"] for a in listed.json()["assets"]]
+    assert "demo-feed" in names
+
+
+def test_mission_config_get_and_put():
+    client = _client()
+    view = client.post(
+        "/v1/missions/instantiate",
+        headers=AUTH,
+        json={
+            "template": "paper_trading",
+            "title": "Learn",
+            "config_overrides": {"starting_cash": 10000, "instruments": []},
+        },
+    ).json()
+    mid = view["mission"]["id"]
+    assert view["config"]["document"]["starting_cash"] == 10000
+    got = client.get(f"/v1/missions/{mid}/config", headers=AUTH)
+    assert got.status_code == 200
+    assert got.json()["config"]["document"]["starting_cash"] == 10000
+    updated = client.put(
+        f"/v1/missions/{mid}/config",
+        headers=AUTH,
+        json={
+            "document": {"starting_cash": 5000, "instruments": [{"symbol": "AAA", "asset": "aaa-feed"}]},
+            "activate": True,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["config"]["version"] == 2
+    assert updated.json()["config"]["document"]["starting_cash"] == 5000

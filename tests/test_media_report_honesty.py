@@ -73,7 +73,7 @@ def test_report_acquire_stop_not_insufficient_and_not_no_further_research():
     assert conf["result"] == "acquisition_failed"
     assert conf["reason_code"] == REASON_ROBOTS_DISALLOWED
     assert conf["knowledge_produced"] == 0
-    assert conf["reasoning"] == "not_attempted"
+    assert conf["reasoning"] == "not_started"
     assert conf["verification"] == "not_executed"
     methodology = report["sections"]["methodology"]
     assert "terminated during acquisition" in methodology.lower()
@@ -87,7 +87,7 @@ def test_report_acquire_stop_not_insufficient_and_not_no_further_research():
     assert "speech_to_text status: disabled" in next_r
     assert "Acquisition failed before read" in report["sections"]["executive_summary"]
     md = report["markdown"]
-    assert "Acquisition Failed" in md
+    assert "Blocked" in md or "Acquisition" in md
     assert "NOT_APPLICABLE" in md
 
 

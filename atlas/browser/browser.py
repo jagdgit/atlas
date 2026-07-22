@@ -49,6 +49,7 @@ class RenderedPage:
     title: str = ""
     text: str = ""
     links: list[str] = field(default_factory=list)
+    html: str = ""
 
 
 class BrowserBackend(Protocol):
@@ -118,6 +119,10 @@ class PlaywrightBackend:
                 text = page.inner_text("body")
             except Exception:  # noqa: BLE001 - body may be absent
                 text = ""
+            try:
+                html = page.content() or ""
+            except Exception:  # noqa: BLE001
+                html = ""
             links = page.eval_on_selector_all(
                 "a[href]", "els => els.map(e => e.href)"
             )
@@ -127,6 +132,7 @@ class PlaywrightBackend:
                 title=title,
                 text=text or "",
                 links=[h for h in (links or []) if isinstance(h, str)],
+                html=html,
             )
         except (BrowserTimeout, BrowserUnavailable):
             raise
@@ -203,13 +209,16 @@ class BrowserClient:
             self._logger.exception("browser backend crashed")
             return {**base, "outcome": BROWSER_ERROR, "reason": str(exc)}
         text = (page.text or "").strip()[: self._max_text_chars]
+        # Cap HTML retained for captionTracks extraction (BA.1); keep modest.
+        html = (page.html or "")[: max(self._max_text_chars * 20, 200_000)]
         return {
             **base,
-            "outcome": BROWSER_OK if text else BROWSER_EMPTY,
+            "outcome": BROWSER_OK if (text or html) else BROWSER_EMPTY,
             "final_url": page.final_url,
             "status": page.status,
             "title": page.title,
             "text": text,
+            "html": html,
             "chars": len(text),
             "links": page.links[: self._max_links],
         }

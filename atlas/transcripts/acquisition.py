@@ -94,13 +94,34 @@ def format_next_research_blocked(
     *,
     speech_status: str | None = None,
 ) -> str:
-    """Operator-facing Next Research copy for acquire-terminated runs."""
+    """Operator-facing Next Research copy for Research acquire-stop (RH.1–RH.4)."""
+    return format_next_action(
+        strategies,
+        speech_status=speech_status,
+        audience="research",
+        status="blocked",
+    )
+
+
+def format_next_action(
+    strategies: list[str] | tuple[str, ...] | None = None,
+    *,
+    speech_status: str | None = None,
+    audience: str = "job",
+    status: str = "waiting",
+) -> str:
+    """Operator-facing next steps for acquire termination (RH.5 / RH9–RH10).
+
+    ``audience=job`` → "Waiting for operator" / Next Action semantics.
+    ``audience=research`` → "Research blocked" (legacy Research report wording).
+    """
     actions = list(strategies) if strategies else list(default_media_recovery_strategies())
-    lines = [
-        "Research blocked.",
-        "",
-        "Continue after one of:",
-    ]
+    if audience == "research":
+        lines = ["Research blocked.", "", "Continue after one of:"]
+    elif status == "waiting":
+        lines = ["Waiting for operator.", "", "Continue after one of:"]
+    else:
+        lines = ["Blocked.", "", "Continue after one of:"]
     for sid in actions:
         lines.append(f"• {strategy_label(sid)}")
     if speech_status:

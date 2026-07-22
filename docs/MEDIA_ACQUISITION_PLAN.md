@@ -311,6 +311,11 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 > `SpeechToTextGap` / `MediaReadFailed`; gate `tests/test_media_acquisition_gate.py`; `OI-M0`
 > closed).
 >
+> **Runtime note (2026-07-22):** Job/Assistant now routes learn-from-video / bare
+> YouTube URLs to **`media.learn`** (one step + strategy journal). Caption-only
+> phrasing still uses `youtube.transcript`. Research path alignment is **MO.3**
+> (pending) — see [`MEDIA_ORCHESTRATION_PLAN.md`](MEDIA_ORCHESTRATION_PLAN.md).
+>
 > Companion: [`OPEN_ITEMS.md`](OPEN_ITEMS.md) (`OI-M*`), roadmap P8/P11/P15,
 > `atlas/transcripts/youtube.py` + `YouTubePlugin`.
 >

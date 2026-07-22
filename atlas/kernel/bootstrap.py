@@ -544,6 +544,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         tools=tools,  # shared by ref; plugin tools (web.fetch) register later
         capabilities=capabilities,  # shared by ref; plugins register 'web' later
         interactive_timeout=cfg.llm.interactive_timeout,  # RC/D3.12c
+        templates=template_service,
+        assets=asset_store,
         logger=get_logger("atlas.assistant"),
     )
 
@@ -961,9 +963,66 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         events=events,
         logger=get_logger("atlas.ingestion.media"),
     )
-    # Research Librarian video path (M.7): captions first, then Asset-first media fallback.
+
+    # media.learn orchestrator (MO*): Job/Assistant + Research share one spine.
+    from atlas.capabilities import CAP_MEDIA_LEARN, MediaLearnCapability
+    from atlas.ingestion.media_learn import MediaLearnOrchestrator
+    from atlas.transcripts.acquisition import speech_to_text_status as _stt_status
+
+    def _media_speech_status() -> str:
+        return _stt_status(
+            enabled=bool(speech_cfg.enabled),
+            available=bool(speech_client._engine.available()),
+        )
+
+    def _browser_render_for_media(url: str) -> dict:
+        """Lazy browser.open for media.learn (BA.1); journals unavailable if missing."""
+        if tools.has("browser.open"):
+            try:
+                return tools.get("browser.open").func(url) or {}
+            except Exception as exc:  # noqa: BLE001
+                return {"outcome": "error", "reason": str(exc), "reason_code": "browser_error"}
+        return {
+            "outcome": "unavailable",
+            "reason": "browser capability not registered",
+            "reason_code": "unavailable",
+        }
+
+    def _timedtext_fetch(timedtext_url: str) -> str:
+        """Fetch a caption track URL via the shared FetchClient (BA.1)."""
+        try:
+            result = fetch_client.fetch(timedtext_url)
+            body = getattr(result, "text", None) or getattr(result, "body", None) or ""
+            if isinstance(body, bytes):
+                return body.decode("utf-8", errors="replace")
+            return str(body or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    media_learn = MediaLearnOrchestrator(
+        caption_fetch=lambda video: youtube_transcripts.fetch(video).as_dict(),
+        media_ingestor=media_ingestor,
+        knowledge=knowledge_service,
+        speech_status=_media_speech_status,
+        browser_render=_browser_render_for_media,
+        timedtext_fetch=_timedtext_fetch,
+        logger=get_logger("atlas.ingestion.media_learn"),
+    )
+    capabilities.register(
+        CAP_MEDIA_LEARN, media_learn, contract=MediaLearnCapability, kind="core"
+    )
+    tools.register(
+        "media.learn",
+        media_learn.media_learn,
+        description="Learn from media (YouTube URL or local file): strategy chain → Knowledge.",
+        params={"source": "YouTube URL, video id, or local media/transcript path"},
+    )
+    assistant_service._media_learn = media_learn
     librarian._media = media_ingestor
+    librarian._media_learn = media_learn
     librarian._events = events
+    container.register_instance("media_learn", media_learn)
+
     # Owner Knowledge Mission worker (Phase C · §C.8): continuously reads the User Archive
     # (code/docs/chats) into global knowledge + experience, then rebuilds the personal profile.
     worker_manager.register_worker_type(

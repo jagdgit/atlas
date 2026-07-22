@@ -118,7 +118,8 @@ def test_youtube_url_routes_to_transcript(planner):
 
 def test_youtube_url_beats_web_fetch(planner):
     plan = planner.plan("https://www.youtube.com/watch?v=abcdefghijk")
-    assert plan.intent == Intent.YOUTUBE_TRANSCRIPT
+    assert plan.intent == Intent.MEDIA_LEARN
+    assert plan.steps[0].capability == "media_learn"
 
 
 def test_run_python_fenced_block(planner):

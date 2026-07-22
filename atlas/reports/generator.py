@@ -93,6 +93,12 @@ _METHODOLOGY_ACQUIRE_STOP = (
     "were read."
 )
 
+_METHODOLOGY_ACQUIRE_WAITING = (
+    "Pipeline terminated during acquisition (waiting for operator). "
+    "Verification was not executed. No Evidence Budget or convergence assessment "
+    "was performed because no media was acquired."
+)
+
 _SUMMARY_SYSTEM = (
     "You are Atlas, writing the prose sections of an evidence-backed research report. "
     "Be precise and non-committal beyond the evidence. Never invent sources or numbers; "
@@ -131,33 +137,63 @@ class ReportGenerator:
         )
 
         if acquire_stop:
+            term_status = str(termination.get("status") or "blocked")
+            term_reason = (
+                termination.get("reason")
+                or termination.get("reason_code")
+                or "unknown"
+            )
             overall = CONFIDENCE_NOT_APPLICABLE
             distribution: dict[str, int] = {}
             confidence_block: dict[str, Any] = {
                 "overall": overall,
                 "distribution": distribution,
-                "result": "acquisition_failed",
-                "reason_code": termination.get("reason_code") or "unknown",
-                "reason": termination.get("reason"),
+                "stage": "acquire",
+                "status": term_status,
+                "reason": term_reason,
+                "reason_code": termination.get("reason_code") or term_reason,
+                "result": (
+                    "waiting"
+                    if term_status == "waiting"
+                    else "acquisition_failed"
+                ),
                 "knowledge_produced": int(termination.get("knowledge_produced") or 0),
-                "reasoning": "not_attempted",
-                "verification": "not_executed",
+                "reasoning": termination.get("reasoning") or "not_started",
+                "verification": termination.get("verification") or "not_executed",
+                "waiting_for": termination.get("waiting_for"),
             }
-            methodology = _METHODOLOGY_ACQUIRE_STOP
-            from atlas.transcripts.acquisition import format_next_research_blocked
+            methodology = (
+                _METHODOLOGY_ACQUIRE_WAITING
+                if term_status == "waiting"
+                else _METHODOLOGY_ACQUIRE_STOP
+            )
+            from atlas.transcripts.acquisition import format_next_action
 
-            next_research = format_next_research_blocked(
+            audience = str(termination.get("audience") or "research")
+            next_research = format_next_action(
                 termination.get("suggested_next_strategies") or (),
                 speech_status=termination.get("speech_to_text_status"),
+                audience=audience,
+                status=term_status,
             )
-            default_answer = (
-                "Acquisition failed before read — no documents were obtained, so no "
-                "claims were verified. No knowledge was fabricated."
-            )
-            limitations = (
-                "Research stopped at the Acquire stage. Reader, Extractor, Candidate, "
-                "Consolidator, and Knowledge stages did not run."
-            )
+            if term_status == "waiting":
+                default_answer = (
+                    "Interactive recovery required — no media was acquired, so "
+                    "reasoning and verification did not start. No knowledge was fabricated."
+                )
+                limitations = (
+                    "Job stopped at the Acquire stage waiting for operator input "
+                    "(upload transcript/media or enable a recovery path)."
+                )
+            else:
+                default_answer = (
+                    "Acquisition failed before read — no documents were obtained, so no "
+                    "claims were verified. No knowledge was fabricated."
+                )
+                limitations = (
+                    "Research stopped at the Acquire stage. Reader, Extractor, Candidate, "
+                    "Consolidator, and Knowledge stages did not run."
+                )
         else:
             overall, distribution = self._overall_confidence(body)
             confidence_block = {"overall": overall, "distribution": distribution}
@@ -192,6 +228,12 @@ class ReportGenerator:
             "hypotheses": list(reasoning.get("hypotheses") or []),
             "limitations": limitations,
             "next_research": next_research,
+            "next_section_title": (
+                "Next Action"
+                if acquire_stop
+                and str(termination.get("audience") or "research") == "job"
+                else "Next Research"
+            ),
             "termination": termination or None,
         }
         sections["executive_summary"] = self._executive_summary(
@@ -410,12 +452,21 @@ class ReportGenerator:
     ) -> str:
         if acquire_stop:
             conf = sections.get("confidence") or {}
-            code = conf.get("reason_code") or "unknown"
+            code = conf.get("reason") or conf.get("reason_code") or "unknown"
+            status = conf.get("status") or "blocked"
+            next_title = sections.get("next_section_title") or "Next Research"
+            if status == "waiting":
+                return (
+                    f"Objective: {objective.strip()}. Acquire stage is waiting "
+                    f"({code}). Knowledge produced: 0. Reasoning was not started; "
+                    f"verification was not executed. Confidence is {overall}. "
+                    f"See {next_title} for operator recovery strategies."
+                )
             return (
                 f"Objective: {objective.strip()}. Acquisition failed before read "
-                f"({code}). Knowledge produced: 0. Reasoning was not attempted; "
+                f"({code}). Knowledge produced: 0. Reasoning was not started; "
                 f"verification was not executed. Confidence is {overall} — this is "
-                "an acquire-stage stop, not thin evidence. See Next Research for "
+                f"an acquire-stage stop, not thin evidence. See {next_title} for "
                 "operator recovery strategies."
             )
         evidence = sections["evidence"]
@@ -522,14 +573,26 @@ class ReportGenerator:
         lines += ["## Executive Summary", sections["executive_summary"], ""]
         lines += ["## Answer", sections["answer"], ""]
         conf = sections.get("confidence") or {}
-        if conf.get("result") == "acquisition_failed":
+        if conf.get("result") in ("acquisition_failed", "waiting") or conf.get("stage") == "acquire":
+            status = conf.get("status") or (
+                "waiting" if conf.get("result") == "waiting" else "blocked"
+            )
+            status_label = "Waiting" if status == "waiting" else "Blocked"
+            reason = conf.get("reason") or conf.get("reason_code") or "unknown"
             lines += [
                 "## Confidence",
-                f"Result: **Acquisition Failed**",
-                f"Reason: `{conf.get('reason_code') or 'unknown'}`"
-                + (f" — {conf['reason']}" if conf.get("reason") else ""),
+                f"Result: **{status_label}** (acquire)",
+                f"Stage: **Acquire**",
+                f"Status: **{status}**",
+                f"Reason: `{reason}`",
+            ]
+            if conf.get("waiting_for"):
+                lines.append(
+                    f"Waiting For: **{str(conf['waiting_for']).replace('_', ' ').title()}**"
+                )
+            lines += [
                 f"Knowledge Produced: **{conf.get('knowledge_produced', 0)}**",
-                f"Reasoning: **{str(conf.get('reasoning') or 'not_attempted').replace('_', ' ').title()}**",
+                f"Reasoning: **{str(conf.get('reasoning') or 'not_started').replace('_', ' ').title()}**",
                 f"Verification: **{str(conf.get('verification') or 'not_executed').replace('_', ' ').title()}**",
                 f"Confidence: **{overall}**",
                 "",
@@ -668,7 +731,8 @@ class ReportGenerator:
         lines.append("")
 
         lines += ["## Limitations", sections["limitations"], ""]
-        lines += ["## Next Research", sections["next_research"], ""]
+        next_title = sections.get("next_section_title") or "Next Research"
+        lines += [f"## {next_title}", sections["next_research"], ""]
         return "\n".join(lines).strip() + "\n"
 
 

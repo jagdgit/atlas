@@ -66,11 +66,22 @@
           <h2>Missions</h2>
           <button id="missions-refresh" class="link">refresh</button>
         </div>
-        <form id="mission-form" class="job-form">
+        <form id="mission-form" class="job-form mission-form">
           <select id="mission-template"></select>
           <input id="mission-title" placeholder="Mission title (optional)" />
           <button type="submit">Instantiate</button>
         </form>
+        <div id="mission-config-panel" class="mission-config-panel">
+          <label class="muted small" for="mission-config">Config overrides (JSON) — seeded from the template; edit before Instantiate</label>
+          <textarea id="mission-config" rows="6" spellcheck="false"
+            placeholder='{"starting_cash": 10000, "instruments": [{"symbol": "DEMO", "asset": "demo-feed"}]}'></textarea>
+          <div class="mission-feed-row">
+            <input id="mission-feed-name" placeholder="Feed name (e.g. demo-feed)" />
+            <input id="mission-feed-symbol" placeholder="Symbol (e.g. DEMO)" />
+            <button type="button" id="mission-feed-sample">Register sample market data</button>
+            <span class="muted small">No broker login — simulation fixtures only</span>
+          </div>
+        </div>
         <div class="jobs-layout">
           <div id="missions-list" class="jobs-list"></div>
           <div id="mission-detail" class="job-detail"></div>
@@ -101,7 +112,7 @@
           <button id="jobs-refresh" class="link">refresh</button>
         </div>
         <form id="job-form" class="job-form">
-          <input id="job-objective" placeholder="Objective for an async job, e.g. “research grid-scale battery economics”" />
+          <input id="job-objective" placeholder='Objective, e.g. “start paper trading with 10000 on DEMO” or “research grid-scale batteries”' />
           <button type="submit">Run job</button>
         </form>
         <div class="jobs-layout">

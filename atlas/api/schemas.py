@@ -538,6 +538,33 @@ class WorkerInputRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class UpdateMissionConfigRequest(BaseModel):
+    """Create the next mission-config version (P6/B6). Activates by default so the worker picks it up."""
+
+    document: dict[str, Any] = Field(default_factory=dict)
+    change_note: str = Field(default="", max_length=2000)
+    activate: bool = True
+
+
+class RegisterAssetRequest(BaseModel):
+    """Register (or version) an Asset Store blob — used for paper-trading OHLCV feeds.
+
+    Provide ``content`` (JSON/CSV text) *or* structured ``bars``, *or* set
+    ``generate_sample`` to mint a deterministic fixture series (no live broker / no login).
+    """
+
+    kind: str = Field(default="market_data", min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=200)
+    symbol: str = Field(default="", max_length=64)
+    content: str | None = None
+    bars: list[dict[str, Any]] | None = None
+    filename: str | None = Field(default=None, max_length=260)
+    content_type: str | None = Field(default=None, max_length=120)
+    generate_sample: bool = False
+    sample_bars: int = Field(default=60, ge=5, le=500)
+    sample_start: float = Field(default=100.0, gt=0)
+
+
 class ApprovalActionRequest(BaseModel):
     """Operator decision on a proposed approval (Phase D · §D.3/D.5, P14). Journaled + reversible."""
 

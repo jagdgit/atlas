@@ -299,6 +299,9 @@ class AssistantService:
         search_limit: int = 5,
         list_limit: int = 25,
         interactive_timeout: float | None = None,
+        templates: Any = None,
+        assets: Any = None,
+        media_learn: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._conversation = conversation
@@ -310,6 +313,9 @@ class AssistantService:
         self._llm = llm
         self._tools = tools
         self._capabilities = capabilities
+        self._templates = templates
+        self._assets = assets
+        self._media_learn = media_learn
         self._web_tool = web_tool
         self._search_tool = search_tool
         self._scholar_tool = scholar_tool
@@ -405,6 +411,7 @@ class AssistantService:
             Intent.WEB_SEARCH: self._do_web_search,
             Intent.SCHOLAR_SEARCH: self._do_scholar_search,
             Intent.YOUTUBE_TRANSCRIPT: self._do_youtube,
+            Intent.MEDIA_LEARN: self._do_media_learn,
             Intent.RUN_PYTHON: self._do_run_python,
             Intent.GIT_STATUS: self._do_git,
             Intent.SQL_QUERY: self._do_sql,
@@ -415,6 +422,8 @@ class AssistantService:
             Intent.ASK_KNOWLEDGE: self._do_ask_knowledge,
             Intent.ANSWER: self._do_answer,
             Intent.REACT: self._do_react,
+            Intent.INSTANTIATE_MISSION: self._do_instantiate_mission,
+            Intent.REGISTER_MARKET_DATA: self._do_register_market_data,
         }.get(intent, self._do_react)
         return handler(args, context, tool_calls)
 
@@ -717,6 +726,83 @@ class AssistantService:
         )
         return _Outcome(answer=summary)
 
+    def _do_media_learn(self, args, context, tool_calls) -> _Outcome:
+        source = (args.get("source") or args.get("video") or "").strip()
+        if not source:
+            return _Outcome(
+                answer="Which media should I learn from? Give a YouTube URL or a local media path."
+            )
+        orch = self._media_learn
+        if orch is None and self._tools is not None and self._tools.has("media.learn"):
+            result = self._executor.execute("media.learn", {"source": source})
+            data = result.data if isinstance(result.data, dict) else {}
+            if not result.ok:
+                return _Outcome(
+                    answer=f"I couldn't learn from that media: {result.error}",
+                    blocked=True,
+                    blocked_reason="media.learn tool failed",
+                )
+        elif orch is not None:
+            data = orch.learn(source, to_knowledge=True)
+        else:
+            return _Outcome(
+                answer="Blocked: media.learn is not available.",
+                blocked=True,
+                blocked_reason="needs capability: media_learn",
+            )
+
+        strategies = data.get("strategies") or []
+        tool_calls.append(
+            {
+                "intent": Intent.MEDIA_LEARN,
+                "action": "media.learn",
+                "capability": "media_learn",
+                "ok": data.get("outcome") == "ok",
+                "outcome": data.get("outcome"),
+                "strategies": strategies,
+                "acquisition": data.get("acquisition"),
+                "orchestrator": data.get("orchestrator") or "media.learn",
+            }
+        )
+        extras = {
+            "strategies": strategies,
+            "acquisition": data.get("acquisition"),
+            "suggested_next_strategies": data.get("suggested_next_strategies") or [],
+            "speech_to_text_status": data.get("speech_to_text_status"),
+            "interactive_recovery": bool(data.get("interactive_recovery")),
+            "waiting_for": "media_asset",
+            "orchestrator": "media.learn",
+        }
+
+        if data.get("outcome") == "ok":
+            text = (data.get("text") or "").strip()
+            title = data.get("title") or source
+            summary = self._responder.compose(
+                _WEB_SUMMARY_SYSTEM,
+                f"Summarize what was learned from this media ({title}):\n\n{text[:4000]}",
+                fallback=(
+                    f"Learned from '{title}' ({len(text)} characters). "
+                    f"Strategies: {len(strategies)}."
+                ),
+            )
+            return _Outcome(answer=summary, extras=extras)
+
+        summary = data.get("operator_summary") or (
+            "Acquisition failed before read. No document was fabricated."
+        )
+        if data.get("interactive_recovery") or data.get("outcome") in (
+            "blocked",
+            "waiting",
+        ):
+            return _Outcome(
+                answer=summary,
+                blocked=True,
+                blocked_reason=data.get("blocked_reason")
+                or "interactive_recovery_required",
+                extras=extras,
+            )
+        return _Outcome(answer=summary, extras=extras)
+
     def _do_run_python(self, args, context, tool_calls) -> _Outcome:
         code = (args.get("code") or "").strip()
         if not code:
@@ -1012,6 +1098,148 @@ class AssistantService:
             answer=result.answer,
             citations=[c.as_dict() for c in result.citations],
             run_id=result.run_id,
+        )
+
+    def _do_instantiate_mission(self, args, context, tool_calls) -> _Outcome:
+        """Create a mission from a template; optionally auto-register a sample OHLCV feed."""
+        if self._templates is None:
+            return _Outcome(
+                answer="Mission templates are not available in this runtime.",
+                blocked=True,
+                blocked_reason="templates unavailable",
+            )
+        template = str(args.get("template") or "").strip()
+        if not template:
+            return _Outcome(answer="Which template should I instantiate?")
+        overrides = dict(args.get("config_overrides") or {})
+        auto_feed = bool(overrides.pop("_auto_sample_feed", False))
+        feed_note = ""
+        if auto_feed and self._assets is not None:
+            from atlas.trading.sample_feed import register_market_feed
+
+            instruments = list(overrides.get("instruments") or [])
+            if not instruments:
+                instruments = [{"symbol": "DEMO", "asset": ""}]
+            fixed = []
+            for inst in instruments:
+                symbol = str(inst.get("symbol") or "DEMO").upper()
+                asset_name = str(inst.get("asset") or "").strip() or f"{symbol.lower()}-feed"
+                try:
+                    info = register_market_feed(
+                        self._assets,
+                        name=asset_name,
+                        symbol=symbol,
+                        generate_sample=True,
+                    )
+                    fixed.append({"symbol": symbol, "asset": info["name"]})
+                    feed_note += f" Registered sample market_data feed `{info['name']}` for {symbol}."
+                except Exception as exc:  # noqa: BLE001
+                    return _Outcome(
+                        answer=f"Could not register market data for {symbol}: {exc}",
+                        blocked=True,
+                        blocked_reason=str(exc),
+                    )
+            overrides["instruments"] = fixed
+        elif auto_feed and self._assets is None:
+            return _Outcome(
+                answer="Paper trading needs a market_data feed, but the asset store is unavailable.",
+                blocked=True,
+                blocked_reason="assets unavailable",
+            )
+
+        try:
+            result = self._templates.instantiate(
+                template,
+                title=args.get("title"),
+                objective=str(args.get("objective") or ""),
+                config_overrides=overrides or None,
+                activate=bool(args.get("activate", True)),
+                autostart=bool(args.get("autostart", True)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _Outcome(
+                answer=f"Could not instantiate mission '{template}': {exc}",
+                blocked=True,
+                blocked_reason=str(exc),
+            )
+        mission = result.get("mission")
+        mid = getattr(mission, "id", None) or (mission.get("id") if isinstance(mission, dict) else None)
+        title = getattr(mission, "title", None) or (mission.get("title") if isinstance(mission, dict) else template)
+        tool_calls.append(
+            {
+                "intent": Intent.INSTANTIATE_MISSION,
+                "action": "instantiate_mission",
+                "template": template,
+                "mission_id": str(mid) if mid else None,
+                "config_overrides": overrides,
+            }
+        )
+        cash = overrides.get("starting_cash")
+        cash_bit = f" starting_cash={cash}" if cash is not None else ""
+        return _Outcome(
+            answer=(
+                f"Instantiated mission `{title}` from template `{template}`"
+                f" (id {mid}).{cash_bit}.{feed_note} "
+                "Open Missions to watch the journal; send JSON live inputs like "
+                '{"block_symbol": "SYM"} while it runs. '
+                "No broker login — simulation only."
+            ).strip(),
+            extras={"mission_id": str(mid) if mid else None, "template": template},
+        )
+
+    def _do_register_market_data(self, args, context, tool_calls) -> _Outcome:
+        if self._assets is None:
+            return _Outcome(
+                answer="Asset store is not available.",
+                blocked=True,
+                blocked_reason="assets unavailable",
+            )
+        from atlas.trading.sample_feed import register_market_feed
+
+        name = str(args.get("name") or "").strip()
+        symbol = str(args.get("symbol") or name or "DEMO").strip() or "DEMO"
+        if not name:
+            name = f"{symbol.lower()}-feed"
+        data = None
+        if args.get("content"):
+            data = str(args["content"]).encode("utf-8")
+        elif args.get("bars"):
+            import json as _json
+
+            data = _json.dumps(args["bars"]).encode("utf-8")
+        try:
+            info = register_market_feed(
+                self._assets,
+                name=name,
+                symbol=symbol,
+                data=data,
+                filename=args.get("filename"),
+                content_type=args.get("content_type"),
+                generate_sample=bool(args.get("generate_sample", data is None)),
+                sample_bars_n=int(args.get("sample_bars") or 60),
+                sample_start=float(args.get("sample_start") or 100.0),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _Outcome(
+                answer=f"Could not register market data: {exc}",
+                blocked=True,
+                blocked_reason=str(exc),
+            )
+        tool_calls.append(
+            {
+                "intent": Intent.REGISTER_MARKET_DATA,
+                "action": "register_market_data",
+                **info,
+            }
+        )
+        sample = " (deterministic sample fixture)" if info.get("generated_sample") else ""
+        return _Outcome(
+            answer=(
+                f"Registered market_data asset `{info['name']}` for symbol {info['symbol']}"
+                f"{sample}. Use instruments:[{{symbol:\"{info['symbol']}\", asset:\"{info['name']}\"}}] "
+                "in a paper_trading mission config. No live broker credentials are required."
+            ),
+            extras=info,
         )
 
     def _do_react(self, args, context, tool_calls) -> _Outcome:

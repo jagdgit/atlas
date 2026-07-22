@@ -36,6 +36,8 @@ from atlas.api.schemas import (
     ApprovalActionRequest,
     CreateMissionRequest,
     MissionActionRequest,
+    RegisterAssetRequest,
+    UpdateMissionConfigRequest,
     WorkerActionRequest,
     WorkerInputRequest,
     JobDetailResponse,
@@ -1118,8 +1120,16 @@ def _templates(request: Request):
     return _app(request).container.resolve("templates")
 
 
+def _configuration(request: Request):
+    return _app(request).container.resolve("configuration")
+
+
+def _assets(request: Request):
+    return _app(request).container.resolve("assets")
+
+
 def _mission_error(exc: Exception) -> HTTPException:
-    """Map a MissionError/WorkerError/TemplateError to a sensible HTTP status."""
+    """Map a MissionError/WorkerError/TemplateError/ConfigError to a sensible HTTP status."""
     msg = str(exc)
     low = msg.lower()
     if "not found" in low or "unknown template" in low or "unknown worker" in low:
@@ -1200,15 +1210,131 @@ def instantiate_mission(body: InstantiateMissionRequest, request: Request) -> di
         )
     except Exception as exc:  # noqa: BLE001 - domain error → HTTP
         raise _mission_error(exc)
-    return _missions(request).get_mission(result["mission"].id)
+    view = _missions(request).get_mission(result["mission"].id)
+    try:
+        active = _configuration(request).get_active(result["mission"].id)
+        if active is not None:
+            view["config"] = active.to_dict()
+    except Exception:  # noqa: BLE001 - config layer optional on aggregate view
+        pass
+    return view
 
 
 @v1_router.get("/missions/{mission_id}", tags=["missions"])
 def get_mission(mission_id: str, request: Request, journal_limit: int = 50) -> dict:
     try:
-        return _missions(request).get_mission(mission_id, journal_limit=journal_limit)
+        view = _missions(request).get_mission(mission_id, journal_limit=journal_limit)
     except Exception as exc:  # noqa: BLE001 - domain error → HTTP
         raise _mission_error(exc)
+    try:
+        active = _configuration(request).get_active(mission_id)
+        if active is not None:
+            view["config"] = active.to_dict()
+    except Exception:  # noqa: BLE001 - config layer optional on aggregate view
+        pass
+    return view
+
+
+@v1_router.get("/missions/{mission_id}/config", tags=["missions"])
+def get_mission_config(mission_id: str, request: Request) -> dict:
+    """Active versioned config for a mission (P6)."""
+    _missions(request)  # 404 if mission missing via require below
+    try:
+        _missions(request).get_mission(mission_id, journal_limit=1)
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
+    cfg = _configuration(request).get_active(mission_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="mission has no active config")
+    return {"config": cfg.to_dict()}
+
+
+@v1_router.put("/missions/{mission_id}/config", tags=["missions"])
+def update_mission_config(
+    mission_id: str, body: UpdateMissionConfigRequest, request: Request
+) -> dict:
+    """Write the next config version (immutable history) and optionally activate it."""
+    try:
+        _missions(request).get_mission(mission_id, journal_limit=1)
+        cfg = _configuration(request).update_config(
+            mission_id,
+            body.document,
+            change_note=body.change_note or "operator update",
+            activate=body.activate,
+        )
+    except Exception as exc:  # noqa: BLE001 - domain error → HTTP
+        raise _mission_error(exc)
+    return {"config": cfg.to_dict()}
+
+
+# --- assets (market_data feeds for paper trading) -----------------------
+@v1_router.get("/assets", tags=["assets"])
+def list_assets(request: Request, kind: str | None = None) -> dict:
+    """List Asset Store entries (filter with ``?kind=market_data``)."""
+    rows = _assets(request).list_assets(kind=kind)
+    return {"assets": rows}
+
+
+@v1_router.post("/assets", tags=["assets"])
+def register_asset(body: RegisterAssetRequest, request: Request) -> dict:
+    """Register/version an asset. For paper trading use ``kind=market_data``.
+
+    No broker login: Atlas paper trading is simulation-only (P10). Pass JSON/CSV
+    ``content`` or ``bars``, or ``generate_sample=true`` for a deterministic fixture.
+    """
+    import json as _json
+
+    from atlas.trading.sample_feed import register_market_feed
+
+    if body.kind != "market_data":
+        # Generic path: content required.
+        if not body.content:
+            raise HTTPException(
+                status_code=400,
+                detail="content required for non-market_data assets (or use kind=market_data)",
+            )
+        try:
+            result = _assets(request).register(
+                body.kind,
+                body.name,
+                body.content.encode("utf-8"),
+                content_type=body.content_type,
+                metadata={"filename": body.filename or f"{body.name}.bin"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"asset": result.get("asset"), "version": result.get("version")}
+
+    data: bytes | None = None
+    filename = body.filename
+    content_type = body.content_type
+    if body.bars is not None:
+        data = _json.dumps(body.bars).encode("utf-8")
+        filename = filename or f"{body.name}.json"
+        content_type = content_type or "application/json"
+    elif body.content is not None:
+        data = body.content.encode("utf-8")
+        if not filename:
+            filename = f"{body.name}.csv" if "," in body.content.split("\n", 1)[0] else f"{body.name}.json"
+            content_type = content_type or (
+                "text/csv" if filename.endswith(".csv") else "application/json"
+            )
+
+    try:
+        info = register_market_feed(
+            _assets(request),
+            name=body.name,
+            symbol=body.symbol or body.name,
+            data=data,
+            filename=filename,
+            content_type=content_type,
+            generate_sample=body.generate_sample or data is None,
+            sample_bars_n=body.sample_bars,
+            sample_start=body.sample_start,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return info
 
 
 @v1_router.get("/missions/{mission_id}/journal", tags=["missions"])

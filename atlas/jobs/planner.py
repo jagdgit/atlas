@@ -36,6 +36,7 @@ _VALID_INTENTS = {
     Intent.WEB_SEARCH,
     Intent.SCHOLAR_SEARCH,
     Intent.YOUTUBE_TRANSCRIPT,
+    Intent.MEDIA_LEARN,
     Intent.RUN_PYTHON,
     Intent.GIT_STATUS,
     Intent.SQL_QUERY,
@@ -47,6 +48,8 @@ _VALID_INTENTS = {
     Intent.INGEST_PATH,
     Intent.ASK_KNOWLEDGE,
     Intent.REACT,
+    Intent.INSTANTIATE_MISSION,
+    Intent.REGISTER_MARKET_DATA,
 }
 
 _DECOMPOSE_SYSTEM = (
@@ -55,11 +58,16 @@ _DECOMPOSE_SYSTEM = (
     "with keys: intent, capability, args (object), description, depends_on (integer "
     "index of a prerequisite step, or null). "
     "Allowed intents: smalltalk, recall, remember, web_fetch, web_search, "
-    "scholar_search, youtube_transcript, run_python, git_status, sql_query, "
+    "scholar_search, youtube_transcript, media_learn, run_python, git_status, sql_query, "
     "ocr_image, mail_search, browse_url, research, list_documents, ingest_path, "
-    "ask_knowledge, react. Allowed capabilities: llm, memory, knowledge, web, search, "
-    "scholar, transcript, python, git, sql, ocr, mail, browser, research, agent, "
-    "document. "
+    "ask_knowledge, react, instantiate_mission, register_market_data. "
+    "Allowed capabilities: llm, memory, knowledge, web, search, "
+    "scholar, transcript, media_learn, python, git, sql, ocr, mail, browser, research, agent, "
+    "document, templates, assets. "
+    "For 'start paper trading with $N on SYMBOL': first register_market_data "
+    "(args: name, symbol, generate_sample=true) then instantiate_mission "
+    "(args: template=paper_trading, config_overrides with starting_cash and "
+    "instruments[{symbol, asset: feed name}]). "
     "Prefer 'react' for open-ended reasoning. Keep it to at most 6 steps. "
     "Do not include any prose outside the JSON array."
 )

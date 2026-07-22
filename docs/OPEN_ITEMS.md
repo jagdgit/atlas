@@ -79,7 +79,11 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
 | OI-M0 | 🟢 | P1 | **Media Reader Family plan complete** (M.1–M.7 ✅) — strategy chain, metadata, Asset-first readers, optional Whisper, provider-agnostic fetch, research wiring + e2e gate. | `MEDIA_ACQUISITION_PLAN.md` · gate `tests/test_media_acquisition_gate.py` |
-| OI-RH0 | 🟢 | P1 | **Media Report Honesty** — acquire-stop reports: NOT_APPLICABLE confidence, Research blocked + operator strategies, methodology without fake Verification, speech status ready/disabled/missing. | `MEDIA_REPORT_HONESTY_PLAN.md` · `tests/test_media_report_honesty.py` |
+| OI-RH0 | 🟢 | P1 | **Media Report Honesty** — Research acquire-stop (RH.1–RH.4). | `MEDIA_REPORT_HONESTY_PLAN.md` |
+| OI-MO0 | 🟢 | P1 | **Media learn roadmap** — RH.5–RH.8, MO.5, BA.1, MO.3 shipped. Remaining: Browser v2 media obtain. | `MEDIA_ORCHESTRATION_PLAN.md` |
+| OI-RH1 | 🟢 | P1 | **Job report honesty** — waiting + Next Action + Job termination. | `MEDIA_REPORT_HONESTY_AMENDMENT.md` · `tests/test_job_report_honesty.py` |
+| OI-BA0 | 🟡 | P2 | **Browser → Asset** — v1 DOM captions shipped. v2 policy-gated media obtain later. | `MEDIA_BROWSER_ACQUISITION_PLAN.md` |
+| OI-UI0 | 🟡 | P1 | **Job UI live updates** — fixed overlapping poll race (stale “planning” overwrite). Hard-refresh UI to pick up `app.js`. Follow-up: richer mid-step activity for long `media.learn`. | `atlas/web/static/app.js` |
 | OI-M1 | 🔴 | P3 | Official YouTube Data API captions (API key) as an extra polite strategy. | defer |
 | OI-M2 | 🔴 | P3 | Speaker diarization on transcripts. | defer |
 | OI-M3 | 🔴 | P3 | Streaming / live caption ingest. | defer |

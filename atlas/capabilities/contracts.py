@@ -30,6 +30,7 @@ CAP_CONVERSATION = "conversation"
 CAP_SEARCH = "search"
 CAP_SCHOLAR = "scholar"
 CAP_TRANSCRIPT = "transcript"
+CAP_MEDIA_LEARN = "media_learn"
 CAP_CODE = "code"
 CAP_PYTHON = "python"
 CAP_LEARNING = "learning"
@@ -138,6 +139,13 @@ class TranscriptCapability(Protocol):
     """Video → transcript text (YouTube; S18)."""
 
     def get_transcript(self, video: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class MediaLearnCapability(Protocol):
+    """Learn from media: captions → Asset → Readers → Knowledge (MO*)."""
+
+    def learn(self, source: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @runtime_checkable
@@ -346,6 +354,16 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Fetch a video transcript (YouTube) as readable text (L1 evidence).",
         "Learning from talks/lectures, not just written sources.",
         "S18",
+    ),
+    CAP_MEDIA_LEARN: CapabilitySpec(
+        CAP_MEDIA_LEARN,
+        MediaLearnCapability,
+        "Learn from media (URL/file): strategy chain → Knowledge.",
+        "One semantic step; captions, fetch, metadata, speech; interactive uploads suggested only.",
+        "MO",
+        cost_class=COST_MODERATE,
+        dependencies=(CAP_TRANSCRIPT,),
+        quality_notes="Platform capability; Research consumes it — does not own media acquire.",
     ),
     CAP_CODE: CapabilitySpec(
         CAP_CODE,
