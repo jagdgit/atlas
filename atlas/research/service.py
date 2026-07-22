@@ -545,13 +545,17 @@ class ResearchService:
         self._persist_artifacts(
             workspace, graph, pipeline, notes, findings=findings, reasoning=reasoning
         )
+        termination = self._acquire_termination(
+            pipeline, blocked, skipped, documents=documents
+        )
         report_bundle = self._render(
             objective, graph, eb, notes=notes, findings=findings,
-            reasoning=reasoning, pipeline=pipeline,
+            reasoning=reasoning, pipeline=pipeline, termination=termination,
         )
         report = report_bundle.get("report") or {}
         # Surface recommendations inside the report's next_research when present.
-        if recommendations and report.get("sections"):
+        # Do not append "further reading" over an acquire-stop recovery list.
+        if recommendations and report.get("sections") and not termination:
             rec_lines = [
                 f"- {r['title']}" + (f" — {r['url']}" if r.get("url") else "")
                 + f" ({r['why']})"
@@ -573,6 +577,11 @@ class ResearchService:
             if status is not None and not status.has_gaps
             else ([g.reason for g in status.gaps] if status else [])
         )
+        if termination:
+            stopped_reasons = [
+                f"acquisition failed before read ({termination.get('reason_code')})",
+                *( [termination["reason"]] if termination.get("reason") else [] ),
+            ]
         if recommendations:
             stopped_reasons = stopped_reasons + [
                 f"document cap ({self._max_documents}) reached; "
@@ -583,12 +592,13 @@ class ResearchService:
             "objective": objective,
             "iterations": pipeline["rounds"],
             "claim": {"confidence": overall, "confidence_score": None, "convergence":
-                      status.convergence if status else None},
+                      None if termination else (status.convergence if status else None)},
             "stopped": {
                 "decision": "stop",
                 "reasons": stopped_reasons or [notes],
-                "convergence": status.convergence if status else None,
-                "met": status.met if status else {},
+                "convergence": None if termination else (status.convergence if status else None),
+                "met": {} if termination else (status.met if status else {}),
+                "termination": termination,
             },
             "graph": graph.as_dict(),
             "verification": report_bundle.get("verification"),
@@ -1329,6 +1339,7 @@ class ResearchService:
         findings: list | None = None,
         reasoning: dict[str, Any] | None = None,
         pipeline: dict[str, Any] | None = None,
+        termination: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
             finding_dicts = None
@@ -1344,10 +1355,101 @@ class ResearchService:
                 findings=finding_dicts,
                 reasoning=reasoning,
                 pipeline=pipeline,
+                termination=termination,
             )
         except Exception:  # noqa: BLE001 - a report must never fail the research result
             self._logger.exception("report generation failed")
             return {}
+
+    def _acquire_termination(
+        self,
+        pipeline: dict[str, Any],
+        blocked: list[dict[str, Any]],
+        skipped: list[dict[str, Any]] | None,
+        *,
+        documents: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Build an acquire-stop termination payload when nothing was read (RH.3)."""
+        read_ok = int(pipeline.get("read") or 0)
+        chars = int(pipeline.get("chars_read") or 0)
+        if read_ok > 0 or chars > 0:
+            return None
+        if documents:
+            # Documents present but empty text still count as "read attempted".
+            if any(getattr(d, "has_text", False) for d in documents.values()):
+                return None
+
+        rows = [r for r in list(blocked or []) + list(skipped or []) if isinstance(r, dict)]
+        acq_rows = [
+            r for r in rows
+            if isinstance(r.get("acquisition"), dict)
+            or (r.get("failure_code") in {
+                "robots_disallowed", "unsupported", "paywall", "parse_error",
+            })
+            or "robots" in str(r.get("reason") or "").lower()
+        ]
+        if not acq_rows and not rows:
+            return None
+        # Prefer an explicit acquisition record when present.
+        chosen = next(
+            (r for r in acq_rows if isinstance(r.get("acquisition"), dict)),
+            (acq_rows[0] if acq_rows else rows[0]),
+        )
+        acq = chosen.get("acquisition") if isinstance(chosen.get("acquisition"), dict) else {}
+        from atlas.transcripts.acquisition import (
+            default_media_recovery_strategies,
+            speech_to_text_status,
+        )
+
+        speech_status = self._speech_to_text_status()
+        strategies = list(acq.get("suggested_next_strategies") or ()) or list(
+            default_media_recovery_strategies(speech_status=speech_status)
+        )
+        return {
+            "stage": "acquire",
+            "outcome": acq.get("outcome") or chosen.get("failure_code") or "blocked",
+            "reason_code": acq.get("reason_code")
+            or chosen.get("failure_code")
+            or "unknown",
+            "reason": acq.get("reason") or chosen.get("reason"),
+            "knowledge_produced": 0,
+            "reasoning": "not_attempted",
+            "verification": "not_executed",
+            "suggested_next_capability": acq.get("suggested_next_capability") or "speech_to_text",
+            "suggested_next_strategies": strategies,
+            "speech_to_text_status": acq.get("speech_to_text_status") or speech_status,
+            "operator_summary": acq.get("operator_summary"),
+        }
+
+    def _speech_to_text_status(self) -> str:
+        """ready | disabled | missing — for operator recovery copy (RH5)."""
+        from atlas.transcripts.acquisition import speech_to_text_status
+
+        try:
+            from atlas.config import get_config
+
+            cfg = get_config()
+            enabled = bool(getattr(cfg.plugins.speech, "enabled", False))
+        except Exception:  # noqa: BLE001
+            enabled = False
+        # Prefer live capability / plugin health when registered.
+        available = False
+        caps = self._capabilities
+        if caps is not None and caps.has("speech_to_text"):
+            try:
+                provider = caps.get("speech_to_text")
+                health = getattr(provider, "health_check", None)
+                if callable(health):
+                    hs = health()
+                    data = getattr(hs, "data", None) or {}
+                    available = bool(data.get("available"))
+                    if "enabled" in data:
+                        enabled = bool(data.get("enabled"))
+                else:
+                    available = True
+            except Exception:  # noqa: BLE001
+                available = False
+        return speech_to_text_status(enabled=enabled, available=available)
 
     # --- helpers --------------------------------------------------------
     def _resolve(self, name: str, injected):

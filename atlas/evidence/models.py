@@ -36,6 +36,7 @@ CONFIDENCE_MEDIUM = "MEDIUM"
 CONFIDENCE_LOW = "LOW"
 CONFIDENCE_INSUFFICIENT = "INSUFFICIENT"  # too little evidence to judge
 CONFIDENCE_UNVERIFIED = "UNVERIFIED"      # not yet run through the engine
+CONFIDENCE_NOT_APPLICABLE = "NOT_APPLICABLE"  # acquire-stop: reasoning never ran (RH2)
 
 # evidence stance toward a claim
 STANCE_SUPPORT = "support"

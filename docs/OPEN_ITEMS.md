@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-22 (Media Reader Family **M.1–M.7 complete**; `OI-M0` closed).
+> **Last updated:** 2026-07-22 (Media Reader Family complete; **Media Report Honesty** RH.1–RH.4 ✅).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -79,6 +79,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
 | OI-M0 | 🟢 | P1 | **Media Reader Family plan complete** (M.1–M.7 ✅) — strategy chain, metadata, Asset-first readers, optional Whisper, provider-agnostic fetch, research wiring + e2e gate. | `MEDIA_ACQUISITION_PLAN.md` · gate `tests/test_media_acquisition_gate.py` |
+| OI-RH0 | 🟢 | P1 | **Media Report Honesty** — acquire-stop reports: NOT_APPLICABLE confidence, Research blocked + operator strategies, methodology without fake Verification, speech status ready/disabled/missing. | `MEDIA_REPORT_HONESTY_PLAN.md` · `tests/test_media_report_honesty.py` |
 | OI-M1 | 🔴 | P3 | Official YouTube Data API captions (API key) as an extra polite strategy. | defer |
 | OI-M2 | 🔴 | P3 | Speaker diarization on transcripts. | defer |
 | OI-M3 | 🔴 | P3 | Streaming / live caption ingest. | defer |
@@ -120,6 +121,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-RH0 | **Media Report Honesty** (acquire-stop UX: NOT_APPLICABLE, Research blocked, operator strategies). | RH.1–RH.4 / `tests/test_media_report_honesty.py` |
 | OI-M0 | **Media Reader Family plan** (M.1–M.7) — Asset-first media Readers, optional Whisper, provider-agnostic fetch, research wiring + e2e gate. | M.7 / `tests/test_media_acquisition_gate.py` |
 | OI-G1 | **`.gitignore` silently ignored `atlas/{documents,knowledge,models}` source packages** (unanchored runtime-data rules) — 25 core source files were untracked. Anchored the rules to the repo root; source now tracked. | commit `57deac9` (2026-07-19) |
 | OI-C6 | Prose "distilled findings" from documents — now flow document → candidate → Consolidator → finding. | C.3g commit `4595ee8` (2026-07-19) |

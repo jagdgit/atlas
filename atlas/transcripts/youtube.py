@@ -32,6 +32,7 @@ from atlas.transcripts.acquisition import (
     STRATEGY_YOUTUBE_WATCH_PAGE,
     AcquisitionAttempt,
     AcquisitionRecord,
+    default_media_recovery_strategies,
     normalize_reason_code,
 )
 
@@ -46,6 +47,13 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 # Soft handoff toward M.5 — captions failed; speech_to_text may help later.
 _SUGGEST_SPEECH = "speech_to_text"
+
+
+def _recovery_kwargs() -> dict[str, Any]:
+    return {
+        "suggested_next_capability": _SUGGEST_SPEECH,
+        "suggested_next_strategies": default_media_recovery_strategies(),
+    }
 
 
 def _attempt_from_strategy(result: StrategyResult) -> AcquisitionAttempt:
@@ -107,6 +115,8 @@ class TranscriptResult:
             "acquisition": acq.as_dict(),
             "operator_summary": acq.operator_summary,
             "suggested_next_capability": acq.suggested_next_capability,
+            "suggested_next_strategies": list(acq.suggested_next_strategies),
+            "speech_to_text_status": acq.speech_to_text_status,
         }
 
     def as_source(self) -> dict[str, object]:
@@ -265,7 +275,7 @@ class YouTubeTranscriptProvider:
             attempts,
             source_url=watch_url,
             source_kind="video",
-            suggested_next_capability=_SUGGEST_SPEECH,
+            **_recovery_kwargs(),
         )
         return TranscriptResult(
             video_id, watch_url, acq.outcome, title=title,
@@ -377,11 +387,14 @@ class YouTubeTranscriptProvider:
         attempts: list[AcquisitionAttempt],
         suggested_next: str | None = None,
     ) -> TranscriptResult:
+        recovery = _recovery_kwargs() if outcome != OUTCOME_OK else {}
+        if suggested_next is not None and outcome != OUTCOME_OK:
+            recovery["suggested_next_capability"] = suggested_next
         acq = AcquisitionRecord.from_attempts(
             attempts,
             source_url=url,
             source_kind="video",
-            suggested_next_capability=suggested_next if outcome != OUTCOME_OK else None,
+            **recovery,
         )
         return TranscriptResult(
             video_id, url, outcome, title=title, language=language, text=text,

@@ -21,6 +21,7 @@ from atlas.evidence.models import (
     CONFIDENCE_INSUFFICIENT,
     CONFIDENCE_LOW,
     CONFIDENCE_MEDIUM,
+    CONFIDENCE_NOT_APPLICABLE,
     CONFIDENCE_UNVERIFIED,
     HEADLINE_CLAIM_TYPES,
     level_name,
@@ -86,6 +87,12 @@ _METHODOLOGY = (
     "governed by a per-job Evidence Budget."
 )
 
+_METHODOLOGY_ACQUIRE_STOP = (
+    "Pipeline terminated during acquisition. Verification was not executed. "
+    "No Evidence Budget or convergence assessment was performed because no documents "
+    "were read."
+)
+
 _SUMMARY_SYSTEM = (
     "You are Atlas, writing the prose sections of an evidence-backed research report. "
     "Be precise and non-committal beyond the evidence. Never invent sources or numbers; "
@@ -111,20 +118,62 @@ class ReportGenerator:
         notes: str = "",
         reasoning: dict[str, Any] | None = None,
         pipeline: dict[str, Any] | None = None,
+        termination: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Prefer findings when present (A3B.9); fall back to claims.
         body = list(findings) if findings else list(claims or [])
         sources = list(sources or [])
         reasoning = dict(reasoning or {})
-        overall, distribution = self._overall_confidence(body)
+        termination = dict(termination or {})
+        acquire_stop = (
+            str(termination.get("stage") or "") == "acquire"
+            and not body
+        )
+
+        if acquire_stop:
+            overall = CONFIDENCE_NOT_APPLICABLE
+            distribution: dict[str, int] = {}
+            confidence_block: dict[str, Any] = {
+                "overall": overall,
+                "distribution": distribution,
+                "result": "acquisition_failed",
+                "reason_code": termination.get("reason_code") or "unknown",
+                "reason": termination.get("reason"),
+                "knowledge_produced": int(termination.get("knowledge_produced") or 0),
+                "reasoning": "not_attempted",
+                "verification": "not_executed",
+            }
+            methodology = _METHODOLOGY_ACQUIRE_STOP
+            from atlas.transcripts.acquisition import format_next_research_blocked
+
+            next_research = format_next_research_blocked(
+                termination.get("suggested_next_strategies") or (),
+                speech_status=termination.get("speech_to_text_status"),
+            )
+            default_answer = (
+                "Acquisition failed before read — no documents were obtained, so no "
+                "claims were verified. No knowledge was fabricated."
+            )
+            limitations = (
+                "Research stopped at the Acquire stage. Reader, Extractor, Candidate, "
+                "Consolidator, and Knowledge stages did not run."
+            )
+        else:
+            overall, distribution = self._overall_confidence(body)
+            confidence_block = {"overall": overall, "distribution": distribution}
+            methodology = _METHODOLOGY
+            next_research = self._next_research(body, reasoning)
+            default_answer = self._answer(body)
+            limitations = self._limitations(body, self._conflicting(body))
+
         conflicting = self._conflicting(body)
         weakly_supported = self._weakly_supported(body)
         references = self._references(body, sources)
 
         sections: dict[str, Any] = {
-            "answer": answer.strip() or self._answer(body),
-            "confidence": {"overall": overall, "distribution": distribution},
-            "methodology": _METHODOLOGY,
+            "answer": answer.strip() or default_answer,
+            "confidence": confidence_block,
+            "methodology": methodology,
             "funnel": {k: v for k, v in (pipeline or {}).items() if k != "trace"},
             "pipeline_trace": list((pipeline or {}).get("trace") or []),
             "evidence": [
@@ -141,14 +190,16 @@ class ReportGenerator:
             "patterns": list(reasoning.get("patterns") or []),
             "opportunities": list(reasoning.get("opportunities") or []),
             "hypotheses": list(reasoning.get("hypotheses") or []),
-            "limitations": self._limitations(body, conflicting),
-            "next_research": self._next_research(body, reasoning),
+            "limitations": limitations,
+            "next_research": next_research,
+            "termination": termination or None,
         }
         sections["executive_summary"] = self._executive_summary(
-            objective, sections, overall, notes
+            objective, sections, overall, notes, acquire_stop=acquire_stop
         )
         # Optional LLM polish of the free-text sections (best-effort).
-        self._polish(objective, sections, body, notes)
+        if not acquire_stop:
+            self._polish(objective, sections, body, notes)
 
         report = {
             "objective": objective,
@@ -156,6 +207,7 @@ class ReportGenerator:
             "sections": sections,
             "used_findings": bool(findings),
             "reasoning": reasoning,
+            "termination": termination or None,
         }
         report["markdown"] = self._render_markdown(objective, sections, overall)
         return report
@@ -348,8 +400,24 @@ class ReportGenerator:
         return " ".join(parts[:6])
 
     def _executive_summary(
-        self, objective: str, sections: dict[str, Any], overall: str, notes: str
+        self,
+        objective: str,
+        sections: dict[str, Any],
+        overall: str,
+        notes: str,
+        *,
+        acquire_stop: bool = False,
     ) -> str:
+        if acquire_stop:
+            conf = sections.get("confidence") or {}
+            code = conf.get("reason_code") or "unknown"
+            return (
+                f"Objective: {objective.strip()}. Acquisition failed before read "
+                f"({code}). Knowledge produced: 0. Reasoning was not attempted; "
+                f"verification was not executed. Confidence is {overall} — this is "
+                "an acquire-stage stop, not thin evidence. See Next Research for "
+                "operator recovery strategies."
+            )
         evidence = sections["evidence"]
         n = len(evidence)
         conflicts = len(sections["conflicting_views"])
@@ -385,15 +453,11 @@ class ReportGenerator:
             if head:
                 base += f" Key finding: {head}."
         if conflicts:
-            base += (
-                f" {conflicts} finding(s) have conflicting sources that need "
-                "resolution."
-            )
+            base += f" {conflicts} finding(s) have unresolved conflicts."
         if weak:
-            base += (
-                f" {weak} finding(s) rest on limited independent evidence; more "
-                "sources are needed before confidence can rise."
-            )
+            base += f" {weak} finding(s) are weakly supported (diversity gap)."
+        if notes and "Unmet gaps:" in notes:
+            base += " " + ("Unmet gaps:" + notes.split("Unmet gaps:", 1)[1])[:200]
         return base
 
     # --- optional LLM polish -------------------------------------------
@@ -457,8 +521,28 @@ class ReportGenerator:
         lines = [f"# Research Report: {objective.strip()}", ""]
         lines += ["## Executive Summary", sections["executive_summary"], ""]
         lines += ["## Answer", sections["answer"], ""]
-        dist = ", ".join(f"{k}: {v}" for k, v in sections["confidence"]["distribution"].items())
-        lines += ["## Confidence", f"Overall: **{overall}**" + (f" ({dist})" if dist else ""), ""]
+        conf = sections.get("confidence") or {}
+        if conf.get("result") == "acquisition_failed":
+            lines += [
+                "## Confidence",
+                f"Result: **Acquisition Failed**",
+                f"Reason: `{conf.get('reason_code') or 'unknown'}`"
+                + (f" — {conf['reason']}" if conf.get("reason") else ""),
+                f"Knowledge Produced: **{conf.get('knowledge_produced', 0)}**",
+                f"Reasoning: **{str(conf.get('reasoning') or 'not_attempted').replace('_', ' ').title()}**",
+                f"Verification: **{str(conf.get('verification') or 'not_executed').replace('_', ' ').title()}**",
+                f"Confidence: **{overall}**",
+                "",
+            ]
+        else:
+            dist = ", ".join(
+                f"{k}: {v}" for k, v in (conf.get("distribution") or {}).items()
+            )
+            lines += [
+                "## Confidence",
+                f"Overall: **{overall}**" + (f" ({dist})" if dist else ""),
+                "",
+            ]
         lines += ["## Methodology", sections["methodology"], ""]
 
         funnel = sections.get("funnel") or {}

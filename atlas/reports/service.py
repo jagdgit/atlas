@@ -45,6 +45,7 @@ class ReportService:
         findings: list[dict[str, Any]] | None = None,
         reasoning: dict[str, Any] | None = None,
         pipeline: dict[str, Any] | None = None,
+        termination: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self._verification is None:
             # No engine wired: render from the (assumed pre-verified) claims as-is.
@@ -54,7 +55,16 @@ class ReportService:
                 "budget": budget or {},
             }
         else:
-            verified = self._verification.verify(graph, budget)
+            # Acquire-stop: skip verification — there is nothing to verify (RH2/RH3).
+            if termination and str(termination.get("stage") or "") == "acquire":
+                verified = {
+                    "claims": [],
+                    "sources": graph.get("sources", []),
+                    "budget": budget or {},
+                    "skipped": "acquisition_failed",
+                }
+            else:
+                verified = self._verification.verify(graph, budget)
         report = self._generator.generate(
             objective,
             claims=verified["claims"],
@@ -63,6 +73,7 @@ class ReportService:
             notes=notes,
             reasoning=reasoning,
             pipeline=pipeline,
+            termination=termination,
         )
         return {"report": report, "verification": verified}
 
@@ -77,6 +88,7 @@ class ReportService:
         notes: str = "",
         reasoning: dict[str, Any] | None = None,
         pipeline: dict[str, Any] | None = None,
+        termination: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._generator.generate(
             objective,
@@ -87,6 +99,7 @@ class ReportService:
             notes=notes,
             reasoning=reasoning,
             pipeline=pipeline,
+            termination=termination,
         )
 
     # --- lifecycle ------------------------------------------------------
