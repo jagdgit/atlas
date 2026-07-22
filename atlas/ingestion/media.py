@@ -1,4 +1,4 @@
-"""Local / remote media ingest orchestration (Media Reader Family · M.4–M.6).
+"""Local / remote media ingest orchestration (Media Reader Family · M.4–M.7).
 
 Asset-first path:
 
@@ -6,7 +6,7 @@ Asset-first path:
         → SourceFetcher (M.6; provider-specific HERE only)
         → MediaMetadataReader
         → TranscriptFileReader / AudioDemuxReader / SpeechToTextReader
-        → Knowledge
+        → Knowledge (optional) + media events (M.7)
 
 No YouTube-specific branches past the Asset boundary (MD8).
 """
@@ -18,6 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from atlas.ingestion.media_events import (
+    EVENT_MEDIA_METADATA_ACQUIRED,
+    EVENT_MEDIA_READ_FAILED,
+    EVENT_SPEECH_TO_TEXT_GAP,
+    EVENT_TRANSCRIPT_ACQUIRED,
+    emit_media_event,
+)
+from atlas.ingestion.source_fetch import stable_source_id
 from atlas.readers.media_kinds import (
     ASSET_KIND_AUDIO,
     ASSET_KIND_TRANSCRIPT,
@@ -50,6 +58,7 @@ class MediaIngestor:
         demux_reader: "AudioDemuxReader | None" = None,
         speech_reader: "SpeechToTextReader | None" = None,
         source_fetcher: "SourceFetcher | None" = None,
+        events: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._acq = acquirer
@@ -59,6 +68,7 @@ class MediaIngestor:
         self._demux = demux_reader
         self._speech = speech_reader
         self._fetcher = source_fetcher
+        self._events = events
         self._logger = logger or logging.getLogger("atlas.ingestion.media")
 
     def ingest_file(
@@ -69,6 +79,7 @@ class MediaIngestor:
         title: str | None = None,
         embed: bool = False,
         metadata: dict[str, Any] | None = None,
+        to_knowledge: bool = True,
     ) -> dict[str, Any]:
         p = Path(path).expanduser().resolve()
         if not p.is_file():
@@ -77,7 +88,8 @@ class MediaIngestor:
         if kind is None:
             raise ValueError(f"not a media file: {p.name}")
 
-        meta = {"filename": p.name, **(metadata or {})}
+        source_id = stable_source_id(str(p))
+        meta = {"filename": p.name, "source_id": source_id, **(metadata or {})}
         acquired = self._acq.acquire_file(
             p,
             kind=kind,
@@ -91,6 +103,9 @@ class MediaIngestor:
             domain=domain,
             title=title,
             embed=embed,
+            source_url=str(p),
+            source_id=source_id,
+            to_knowledge=to_knowledge,
         )
 
     def ingest_url(
@@ -100,19 +115,35 @@ class MediaIngestor:
         domain: str = "external",
         title: str | None = None,
         embed: bool = False,
+        to_knowledge: bool = True,
     ) -> dict[str, Any]:
         """Fetch a remote/local source via SourceFetcher, then the same Reader path."""
         if self._fetcher is None:
-            return {
+            out = {
                 "outcome": "unsupported",
                 "source_url": url,
+                "source_id": stable_source_id(url),
                 "reason": "SourceFetcher not configured",
                 "operator_hint": "upload a local file or a transcript asset",
                 "ingest": None,
+                "text": "",
             }
+            emit_media_event(
+                self._events,
+                EVENT_MEDIA_READ_FAILED,
+                {
+                    "source_url": url,
+                    "reason": out["reason"],
+                    "reason_code": "fetch_unavailable",
+                    "operator_hint": out["operator_hint"],
+                },
+            )
+            return out
+
         fetched = self._fetcher.fetch(url)
         out: dict[str, Any] = {
             "source_url": url,
+            "source_id": fetched.source_id,
             "fetch": fetched.as_dict(),
             "outcome": fetched.outcome,
             "operator_hint": fetched.operator_hint,
@@ -124,11 +155,23 @@ class MediaIngestor:
             "demux": None,
             "speech": None,
             "ingest": None,
+            "text": "",
         }
         if not fetched.ok:
+            emit_media_event(
+                self._events,
+                EVENT_MEDIA_READ_FAILED,
+                {
+                    "source_url": url,
+                    "source_id": fetched.source_id,
+                    "reason": fetched.reason,
+                    "reason_code": fetched.reason_code,
+                    "operator_hint": fetched.operator_hint,
+                    "strategies_tried": list(fetched.strategies_tried),
+                },
+            )
             return out
 
-        # Rebuild a lightweight acquired view for the shared Reader path.
         from atlas.ingestion.acquire import AcquiredAsset
 
         acquired = AcquiredAsset(
@@ -150,10 +193,17 @@ class MediaIngestor:
             domain=domain,
             title=title,
             embed=embed,
+            source_url=url,
+            source_id=fetched.source_id or stable_source_id(url),
+            to_knowledge=to_knowledge,
         )
         out.update(processed)
         out["fetch"] = fetched.as_dict()
-        out["outcome"] = "ok" if processed.get("ingest") else fetched.outcome
+        out["source_id"] = fetched.source_id
+        if processed.get("text") or (processed.get("ingest") or {}).get("outcome") == "ok":
+            out["outcome"] = "ok"
+        elif not to_knowledge and not (processed.get("text") or "").strip():
+            out["outcome"] = processed.get("outcome") or "empty"
         return out
 
     def ingest(
@@ -164,13 +214,23 @@ class MediaIngestor:
         title: str | None = None,
         embed: bool = False,
         metadata: dict[str, Any] | None = None,
+        to_knowledge: bool = True,
     ) -> dict[str, Any]:
         """Route a path or URL to the appropriate ingest entrypoint."""
         s = str(source).strip()
         parsed = urlparse(s)
         if parsed.scheme in ("http", "https"):
-            return self.ingest_url(s, domain=domain, title=title, embed=embed)
-        return self.ingest_file(s, domain=domain, title=title, embed=embed, metadata=metadata)
+            return self.ingest_url(
+                s, domain=domain, title=title, embed=embed, to_knowledge=to_knowledge
+            )
+        return self.ingest_file(
+            s,
+            domain=domain,
+            title=title,
+            embed=embed,
+            metadata=metadata,
+            to_knowledge=to_knowledge,
+        )
 
     def _after_acquire(
         self,
@@ -181,6 +241,9 @@ class MediaIngestor:
         domain: str,
         title: str | None,
         embed: bool,
+        source_url: str,
+        source_id: str,
+        to_knowledge: bool,
     ) -> dict[str, Any]:
         out: dict[str, Any] = {
             "asset_id": acquired.asset_id,
@@ -188,16 +251,33 @@ class MediaIngestor:
             "asset_reused": acquired.reused,
             "kind": kind,
             "filename": filename,
+            "source_url": source_url,
+            "source_id": source_id,
             "metadata": None,
             "demux": None,
             "speech": None,
             "ingest": None,
+            "text": "",
+            "outcome": "ok",
         }
 
         if self._meta is not None:
             out["metadata"] = self._meta.read(
                 acquired.asset_id, acquired.asset_version, filename=filename
             )
+            if (out["metadata"] or {}).get("outcome") == "ok":
+                emit_media_event(
+                    self._events,
+                    EVENT_MEDIA_METADATA_ACQUIRED,
+                    {
+                        "asset_id": acquired.asset_id,
+                        "asset_version": acquired.asset_version,
+                        "source_id": source_id,
+                        "source_url": source_url,
+                        "kind": kind,
+                        "filename": filename,
+                    },
+                )
 
         if kind == ASSET_KIND_TRANSCRIPT and self._transcript is not None:
             art = self._transcript.read(
@@ -208,20 +288,35 @@ class MediaIngestor:
                 "char_count": art.get("char_count"),
                 "reason": art.get("reason"),
             }
-            if art.get("outcome") == "ok" and (art.get("text") or "").strip():
-                out["ingest"] = self._to_knowledge(
-                    text=art["text"],
-                    acquired=acquired,
-                    filename=filename,
-                    title=title
-                    or (out.get("metadata") or {}).get("fields", {}).get("title")
-                    or filename,
-                    domain=domain,
-                    embed=embed,
-                    reader_id=self._transcript.id,
-                    reader_version=self._transcript.VERSION,
-                    source="media_transcript",
+            text = (art.get("text") or "").strip()
+            if art.get("outcome") == "ok" and text:
+                out["text"] = text
+                emit_media_event(
+                    self._events,
+                    EVENT_TRANSCRIPT_ACQUIRED,
+                    {
+                        "asset_id": acquired.asset_id,
+                        "source_id": source_id,
+                        "source_url": source_url,
+                        "strategy": "transcript_file",
+                        "char_count": len(text),
+                    },
                 )
+                if to_knowledge:
+                    out["ingest"] = self._to_knowledge(
+                        text=text,
+                        acquired=acquired,
+                        filename=filename,
+                        title=title
+                        or (out.get("metadata") or {}).get("fields", {}).get("title")
+                        or filename,
+                        domain=domain,
+                        embed=embed,
+                        reader_id=self._transcript.id,
+                        reader_version=self._transcript.VERSION,
+                        source="media_transcript",
+                        source_id=source_id,
+                    )
             return out
 
         speech_asset_id = acquired.asset_id
@@ -243,26 +338,56 @@ class MediaIngestor:
                 speech_asset_id, speech_asset_version, filename=speech_filename
             )
             speech = out["speech"] or {}
-            if speech.get("outcome") == STT_OK and (speech.get("text") or "").strip():
-                out["ingest"] = self._to_knowledge(
-                    text=speech["text"],
-                    acquired=acquired,
-                    filename=filename,
-                    title=title
-                    or (out.get("metadata") or {}).get("fields", {}).get("title")
-                    or filename,
-                    domain=domain,
-                    embed=embed,
-                    reader_id=self._speech.id,
-                    reader_version=self._speech.VERSION,
-                    source="media_speech_to_text",
-                    extra_metadata={
-                        "model": speech.get("model"),
+            text = (speech.get("text") or "").strip()
+            if speech.get("outcome") == STT_OK and text:
+                out["text"] = text
+                emit_media_event(
+                    self._events,
+                    EVENT_TRANSCRIPT_ACQUIRED,
+                    {
+                        "asset_id": acquired.asset_id,
+                        "source_id": source_id,
+                        "source_url": source_url,
                         "strategy": "speech_to_text",
-                        "evidence_level": speech.get("evidence_level", 1),
+                        "model": speech.get("model"),
+                        "char_count": len(text),
                     },
                 )
+                if to_knowledge:
+                    out["ingest"] = self._to_knowledge(
+                        text=text,
+                        acquired=acquired,
+                        filename=filename,
+                        title=title
+                        or (out.get("metadata") or {}).get("fields", {}).get("title")
+                        or filename,
+                        domain=domain,
+                        embed=embed,
+                        reader_id=self._speech.id,
+                        reader_version=self._speech.VERSION,
+                        source="media_speech_to_text",
+                        source_id=source_id,
+                        extra_metadata={
+                            "model": speech.get("model"),
+                            "strategy": "speech_to_text",
+                            "evidence_level": speech.get("evidence_level", 1),
+                        },
+                    )
                 return out
+
+            if speech.get("capability_gap") or speech.get("outcome") != STT_OK:
+                emit_media_event(
+                    self._events,
+                    EVENT_SPEECH_TO_TEXT_GAP,
+                    {
+                        "asset_id": acquired.asset_id,
+                        "source_id": source_id,
+                        "source_url": source_url,
+                        "outcome": speech.get("outcome"),
+                        "reason": speech.get("reason"),
+                        "capability_gap": speech.get("capability_gap") or "speech_to_text",
+                    },
+                )
 
         note = _metadata_knowledge_note(
             filename=filename,
@@ -271,7 +396,7 @@ class MediaIngestor:
             demux_artifact=out.get("demux"),
             speech_artifact=out.get("speech"),
         )
-        if note.strip():
+        if note.strip() and to_knowledge:
             out["ingest"] = self._to_knowledge(
                 text=note,
                 acquired=acquired,
@@ -284,7 +409,11 @@ class MediaIngestor:
                 reader_id=(self._meta.id if self._meta else "media_metadata"),
                 reader_version=(self._meta.VERSION if self._meta else "1.0.0"),
                 source="media_metadata",
+                source_id=source_id,
             )
+        elif not to_knowledge and not out["text"]:
+            out["outcome"] = "empty"
+            out["reason"] = "no transcript text (speech_to_text gap or metadata-only)"
         return out
 
     def _to_knowledge(
@@ -299,6 +428,7 @@ class MediaIngestor:
         reader_id: str,
         reader_version: str,
         source: str,
+        source_id: str,
         extra_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         meta = {
@@ -309,23 +439,29 @@ class MediaIngestor:
             "reader_version": reader_version,
             "filename": filename,
             "media_kind": acquired.kind,
+            "source_id": source_id,
             **(extra_metadata or {}),
         }
+        # URI keyed by stable source_id so re-ingest of the same source dedupes (P13).
+        uri = acquired.source_uri or f"media:{source_id}"
         summary = self._knowledge.ingest_text(
             source=source,
             content=text,
-            uri=acquired.source_uri,
+            uri=uri,
             title=title,
             content_type="text/plain",
             metadata=meta,
             domain=domain,
             embed=embed,
+            asset_id=acquired.asset_id,
+            asset_version=acquired.asset_version,
         )
         return {
             "outcome": "ok",
             "document_id": summary.get("document_id"),
             "chunks": summary.get("chunks", 0),
             "deduped": bool(summary.get("deduped")),
+            "source_id": source_id,
         }
 
 

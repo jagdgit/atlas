@@ -958,8 +958,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         demux_reader=audio_demux_reader,
         speech_reader=speech_to_text_reader,
         source_fetcher=source_fetcher,
+        events=events,
         logger=get_logger("atlas.ingestion.media"),
     )
+    # Research Librarian video path (M.7): captions first, then Asset-first media fallback.
+    librarian._media = media_ingestor
+    librarian._events = events
     # Owner Knowledge Mission worker (Phase C · §C.8): continuously reads the User Archive
     # (code/docs/chats) into global knowledge + experience, then rebuilds the personal profile.
     worker_manager.register_worker_type(

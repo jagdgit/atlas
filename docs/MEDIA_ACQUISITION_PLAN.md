@@ -277,7 +277,7 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 - [x] **M.4** Transcript / Audio / Speech Readers (Asset-first)
 - [x] **M.5** Optional `speech_to_text` (Whisper)
 - [x] **M.6** Provider-agnostic source fetch → Asset
-- [ ] **M.7** Wiring + e2e gate → plan complete
+- [x] **M.7** Wiring + e2e gate → plan complete
 
 ---
 
@@ -304,8 +304,12 @@ vast majority of operator-reachable spoken content, without sacrificing P15 or m
 >
 > **M.6 ✅ DONE** (`SourceFetcher` — `local_file` / `http_direct` / `youtube_media` via
 > `ReaderStrategyChain`; robots never bypassed; blocked → operator hint; allowed HTTP media →
-> Asset → same M.3–M.5 Reader path; `atlas ingest <url>`). **Next: M.7 — Job/Research wiring +
-> e2e gate.**
+> Asset → same M.3–M.5 Reader path; `atlas ingest <url>`).
+>
+> **M.7 ✅ DONE / PLAN COMPLETE** (Librarian video path: captions → Asset-first media fallback;
+> `source_id` dedupe stamps; events `MediaMetadataAcquired` / `TranscriptAcquired` /
+> `SpeechToTextGap` / `MediaReadFailed`; gate `tests/test_media_acquisition_gate.py`; `OI-M0`
+> closed).
 >
 > Companion: [`OPEN_ITEMS.md`](OPEN_ITEMS.md) (`OI-M*`), roadmap P8/P11/P15,
 > `atlas/transcripts/youtube.py` + `YouTubePlugin`.

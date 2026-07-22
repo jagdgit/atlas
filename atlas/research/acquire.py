@@ -29,9 +29,10 @@ from atlas.research.classifier import (
     classify,
 )
 from atlas.research.reader import Document, Reader
-from atlas.transcripts.acquisition import AcquisitionRecord
+from atlas.transcripts.acquisition import REASON_ROBOTS_DISALLOWED, AcquisitionRecord
 
 if TYPE_CHECKING:
+    from atlas.ingestion.media import MediaIngestor
     from atlas.jobs.activity import ActivityRecorder
     from atlas.jobs.workspace import JobWorkspace
     from atlas.transcripts.youtube import TranscriptResult
@@ -235,6 +236,8 @@ class Librarian:
         *,
         reader: Reader | None = None,
         transcript_fetcher: TranscriptFetcher | None = None,
+        media_ingestor: "MediaIngestor | None" = None,
+        events: Any | None = None,
         max_documents: int = 12,
         open_access_first: bool = True,
         prefer_ar5iv: bool = True,
@@ -245,6 +248,8 @@ class Librarian:
         self._fetcher = fetcher
         self._reader = reader or Reader()
         self._transcript_fetcher = transcript_fetcher
+        self._media = media_ingestor
+        self._events = events
         self._max_documents = max_documents
         self._open_access_first = open_access_first
         self._prefer_ar5iv = prefer_ar5iv
@@ -453,75 +458,213 @@ class Librarian:
         return out
 
     def _acquire_video(self, source: Source, out: _OneOutcome) -> _OneOutcome:
-        """Media Reader Family · M.1: try transcript acquisition; never fabricate text."""
-        url = source.url or ""
-        out.stages.append("found")
-        if self._transcript_fetcher is None:
-            acq = AcquisitionRecord.not_attempted(
-                source_url=url,
-                reason="video source — transcript fetcher not configured",
-            )
-            out.skipped.append(
-                {
-                    "source_id": source.id,
-                    "url": url,
-                    "reason": acq.reason,
-                    "failure_code": "unsupported",
-                    "acquisition": acq.as_dict(),
-                }
-            )
-            return out
+        """Media Reader Family · M.1–M.7: captions first, then Asset-first media path.
 
-        try:
-            result = self._transcript_fetcher(url or source.id)
-        except Exception as exc:  # noqa: BLE001 - acquisition must never abort the batch
-            self._logger.debug("transcript fetch failed for %s: %s", url, exc)
-            acq = AcquisitionRecord.not_attempted(
-                source_url=url, reason=f"transcript fetch error: {exc}"
-            )
-            out.skipped.append(
-                {
+        Never fabricates transcript text. Provider logic stops once bytes/text exist;
+        Documents are stamped with a stable ``source_id`` (P13), not YouTube-specific
+        Knowledge branches.
+        """
+        from atlas.ingestion.media_events import (
+            EVENT_MEDIA_READ_FAILED,
+            EVENT_TRANSCRIPT_ACQUIRED,
+            emit_media_event,
+        )
+        from atlas.ingestion.source_fetch import stable_source_id
+
+        url = source.url or ""
+        source_id = stable_source_id(url or source.id)
+        out.stages.append("found")
+
+        # --- 1) Caption / transcript strategy chain (existing YouTube captions) ---
+        caption_entry: dict[str, Any]
+        if self._transcript_fetcher is not None:
+            try:
+                result = self._transcript_fetcher(url or source.id)
+            except Exception as exc:  # noqa: BLE001 - acquisition must never abort the batch
+                self._logger.debug("transcript fetch failed for %s: %s", url, exc)
+                acq = AcquisitionRecord.not_attempted(
+                    source_url=url, reason=f"transcript fetch error: {exc}"
+                )
+                caption_entry = {
                     "source_id": source.id,
                     "url": url,
                     "reason": str(exc),
                     "failure_code": "parse_error",
                     "acquisition": acq.as_dict(),
                 }
-            )
-            return out
+            else:
+                acq = result.acquisition or AcquisitionRecord.not_attempted(source_url=url)
+                caption_entry = {
+                    "source_id": source.id,
+                    "url": url,
+                    "reason": result.reason or acq.reason or result.outcome,
+                    "failure_code": acq.reason_code,
+                    "acquisition": acq.as_dict(),
+                }
+                if result.ok and (result.text or "").strip():
+                    title = result.title or source.title or source.url or source.id
+                    doc = self._reader.read_text(
+                        result.text,
+                        source_id=source.id,
+                        title=title,
+                        url=url,
+                        content_type="text/plain",
+                        metadata={
+                            "kind": "transcript",
+                            "source_id": source_id,
+                            "language": result.language,
+                            "strategy": "caption_tracks",
+                            "acquisition": acq.as_dict(),
+                        },
+                        reader_id="media_transcript",
+                    )
+                    out.documents.append(doc)
+                    out.stages.extend(
+                        ["downloaded", "read"] if doc.has_text else ["downloaded"]
+                    )
+                    emit_media_event(
+                        self._events,
+                        EVENT_TRANSCRIPT_ACQUIRED,
+                        {
+                            "source_url": url,
+                            "source_id": source_id,
+                            "strategy": "caption_tracks",
+                            "char_count": len(result.text or ""),
+                            "job_source_id": source.id,
+                        },
+                    )
+                    return out
 
-        acq = result.acquisition or AcquisitionRecord.not_attempted(source_url=url)
-        entry = {
-            "source_id": source.id,
-            "url": url,
-            "reason": result.reason or acq.reason or result.outcome,
-            "failure_code": acq.reason_code,
-            "acquisition": acq.as_dict(),
-        }
-        if not result.ok or not (result.text or "").strip():
-            if result.outcome == OUTCOME_BLOCKED:
+                # Robots / hard blocks stay blocked (honest failure, 0 docs).
+                if (
+                    result.outcome == OUTCOME_BLOCKED
+                    or acq.reason_code == REASON_ROBOTS_DISALLOWED
+                    or "robots" in (result.reason or "").lower()
+                ):
+                    out.blocked.append(caption_entry)
+                    emit_media_event(
+                        self._events,
+                        EVENT_MEDIA_READ_FAILED,
+                        {
+                            "source_url": url,
+                            "source_id": source_id,
+                            "reason": caption_entry["reason"],
+                            "reason_code": caption_entry["failure_code"],
+                            "job_source_id": source.id,
+                        },
+                    )
+                    return out
+        else:
+            caption_entry = {
+                "source_id": source.id,
+                "url": url,
+                "reason": "video source — transcript fetcher not configured",
+                "failure_code": "unsupported",
+                "acquisition": AcquisitionRecord.not_attempted(
+                    source_url=url,
+                    reason="video source — transcript fetcher not configured",
+                ).as_dict(),
+            }
+
+        # --- 2) Asset-first fallback (SourceFetcher → Metadata → speech/transcript) ---
+        if self._media is not None and url:
+            try:
+                media_out = self._media.ingest_url(url, embed=False, to_knowledge=False)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("media ingest failed for %s: %s", url, exc)
+                media_out = {
+                    "outcome": "error",
+                    "reason": str(exc),
+                    "text": "",
+                    "operator_hint": "upload a local file or a transcript asset",
+                }
+            text = (media_out.get("text") or "").strip()
+            if text:
+                title = source.title or media_out.get("filename") or url or source.id
+                strategy = "speech_to_text" if media_out.get("speech") else "media_asset"
+                doc = self._reader.read_text(
+                    text,
+                    source_id=source.id,
+                    title=title,
+                    url=url,
+                    content_type="text/plain",
+                    metadata={
+                        "kind": "transcript",
+                        "source_id": media_out.get("source_id") or source_id,
+                        "strategy": strategy,
+                        "asset_id": media_out.get("asset_id"),
+                        "media_kind": media_out.get("kind"),
+                    },
+                    reader_id="media_transcript",
+                )
+                out.documents.append(doc)
+                out.stages.extend(["downloaded", "read"] if doc.has_text else ["downloaded"])
+                emit_media_event(
+                    self._events,
+                    EVENT_TRANSCRIPT_ACQUIRED,
+                    {
+                        "source_url": url,
+                        "source_id": media_out.get("source_id") or source_id,
+                        "strategy": strategy,
+                        "char_count": len(text),
+                        "job_source_id": source.id,
+                    },
+                )
+                return out
+
+            outcome = media_out.get("outcome") or "skipped"
+            entry = {
+                "source_id": source.id,
+                "url": url,
+                "reason": media_out.get("reason")
+                or (media_out.get("fetch") or {}).get("reason")
+                or caption_entry.get("reason")
+                or outcome,
+                "failure_code": (media_out.get("fetch") or {}).get("reason_code")
+                or caption_entry.get("failure_code")
+                or outcome,
+                "operator_hint": media_out.get("operator_hint"),
+                "acquisition": caption_entry.get("acquisition"),
+                "media": {
+                    k: media_out.get(k)
+                    for k in ("outcome", "fetch", "speech", "source_id")
+                    if media_out.get(k) is not None
+                },
+            }
+            if outcome == "blocked" or entry["failure_code"] == REASON_ROBOTS_DISALLOWED:
                 out.blocked.append(entry)
             else:
                 out.skipped.append(entry)
+            emit_media_event(
+                self._events,
+                EVENT_MEDIA_READ_FAILED,
+                {
+                    "source_url": url,
+                    "source_id": media_out.get("source_id") or source_id,
+                    "reason": entry["reason"],
+                    "reason_code": entry["failure_code"],
+                    "operator_hint": entry.get("operator_hint"),
+                    "job_source_id": source.id,
+                },
+            )
             return out
 
-        title = result.title or source.title or source.url or source.id
-        doc = self._reader.read_text(
-            result.text,
-            source_id=source.id,
-            title=title,
-            url=url,
-            content_type="text/plain",
-            metadata={
-                "kind": "video_transcript",
-                "video_id": result.video_id,
-                "language": result.language,
-                "acquisition": acq.as_dict(),
+        # --- 3) No media path — report caption failure honestly ---
+        if caption_entry.get("failure_code") == REASON_ROBOTS_DISALLOWED:
+            out.blocked.append(caption_entry)
+        else:
+            out.skipped.append(caption_entry)
+        emit_media_event(
+            self._events,
+            EVENT_MEDIA_READ_FAILED,
+            {
+                "source_url": url,
+                "source_id": source_id,
+                "reason": caption_entry.get("reason"),
+                "reason_code": caption_entry.get("failure_code"),
+                "job_source_id": source.id,
             },
-            reader_id="youtube_transcript",
         )
-        out.documents.append(doc)
-        out.stages.extend(["downloaded", "read"] if doc.has_text else ["downloaded"])
         return out
 
     def _emit_activity(

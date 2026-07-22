@@ -190,8 +190,9 @@ def test_video_source_with_blocked_transcript_fetcher():
     lib = Librarian(FakeFetcher(), transcript_fetcher=fetch)
     result = lib.acquire([_src("s1", "https://www.youtube.com/watch?v=abcdefghijk")])
     assert result.documents == []
-    assert result.skipped
-    assert result.skipped[0]["acquisition"]["reason_code"] == REASON_ROBOTS_DISALLOWED
+    assert result.blocked  # robots → blocked (honest failure, 0 fabricated docs)
+    assert result.blocked[0]["acquisition"]["reason_code"] == REASON_ROBOTS_DISALLOWED
+    assert result.skipped == []
 
 
 def test_video_source_with_ok_transcript_becomes_document():
@@ -218,7 +219,9 @@ def test_video_source_with_ok_transcript_becomes_document():
     result = lib.acquire([_src("s1", "https://www.youtube.com/watch?v=abcdefghijk")])
     assert result.stats["read"] == 1
     assert "0.3%/day" in result.documents[0].text
-    assert result.documents[0].reader_id == "youtube_transcript"
+    assert result.documents[0].reader_id == "media_transcript"
+    assert result.documents[0].metadata.get("source_id") == "youtube:abcdefghijk"
+    assert result.documents[0].metadata.get("kind") == "transcript"
 
 
 def test_document_cap_limits_downloads():
