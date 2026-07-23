@@ -1,10 +1,11 @@
 # Browser as Media Acquisition — Discussion Plan
 
-> **Status:** IN SCOPE of Media Orchestration plan · **Required** · **Date:** 2026-07-22  
-> **Implement after RH.5 + MO.5** (same roadmap — not a side quest).  
+> **Status:** BA.1 + BA.1b + BA.v2 DONE · BA.v2+ deferred ·
+> **Date:** 2026-07-22  
 > **Does not** reopen Media Reader MD1–MD9. Browser produces **Assets**; Readers produce Knowledge.
 >
-> Parent checklist: [`MEDIA_ORCHESTRATION_PLAN.md`](MEDIA_ORCHESTRATION_PLAN.md) (§4 ship order).
+> Parent: [`MEDIA_ORCHESTRATION_PLAN.md`](MEDIA_ORCHESTRATION_PLAN.md) ·
+> Next phase: [`MEDIA_ACQUISITION_CLOSURE_PLAN.md`](MEDIA_ACQUISITION_CLOSURE_PLAN.md)
 
 ---
 
@@ -30,37 +31,52 @@ Research                      →  one Knowledge consumer (not media owner)
 | **BA2** | Browser outputs **Assets** (and metadata), never Knowledge |
 | **BA3** | Robots / policy / ToS still gate obtain — browser is not a bypass |
 | **BA4** | Provider names stay in the strategy journal; user step remains **Learn from media** |
-| **BA5** | Part of **this** media.learn roadmap (required). Sequence: after RH.5 → MO.5, before MO.3 | Not optional / not a separate product |
-| **BA6** | **Browser v1 (required):** open page → extract metadata → **DOM captions** → Asset. **No** downloads, clicks, or login | — |
-| **BA7** | **Browser v2 (later, same plan family):** policy-gated media obtain → Asset | After v1 proves Browser → Asset |
-### Strategy order inside `media.learn` (target)
+| **BA5** | Part of media.learn roadmap (required) | — |
+| **BA6** | **Browser v1:** open → metadata → DOM captions → **Asset** (no download/click/login) |
+| **BA7** | **Browser v2:** policy-gated media obtain → Video/Audio Asset | After BA.1b |
+| **BA8** | **BA.1b (locked):** On successful browser open, **always** create an Asset — transcript if captions found, else **metadata Asset** at minimum. Strategy “ran” ≠ Asset produced. |
 
-1. Official / polite captions  
-2. Browser-assisted (v1: metadata + DOM captions → Asset)  
-3. Local media + Whisper (when Asset exists)  
-4. Interactive recovery → **waiting** (operator upload)
+### Strategy order inside `media.learn`
 
----
-
-## 3. Implementation slices (after RH.5 / MO.5)
-
-| Slice | Scope |
-|-------|--------|
-| **BA.1** | Spec + hermetic fakes: browser caption extract → Asset (no live YouTube in CI) |
-| **BA.2** | Wire as automatic strategy in `media.learn` |
-| **BA.3** | Gate: captions via browser DOM when watch-page scrape blocked but DOM allows (policy permitting) |
-| **BA.4+** | Browser v2 media obtain (separate decision) |
+1. Official / polite captions (when configured — executable, not suggestion-only)  
+2. Browser-assisted (v1: metadata + DOM captions → **Asset**)  
+3. Browser v2 / SourceFetch media obtain (when implemented + policy allows)  
+4. Local media + Whisper (when Asset exists + STT ready)  
+5. Interactive recovery → **waiting**
 
 ---
 
-## 4. Checklist
+## 3. Version 4 finding (BA.1 incomplete)
 
-- [x] Freeze BA1–BA7  
-- [x] Wait for RH.5 + MO.5  
-- [x] **BA.1** Browser DOM captions strategy + `media.learn` wiring (`tests/test_browser_captions_ba1.py`)  
-- [ ] **BA.4+** Browser v2 media obtain (separate)  
+| Shipped | Gap |
+|---------|-----|
+| `browser_dom_captions` strategy invoked from `media.learn` | Log shows strategy tried but **no Media Asset created** |
+| Hermetic caption-text success path | Open → search DOM → empty → return **without** metadata Asset |
+
+**BA.1b** closes BA2/BA6 properly.
 
 ---
 
-> Companions: [`MEDIA_REPORT_HONESTY_AMENDMENT.md`](MEDIA_REPORT_HONESTY_AMENDMENT.md),
-> [`MEDIA_ORCHESTRATION_PLAN.md`](MEDIA_ORCHESTRATION_PLAN.md).
+## 4. Implementation slices
+
+| Slice | Scope | Status |
+|-------|--------|--------|
+| **BA.1** | Strategy + wiring + hermetic caption text | ✅ Done |
+| **BA.1b** | Register transcript **or** metadata Asset; journal `asset_produced` / `no_caption_nodes_found` + `asset_id` | ⬜ Next |
+| **BA.2** | Gate: policy-allowing DOM captions when HTTP scrape blocked | partial / revisit with BA.1b |
+| **BA.v2** | Policy-gated media obtain → bytes Asset | ✅ Opt-in yt-dlp |
+| **BA.v2+** | Progress, resume, auth sessions | later |
+
+---
+
+## 5. Checklist
+
+- [x] Freeze BA1–BA8  
+- [x] **BA.1** Strategy wiring  
+- [x] **BA.1b** Asset emission (metadata minimum) — locked yes  
+- [x] **BA.v2** Media obtain (after official captions API)  
+
+---
+
+> Companions: [`MEDIA_ACQUISITION_CLOSURE_PLAN.md`](MEDIA_ACQUISITION_CLOSURE_PLAN.md),
+> [`MEDIA_REPORT_HONESTY_AMENDMENT.md`](MEDIA_REPORT_HONESTY_AMENDMENT.md).

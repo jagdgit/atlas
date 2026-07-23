@@ -483,7 +483,9 @@ class JobService:
             result["overall_confidence"] = report.get("overall_confidence")
         # Prefer research-pipeline confidence from workspace evidence when present
         # (C4/C6) — the scientific report written during the research step.
-        self._enrich_from_research(job_id, result)
+        # Do not clobber Learning Report status (LR*) with research confidence.
+        if (result.get("report_sections") or {}).get("report_kind") != "learning":
+            self._enrich_from_research(job_id, result)
         usage = self._usage_for_job(job_id, steps)
         if usage:
             result["usage"] = usage
@@ -745,10 +747,10 @@ class JobService:
                                 "evidence_level": 3,
                             }
                         )
-        # If research already wrote a full report and we have no claims to
-        # re-render, keep that markdown rather than clobbering it — unless this
-        # job stopped at acquire / interactive recovery (RH.5).
+        # Acquire wait/fail (RH*) first; else Learning Report for successful media.learn (LR*).
         termination = self._acquire_termination_from_steps(steps)
+        if termination is None:
+            termination = self._learning_termination_from_steps(steps)
         if not claims and termination is None:
             existing = self._existing_research_report(job_id)
             if existing is not None:
@@ -985,14 +987,120 @@ class JobService:
                 "status": status,
                 "reason": reason,
                 "reason_code": acq.get("reason_code") or reason,
-                "knowledge_produced": 0,
+                "knowledge_produced": int(
+                    result.get("knowledge_produced")
+                    if result.get("knowledge_produced") is not None
+                    else (acq.get("knowledge_produced") or 0)
+                ),
                 "reasoning": "not_started",
                 "verification": "not_executed",
-                "waiting_for": result.get("waiting_for") or "media_asset",
+                "waiting_for": result.get("waiting_for") or (
+                    "media_asset" if not acq.get("asset_id") else "speech_to_text"
+                ),
                 "suggested_next_strategies": list(suggestions) if suggestions else None,
                 "speech_to_text_status": result.get("speech_to_text_status")
                 or acq.get("speech_to_text_status"),
                 "strategies_tried": strategies,
+                "readiness": result.get("readiness"),
+                "stages": result.get("stages"),
+                "audience": "job",
+            }
+        return None
+
+    def _learning_termination_from_steps(
+        self, steps: list[JobStep]
+    ) -> dict[str, Any] | None:
+        """Build Learning Report termination for successful media.learn (LR1)."""
+        from atlas.reports.generator import (
+            LEARNING_STATUS_COMPLETE,
+            LEARNING_STATUS_PARTIAL,
+            _learning_status_from_stages,
+        )
+
+        for step in reversed(steps):
+            if step.status != STEP_DONE:
+                continue
+            if step.intent not in ("media_learn",):
+                # Also accept extras shaped like media.learn even if intent label differs.
+                result_probe = step.result if isinstance(step.result, dict) else {}
+                if result_probe.get("orchestrator") != "media.learn" and not result_probe.get(
+                    "stages"
+                ):
+                    continue
+            result = step.result if isinstance(step.result, dict) else {}
+            if result.get("interactive_recovery"):
+                continue
+            if result.get("outcome") not in ("ok", None) and not result.get("stages"):
+                # Prefer explicit ok; allow stages-only payloads.
+                if result.get("outcome") not in ("ok", "waiting"):
+                    continue
+            if result.get("outcome") == "waiting":
+                continue
+
+            stages = result.get("stages") if isinstance(result.get("stages"), dict) else {}
+            acq = result.get("acquisition") if isinstance(result.get("acquisition"), dict) else {}
+            asset_id = result.get("asset_id") or acq.get("asset_id")
+            if not stages and not asset_id and result.get("orchestrator") != "media.learn":
+                continue
+            if not stages and asset_id:
+                stages = {
+                    "acquire": "success",
+                    "metadata": "success",
+                    "transcript": "waiting",
+                    "speech": "waiting",
+                    "knowledge": (
+                        "success"
+                        if int(result.get("knowledge_produced") or 0) > 0
+                        else "empty"
+                    ),
+                }
+
+            learning_status = _learning_status_from_stages(stages)
+            if stages.get("speech") == "success" or stages.get("transcript") == "success":
+                if stages.get("knowledge") == "success":
+                    learning_status = LEARNING_STATUS_COMPLETE
+                else:
+                    learning_status = LEARNING_STATUS_PARTIAL
+            elif learning_status not in (LEARNING_STATUS_PARTIAL, LEARNING_STATUS_COMPLETE):
+                learning_status = LEARNING_STATUS_PARTIAL
+
+            metadata_fields: dict[str, Any] = {}
+            media = result.get("media") if isinstance(result.get("media"), dict) else {}
+            meta = media.get("metadata") if isinstance(media.get("metadata"), dict) else {}
+            fields = meta.get("fields") if isinstance(meta.get("fields"), dict) else {}
+            if fields:
+                metadata_fields = {
+                    k: v for k, v in fields.items() if v not in (None, "", [])
+                }
+
+            strategies = result.get("strategies") or acq.get("strategies_tried") or []
+            suggestions = list(result.get("suggested_next_strategies") or [])
+            if learning_status == LEARNING_STATUS_PARTIAL and not suggestions:
+                suggestions = ["enable_speech_to_text", "upload_transcript"]
+
+            return {
+                "mode": "learning",
+                "stage": "learn",
+                "status": learning_status.lower(),
+                "learning_status": learning_status,
+                "reason": "media_learn_completed",
+                "reason_code": "media_learn_completed",
+                "knowledge_produced": int(result.get("knowledge_produced") or 0),
+                "reasoning": "not_started",
+                "verification": "not_executed",
+                "stages": stages,
+                "asset_id": asset_id,
+                "asset_kind": result.get("asset_kind")
+                or acq.get("asset_kind")
+                or media.get("kind"),
+                "source": result.get("source") or acq.get("source_url") or "",
+                "title": result.get("title"),
+                "metadata_fields": metadata_fields,
+                "strategies_tried": strategies,
+                "suggested_next_strategies": suggestions,
+                "speech_to_text_status": result.get("speech_to_text_status")
+                or acq.get("speech_to_text_status"),
+                "readiness": result.get("readiness"),
                 "audience": "job",
             }
         return None

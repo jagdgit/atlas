@@ -275,6 +275,11 @@ plugins:
     semantic_scholar_api_key: ""  # optional; keyless works but is rate-limited
   youtube:                  # S18a: video transcripts (L1 evidence)
     languages: [en]
+    api_key: ""             # OI-M1: YouTube Data API v3 key for official captions
+    media_obtain_enabled: false  # BA.v2: opt-in yt-dlp media obtain (policy-gated)
+    media_obtain_binary: yt-dlp
+    media_obtain_format: bestaudio/best
+    media_obtain_timeout: 300
   git:                      # S20a: read-only local VCS inspection (network-free)
     git_binary: git
     timeout: 15             # hard wall-clock per git invocation

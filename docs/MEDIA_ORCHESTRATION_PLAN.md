@@ -1,14 +1,10 @@
 # Media Orchestration — `media.learn`
 
 > **Status:** MO.0–MO.5 + RH.5–RH.8 + BA.1 + MO.3 DONE · **Date:** 2026-07-22  
-> Browser v2 (policy-gated media download) remains later.  
-> **Open item:** OI-MO0 · Job report honesty detail:
-> [`MEDIA_REPORT_HONESTY_AMENDMENT.md`](MEDIA_REPORT_HONESTY_AMENDMENT.md) · Browser v1 detail:
-> [`MEDIA_BROWSER_ACQUISITION_PLAN.md`](MEDIA_BROWSER_ACQUISITION_PLAN.md)  
->
-> **Browser is in scope for this plan** — required for a complete `media.learn` acquisition
-> spine (Browser → Asset → Readers). It is sequenced after report honesty, not optional and
-> not a separate product track.
+> **Next (acquisition closure):** BA.1b Asset emission · MO.6 journal outcomes ·
+> Capability Readiness Matrix · Official captions API · Browser v2 — see
+> [`MEDIA_ACQUISITION_CLOSURE_PLAN.md`](MEDIA_ACQUISITION_CLOSURE_PLAN.md).  
+> Report honesty / orchestrator shape: **stop investing** — validated by Version 4.
 
 ---
 
@@ -208,8 +204,10 @@ No other product ambiguities block coding. Naming (`MediaLearnOrchestrator` vs w
 - [x] **MO.4** Job gate (hermetic)  
 - [x] **RH.5–RH.8** Job report honesty (required; see amendment)  
 - [x] **MO.5** Speech/fetch journal clarity  
-- [x] **BA.1–BA.3** Browser → Asset v1 (required in this plan)  
+- [x] **BA.1–BA.3** Browser strategy wiring (Asset emission = **BA.1b**, closure plan)  
 - [x] **MO.3** Research consumes shared orchestrator  
+- [ ] **MO.6** Journal outcome clarity (`asset_produced` / precise reason_codes)  
+- [ ] **BA.1b** / readiness / official API / Browser v2 — [`MEDIA_ACQUISITION_CLOSURE_PLAN.md`](MEDIA_ACQUISITION_CLOSURE_PLAN.md)  
 
 ---
 

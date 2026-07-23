@@ -99,11 +99,22 @@ _METHODOLOGY_ACQUIRE_WAITING = (
     "was performed because no media was acquired."
 )
 
+_METHODOLOGY_LEARNING = (
+    "Media was acquired into a registered Asset. Media Readers extracted metadata "
+    "(and transcript/speech when available). Knowledge was updated from what Readers "
+    "produced. Research verification, Evidence Budget, and convergence assessment "
+    "did not run — this is a Learning Report, not a Research verification report."
+)
+
 _SUMMARY_SYSTEM = (
     "You are Atlas, writing the prose sections of an evidence-backed research report. "
     "Be precise and non-committal beyond the evidence. Never invent sources or numbers; "
     "use only the claims and confidences provided."
 )
+
+# Learning-status labels (LR3) — not Verification confidence levels.
+LEARNING_STATUS_PARTIAL = "PARTIAL"
+LEARNING_STATUS_COMPLETE = "COMPLETE"
 
 
 class ReportGenerator:
@@ -126,11 +137,19 @@ class ReportGenerator:
         pipeline: dict[str, Any] | None = None,
         termination: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        termination = dict(termination or {})
+        if str(termination.get("mode") or "") == "learning":
+            return self._generate_learning(
+                objective,
+                termination,
+                answer=answer,
+                notes=notes,
+            )
+
         # Prefer findings when present (A3B.9); fall back to claims.
         body = list(findings) if findings else list(claims or [])
         sources = list(sources or [])
         reasoning = dict(reasoning or {})
-        termination = dict(termination or {})
         acquire_stop = (
             str(termination.get("stage") or "") == "acquire"
             and not body
@@ -161,6 +180,7 @@ class ReportGenerator:
                 "reasoning": termination.get("reasoning") or "not_started",
                 "verification": termination.get("verification") or "not_executed",
                 "waiting_for": termination.get("waiting_for"),
+                "stages": termination.get("stages"),
             }
             methodology = (
                 _METHODOLOGY_ACQUIRE_WAITING
@@ -175,6 +195,7 @@ class ReportGenerator:
                 speech_status=termination.get("speech_to_text_status"),
                 audience=audience,
                 status=term_status,
+                readiness=termination.get("readiness"),
             )
             if term_status == "waiting":
                 default_answer = (
@@ -250,6 +271,114 @@ class ReportGenerator:
             "used_findings": bool(findings),
             "reasoning": reasoning,
             "termination": termination or None,
+        }
+        report["markdown"] = self._render_markdown(objective, sections, overall)
+        return report
+
+    def _generate_learning(
+        self,
+        objective: str,
+        termination: dict[str, Any],
+        *,
+        answer: str = "",
+        notes: str = "",
+    ) -> dict[str, Any]:
+        """Learning Report product (LR1–LR7) — not Research verification."""
+        stages = dict(termination.get("stages") or {})
+        kp = int(termination.get("knowledge_produced") or 0)
+        learning_status = str(
+            termination.get("learning_status")
+            or _learning_status_from_stages(stages)
+        )
+        overall = learning_status  # Job/UI “overall_confidence” slot = learning status
+        observations = list(termination.get("observations") or [])
+        if not observations:
+            observations = _default_learning_observations(termination)
+
+        pending = _pending_capabilities(stages, termination.get("speech_to_text_status"))
+        confidence_block: dict[str, Any] = {
+            "overall": overall,
+            "learning_status": learning_status,
+            "result": "learning",
+            "stage": "learn",
+            "status": str(termination.get("status") or learning_status.lower()),
+            "stages": stages,
+            "knowledge_produced": kp,
+            "asset_id": termination.get("asset_id"),
+            "asset_kind": termination.get("asset_kind"),
+            "reasoning": "not_started",
+            "verification": "not_executed",
+            "pending_capabilities": pending,
+        }
+
+        from atlas.transcripts.acquisition import format_next_action
+
+        if pending:
+            next_action = format_next_action(
+                termination.get("suggested_next_strategies")
+                or _default_learning_suggestions(pending),
+                speech_status=termination.get("speech_to_text_status"),
+                audience="job",
+                status="waiting",
+                readiness=termination.get("readiness"),
+            )
+            # Soften: enrichment, not acquire failure.
+            next_action = (
+                "Learning succeeded for available Readers. Optional enrichment:\n\n"
+                + next_action.split("\n\n", 1)[-1]
+                if "Continue after" in next_action or "Waiting" in next_action
+                else next_action
+            )
+        else:
+            next_action = (
+                "No pending media capabilities for this source — "
+                "transcript/speech paths completed or were not applicable."
+            )
+
+        default_answer = answer.strip() or _learning_answer(termination, kp, learning_status)
+        executive = _learning_executive_summary(objective, termination, kp, learning_status)
+        limitations = (
+            "Verification and research convergence were not part of this job. "
+            "Spoken content remains unlearned while transcript/speech stages are waiting."
+            if learning_status == LEARNING_STATUS_PARTIAL
+            else "Verification and research convergence were not part of this job."
+        )
+
+        sections: dict[str, Any] = {
+            "answer": default_answer,
+            "confidence": confidence_block,
+            "methodology": _METHODOLOGY_LEARNING,
+            "funnel": {},
+            "pipeline_trace": list(termination.get("strategies_tried") or []),
+            "evidence": [],
+            "observations": observations,
+            "parameters": [],
+            "references": _learning_references(termination),
+            "conflicting_views": [],
+            "weakly_supported": [],
+            "patterns": [],
+            "opportunities": [],
+            "hypotheses": [],
+            "limitations": limitations,
+            "next_research": next_action,
+            "next_section_title": "Next Action",
+            "termination": termination,
+            "report_kind": "learning",
+            "executive_summary": executive,
+            "pending_capabilities": pending,
+            "stages": stages,
+        }
+        if notes and notes.strip() and notes.strip() not in default_answer:
+            sections["answer"] = f"{default_answer}\n\n{notes.strip()[:600]}"
+
+        report = {
+            "objective": objective,
+            "overall_confidence": overall,
+            "report_kind": "learning",
+            "sections": sections,
+            "used_findings": False,
+            "reasoning": {},
+            "termination": termination,
         }
         report["markdown"] = self._render_markdown(objective, sections, overall)
         return report
@@ -569,6 +698,14 @@ class ReportGenerator:
     def _render_markdown(
         self, objective: str, sections: dict[str, Any], overall: str
     ) -> str:
+        kind = sections.get("report_kind") or (
+            "learning"
+            if (sections.get("confidence") or {}).get("result") == "learning"
+            else "research"
+        )
+        if kind == "learning":
+            return self._render_learning_markdown(objective, sections, overall)
+
         lines = [f"# Research Report: {objective.strip()}", ""]
         lines += ["## Executive Summary", sections["executive_summary"], ""]
         lines += ["## Answer", sections["answer"], ""]
@@ -589,6 +726,14 @@ class ReportGenerator:
             if conf.get("waiting_for"):
                 lines.append(
                     f"Waiting For: **{str(conf['waiting_for']).replace('_', ' ').title()}**"
+                )
+            stages = conf.get("stages") or {}
+            if isinstance(stages, dict) and stages:
+                lines.append(
+                    "Stages: "
+                    + ", ".join(
+                        f"**{k}**={v}" for k, v in stages.items()
+                    )
                 )
             lines += [
                 f"Knowledge Produced: **{conf.get('knowledge_produced', 0)}**",
@@ -734,6 +879,227 @@ class ReportGenerator:
         next_title = sections.get("next_section_title") or "Next Research"
         lines += [f"## {next_title}", sections["next_research"], ""]
         return "\n".join(lines).strip() + "\n"
+
+    def _render_learning_markdown(
+        self, objective: str, sections: dict[str, Any], overall: str
+    ) -> str:
+        conf = sections.get("confidence") or {}
+        stages = conf.get("stages") or sections.get("stages") or {}
+        lines = [f"# Learning Report: {objective.strip()}", ""]
+        lines += ["## Executive Summary", sections.get("executive_summary") or "", ""]
+        lines += ["## Answer", sections.get("answer") or "", ""]
+        lines += [
+            "## Learning Status",
+            f"Status: **{overall}**",
+            f"Knowledge Produced: **{conf.get('knowledge_produced', 0)}**",
+            "Verification: **Not Executed** (learning job)",
+            "",
+        ]
+        # LS1: operator-facing capability summary (why PARTIAL / COMPLETE).
+        lines.extend(_learning_capability_summary_lines(stages))
+        lines.append("")
+        if isinstance(stages, dict) and stages:
+            lines.append("### Stages")
+            for key in ("acquire", "metadata", "transcript", "speech", "knowledge"):
+                if key in stages:
+                    lines.append(f"- **{key}**: {stages[key]}")
+            lines.append("")
+        pending = sections.get("pending_capabilities") or conf.get("pending_capabilities") or []
+        if pending:
+            lines.append("### Pending capabilities")
+            for p in pending:
+                lines.append(f"- {p}")
+            lines.append("")
+
+        lines += ["## Methodology", sections.get("methodology") or "", ""]
+
+        lines.append("## Observations")
+        observations = sections.get("observations") or []
+        if observations:
+            for obs in observations:
+                if isinstance(obs, dict):
+                    label = obs.get("label") or obs.get("key") or "fact"
+                    value = obs.get("value") or obs.get("detail") or ""
+                    lines.append(f"- **{label}**: {value}")
+                else:
+                    lines.append(f"- {obs}")
+        else:
+            lines.append("_No metadata observations recorded._")
+        lines.append("")
+
+        refs = sections.get("references") or []
+        lines.append("## References")
+        if refs:
+            for i, r in enumerate(refs, start=1):
+                if isinstance(r, dict):
+                    lines.append(
+                        f"{i}. {r.get('title') or r.get('id') or 'source'} "
+                        f"({r.get('url') or r.get('id') or ''})".rstrip()
+                    )
+                else:
+                    lines.append(f"{i}. {r}")
+        else:
+            lines.append("_No media sources cited._")
+        lines.append("")
+
+        trace = sections.get("pipeline_trace") or []
+        if trace:
+            lines.append("## Strategy Journal")
+            for row in trace:
+                if not isinstance(row, dict):
+                    continue
+                name = row.get("strategy") or row.get("name") or "?"
+                outcome = row.get("outcome") or "?"
+                reason = row.get("reason_code") or row.get("reason") or ""
+                aid = row.get("asset_id") or ""
+                extra = f" asset_id={aid}" if aid else ""
+                lines.append(f"- **{name}**: {outcome}" + (f" ({reason})" if reason else "") + extra)
+            lines.append("")
+
+        lines += ["## Limitations", sections.get("limitations") or "", ""]
+        next_title = sections.get("next_section_title") or "Next Action"
+        lines += [f"## {next_title}", sections.get("next_research") or "", ""]
+        return "\n".join(lines).strip() + "\n"
+
+
+def _learning_status_from_stages(stages: dict[str, Any]) -> str:
+    speech = str(stages.get("speech") or "")
+    transcript = str(stages.get("transcript") or "")
+    if speech == "success" or transcript == "success":
+        if stages.get("knowledge") == "success":
+            return LEARNING_STATUS_COMPLETE
+    if stages.get("knowledge") == "success" or stages.get("acquire") == "success":
+        return LEARNING_STATUS_PARTIAL
+    return LEARNING_STATUS_PARTIAL
+
+
+def _learning_capability_mark(state: str) -> str:
+    s = (state or "").lower()
+    if s == "success":
+        return "✓ Learned"
+    if s == "waiting":
+        return "Pending"
+    if s in ("skipped", "empty"):
+        return "Not started" if s == "skipped" else "Empty"
+    if s == "failed":
+        return "Failed"
+    return (state or "unknown").replace("_", " ").title()
+
+
+def _learning_capability_summary_lines(stages: dict[str, Any] | None) -> list[str]:
+    """LS1 — compact Metadata / Transcript / Speech / Knowledge summary."""
+    stages = stages or {}
+    rows = [
+        ("Metadata", stages.get("metadata")),
+        ("Transcript", stages.get("transcript")),
+        ("Speech", stages.get("speech")),
+        ("Knowledge", stages.get("knowledge")),
+    ]
+    lines = ["| Capability | State |", "| --- | --- |"]
+    for label, state in rows:
+        lines.append(f"| {label} | {_learning_capability_mark(str(state or ''))} |")
+    return lines
+
+
+def _pending_capabilities(
+    stages: dict[str, Any], speech_status: Any
+) -> list[str]:
+    pending: list[str] = []
+    if str(stages.get("transcript") or "") in ("waiting", "skipped", ""):
+        if str(stages.get("transcript") or "") == "waiting":
+            pending.append("transcript")
+    if str(stages.get("speech") or "") == "waiting":
+        pending.append("speech_to_text")
+        if speech_status and speech_status != "ready":
+            pending.append(f"speech_to_text status: {speech_status}")
+    # Dedupe preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in pending:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _default_learning_suggestions(pending: list[str]) -> list[str]:
+    out: list[str] = []
+    joined = " ".join(pending).lower()
+    if "speech" in joined:
+        out.append("enable_speech_to_text")
+    if "transcript" in joined:
+        out.append("upload_transcript")
+    return out or ["enable_speech_to_text", "upload_transcript"]
+
+
+def _default_learning_observations(termination: dict[str, Any]) -> list[dict[str, str]]:
+    obs: list[dict[str, str]] = []
+    source = termination.get("source") or termination.get("source_url")
+    if source:
+        obs.append({"label": "source_url", "value": str(source)})
+    if termination.get("asset_id"):
+        obs.append({"label": "asset_id", "value": str(termination["asset_id"])})
+    if termination.get("asset_kind"):
+        obs.append({"label": "asset_kind", "value": str(termination["asset_kind"])})
+    for key, value in (termination.get("metadata_fields") or {}).items():
+        if value not in (None, "", []):
+            obs.append({"label": str(key), "value": str(value)})
+    kp = termination.get("knowledge_produced")
+    if kp is not None:
+        obs.append({"label": "knowledge_produced", "value": str(kp)})
+    return obs
+
+
+def _learning_references(termination: dict[str, Any]) -> list[dict[str, Any]]:
+    source = termination.get("source") or termination.get("source_url")
+    if not source:
+        return []
+    return [
+        {
+            "id": termination.get("asset_id") or source,
+            "title": termination.get("title") or source,
+            "url": source,
+            "evidence_level": 1,
+        }
+    ]
+
+
+def _learning_answer(
+    termination: dict[str, Any], kp: int, learning_status: str
+) -> str:
+    source = termination.get("source") or termination.get("source_url") or "media"
+    aid = termination.get("asset_id") or "unknown"
+    if learning_status == LEARNING_STATUS_COMPLETE:
+        return (
+            f"Learned from '{source}' (asset_id={aid}). "
+            f"Knowledge produced: {kp}. Transcript/speech paths completed."
+        )
+    return (
+        f"Learned from '{source}' (asset_id={aid}). "
+        f"Knowledge produced: {kp} from metadata. "
+        "Transcript and speech content are still pending."
+    )
+
+
+def _learning_executive_summary(
+    objective: str,
+    termination: dict[str, Any],
+    kp: int,
+    learning_status: str,
+) -> str:
+    source = termination.get("source") or termination.get("source_url") or "the media"
+    if learning_status == LEARNING_STATUS_COMPLETE:
+        return (
+            f"Objective: {objective.strip()}. Atlas acquired {source}, ran Media Readers, "
+            f"and ingested Knowledge ({kp}). Learning status: {learning_status}. "
+            "Verification was not executed (learning job)."
+        )
+    return (
+        f"Objective: {objective.strip()}. Atlas successfully acquired the media and "
+        f"ingested metadata into the Knowledge Base (knowledge_produced={kp}). "
+        "Speech content has not yet been learned because transcript/speech processing "
+        f"has not completed. Learning status: {learning_status}."
+    )
 
 
 def _msg(role: str, content: str):

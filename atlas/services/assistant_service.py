@@ -770,19 +770,42 @@ class AssistantService:
             "suggested_next_strategies": data.get("suggested_next_strategies") or [],
             "speech_to_text_status": data.get("speech_to_text_status"),
             "interactive_recovery": bool(data.get("interactive_recovery")),
-            "waiting_for": "media_asset",
+            "waiting_for": data.get("waiting_for"),
+            "readiness": data.get("readiness"),
+            "stages": data.get("stages"),
+            "knowledge_produced": int(data.get("knowledge_produced") or 0),
+            "outcome": data.get("outcome"),
+            "source": data.get("source") or source,
+            "title": data.get("title"),
+            "media": data.get("media"),
+            "asset_id": (data.get("acquisition") or {}).get("asset_id")
+            if isinstance(data.get("acquisition"), dict)
+            else None,
+            "asset_kind": (data.get("acquisition") or {}).get("asset_kind")
+            if isinstance(data.get("acquisition"), dict)
+            else None,
             "orchestrator": "media.learn",
         }
 
         if data.get("outcome") == "ok":
             text = (data.get("text") or "").strip()
             title = data.get("title") or source
+            stages = data.get("stages") or {}
+            stage_line = ""
+            if stages:
+                stage_line = (
+                    " Stages: "
+                    + ", ".join(f"{k}={v}" for k, v in stages.items())
+                    + "."
+                )
             summary = self._responder.compose(
                 _WEB_SUMMARY_SYSTEM,
                 f"Summarize what was learned from this media ({title}):\n\n{text[:4000]}",
                 fallback=(
-                    f"Learned from '{title}' ({len(text)} characters). "
-                    f"Strategies: {len(strategies)}."
+                    f"Learned from '{title}' "
+                    f"(knowledge_produced={extras['knowledge_produced']}, "
+                    f"{len(text)} characters). "
+                    f"Strategies: {len(strategies)}.{stage_line}"
                 ),
             )
             return _Outcome(answer=summary, extras=extras)

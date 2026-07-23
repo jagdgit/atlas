@@ -311,6 +311,15 @@ class ScholarPluginConfig(BaseModel):
 
 class YouTubePluginConfig(BaseModel):
     languages: list[str] = Field(default_factory=lambda: ["en"])
+    # Optional YouTube Data API v3 key — when set, media.learn runs
+    # ``youtube_official_captions`` as an automatic strategy (OI-M1).
+    api_key: str = ""
+    # BA.v2: policy-gated media obtain via yt-dlp (default OFF — operator opt-in).
+    # When true and the binary is on PATH, SourceFetcher can produce Video/Audio Assets.
+    media_obtain_enabled: bool = False
+    media_obtain_binary: str = "yt-dlp"
+    media_obtain_format: str = "bestaudio/best"  # prefer audio for speech_to_text
+    media_obtain_timeout: float = 300.0
 
 
 class GitPluginConfig(BaseModel):

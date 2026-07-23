@@ -119,27 +119,31 @@ def browser_dom_captions(
             cleaned = _strip_timedtext(raw)
             if cleaned.strip():
                 out["outcome"] = "ok"
-                out["reason_code"] = "ok"
+                out["reason_code"] = "asset_produced"
                 out["text"] = cleaned.strip()
                 out["bytes_read"] = len(cleaned.encode("utf-8"))
                 out["metadata"]["caption_lang"] = track.get("languageCode")
+                out["page_opened"] = True
                 return out
 
     if text_looks_like_transcript(text):
         out["outcome"] = "ok"
-        out["reason_code"] = "ok"
+        out["reason_code"] = "asset_produced"
         out["text"] = text
         out["bytes_read"] = len(text.encode("utf-8"))
         out["reason"] = "dom transcript text"
+        out["page_opened"] = True
         return out
 
     out["outcome"] = "skipped"
-    out["reason_code"] = "no_captions"
+    out["reason_code"] = "no_caption_nodes_found"
     out["reason"] = (
         "browser rendered page but no DOM captions / captionTracks found"
         + (" (YouTube-shaped URL)" if is_youtube_url(source) else "")
     )
     out["bytes_read"] = len((html or text).encode("utf-8"))
+    # Signal to caller that the page itself opened (BA.1b metadata Asset).
+    out["page_opened"] = True
     return out
 
 

@@ -42,6 +42,7 @@ STRATEGY_UPLOAD_TRANSCRIPT = "upload_transcript"
 STRATEGY_UPLOAD_LOCAL_MEDIA = "upload_local_media"
 STRATEGY_ENABLE_SPEECH_TO_TEXT = "enable_speech_to_text"
 STRATEGY_OFFICIAL_CAPTIONS_API = "configure_official_captions_api"
+STRATEGY_YOUTUBE_OFFICIAL_CAPTIONS = "youtube_official_captions"
 
 SPEECH_STATUS_READY = "ready"
 SPEECH_STATUS_DISABLED = "disabled"
@@ -109,12 +110,9 @@ def format_next_action(
     speech_status: str | None = None,
     audience: str = "job",
     status: str = "waiting",
+    readiness: dict[str, Any] | None = None,
 ) -> str:
-    """Operator-facing next steps for acquire termination (RH.5 / RH9–RH10).
-
-    ``audience=job`` → "Waiting for operator" / Next Action semantics.
-    ``audience=research`` → "Research blocked" (legacy Research report wording).
-    """
+    """Operator-facing next steps for acquire termination (RH.5 / RH9–RH10 / CR.1)."""
     actions = list(strategies) if strategies else list(default_media_recovery_strategies())
     if audience == "research":
         lines = ["Research blocked.", "", "Continue after one of:"]
@@ -127,6 +125,13 @@ def format_next_action(
     if speech_status:
         lines.append("")
         lines.append(f"speech_to_text status: {speech_status}")
+    if readiness:
+        from atlas.ingestion.media_readiness import format_readiness_block
+
+        block = format_readiness_block(readiness)
+        if block:
+            lines.append("")
+            lines.append(block)
     return "\n".join(lines)
 
 
@@ -139,6 +144,8 @@ class AcquisitionAttempt:
     reason: str | None = None
     reason_code: str = REASON_UNKNOWN
     bytes_read: int = 0
+    asset_id: str | None = None
+    asset_kind: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -147,6 +154,8 @@ class AcquisitionAttempt:
             "reason": self.reason,
             "reason_code": self.reason_code,
             "bytes_read": int(self.bytes_read or 0),
+            "asset_id": self.asset_id,
+            "asset_kind": self.asset_kind,
         }
 
 
@@ -165,21 +174,27 @@ class AcquisitionRecord:
     suggested_next_capability: str | None = None
     suggested_next_strategies: tuple[str, ...] = ()
     speech_to_text_status: str | None = None
+    asset_id: str | None = None
+    asset_kind: str | None = None
 
     @property
     def ok(self) -> bool:
-        return self.outcome == "ok"
+        # AL1: acquisition success means a registered Asset, not merely bytes read.
+        return self.outcome == "ok" and bool(self.asset_id)
 
     @property
     def operator_summary(self) -> str:
         """Human-facing one-liner: distinguishes acquire-stop from reasoning failure."""
         if self.ok:
             n = len(self.strategies_tried)
-            return (
-                f"Acquisition succeeded ({self.bytes_read} B read"
-                + (f", {n} strateg{'y' if n == 1 else 'ies'}" if n else "")
-                + ")."
-            )
+            bits = [f"asset_id={self.asset_id}"]
+            if self.asset_kind:
+                bits.append(f"kind={self.asset_kind}")
+            if self.bytes_read:
+                bits.append(f"{self.bytes_read} B registered")
+            if n:
+                bits.append(f"{n} strateg{'y' if n == 1 else 'ies'}")
+            return f"Acquisition succeeded ({', '.join(bits)})."
         detail = self.reason or self.reason_code or self.outcome
         tried = ", ".join(a.strategy for a in self.strategies_tried) or "none"
         hint = ""
@@ -203,6 +218,8 @@ class AcquisitionRecord:
             "reason_code": self.reason_code,
             "reason": self.reason,
             "bytes_read": int(self.bytes_read or 0),
+            "asset_id": self.asset_id,
+            "asset_kind": self.asset_kind,
             "strategies_tried": [a.as_dict() for a in self.strategies_tried],
             "source_url": self.source_url,
             "source_kind": self.source_kind,
@@ -210,7 +227,7 @@ class AcquisitionRecord:
             "suggested_next_strategies": list(self.suggested_next_strategies),
             "speech_to_text_status": self.speech_to_text_status,
             "operator_summary": self.operator_summary,
-            "read_started": False if not self.ok else True,
+            "read_started": bool(self.ok),
         }
 
     @classmethod
@@ -223,8 +240,10 @@ class AcquisitionRecord:
         suggested_next_capability: str | None = None,
         suggested_next_strategies: tuple[str, ...] | list[str] | None = None,
         speech_to_text_status: str | None = None,
+        asset_id: str | None = None,
+        asset_kind: str | None = None,
     ) -> "AcquisitionRecord":
-        """Build a record from ordered attempts: first ``ok`` wins; else last failure."""
+        """Build a record from ordered attempts (AL1: Asset registration wins)."""
         strategies = tuple(suggested_next_strategies or ())
         if not attempts:
             return cls(
@@ -237,21 +256,58 @@ class AcquisitionRecord:
                 suggested_next_strategies=strategies,
                 speech_to_text_status=speech_to_text_status,
             )
-        winner = next((a for a in attempts if a.outcome == "ok"), None)
-        chosen = winner or attempts[-1]
+
+        # Prefer an explicit asset_id, else first attempt that registered one.
+        registered = next(
+            (
+                a
+                for a in attempts
+                if (a.asset_id and str(a.asset_id).strip())
+                and a.outcome in ("ok", "skipped")
+            ),
+            None,
+        )
+        if asset_id or (registered and registered.asset_id):
+            aid = (asset_id or (registered.asset_id if registered else None) or "").strip() or None
+            akind = asset_kind or (registered.asset_kind if registered else None)
+            # Prefer the attempt that carried the asset for reason/bytes context.
+            chosen = registered or attempts[-1]
+            return cls(
+                outcome="ok",
+                reason_code="asset_registered",
+                reason=chosen.reason or "Media Asset registered",
+                bytes_read=sum(a.bytes_read for a in attempts),
+                strategies_tried=tuple(attempts),
+                source_url=source_url,
+                source_kind=source_kind,
+                suggested_next_capability=None,
+                suggested_next_strategies=(),
+                speech_to_text_status=speech_to_text_status,
+                asset_id=aid,
+                asset_kind=akind,
+            )
+
+        # No Asset — first legacy ``ok`` without asset_id does NOT count (AL1).
+        chosen = attempts[-1]
         return cls(
-            outcome=chosen.outcome,
-            reason_code=chosen.reason_code,
-            reason=chosen.reason,
+            outcome=chosen.outcome if chosen.outcome != "ok" else "error",
+            reason_code=(
+                chosen.reason_code
+                if chosen.outcome != "ok"
+                else "no_asset"
+            ),
+            reason=(
+                chosen.reason
+                if chosen.outcome != "ok"
+                else "strategy reported ok without registering an Asset"
+            ),
             bytes_read=sum(a.bytes_read for a in attempts),
             strategies_tried=tuple(attempts),
             source_url=source_url,
             source_kind=source_kind,
-            suggested_next_capability=(
-                None if winner else suggested_next_capability
-            ),
-            suggested_next_strategies=(() if winner else strategies),
-            speech_to_text_status=(None if winner else speech_to_text_status),
+            suggested_next_capability=suggested_next_capability,
+            suggested_next_strategies=strategies,
+            speech_to_text_status=speech_to_text_status,
         )
 
     @classmethod

@@ -947,9 +947,22 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         speech_client,
         logger=get_logger("atlas.readers.speech_to_text"),
     )
+    from atlas.ingestion.youtube_media_obtain import YoutubeMediaObtain
+
+    yt_media_obtain = YoutubeMediaObtain(
+        enabled=bool(getattr(cfg.plugins.youtube, "media_obtain_enabled", False)),
+        binary=str(getattr(cfg.plugins.youtube, "media_obtain_binary", "yt-dlp") or "yt-dlp"),
+        format_spec=str(
+            getattr(cfg.plugins.youtube, "media_obtain_format", "bestaudio/best")
+            or "bestaudio/best"
+        ),
+        timeout=float(getattr(cfg.plugins.youtube, "media_obtain_timeout", 300.0) or 300.0),
+        logger=get_logger("atlas.ingestion.youtube_media_obtain"),
+    )
     source_fetcher = SourceFetcher(
         asset_acquirer,
         fetch_client,
+        youtube_fetch=(yt_media_obtain.fetch if yt_media_obtain.enabled else None),
         logger=get_logger("atlas.ingestion.source_fetch"),
     )
     media_ingestor = MediaIngestor(
@@ -988,6 +1001,74 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             "reason_code": "unavailable",
         }
 
+    def _youtube_api_json(client, url: str) -> dict:
+        from atlas.transcripts.official_captions import (
+            OfficialCaptionsFetchError,
+            classify_youtube_api_failure,
+        )
+        import json as _json
+
+        result = client.fetch(url)
+        text = getattr(result, "text", None) or ""
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        status = getattr(result, "status_code", None)
+        outcome = getattr(result, "outcome", None)
+        if outcome and outcome != "ok":
+            code = classify_youtube_api_failure(
+                status_code=status,
+                message=str(getattr(result, "reason", "") or outcome),
+                body=text,
+                outcome=str(outcome),
+            )
+            raise OfficialCaptionsFetchError(
+                code,
+                str(getattr(result, "reason", None) or f"fetch {outcome}"),
+                status_code=status,
+                payload=text,
+            )
+        data = _json.loads(text or "{}")
+        if isinstance(data, dict) and data.get("error"):
+            err = data.get("error") or {}
+            msg = str(err.get("message") or "YouTube API error")
+            code = classify_youtube_api_failure(
+                status_code=status, message=msg, body=data
+            )
+            raise OfficialCaptionsFetchError(code, msg, status_code=status, payload=data)
+        return data if isinstance(data, dict) else {}
+
+    def _youtube_api_bytes(client, url: str) -> bytes:
+        from atlas.transcripts.official_captions import (
+            OfficialCaptionsFetchError,
+            classify_youtube_api_failure,
+        )
+
+        result = client.fetch(url)
+        status = getattr(result, "status_code", None)
+        outcome = getattr(result, "outcome", None)
+        content = getattr(result, "content", None)
+        if outcome and outcome != "ok":
+            text = getattr(result, "text", None) or ""
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", errors="replace")
+            code = classify_youtube_api_failure(
+                status_code=status,
+                message=str(getattr(result, "reason", "") or outcome),
+                body=text,
+                outcome=str(outcome),
+            )
+            raise OfficialCaptionsFetchError(
+                code,
+                str(getattr(result, "reason", None) or f"fetch {outcome}"),
+                status_code=status,
+            )
+        if isinstance(content, (bytes, bytearray)):
+            return bytes(content)
+        text = getattr(result, "text", None) or ""
+        if isinstance(text, bytes):
+            return text
+        return str(text).encode("utf-8")
+
     def _timedtext_fetch(timedtext_url: str) -> str:
         """Fetch a caption track URL via the shared FetchClient (BA.1)."""
         try:
@@ -999,13 +1080,40 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         except Exception:  # noqa: BLE001
             return ""
 
+    from atlas.ingestion.media_readiness import build_media_readiness
+    from atlas.transcripts.official_captions import OfficialYouTubeCaptions
+
+    yt_api_key = str(getattr(cfg.plugins.youtube, "api_key", "") or "").strip()
+    official_captions = OfficialYouTubeCaptions(
+        yt_api_key,
+        fetch_json=lambda url: _youtube_api_json(fetch_client, url),
+        fetch_bytes=lambda url: _youtube_api_bytes(fetch_client, url),
+        logger=get_logger("atlas.transcripts.official_captions"),
+    )
+
+    def _media_readiness():
+        browser_status = "ready" if tools.has("browser.open") else "unavailable"
+        return build_media_readiness(
+            browser=browser_status,
+            dom_captions="ready" if browser_status == "ready" else "unavailable",
+            official_captions="ready" if official_captions.configured else "not_configured",
+            media_obtain=yt_media_obtain.readiness_status(),
+            speech_to_text=_media_speech_status(),
+            operator_upload="ready",
+        )
+
     media_learn = MediaLearnOrchestrator(
         caption_fetch=lambda video: youtube_transcripts.fetch(video).as_dict(),
         media_ingestor=media_ingestor,
         knowledge=knowledge_service,
+        asset_acquirer=asset_acquirer,
         speech_status=_media_speech_status,
+        official_captions_api=(
+            official_captions.fetch if official_captions.configured else None
+        ),
         browser_render=_browser_render_for_media,
         timedtext_fetch=_timedtext_fetch,
+        readiness=_media_readiness,
         logger=get_logger("atlas.ingestion.media_learn"),
     )
     capabilities.register(

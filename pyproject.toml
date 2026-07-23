@@ -34,6 +34,11 @@ dev = [
 browser = [
     "playwright>=1.40",
 ]
+# BA.v2 media obtain (policy-gated). Optional — Atlas boots without it; enable
+# ``plugins.youtube.media_obtain_enabled`` when the binary is available.
+media = [
+    "yt-dlp>=2024.4.9",
+]
 
 [project.scripts]
 atlas = "atlas.cli.main:main"

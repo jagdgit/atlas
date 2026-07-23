@@ -397,6 +397,7 @@ class MediaIngestor:
             speech_artifact=out.get("speech"),
         )
         if note.strip() and to_knowledge:
+            out["text"] = note  # AL3: metadata note is learnable text
             out["ingest"] = self._to_knowledge(
                 text=note,
                 acquired=acquired,

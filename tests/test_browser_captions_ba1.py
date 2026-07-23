@@ -85,3 +85,5 @@ def test_media_learn_uses_browser_when_captions_fail():
     assert "solar" in result["text"].lower()
     names = [s["strategy"] for s in result["strategies"]]
     assert STRATEGY_BROWSER_DOM_CAPTIONS in names
+    row = next(s for s in result["strategies"] if s["strategy"] == STRATEGY_BROWSER_DOM_CAPTIONS)
+    assert row["reason_code"] in ("asset_produced", "ok")

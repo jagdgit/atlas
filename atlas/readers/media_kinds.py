@@ -11,8 +11,11 @@ from pathlib import Path
 ASSET_KIND_VIDEO = "video"
 ASSET_KIND_AUDIO = "audio"
 ASSET_KIND_TRANSCRIPT = "transcript"
+ASSET_KIND_METADATA = "metadata"
 
-MEDIA_ASSET_KINDS = frozenset({ASSET_KIND_VIDEO, ASSET_KIND_AUDIO, ASSET_KIND_TRANSCRIPT})
+MEDIA_ASSET_KINDS = frozenset(
+    {ASSET_KIND_VIDEO, ASSET_KIND_AUDIO, ASSET_KIND_TRANSCRIPT, ASSET_KIND_METADATA}
+)
 
 _VIDEO_EXTENSIONS = frozenset({".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"})
 _AUDIO_EXTENSIONS = frozenset({".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".opus"})
