@@ -1240,6 +1240,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             personal=personal_service,
             conversation_reader=conversation_reader,
             candidates=candidate_consumer,
+            coverage=coverage_service,
             logger=get_logger("atlas.workers.owner_knowledge"),
         )
     )

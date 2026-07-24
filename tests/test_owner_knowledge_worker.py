@@ -141,3 +141,59 @@ def test_bad_root_does_not_crash_tick(tmp_path):
     }
     result = _worker().do_tick(_ctx(config))
     assert result.state["last_totals"]["errors"] == 1
+
+
+def test_reextract_stale_by_reader_version():
+    """OI-C8: unchanged archive still re-reads assets flagged stale for a reader bump."""
+
+    class _DocReader:
+        id = "document"
+        VERSION = "2.0.0"
+
+    class _Ingestion(_FakeIngestion):
+        def __init__(self):
+            super().__init__()
+            self._reader = _DocReader()
+            self.reextracts: list[dict] = []
+
+        def reingest_asset(self, asset_id, asset_version=None, **kw):
+            self.reextracts.append({"asset_id": asset_id, "asset_version": asset_version, **kw})
+            return type("R", (), {"candidates": 1})()
+
+    class _Coverage:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def mark_stale_for_reextraction(self, reader, *, reader_version=None, limit=500):
+            self.calls.append({"reader": reader, "reader_version": reader_version, "limit": limit})
+            if reader != "document":
+                return []
+            return [
+                {
+                    "id": "cov-1",
+                    "asset_id": "asset-aaa",
+                    "asset_version": 1,
+                    "domain": "personal",
+                    "status": "pending",
+                }
+            ]
+
+    ing = _Ingestion()
+    cov = _Coverage()
+    worker = OwnerKnowledgeWorker(
+        ingestion=ing,
+        intelligence=_FakeIntelligence(),
+        personal=_FakePersonal(),
+        conversation_reader=_ConvReader(),
+        coverage=cov,
+    )
+    # No archive roots — only coverage-driven work
+    result = worker.do_tick(_ctx({"archive_roots": [], "build_profile": False}))
+    assert cov.calls
+    assert cov.calls[0]["reader"] == "document"
+    assert cov.calls[0]["reader_version"] == "2.0.0"
+    assert len(ing.reextracts) == 1
+    assert ing.reextracts[0]["asset_id"] == "asset-aaa"
+    assert ing.reextracts[0]["force"] is True
+    assert result.state["last_totals"]["reextracted"] == 1
+    assert "reextracted=1" in result.note

@@ -141,6 +141,40 @@ class IngestionService:
             extract_findings=extract_findings, reader=reader, source=source,
         )
 
+    def reingest_asset(
+        self,
+        asset_id: str,
+        asset_version: int | None = None,
+        *,
+        domain: str = "external",
+        title: str | None = None,
+        embed: bool = True,
+        extract_findings: bool = False,
+        reader: Any = None,
+        source: str = "document",
+        force: bool = True,
+    ) -> IngestResult:
+        """Re-read an existing Asset with the current reader (A10 / OI-C8).
+
+        Used after a reader/extractor version bump: same bytes, new derivation.
+        ``force=True`` bypasses the Derived Artifact cache for this reader version.
+        """
+        acquired = self._acq.acquire_existing(asset_id, asset_version)
+        filename = "asset"
+        if acquired.source_uri:
+            filename = Path(acquired.source_uri).name or filename
+        return self._ingest(
+            acquired,
+            filename=filename,
+            domain=domain,
+            title=title,
+            embed=embed,
+            extract_findings=extract_findings,
+            reader=reader,
+            source=source,
+            force=force,
+        )
+
     # --- internals ------------------------------------------------------
     def _ingest(
         self,
@@ -153,10 +187,14 @@ class IngestionService:
         extract_findings: bool = False,
         reader: Any = None,
         source: str = "document",
+        force: bool = False,
     ) -> IngestResult:
         rdr = reader or self._reader
         artifact = rdr.read(
-            acquired.asset_id, acquired.asset_version, filename=filename
+            acquired.asset_id,
+            acquired.asset_version,
+            filename=filename,
+            force=force,
         )
         text = (artifact.get("text") or "").strip()
         if artifact.get("outcome") != "ok" or not text:

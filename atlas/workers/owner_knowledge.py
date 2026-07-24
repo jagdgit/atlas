@@ -15,7 +15,9 @@ After ingesting, it rebuilds the **personal profile** (skills/identity/timeline)
 experience + engineering knowledge (:meth:`PersonalService.infer` — inferred facts only, CC7/A9). It
 **never completes**: each tick is a bounded pass; a per-root content checksum in the checkpoint state
 makes an unchanged root a cheap no-op and makes the whole loop resume after a reboot (the manager
-reloads the checkpoint). Per P11 the worker owns no knowledge — it drives stateless translators and
+reloads the checkpoint). Per tick it also consults the coverage map for **reader-version**
+staleness (A10 / OI-C8) and force-re-reads those assets without requiring content change.
+Per P11 the worker owns no knowledge — it drives stateless translators and
 journals what it did (P9).
 """
 
@@ -51,6 +53,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
         personal: Any = None,
         conversation_reader: Any = None,
         candidates: Any = None,
+        coverage: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._ingestion = ingestion
@@ -60,6 +63,8 @@ class OwnerKnowledgeWorker(PersistentWorker):
         # CandidateConsumer: doc/chat ingests emit prose candidates; drain them into findings so the
         # archive's understanding is materialized each tick (single write path stays the Consolidator).
         self._candidates = candidates
+        # C.4 / OI-C8: coverage map drives reader-version re-extraction (A10).
+        self._coverage = coverage
         self._logger = logger or logging.getLogger("atlas.workers.owner_knowledge")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -68,7 +73,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
         force = any(bool(item.get("force")) for item in ctx.inputs)
 
         roots = cfg.get("archive_roots") or []
-        if not roots:
+        if not roots and self._coverage is None:
             return TickResult(state=state, note="")  # nothing configured yet — idle quietly
 
         config_note = ""
@@ -80,7 +85,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
         totals = {
             "findings": 0, "experiences": 0, "documents": 0,
             "conversations": 0, "candidates": 0, "code_repos": 0,
-            "skipped": 0, "errors": 0,
+            "skipped": 0, "errors": 0, "reextracted": 0,
         }
         changed_any = False
 
@@ -105,6 +110,11 @@ class OwnerKnowledgeWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001 - a bad root must not stop the whole archive
                 totals["errors"] += 1
                 self._logger.warning("owner archive root failed (%s): %s", path, exc)
+
+        # OI-C8 / A10: re-read assets whose coverage was recorded under an older reader version.
+        reextracted = self._reextract_stale(cfg, totals)
+        if reextracted:
+            changed_any = True
 
         state["roots"] = root_state
 
@@ -135,11 +145,14 @@ class OwnerKnowledgeWorker(PersistentWorker):
             note = f"{config_note}no change (archive unchanged)".strip() if config_note else ""
             return TickResult(state=state, note=note)
 
+        reex_note = (
+            f", reextracted={totals['reextracted']}" if totals.get("reextracted") else ""
+        )
         note = (
             f"{config_note}archive: {totals['code_repos']} repo(s) "
             f"(+{totals['findings']} finding, +{totals['experiences']} experience), "
             f"{totals['documents']} doc(s), {totals['conversations']} chat(s), "
-            f"+{totals['candidates']} candidate(s){profile_note}"
+            f"+{totals['candidates']} candidate(s){reex_note}{profile_note}"
         ).strip()
         return TickResult(state=state, note=note)
 
@@ -189,6 +202,69 @@ class OwnerKnowledgeWorker(PersistentWorker):
             else:
                 totals["documents"] += 1
             totals["candidates"] += int(res.candidates or 0)
+
+    def _reextract_stale(self, cfg: dict[str, Any], totals: dict[str, int]) -> int:
+        """Force-re-read assets stale after a reader version bump (OI-C8 / A10)."""
+        if self._coverage is None or not hasattr(self._ingestion, "reingest_asset"):
+            return 0
+        if cfg.get("reextract_stale", True) is False:
+            return 0
+        limit = max(1, int(cfg.get("reextract_limit") or 50))
+        done = 0
+        for reader_id, reader_obj, source in self._reader_targets():
+            version = str(getattr(reader_obj, "VERSION", "") or "")
+            if not version:
+                continue
+            try:
+                flagged = self._coverage.mark_stale_for_reextraction(
+                    reader_id, reader_version=version, limit=limit
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning(
+                    "stale coverage mark failed (%s@%s): %s", reader_id, version, exc
+                )
+                continue
+            for row in flagged or []:
+                asset_id = str(row.get("asset_id") or "")
+                if not asset_id:
+                    continue
+                try:
+                    av = row.get("asset_version")
+                    res = self._ingestion.reingest_asset(
+                        asset_id,
+                        int(av) if av is not None else None,
+                        domain=str(row.get("domain") or "personal"),
+                        embed=bool(cfg.get("embed", False)),
+                        extract_findings=True,
+                        reader=reader_obj if source == "conversation" else None,
+                        source=source,
+                        force=True,
+                    )
+                    totals["reextracted"] += 1
+                    totals["candidates"] += int(getattr(res, "candidates", 0) or 0)
+                    if source == "conversation":
+                        totals["conversations"] += 1
+                    else:
+                        totals["documents"] += 1
+                    done += 1
+                except Exception as exc:  # noqa: BLE001
+                    totals["errors"] += 1
+                    self._logger.warning(
+                        "reextract failed for asset %s: %s", asset_id, exc
+                    )
+        return done
+
+    def _reader_targets(self) -> list[tuple[str, Any, str]]:
+        """(reader_id, reader_obj, source) pairs for coverage-driven re-extraction."""
+        out: list[tuple[str, Any, str]] = []
+        # Default document reader lives on the ingestion bridge.
+        doc = getattr(self._ingestion, "_reader", None)
+        if doc is not None and getattr(doc, "id", None) and getattr(doc, "VERSION", None):
+            out.append((str(doc.id), doc, "document"))
+        conv = self._conversation_reader
+        if conv is not None and getattr(conv, "id", None) and getattr(conv, "VERSION", None):
+            out.append((str(conv.id), conv, "conversation"))
+        return out
 
     # --- helpers --------------------------------------------------------
     @staticmethod

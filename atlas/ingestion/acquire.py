@@ -169,3 +169,44 @@ class AssetAcquirer:
             content_type=content_type,
             metadata=metadata,
         )
+
+    def acquire_existing(
+        self,
+        asset_id: str,
+        asset_version: int | None = None,
+    ) -> AcquiredAsset:
+        """Re-bind to an already-registered asset (A10 / OI-C8 re-extraction).
+
+        Does **not** re-store bytes — only resolves ``(asset_id, version)`` so a
+        bumped reader can re-read the same Asset (P8).
+        """
+        asset = self._assets.get(str(asset_id))
+        if asset is None:
+            raise AssetAcquireError(f"no such asset: {asset_id}")
+        versions = self._assets.versions(str(asset_id))
+        if not versions:
+            raise AssetAcquireError(f"asset has no versions: {asset_id}")
+        if asset_version is None:
+            ver_row = max(versions, key=lambda v: int(v.get("version") or 0))
+        else:
+            ver_row = next(
+                (v for v in versions if int(v.get("version") or 0) == int(asset_version)),
+                None,
+            )
+            if ver_row is None:
+                raise AssetAcquireError(
+                    f"asset {asset_id} has no version {asset_version}"
+                )
+        checksum = str(ver_row.get("checksum") or asset.get("name") or "")
+        return AcquiredAsset(
+            asset_id=str(asset["id"]),
+            asset_version=int(ver_row["version"]),
+            kind=str(asset.get("kind") or DEFAULT_ASSET_KIND),
+            name=str(asset.get("name") or checksum),
+            checksum=checksum,
+            content_type=asset.get("content_type"),
+            source_uri=asset.get("source_uri"),
+            size_bytes=int(ver_row.get("size_bytes") or 0),
+            reused=True,
+            source=str(asset.get("source_uri") or asset.get("name") or asset_id),
+        )
