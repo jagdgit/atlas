@@ -302,6 +302,8 @@ class LearningService:
         for key in (
             "readers", "paywalls", "timings", "strategies", "recommendations",
             "component_observations", "domain", "provisional", "overall_confidence",
+            # Experience OS (EX.1 / OI-MP1) structured journal + provenance
+            "journal", "experience_os", "source_experience_ids",
         ):
             if fields.get(key) is not None:
                 payload[key] = fields[key]

@@ -93,8 +93,11 @@ Journal:
 
 Outcome without Lesson = history. Lesson without Improve = unused wisdom.
 
-Paper trading today remembers sell outcomes as Experiences (`_remember_outcome`).  
-**Gap:** reflection/lesson are thin; structured Observation→Lesson is the required shape going forward (see OI-MP1).
+Paper trading and Investment Mentor write Experiences via **Experience OS**
+(`ExperienceOS.journal` — Observation→…→Lesson). Structured fields live in
+`learning.experiences.payload.journal`; free-text columns stay human-readable.
+**Closed (EX.1 / OI-MP1):** `GET /v1/experience/shape`, `POST /v1/experience/journal`,
+`GET /v1/experience/recall`.
 
 ---
 
@@ -247,7 +250,7 @@ Code source of truth for this table: `atlas/missions/philosophy.py`.
 
 ## What to build next (priority)
 
-1. **OI-MP1** — Experience journal fields on paper-trading (and convention for others)  
+1. **OI-MP1** — ✅ Experience OS first-class journal (EX.1)  
 2. **OI-MP3** — Daily / periodic Learning Governance Report  
 3. **OI-D1** — Live market observation for simulation missions  
 4. **OI-MP2** — Split paper trading into three templates when Watch + Research feeds exist  

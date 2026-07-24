@@ -92,6 +92,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Memory OS (MEM.1)** — explicit hierarchy: working → session → long_term (then Knowledge / Experience as separate OS). `GET /v1/memory/hierarchy`, `POST /v1/memory/os/remember` `{content, layer}`, `POST /v1/memory/promote` `{memory_id, to_layer}`.
 
+**Experience OS (EX.1)** — Observation→Reasoning→Decision→Outcome→Reflection→Lesson over `learning.experiences`. `GET /v1/experience/shape`, `POST /v1/experience/journal`, `GET /v1/experience/recall` / `advice`. Decision Simulation + Investment Mentor write through it.
+
 **Capability Registry (CAP.1)** — missions declare needs instead of importing adapters. `POST /v1/capabilities/needs` `{needs:["MarketReader"]}` or `{mission:"market_observer"}`. `GET /v1/capabilities/inspect`. Missing needs → honest `capability_gap` (Market Observer).
 
 **Scheduler hierarchy (SCHED.1)** — Program → Mission → Worker cadence. `GET /v1/scheduler/hierarchy?program_id=market` (alias for `market_intelligence`). Resolve interval: `POST /v1/scheduler/resolve` `{program_id, template}` (worker_specs > mission cadence > program default 300s).

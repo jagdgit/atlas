@@ -18,6 +18,7 @@ NEED_POLICY_ENGINE = "policy_engine"
 NEED_WORLD_MODELS = "world_models"
 NEED_KNOWLEDGE_GRAPH = "knowledge_graph"
 NEED_MEMORY_OS = "memory_os"
+NEED_EXPERIENCE_OS = "experience_os"
 NEED_EVENTS = "events"
 NEED_JOBS = "jobs"
 NEED_LEARNING = "learning"
@@ -39,6 +40,7 @@ ALIASES: dict[str, str] = {
     "WorldModels": NEED_WORLD_MODELS,
     "KnowledgeGraph": NEED_KNOWLEDGE_GRAPH,
     "MemoryOS": NEED_MEMORY_OS,
+    "ExperienceOS": NEED_EXPERIENCE_OS,
     "SpeechToText": NEED_SPEECH,
     "speech": NEED_SPEECH,
 }
@@ -49,10 +51,10 @@ MISSION_NEEDS: dict[str, tuple[str, ...]] = {
     "company_intelligence": (NEED_COMPANY_DATA, NEED_CANDIDATES),
     "news_intelligence": (NEED_CANDIDATES,),
     "event_research": (NEED_JOBS, NEED_PLANNING),
-    "decision_simulation": (NEED_PORTFOLIO, NEED_MISSION_CONTEXT, NEED_POLICY_ENGINE),
-    "paper_trading": (NEED_PORTFOLIO, NEED_MISSION_CONTEXT, NEED_POLICY_ENGINE),
+    "decision_simulation": (NEED_PORTFOLIO, NEED_MISSION_CONTEXT, NEED_POLICY_ENGINE, NEED_EXPERIENCE_OS),
+    "paper_trading": (NEED_PORTFOLIO, NEED_MISSION_CONTEXT, NEED_POLICY_ENGINE, NEED_EXPERIENCE_OS),
     "portfolio_ledger": (NEED_PORTFOLIO_LEDGER,),
-    "investment_mentor": (NEED_LEARNING,),
+    "investment_mentor": (NEED_LEARNING, NEED_EXPERIENCE_OS),
 }
 
 

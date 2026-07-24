@@ -128,6 +128,7 @@ from atlas.world_models import default_world_model_registry
 from atlas.knowledge.graph import KnowledgeGraphService
 from atlas.missions.context import MissionContextService
 from atlas.memory import MemoryOS
+from atlas.experience import ExperienceOS
 from atlas.governance import GovernanceReportService
 from atlas.planning import PlanningService
 from atlas.planner.planner import Planner
@@ -686,7 +687,11 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # Soft bias after apply+enable is loaded inside KnowledgeService.retrieve.
     knowledge_service._learning = learning_service  # noqa: SLF001
 
-    # Mission Context API (MCA.1) + Memory OS hierarchy (MEM.1) + Programs.
+    # Mission Context API (MCA.1) + Memory OS hierarchy (MEM.1) + Experience OS (EX.1) + Programs.
+    experience_os = ExperienceOS(
+        learning_service,
+        logger=get_logger("atlas.experience.os"),
+    )
     memory_os = MemoryOS(
         memory_service,
         learning=learning_service,
@@ -1283,6 +1288,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             decision_engine=decision_engine,
             portfolio=portfolio_service,
             learning=learning_service,
+            experience_os=experience_os,
             mission_context=mission_context_service,
             policy_engine=policy_engine,
             events=events,
@@ -1421,6 +1427,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("agent", agent_service)
     container.register_instance("memory", memory_service)
     container.register_instance("memory_os", memory_os)
+    container.register_instance("experience_os", experience_os)
     container.register_instance("backup", backup_manager)
     container.register_instance("storage", storage_manager)
     container.register_instance("assets", asset_store)
@@ -1494,6 +1501,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     worker_manager.register_worker_type(
         InvestmentMentorWorker(
             learning=learning_service,
+            experience_os=experience_os,
             events=events,
             logger=get_logger("atlas.workers.investment_mentor"),
         )
@@ -1596,6 +1604,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "memory_os", memory_os, kind="service", version=MemoryOS.VERSION
+    )
+    capabilities.register(
+        "experience_os", experience_os, kind="service", version=ExperienceOS.VERSION
     )
     capabilities.register("backup", backup_manager, kind="service")
     capabilities.register(
@@ -1719,6 +1730,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         ("WorldModels", "world_models"),
         ("KnowledgeGraph", "knowledge_graph"),
         ("MemoryOS", "memory_os"),
+        ("ExperienceOS", "experience_os"),
     ):
         capabilities.alias(alias, target)
     capabilities.register(

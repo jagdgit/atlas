@@ -23,10 +23,12 @@ class InvestmentMentorWorker(PersistentWorker):
         self,
         *,
         learning: Any,
+        experience_os: Any | None = None,
         events: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._learning = learning
+        self._experience_os = experience_os
         self._events = events
         self._logger = logger or logging.getLogger("atlas.workers.investment_mentor")
 
@@ -73,11 +75,36 @@ class InvestmentMentorWorker(PersistentWorker):
             )
 
         wrote = False
-        if self._learning is not None and not cfg.get("dry_run"):
+        if not cfg.get("dry_run"):
             try:
-                payload = lesson.experience_payload()
-                self._learning.remember_experience(**payload)
-                wrote = True
+                if self._experience_os is not None:
+                    out = self._experience_os.journal(
+                        title=lesson.title,
+                        observation=lesson.observation,
+                        decision=lesson.decision_summary,
+                        outcome=lesson.outcome_summary,
+                        reflection=lesson.reflection,
+                        lesson=lesson.lesson,
+                        domain="markets",
+                        tags=list(lesson.tags),
+                        recommendations=[
+                            {"title": r, "why": lesson.lesson}
+                            for r in lesson.recommendations
+                        ],
+                        metadata={
+                            "source_experience_ids": list(lesson.source_experience_ids),
+                        },
+                    )
+                    wrote = bool(out.get("ok"))
+                    if not wrote:
+                        return TickResult(
+                            state=state,
+                            note=f"mentor write failed: {out.get('error') or out}",
+                        )
+                elif self._learning is not None:
+                    payload = lesson.experience_payload()
+                    self._learning.remember_experience(**payload)
+                    wrote = True
             except Exception as exc:  # noqa: BLE001
                 self._logger.warning("remember_experience failed: %s", exc)
                 return TickResult(

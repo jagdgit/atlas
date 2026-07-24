@@ -83,7 +83,7 @@ Today workers mostly own their own `interval_seconds`. Elevate to Program → Mi
 | OS | Role | Status |
 |----|------|--------|
 | **Knowledge OS** | Global findings, candidates, consolidator, graph, trust | Strong (KE + KV) |
-| **Experience OS** | Observation→Decision→Outcome→Reflection→Lesson | Partial (OI-MP1); elevate to first-class |
+| **Experience OS** | Observation→Decision→Outcome→Reflection→Lesson | ✅ EX.1 (`ExperienceOS` / `/v1/experience/*`) |
 | **Mission OS** | Templates, workers, journals, configs, Programs | Strong (Phase A/D) |
 
 ### 4.2 Foundational services to complete / elevate
@@ -212,7 +212,7 @@ Missions never depend on which extractor produced a finding.
 | V6 | Knowledge graph | ✅ KG.1 (derived) |
 | V6.5 | World Models framework + first domain packs | ✅ WM.1 |
 | V7 | Context API + Planning OS in mission loops | ✅ MCA.1 + PA.1 |
-| V8 | Experience OS + Mentors → better decisions | Partial (MI.7 / OI-MP5) |
+| V8 | Experience OS + Mentors → better decisions | ✅ EX.1 + MI.7 (OI-MP5 soft bias remains) |
 
 ---
 

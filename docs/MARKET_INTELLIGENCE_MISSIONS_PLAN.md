@@ -108,7 +108,7 @@ These ship **with** Market Intelligence / Platform work (not a separate forever 
 | **KG.1** | Knowledge graph construction over Claim↔Concept↔Entity↔SPO | V6 |
 | **MCA.1** | Mission Context API — shared retrieval for all Programs | V7 |
 | **WM.1** | World Models layer (market structure ≠ claim store) | V6.5 |
-| **EX.1** | Experience OS as first-class (Observation→…→Lesson) | V8 / OI-MP1 |
+| **EX.1** | Experience OS as first-class (Observation→…→Lesson) | ✅ V8 / OI-MP1 |
 
 **Do not invent Facts at extract** — `facts=0` on interviews remains correct until verification promotes trust.
 
@@ -221,6 +221,7 @@ MI.7   Investment Mentor + Experience OS deepening    ✅
 WM.1   World Models (markets first)                   ✅
 KG.1   Knowledge graph (Claim↔Concept↔Entity↔SPO)     ✅
 MCA.1  Mission Context API (all Programs)             ✅
+EX.1   Experience OS first-class journal              ✅
 ```
 
 ---

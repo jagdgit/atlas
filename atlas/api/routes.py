@@ -546,6 +546,67 @@ def learning_advice(request: Request, q: str = "", limit: int = 5) -> dict:
     return learning.advice_for(q, limit=limit)
 
 
+@v1_router.get("/experience/shape", tags=["experience"])
+def experience_shape(request: Request) -> dict:
+    """Experience OS journal shape — Observation→…→Lesson (EX.1 / OI-MP1)."""
+    try:
+        eos = _app(request).container.resolve("experience_os")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"experience_os unavailable: {exc}") from exc
+    return eos.shape()
+
+
+@v1_router.post("/experience/journal", tags=["experience"])
+def experience_journal(request: Request, body: dict | None = None) -> dict:
+    """Write a structured Experience Journal entry (EX.1)."""
+    try:
+        eos = _app(request).container.resolve("experience_os")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"experience_os unavailable: {exc}") from exc
+    payload = body or {}
+    required = ("observation", "decision", "outcome", "reflection", "lesson")
+    missing = [k for k in required if not str(payload.get(k) or "").strip()]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"missing journal fields: {missing}")
+    title = str(payload.get("title") or payload.get("lesson") or "Experience")[:200]
+    return eos.journal(
+        title=title,
+        observation=str(payload.get("observation") or ""),
+        reasoning=str(payload.get("reasoning") or ""),
+        decision=str(payload.get("decision") or ""),
+        outcome=str(payload.get("outcome") or ""),
+        reflection=str(payload.get("reflection") or ""),
+        lesson=str(payload.get("lesson") or ""),
+        domain=str(payload.get("domain") or "general"),
+        tags=list(payload.get("tags") or []),
+        recommendations=list(payload.get("recommendations") or []),
+        metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        strict=bool(payload.get("strict", True)),
+    )
+
+
+@v1_router.get("/experience/recall", tags=["experience"])
+def experience_recall(request: Request, q: str = "", limit: int = 20) -> dict:
+    """Recall Experiences as structured journals (EX.1)."""
+    try:
+        eos = _app(request).container.resolve("experience_os")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"experience_os unavailable: {exc}") from exc
+    if q.strip():
+        return {"journals": eos.recall(q, limit=limit), "query": q}
+    return {"journals": eos.list_journals(limit=limit)}
+
+
+@v1_router.get("/experience/advice", tags=["experience"])
+def experience_advice(request: Request, q: str = "", limit: int = 5) -> dict:
+    """Advice from Experience OS (structured journals + legacy advice_for)."""
+    try:
+        eos = _app(request).container.resolve("experience_os")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"experience_os unavailable: {exc}") from exc
+    return eos.advice_for(q, limit=limit)
+
+
 @v1_router.get("/learning/sources", tags=["learning"])
 def learning_sources(request: Request, limit: int = 20) -> dict:
     """Operational source-reliability advice (prefer/deprioritize) — advice-only (§3B)."""

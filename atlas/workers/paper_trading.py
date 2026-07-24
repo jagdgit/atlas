@@ -47,6 +47,7 @@ class PaperTradingWorker(PersistentWorker):
         decision_engine: Any,
         portfolio: Any,
         learning: Any = None,
+        experience_os: Any = None,
         mission_context: Any = None,
         policy_engine: Any = None,
         events: Any = None,
@@ -57,6 +58,7 @@ class PaperTradingWorker(PersistentWorker):
         self._engine = decision_engine
         self._portfolio = portfolio
         self._learning = learning
+        self._experience_os = experience_os
         self._mission_context = mission_context
         self._policy_engine = policy_engine
         self._events = events
@@ -350,8 +352,8 @@ class PaperTradingWorker(PersistentWorker):
         *,
         indicators: dict[str, Any] | None = None,
     ) -> None:
-        """Record an Experience Journal entry (MP3): Observation→…→Lesson."""
-        if self._learning is None:
+        """Record an Experience Journal entry (OI-MP1): Observation→…→Lesson."""
+        if self._experience_os is None and self._learning is None:
             return
         pnl = float(trade.get("realized_pnl", 0.0))
         outcome = "profit" if pnl > 0 else ("loss" if pnl < 0 else "flat")
@@ -388,24 +390,41 @@ class PaperTradingWorker(PersistentWorker):
                 else "Treat flat outcomes as inconclusive; avoid overfitting to noise."
             )
         )
+        title = f"Paper trade closed on {symbol}: {outcome} {pnl:+.2f}"
+        tags = [symbol.lower(), "paper_trading", outcome, "experience_journal"]
+        if self._experience_os is not None:
+            try:
+                self._experience_os.journal(
+                    title=title,
+                    observation=observation,
+                    reasoning=why,
+                    decision=f"sell {symbol} (simulation)",
+                    outcome=f"{outcome} {pnl:+.2f}",
+                    reflection=reflection,
+                    lesson=lesson,
+                    domain="markets",
+                    tags=tags,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("experience_os.journal failed for %s: %s", symbol, exc)
+            return
+        # Legacy path when Experience OS is not wired
         problem = (
             f"Observation: {observation}\n"
             f"Reasoning: {why}\n"
             f"Decision: sell {symbol} (simulation)\n"
             f"Outcome: {outcome} {pnl:+.2f}"
         )
-        solution = f"Reflection: {reflection}"
-        lessons = f"Lesson: {lesson}"
         try:
             self._learning.remember_experience(
-                title=f"Paper trade closed on {symbol}: {outcome} {pnl:+.2f}",
+                title=title,
                 problem=problem,
-                solution=solution,
-                lessons=lessons,
+                solution=f"Reflection: {reflection}",
+                lessons=f"Lesson: {lesson}",
                 domain="markets",
-                tags=[symbol.lower(), "paper_trading", outcome, "experience_journal"],
+                tags=tags,
             )
-        except Exception as exc:  # noqa: BLE001 - learning is best-effort, never breaks a tick
+        except Exception as exc:  # noqa: BLE001
             self._logger.warning("remember_experience failed for %s: %s", symbol, exc)
 
     # --- notifications ---------------------------------------------------
