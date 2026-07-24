@@ -187,10 +187,10 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
         "mission_kind": KIND_SIMULATION,
         "never_stops": True,
         "lifecycle": _stages(
-            observe=STAGE_WAITING,
+            observe=STAGE_PARTIAL,
             decide=STAGE_WAITING,
-            record_why=STAGE_PARTIAL,
-            evaluate=STAGE_WAITING,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_PARTIAL,
             reflect=STAGE_WAITING,
             improve=STAGE_WAITING,
         ),

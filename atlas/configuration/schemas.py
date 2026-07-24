@@ -147,6 +147,8 @@ class PaperTradingConfig(BaseModel):
     bars_per_tick: int = Field(default=1, ge=1)
     drawdown_alert_pct: float = Field(default=0.0, ge=0)   # 0 = no drawdown alert
     tick_interval_seconds: int = Field(default=300, ge=1)
+    # Optional Market Program Broker Profile id (MI.6); empty → fee=0.
+    broker_profile: str = ""
 
 
 class ResearchWatcherConfig(BaseModel):

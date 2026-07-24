@@ -1460,6 +1460,19 @@ def list_company_providers(request: Request) -> dict:
     }
 
 
+@v1_router.get("/market/broker-profiles", tags=["programs"])
+def list_broker_profiles(request: Request) -> dict:
+    """List Broker Profiles for sim fee/tax (MI.6 — Market Program config, P10)."""
+    try:
+        ledger = _app(request).container.resolve("portfolio_ledger")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"portfolio_ledger unavailable: {exc}") from exc
+    return {
+        "profiles": ledger.list_profiles(),
+        "version": getattr(ledger, "VERSION", "mi.6"),
+    }
+
+
 @v1_router.get("/workers", tags=["workers"])
 def list_workers(
     request: Request, mission_id: str | None = None, status: str | None = None

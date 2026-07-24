@@ -216,9 +216,10 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "portfolio_ledger",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
-            "Market Intelligence M6 — fee/tax-aware sim ledger + Broker Profiles (stub until MI.6)."
+            "Market Intelligence M6 — fee/tax-aware sim ledger + Broker Profiles "
+            "(paper_demo / zerodha / groww / angel / custom). Simulation only (P10)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
@@ -226,9 +227,13 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "role": "Portfolio Ledger",
             "roadmap": "MI.6",
             "broker_profile": "paper_demo",
+            "starting_cash": 100000.0,
+            "base_currency": "INR",
+            "pending_fills": [],
+            "marks": {},
             "tick_interval_seconds": 300,
         },
-        "worker_specs": [{"type": "program_stub", "interval_seconds": 300}],
+        "worker_specs": [{"type": "portfolio_ledger", "interval_seconds": 300}],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "portfolio_ledger"),
     },

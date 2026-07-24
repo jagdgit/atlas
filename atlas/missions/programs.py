@@ -133,8 +133,8 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 template="portfolio_ledger",
                 kind="simulation",
                 cadence="with fills",
-                status=MEMBER_STUB,
-                description="Fee/tax-aware sim ledger (Broker Profiles)",
+                status=MEMBER_ENABLED,
+                description="Fee/tax-aware sim ledger + Broker Profiles (P10)",
             ),
             ProgramMember(
                 role="Investment Mentor",
@@ -278,7 +278,7 @@ class ProgramService:
     """Derive Program cockpit views from definitions + live missions/templates."""
 
     name = "programs"
-    VERSION = "mi.2"
+    VERSION = "mi.6"
 
     def __init__(
         self,

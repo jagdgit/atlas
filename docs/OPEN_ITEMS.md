@@ -89,7 +89,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-KV0 | 🟢 | P1 | **Knowledge Verification (V5)** — KV.0–KV.10 ✅. | `docs/KNOWLEDGE_VERIFICATION_PLAN.md` |
 | OI-MP0 | 🟢 | P1 | **Mission Philosophy** — Layer 1 vs Layer 2; kinds; lifecycle; experience shape. | `docs/ATLAS_MISSION_PHILOSOPHY.md` |
 | OI-MP1 | 🟡 | P1 | **Experience journal** — deepen; Experience OS first-class (platform). | MP · `ATLAS_PLATFORM_ARCHITECTURE.md` |
-| OI-MI0 | 🟡 | P1 | **Market Intelligence Program** — MI.1–MI.5 ✅. **Next:** MI.6 Portfolio Ledger + Broker Profiles. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
+| OI-MI0 | 🟡 | P1 | **Market Intelligence Program** — MI.1–MI.6 ✅. **Next:** MI.7 Investment Mentor. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
 | OI-MP2 | 🟢 | P1 | **Split paper trading** — `decision_simulation` is primary; `paper_trading` remains compat alias. | `OI-MI0` |
 | OI-MP3 | 🔴 | P1 | **Daily Learning Governance Report**. | Philosophy Layer 2 |
 | OI-MP4 | 🔴 | P3 | **Engineering Mentor Mission**. | Philosophy |

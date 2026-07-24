@@ -59,6 +59,7 @@ from atlas.repositories.sim_repo import SimTradingRepository
 from atlas.trading import PortfolioService, StrategyDecisionRule
 from atlas.trading.market_reader import MarketReaderService
 from atlas.trading.company import CompanyDataService
+from atlas.trading.ledger import PortfolioLedgerService
 from atlas.research import ResearchDecisionRule
 from atlas.career import JobDecisionRule
 from atlas.watch import AdvisoryDecisionRule, MISSION_TYPE_SECURITY, MISSION_TYPE_TECHNOLOGY
@@ -71,6 +72,7 @@ from atlas.workers.market_observer import MarketObserverWorker
 from atlas.workers.news_intelligence import NewsIntelligenceWorker
 from atlas.workers.event_research import EventResearchWorker
 from atlas.workers.company_intelligence import CompanyIntelligenceWorker
+from atlas.workers.portfolio_ledger import PortfolioLedgerWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
@@ -1196,6 +1198,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     portfolio_service = PortfolioService(
         SimTradingRepository(db_manager), logger=get_logger("atlas.trading.portfolio")
     )
+    portfolio_ledger_service = PortfolioLedgerService(
+        portfolio_service, logger=get_logger("atlas.trading.ledger")
+    )
     decision_engine.register_rule(StrategyDecisionRule())
     worker_manager.register_worker_type(
         PaperTradingWorker(
@@ -1394,6 +1399,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.company_intelligence"),
         )
     )
+    worker_manager.register_worker_type(
+        PortfolioLedgerWorker(
+            ledger=portfolio_ledger_service,
+            events=events,
+            logger=get_logger("atlas.workers.portfolio_ledger"),
+        )
+    )
     tools.register(
         "knowledge.verify",
         knowledge_verification.knowledge_verify,
@@ -1440,6 +1452,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("decision", decision_engine)
     container.register_instance("approvals", approval_service)
     container.register_instance("portfolio", portfolio_service)
+    container.register_instance("portfolio_ledger", portfolio_ledger_service)
     container.register_instance("market_reader", market_reader_service)
     container.register_instance("company_data", company_data_service)
     container.register_instance("improvement_board", improvement_board)

@@ -10,6 +10,8 @@ from atlas.trading.portfolio import PortfolioService
 from atlas.trading.strategy import StrategyDecisionRule
 from atlas.trading.market_reader import MarketReaderService
 from atlas.trading.company import CompanyDataService
+from atlas.trading.broker_profiles import compute_fees, get_broker_profile, list_broker_profiles
+from atlas.trading.ledger import PortfolioLedgerService
 
 __all__ = [
     "compute_indicators",
@@ -21,4 +23,8 @@ __all__ = [
     "StrategyDecisionRule",
     "MarketReaderService",
     "CompanyDataService",
+    "PortfolioLedgerService",
+    "compute_fees",
+    "get_broker_profile",
+    "list_broker_profiles",
 ]

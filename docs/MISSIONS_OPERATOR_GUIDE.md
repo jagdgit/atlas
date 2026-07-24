@@ -49,9 +49,24 @@ API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/
   ```
 - Official SEC/NSE/BSE adapters raise capability gaps until API keys + ToS paths exist (`GET /v1/market/company-providers`).
 
+**Portfolio Ledger (MI.6)** — fee/tax-aware sim book + Broker Profiles (`paper_demo`, `zerodha`, `groww`, `angel`, or `custom_broker_profile`). List profiles: `GET /v1/market/broker-profiles`. Example config:
+
+  ```json
+  {
+    "broker_profile": "zerodha",
+    "starting_cash": 100000,
+    "pending_fills": [
+      {"symbol": "RELIANCE.NS", "side": "buy", "quantity": 10, "price": 2800}
+    ],
+    "marks": {"RELIANCE.NS": 2850}
+  }
+  ```
+
+`paper_trading` / `decision_simulation` may set `broker_profile` to charge the same schedules on fills. Remaining Program stub: `investment_mentor`.
+
 `paper_trading` remains a **compat alias** for Chat/Jobs; prefer **`decision_simulation`**.
-Start Program instantiates members when templates are seeded — remaining stubs
-(`portfolio_ledger`, `investment_mentor`) journal waiting notes.
+Start Program instantiates members when templates are seeded — remaining stub
+(`investment_mentor`) journals waiting notes.
 
 ---
 

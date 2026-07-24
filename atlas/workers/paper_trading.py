@@ -26,6 +26,7 @@ import logging
 from typing import Any
 
 from atlas.decision.contracts import ACTION_RECOMMEND, DecisionRequest
+from atlas.trading.broker_profiles import compute_fees, get_broker_profile
 from atlas.trading.indicators import compute_indicators
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
@@ -244,6 +245,16 @@ class PaperTradingWorker(PersistentWorker):
         if qty <= 0:
             totals["holds"] += 1
             return f"{symbol}: hold @ {price:.2f}"
+        fee = 0.0
+        profile_id = str(cfg.get("broker_profile") or "").strip()
+        if profile_id:
+            breakdown = compute_fees(
+                get_broker_profile(profile_id),
+                side=kind,
+                quantity=qty,
+                price=price,
+            )
+            fee = float(breakdown.total)
         try:
             trade = self._portfolio.apply_trade(
                 portfolio_id,
@@ -251,6 +262,7 @@ class PaperTradingWorker(PersistentWorker):
                 side=kind,
                 quantity=qty,
                 price=price,
+                fee=fee,
                 mission_id=mission_id,
                 decision_id=decision.id,
             )
