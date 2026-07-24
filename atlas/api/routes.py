@@ -1447,6 +1447,19 @@ def list_market_providers(request: Request) -> dict:
     }
 
 
+@v1_router.get("/market/company-providers", tags=["programs"])
+def list_company_providers(request: Request) -> dict:
+    """List company/filing adapters (MI.5 — official preferred, no scrape)."""
+    try:
+        svc = _app(request).container.resolve("company_data")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"company_data unavailable: {exc}") from exc
+    return {
+        "providers": svc.list_providers(),
+        "version": getattr(svc, "VERSION", "mi.5"),
+    }
+
+
 @v1_router.get("/workers", tags=["workers"])
 def list_workers(
     request: Request, mission_id: str | None = None, status: str | None = None

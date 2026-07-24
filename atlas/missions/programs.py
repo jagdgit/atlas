@@ -69,7 +69,7 @@ class ProgramDefinition:
 def _market_lifecycle() -> dict[str, str]:
     return {
         "observe": STAGE_ACTIVE,  # MI.3 MarketReader
-        "learn": STAGE_PARTIAL,  # news live; company stub until MI.5
+        "learn": STAGE_ACTIVE,  # MI.4 news + MI.5 company
         "decide": STAGE_ACTIVE,  # decision_simulation + event spawn
         "record_why": STAGE_ACTIVE,
         "evaluate": STAGE_ACTIVE,
@@ -101,8 +101,8 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 template="company_intelligence",
                 kind="learning",
                 cadence="daily/weekly",
-                status=MEMBER_STUB,
-                description="Filings / ratios (official first)",
+                status=MEMBER_ENABLED,
+                description="Filings / ratios (config_seed; official adapters when keys)",
             ),
             ProgramMember(
                 role="News Intelligence",

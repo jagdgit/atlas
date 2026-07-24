@@ -32,9 +32,26 @@ API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/
 - **Event Research** polls `MarketInterestingMove` and enqueues research Jobs when `score ≥ score_threshold` (default 0.7).
 - **Market Observer** scores price+volume; set `spawn_research: true` to spawn Jobs directly (default off — Event Research owns that path).
 
+**MI.5 — Company Intelligence**
+
+- Config hermetic path (no scrape):
+  ```json
+  {
+    "tickers": ["RELIANCE.NS"],
+    "companies": [{
+      "symbol": "RELIANCE.NS",
+      "name": "Reliance Industries",
+      "sector": "Energy",
+      "facts": ["Reliance Industries owns refining businesses."],
+      "filings": [{"title": "Annual Report FY24", "kind": "annual", "as_of": "2024-03-31"}]
+    }]
+  }
+  ```
+- Official SEC/NSE/BSE adapters raise capability gaps until API keys + ToS paths exist (`GET /v1/market/company-providers`).
+
 `paper_trading` remains a **compat alias** for Chat/Jobs; prefer **`decision_simulation`**.
-Start Program instantiates all seven members when templates are seeded — remaining stubs
-(`company_intelligence`, `portfolio_ledger`, `investment_mentor`) journal waiting notes.
+Start Program instantiates members when templates are seeded — remaining stubs
+(`portfolio_ledger`, `investment_mentor`) journal waiting notes.
 
 ---
 

@@ -9,6 +9,7 @@ from atlas.trading.indicators import compute_indicators, ema, macd, rsi, sma
 from atlas.trading.portfolio import PortfolioService
 from atlas.trading.strategy import StrategyDecisionRule
 from atlas.trading.market_reader import MarketReaderService
+from atlas.trading.company import CompanyDataService
 
 __all__ = [
     "compute_indicators",
@@ -19,4 +20,5 @@ __all__ = [
     "PortfolioService",
     "StrategyDecisionRule",
     "MarketReaderService",
+    "CompanyDataService",
 ]

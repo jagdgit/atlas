@@ -32,7 +32,8 @@ def test_market_program_has_seven_members_with_stubs():
     assert statuses["market_observer"] == MEMBER_ENABLED
     assert statuses["news_intelligence"] == MEMBER_ENABLED
     assert statuses["event_research"] == MEMBER_ENABLED
-    assert statuses["company_intelligence"] == MEMBER_STUB
+    assert statuses["company_intelligence"] == MEMBER_ENABLED
+    assert statuses["portfolio_ledger"] == MEMBER_STUB
     assert "Broker Profiles" in market.domain_adapters
     assert "MarketReader" in market.domain_adapters
 
@@ -49,7 +50,7 @@ def test_program_service_describe_without_deps():
     view = svc.describe("market_intelligence")
     assert view["title"] == "Market Intelligence"
     assert view["startable_count"] == 0  # no templates wired
-    assert view["stub_count"] >= 3
+    assert view["stub_count"] >= 2
     assert view["label"] == program_label("market_intelligence")
     assert len(view["lifecycle"]) == 7
 

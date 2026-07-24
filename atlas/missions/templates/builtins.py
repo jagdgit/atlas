@@ -149,19 +149,23 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "company_intelligence",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
-            "Market Intelligence M2 — filings/ratios learning (stub until MI.5)."
+            "Market Intelligence M2 — company profiles/filings → Knowledge "
+            "(config_seed hermetic; SEC/NSE/BSE skeletons when keys exist; no scrape)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "Company Intelligence",
             "roadmap": "MI.5",
+            "provider": "config_seed",
             "tickers": [],
+            "companies": [],
+            "force": False,
             "tick_interval_seconds": 86400,
         },
-        "worker_specs": [{"type": "program_stub", "interval_seconds": 86400}],
+        "worker_specs": [{"type": "company_intelligence", "interval_seconds": 86400}],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "company_intelligence"),
     },
