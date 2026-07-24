@@ -31,6 +31,7 @@ the DI container, so they work without a running API server:
     atlas ask "question"        # ask an agent (default: rag)
     atlas search "query"        # semantic search over the knowledge base
     atlas ingest ./file.md      # ingest a file into the knowledge base
+    atlas backfill-assets       # OI-C4: link orphan documents to Assets
     atlas remember "fact"       # store a memory (working/episodic/semantic)
     atlas recall "query"        # semantic recall from memory
     atlas forget <id>           # delete a memory by id
@@ -102,6 +103,12 @@ def build_parser() -> argparse.ArgumentParser:
         "path",
         help="path or http(s) URL: document (.txt/.md/.pdf/…) or media (.mp4/.vtt/.mp3/…)",
     )
+
+    p_backfill = sub.add_parser(
+        "backfill-assets",
+        help="OI-C4: register Assets for knowledge.documents still missing asset_id",
+    )
+    p_backfill.add_argument("--limit", type=int, default=25)
 
     p_remember = sub.add_parser("remember", help="store a memory")
     p_remember.add_argument("content")
@@ -566,6 +573,21 @@ def cmd_ingest(args: argparse.Namespace, app: "Application | None" = None) -> in
         f"deduped={summary['deduped']}"
     )
     return 0
+
+
+def cmd_backfill_assets(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    """OI-C4 — link orphan knowledge.documents to Assets."""
+    import json
+
+    app = app or build_application()
+    try:
+        bridge = app.container.resolve("ingestion_bridge")
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: ingestion_bridge unavailable: {exc}", file=sys.stderr)
+        return 1
+    report = bridge.backfill_orphan_documents(limit=int(args.limit or 25))
+    print(json.dumps(report, indent=2, default=str))
+    return 0 if report.get("ok") else 1
 
 
 def cmd_remember(args: argparse.Namespace, app: "Application | None" = None) -> int:
@@ -1619,6 +1641,7 @@ _HANDLERS = {
     "ask": cmd_ask,
     "search": cmd_search,
     "ingest": cmd_ingest,
+    "backfill-assets": cmd_backfill_assets,
     "remember": cmd_remember,
     "recall": cmd_recall,
     "forget": cmd_forget,

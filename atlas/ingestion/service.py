@@ -175,6 +175,82 @@ class IngestionService:
             force=force,
         )
 
+    def backfill_orphan_documents(self, *, limit: int = 25) -> dict[str, Any]:
+        """Register Assets for documents that still have ``asset_id IS NULL`` (OI-C4).
+
+        Lazy / opportunistic — no big-bang migration. Identical content reuses an
+        existing Asset (content-sha256). Bounded by ``limit`` so callers can drain
+        the backlog across ticks.
+        """
+        docs_repo = getattr(self._knowledge, "_documents", None)
+        if docs_repo is None or not hasattr(docs_repo, "list_without_asset"):
+            return {"ok": False, "error": "documents_unavailable", "linked": 0}
+
+        try:
+            pending = int(docs_repo.count_without_asset()) if hasattr(
+                docs_repo, "count_without_asset"
+            ) else -1
+        except Exception:  # noqa: BLE001
+            pending = -1
+
+        rows = docs_repo.list_without_asset(limit=max(0, int(limit)))
+        linked: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for doc in rows:
+            doc_id = str(getattr(doc, "id", "") or "")
+            content = getattr(doc, "content", None)
+            if not doc_id:
+                continue
+            if content is None or (isinstance(content, str) and not content):
+                errors.append({"document_id": doc_id, "error": "empty_content"})
+                continue
+            try:
+                data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+                filename = (
+                    str(getattr(doc, "title", None) or "").strip()
+                    or (Path(str(getattr(doc, "uri", "") or "")).name if getattr(doc, "uri", None) else "")
+                    or f"{doc_id}.txt"
+                )
+                acquired = self._acq.acquire_bytes(
+                    data,
+                    kind="document",
+                    filename=filename,
+                    source_uri=getattr(doc, "uri", None),
+                    content_type=getattr(doc, "content_type", None) or "text/plain",
+                    metadata={
+                        "backfill": True,
+                        "document_id": doc_id,
+                        "source": getattr(doc, "source", None),
+                    },
+                )
+                updated = docs_repo.set_asset(
+                    doc_id, acquired.asset_id, acquired.asset_version
+                )
+                linked.append(
+                    {
+                        "document_id": doc_id,
+                        "asset_id": acquired.asset_id,
+                        "asset_version": acquired.asset_version,
+                        "asset_reused": bool(acquired.reused),
+                        "linked": updated is not None,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad row must not stop the batch
+                self._logger.warning("orphan document backfill failed (%s): %s", doc_id, exc)
+                errors.append({"document_id": doc_id, "error": str(exc)})
+
+        remaining = max(0, pending - len(linked)) if pending >= 0 else None
+        return {
+            "ok": True,
+            "linked": len(linked),
+            "errors": len(errors),
+            "pending_before": pending if pending >= 0 else None,
+            "pending_after": remaining,
+            "items": linked,
+            "error_items": errors,
+            "version": "c4.1",
+        }
+
     # --- internals ------------------------------------------------------
     def _ingest(
         self,

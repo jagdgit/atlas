@@ -1782,6 +1782,43 @@ def ingest(body: IngestRequest, request: Request) -> IngestResponse:
     return IngestResponse(**summary)
 
 
+@v1_router.get("/knowledge/orphans", tags=["knowledge"])
+def knowledge_orphans(request: Request, limit: int = 50) -> dict:
+    """Documents still missing an Asset link (OI-C4 backlog)."""
+    knowledge = _app(request).container.resolve("knowledge")
+    docs = knowledge.list_documents_without_asset(limit=limit)
+    return {
+        "count": knowledge.count_documents_without_asset(),
+        "documents": [
+            {
+                "id": d.id,
+                "source": d.source,
+                "title": d.title,
+                "uri": d.uri,
+                "domain": d.domain,
+                "status": d.status,
+                "checksum": d.checksum,
+            }
+            for d in docs
+        ],
+        "version": "c4.1",
+    }
+
+
+@v1_router.post("/knowledge/backfill-assets", tags=["knowledge"])
+def knowledge_backfill_assets(request: Request, body: dict | None = None) -> dict:
+    """Lazy backfill: register Assets for orphan documents (OI-C4)."""
+    try:
+        bridge = _app(request).container.resolve("ingestion_bridge")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"ingestion_bridge unavailable: {exc}"
+        ) from exc
+    payload = body or {}
+    limit = int(payload.get("limit") or 25)
+    return bridge.backfill_orphan_documents(limit=limit)
+
+
 @v1_router.post("/memory/remember", response_model=RememberResponse, tags=["memory"])
 def remember(body: RememberRequest, request: Request) -> RememberResponse:
     memory = _app(request).container.resolve("memory")

@@ -73,7 +73,12 @@ class OwnerKnowledgeWorker(PersistentWorker):
         force = any(bool(item.get("force")) for item in ctx.inputs)
 
         roots = cfg.get("archive_roots") or []
-        if not roots and self._coverage is None:
+        # Idle only when there is nothing to do at all (no roots, no coverage re-extract,
+        # and orphan-asset backfill disabled).
+        can_backfill = bool(cfg.get("backfill_orphan_assets", True)) and hasattr(
+            self._ingestion, "backfill_orphan_documents"
+        )
+        if not roots and self._coverage is None and not can_backfill:
             return TickResult(state=state, note="")  # nothing configured yet — idle quietly
 
         config_note = ""
@@ -85,7 +90,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
         totals = {
             "findings": 0, "experiences": 0, "documents": 0,
             "conversations": 0, "candidates": 0, "code_repos": 0,
-            "skipped": 0, "errors": 0, "reextracted": 0,
+            "skipped": 0, "errors": 0, "reextracted": 0, "backfilled": 0,
         }
         changed_any = False
 
@@ -114,6 +119,11 @@ class OwnerKnowledgeWorker(PersistentWorker):
         # OI-C8 / A10: re-read assets whose coverage was recorded under an older reader version.
         reextracted = self._reextract_stale(cfg, totals)
         if reextracted:
+            changed_any = True
+
+        # OI-C4: opportunistic Asset links for pre-Phase-C documents (bounded).
+        backfilled = self._backfill_orphan_assets(cfg, totals)
+        if backfilled:
             changed_any = True
 
         state["roots"] = root_state
@@ -148,11 +158,14 @@ class OwnerKnowledgeWorker(PersistentWorker):
         reex_note = (
             f", reextracted={totals['reextracted']}" if totals.get("reextracted") else ""
         )
+        bf_note = (
+            f", backfilled={totals['backfilled']}" if totals.get("backfilled") else ""
+        )
         note = (
             f"{config_note}archive: {totals['code_repos']} repo(s) "
             f"(+{totals['findings']} finding, +{totals['experiences']} experience), "
             f"{totals['documents']} doc(s), {totals['conversations']} chat(s), "
-            f"+{totals['candidates']} candidate(s){reex_note}{profile_note}"
+            f"+{totals['candidates']} candidate(s){reex_note}{bf_note}{profile_note}"
         ).strip()
         return TickResult(state=state, note=note)
 
@@ -253,6 +266,24 @@ class OwnerKnowledgeWorker(PersistentWorker):
                         "reextract failed for asset %s: %s", asset_id, exc
                     )
         return done
+
+    def _backfill_orphan_assets(self, cfg: dict[str, Any], totals: dict[str, int]) -> int:
+        """Link orphan knowledge.documents rows to Assets (OI-C4)."""
+        if not bool(cfg.get("backfill_orphan_assets", True)):
+            return 0
+        if not hasattr(self._ingestion, "backfill_orphan_documents"):
+            return 0
+        limit = max(0, int(cfg.get("backfill_limit") or 25))
+        if limit <= 0:
+            return 0
+        try:
+            report = self._ingestion.backfill_orphan_documents(limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("orphan document backfill failed: %s", exc)
+            return 0
+        n = int((report or {}).get("linked") or 0)
+        totals["backfilled"] += n
+        return n
 
     def _reader_targets(self) -> list[tuple[str, Any, str]]:
         """(reader_id, reader_obj, source) pairs for coverage-driven re-extraction."""

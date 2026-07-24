@@ -208,6 +208,13 @@ class KnowledgeService:
         """List documents in the knowledge base (newest first)."""
         return self._documents.recent(limit=limit)
 
+    def list_documents_without_asset(self, *, limit: int = 50) -> list["Document"]:
+        """Documents still missing an Asset link (OI-C4 backlog)."""
+        return self._documents.list_without_asset(limit=limit)
+
+    def count_documents_without_asset(self) -> int:
+        return self._documents.count_without_asset()
+
     def document_count(self) -> int:
         return self._documents.count()
 

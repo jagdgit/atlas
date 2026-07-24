@@ -159,6 +159,27 @@ class DocumentRepository(BaseRepository):
     def count(self) -> int:
         return self.fetch_val("SELECT count(*) FROM knowledge.documents") or 0
 
+    def list_without_asset(self, *, limit: int = 50) -> list[Document]:
+        """Pre-Phase-C / inline docs still missing an Asset link (OI-C4 lazy backfill)."""
+        rows = self.fetch_all(
+            """
+            SELECT * FROM knowledge.documents
+            WHERE asset_id IS NULL
+            ORDER BY created_at ASC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return Document.from_rows(rows)
+
+    def count_without_asset(self) -> int:
+        return (
+            self.fetch_val(
+                "SELECT count(*) FROM knowledge.documents WHERE asset_id IS NULL"
+            )
+            or 0
+        )
+
     def set_status(self, document_id: UUID | str, status: str) -> bool:
         if status not in VALID_STATUSES:
             raise ValueError(f"invalid status: {status}")
