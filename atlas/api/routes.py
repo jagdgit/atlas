@@ -762,6 +762,21 @@ def policy_rules(
     return {"rules": policy.list_rules(scope=scope, rule=rule, enabled=enabled, limit=limit)}
 
 
+@v1_router.post("/policy/evaluate", tags=["policy"])
+def policy_evaluate(request: Request, body: dict | None = None) -> dict:
+    """Policy Engine — hard/soft evaluation for an intended action (PA.2 / OI-PA-POLICY)."""
+    try:
+        engine = _app(request).container.resolve("policy_engine")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"policy_engine unavailable: {exc}") from exc
+    payload = body or {}
+    return engine.evaluate(
+        action=payload.get("action") if isinstance(payload.get("action"), dict) else payload,
+        context=payload.get("context") if isinstance(payload.get("context"), dict) else {},
+        scope=payload.get("scope"),
+    )
+
+
 @v1_router.post("/policy/rules", tags=["policy"])
 def policy_create_rule(body: PolicyRuleRequest, request: Request) -> dict:
     """Create (or upsert) a policy rule. Journaled + reversible."""

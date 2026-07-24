@@ -48,6 +48,7 @@ class PaperTradingWorker(PersistentWorker):
         portfolio: Any,
         learning: Any = None,
         mission_context: Any = None,
+        policy_engine: Any = None,
         events: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -57,6 +58,7 @@ class PaperTradingWorker(PersistentWorker):
         self._portfolio = portfolio
         self._learning = learning
         self._mission_context = mission_context
+        self._policy_engine = policy_engine
         self._events = events
         self._logger = logger or logging.getLogger("atlas.workers.paper_trading")
 
@@ -276,6 +278,33 @@ class PaperTradingWorker(PersistentWorker):
         if qty <= 0:
             totals["holds"] += 1
             return f"{symbol}: hold @ {price:.2f}"
+
+        if self._policy_engine is not None:
+            try:
+                exposure = 0.0
+                if float(snapshot.get("equity") or 0) > 0 and price > 0:
+                    exposure = 100.0 * (held * price) / float(snapshot["equity"])
+                verdict = self._policy_engine.evaluate(
+                    action={"kind": kind, "symbol": symbol, "quantity": qty, "price": price},
+                    context={
+                        "equity": snapshot.get("equity"),
+                        "position_qty": held,
+                        "exposure_pct": exposure,
+                        "drawdown_pct": state.get("last_drawdown_pct"),
+                        "price": price,
+                    },
+                    scope="domain:markets",
+                )
+                if not verdict.get("allowed", True):
+                    totals["holds"] += 1
+                    detail = ""
+                    viols = verdict.get("hard_violations") or []
+                    if viols:
+                        detail = str(viols[0].get("detail") or "")
+                    return f"{symbol}: policy_block ({detail or 'hard constraint'})"
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("policy_engine evaluate skipped: %s", exc)
+
         fee = 0.0
         profile_id = str(cfg.get("broker_profile") or "").strip()
         if profile_id:

@@ -91,7 +91,7 @@ Today workers mostly own their own `interval_seconds`. Elevate to Program → Mi
 | **Verification OS** | UNVERIFIED → scored / contested; multi-dim trust | ✅ KV.0–KV.10 | Consume from Mission Context API |
 | **Memory OS** | Explicit hierarchy (below) | Partial (`memory.items` working/episodic/semantic) | Name + document hierarchy vs Knowledge/Experience |
 | **Planning OS** | Goal → gather gaps → compare → risk → decide | ✅ PA.1 | Multi-step across Programs; hard Policy still OI-PA-POLICY |
-| **Policy Engine** | Constraints & governance (caps, forbidden actions) | Partial (prefer/avoid Policy store C.5) | First-class **limits** (max 5%, no pre-earnings) as reusable engine |
+| **Policy Engine** | Constraints & governance (caps, forbidden actions) | ✅ PA.2 | Soft prefer/avoid + hard forbid/limit; Decision Simulation blocks hard violations |
 | **Capability Registry** | Discover readers/extractors/verifiers/tools | Partial (`CapabilityRegistry`) | Enrich: version/health/deps; missions ask “need MarketReader” not import |
 | **Decision Engine** | Kernel arbitration | ✅ Phase D | Keep kernel; Programs supply rules + context |
 | **World Models** | Domain *structure* (not claim rows) | ✅ WM.1 | Framework + `indian_markets` + `solar_plant` stub packs |
@@ -137,6 +137,8 @@ Separate from reasoning:
 | “Buy Tata looks attractive” | Max 5% position; never enter before earnings; max sector exposure; max drawdown |
 
 Reuse across Programs (engineering: “never auto-push”; personal: “never send mail”). Build on existing Policy store; elevate to **Policy Engine** with hard/soft constraint evaluation (`OI-PA-POLICY`).
+
+**Shipped (PA.2):** `PolicyEngine.evaluate` — soft (`prefer`/`avoid`/`trust`/`distrust`) + hard (`forbid`, `limit` with provenance caps). `POST /v1/policy/evaluate`. Decision Simulation refuses fills that hard-violate.
 
 ### 4.6 Capability Registry (invert dependencies)
 

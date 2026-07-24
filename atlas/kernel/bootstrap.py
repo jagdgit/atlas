@@ -105,7 +105,7 @@ from atlas.core.resources.arbiter import MissionArbiter
 from atlas.decision import ApprovalService, DecisionEngine, DecisionRuleRegistry
 from atlas.repositories.approval_repo import ApprovalRepository
 from atlas.repositories.decision_repo import DecisionRepository
-from atlas.policy import PolicyService
+from atlas.policy import PolicyEngine, PolicyService
 from atlas.llm.ollama_provider import OllamaProvider
 from atlas.llm.service import LLMService
 from atlas.ops.backup import BackupManager
@@ -706,6 +706,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         PolicyRepository(db_manager), logger=get_logger("atlas.policy")
     )
     knowledge_service._policy = policy_service  # noqa: SLF001
+    policy_engine = PolicyEngine(
+        policy_service, logger=get_logger("atlas.policy.engine")
+    )
 
     # Planning OS (PA.1 / OI-PA-PLAN) — goal → gaps → compare → risk → decide.
     planning_service = PlanningService(
@@ -1251,6 +1254,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             portfolio=portfolio_service,
             learning=learning_service,
             mission_context=mission_context_service,
+            policy_engine=policy_engine,
             events=events,
             logger=get_logger("atlas.workers.paper_trading"),
         )
@@ -1501,6 +1505,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("ingestion", ingestion_source)
     container.register_instance("coverage", coverage_service)
     container.register_instance("policy", policy_service)
+    container.register_instance("policy_engine", policy_engine)
     container.register_instance("personal", personal_service)
     container.register_instance("arbiter", mission_arbiter)
     container.register_instance("decision", decision_engine)
@@ -1653,6 +1658,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "policy", policy_service, kind="service", version=PolicyService.VERSION
+    )
+    capabilities.register(
+        "policy_engine",
+        policy_engine,
+        kind="service",
+        version=PolicyEngine.VERSION,
     )
     capabilities.register(
         "personal", personal_service, kind="service", version=PersonalService.VERSION

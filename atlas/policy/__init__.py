@@ -8,5 +8,11 @@ Mission State). Rules nudge ranking/inclusion; they never act on the world or ar
 from __future__ import annotations
 
 from atlas.policy.service import POLICY_INFLUENCE_MAX, PolicyService
+from atlas.policy.engine import PolicyEngine, PolicyVerdict
 
-__all__ = ["PolicyService", "POLICY_INFLUENCE_MAX"]
+__all__ = [
+    "PolicyService",
+    "POLICY_INFLUENCE_MAX",
+    "PolicyEngine",
+    "PolicyVerdict",
+]

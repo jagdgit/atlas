@@ -88,6 +88,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Planning OS (PA.1)** — `GET /v1/planning/plan?goal=Should+I+buy+RELIANCE.NS` (or POST JSON). Returns gaps, alternatives, risks, recommended next steps, and a non-side-effecting decision (simulate / gather / hold). Never broker login (P10).
 
+**Policy Engine (PA.2)** — soft prefer/avoid plus hard `forbid` / `limit` (provenance caps). Evaluate: `POST /v1/policy/evaluate` with `{action, context}`. Decision Simulation blocks hard violations before sim fills.
+
 ---
 
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)
