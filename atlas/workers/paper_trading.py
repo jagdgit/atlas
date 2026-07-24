@@ -47,6 +47,7 @@ class PaperTradingWorker(PersistentWorker):
         decision_engine: Any,
         portfolio: Any,
         learning: Any = None,
+        mission_context: Any = None,
         events: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -55,6 +56,7 @@ class PaperTradingWorker(PersistentWorker):
         self._engine = decision_engine
         self._portfolio = portfolio
         self._learning = learning
+        self._mission_context = mission_context
         self._events = events
         self._logger = logger or logging.getLogger("atlas.workers.paper_trading")
 
@@ -204,7 +206,25 @@ class PaperTradingWorker(PersistentWorker):
         snapshot = self._portfolio.snapshot(portfolio_id, prices={symbol: price})
 
         mentor_advice = ""
-        if self._learning is not None:
+        mission_ctx_summary = ""
+        mission_ctx_citations: list[str] = []
+        if self._mission_context is not None:
+            try:
+                gathered = self._mission_context.gather(
+                    f"markets trading {symbol}",
+                    program_id="market",
+                    limit=8,
+                )
+                mission_ctx_summary = str(gathered.get("summary") or "")[:400]
+                mission_ctx_citations = list(gathered.get("citations") or [])[:8]
+                # Prefer Experience block from shared API when present.
+                for it in gathered.get("items") or []:
+                    if str(it.get("item_kind") or it.get("kind")) == "experience_advice":
+                        mentor_advice = str(it.get("advice") or "")[:500]
+                        break
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("mission_context gather skipped: %s", exc)
+        if not mentor_advice and self._learning is not None:
             try:
                 adv = self._learning.advice_for(f"markets trading {symbol}", limit=3)
                 mentor_advice = str(adv.get("advice") or "")[:500]
@@ -230,6 +250,8 @@ class PaperTradingWorker(PersistentWorker):
                 "rsi_overbought": strategy.get("rsi_overbought", 70.0),
                 "rsi_oversold": strategy.get("rsi_oversold", 30.0),
                 "mentor_advice": mentor_advice,
+                "mission_context_summary": mission_ctx_summary,
+                "mission_context_citations": mission_ctx_citations,
             },
         )
         decision = self._engine.decide(request)

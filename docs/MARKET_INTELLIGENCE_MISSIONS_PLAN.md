@@ -220,7 +220,7 @@ MI.6   Promote Portfolio Ledger + Broker Profiles     ✅
 MI.7   Investment Mentor + Experience OS deepening    ✅
 WM.1   World Models (markets first)                   ✅
 KG.1   Knowledge graph (Claim↔Concept↔Entity↔SPO)     ✅
-MCA.1  Mission Context API (all Programs) — deepened with WM.1 + KG.1
+MCA.1  Mission Context API (all Programs)             ✅
 ```
 
 ---
@@ -231,7 +231,7 @@ MCA.1  Mission Context API (all Programs) — deepened with WM.1 + KG.1
 2. See Program members (including disabled stubs) + lifecycle stages  
 3. After media.learn, **verify** claims and see trust / contested without DB  
 4. Interesting Event can spawn research (when enabled)  
-5. Decision Simulation cites context via shared API (when MCA.1 lands)  
+5. Decision Simulation cites context via shared API ✅ MCA.1  
 6. Mentor weekly lesson changes future advice  
 7. **No** broker credentials anywhere  
 
@@ -255,3 +255,4 @@ MCA.1  Mission Context API (all Programs) — deepened with WM.1 + KG.1
 - [x] MI.7 Investment Mentor → Experience OS; Decision Simulation recalls advice  
 - [x] WM.1 World Models framework + indian_markets + solar_plant stub (`GET /v1/world-models`)  
 - [x] KG.1 derived Knowledge Graph (`GET /v1/knowledge/graph`) + context graph_node rows  
+- [x] MCA.1 Mission Context API — Decision Simulation cites shared gather (`summary`/`citations`)  

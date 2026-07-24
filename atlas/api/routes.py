@@ -1445,18 +1445,26 @@ def program_context(
     q: str = "",
     limit: int = 12,
 ) -> dict:
-    """Mission Context for a Program — Knowledge + World Model structure (WM.1)."""
+    """Mission Context for a Program (MCA.1)."""
     try:
         _programs(request).describe(program_id)  # 404 if unknown
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _programs(request).context(q, program_id=program_id, limit=limit)
+    try:
+        ctx = _app(request).container.resolve("mission_context")
+        return ctx.gather(q, program_id=program_id, limit=limit)
+    except Exception:  # noqa: BLE001 — fall back to ProgramService wrapper
+        return _programs(request).context(q, program_id=program_id, limit=limit)
 
 
 @v1_router.get("/context", tags=["programs"])
 def mission_context(request: Request, q: str = "", limit: int = 12) -> dict:
-    """Mission Context gather — Knowledge + World Models (platform-wide)."""
-    return _programs(request).context(q, limit=limit)
+    """Mission Context API — everything relevant to ``q`` (MCA.1)."""
+    try:
+        ctx = _app(request).container.resolve("mission_context")
+        return ctx.gather(q, limit=limit)
+    except Exception:  # noqa: BLE001
+        return _programs(request).context(q, limit=limit)
 
 
 @v1_router.get("/world-models", tags=["programs"])

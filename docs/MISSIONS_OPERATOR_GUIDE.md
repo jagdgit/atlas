@@ -84,6 +84,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Knowledge Graph (KG.1)** — derived Claim↔Concept↔Entity↔SPO view over findings (no separate graph DB). `GET /v1/knowledge/graph?q=cash+flow`. Context also returns `item_kind=graph_node`.
 
+**Mission Context (MCA.1)** — shared gather for all Programs: `GET /v1/context?q=…` returns `items`, `sources`, `citations`, `summary`. Decision Simulation pulls this each tick and cites refs in the decision rationale.
+
 ---
 
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)

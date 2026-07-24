@@ -278,7 +278,7 @@ class ProgramService:
     """Derive Program cockpit views from definitions + live missions/templates."""
 
     name = "programs"
-    VERSION = "kg.1"
+    VERSION = "mca.1"
 
     def __init__(
         self,
@@ -288,12 +288,14 @@ class ProgramService:
         knowledge: Any | None = None,
         world_models: Any | None = None,
         knowledge_graph: Any | None = None,
+        mission_context: Any | None = None,
     ) -> None:
         self._missions = missions
         self._templates = templates
         self._knowledge = knowledge
         self._world_models = world_models
         self._knowledge_graph = knowledge_graph
+        self._mission_context = mission_context
 
     def list(self) -> list[dict[str, Any]]:
         return [self.describe(p.id) for p in BUILTIN_PROGRAMS]
@@ -430,71 +432,19 @@ class ProgramService:
     def context(
         self, topic: str, *, program_id: str | None = None, limit: int = 12
     ) -> dict[str, Any]:
-        """Mission Context gather — Knowledge chunks/findings + World Model structure (WM.1)."""
-        topic = (topic or "").strip()
-        items: list[dict[str, Any]] = []
-        if self._world_models is not None and (topic or program_id):
-            try:
-                wm_limit = max(2, min(8, limit // 2 or 2))
-                for row in self._world_models.context_for(
-                    topic, program_id=program_id, limit=wm_limit
-                ):
-                    items.append(row)
-            except Exception:  # noqa: BLE001 — context must not fail cockpit
-                pass
-        if self._knowledge_graph is not None and topic:
-            try:
-                g_limit = max(2, min(6, limit // 3 or 2))
-                for row in self._knowledge_graph.context_nodes(topic, limit=g_limit):
-                    items.append(row)
-            except Exception:  # noqa: BLE001
-                pass
-        if self._knowledge is not None and topic:
-            retrieve = getattr(self._knowledge, "retrieve", None)
-            if callable(retrieve):
-                try:
-                    ranked = retrieve(topic, k=limit)
-                    for r in ranked or []:
-                        content = getattr(r, "content", None)
-                        if content is None and isinstance(r, dict):
-                            content = r.get("content")
-                        score = getattr(r, "similarity", None)
-                        if score is None and isinstance(r, dict):
-                            score = r.get("similarity")
-                        items.append(
-                            {"kind": "chunk", "content": content, "score": score}
-                        )
-                except Exception:  # noqa: BLE001 — spike must not fail cockpit
-                    pass
-            if len(items) < limit:
-                try:
-                    findings = self._knowledge.list_findings(limit=max(limit * 3, 30))
-                    needle = topic.lower()
-                    for f in findings:
-                        stmt = str(f.get("statement") or "")
-                        if needle in stmt.lower():
-                            items.append(
-                                {
-                                    "kind": "finding",
-                                    "id": str(f.get("id") or ""),
-                                    "statement": stmt,
-                                    "claim_type": f.get("claim_type"),
-                                    "domain": f.get("domain"),
-                                }
-                            )
-                        if len(items) >= limit:
-                            break
-                except Exception:  # noqa: BLE001
-                    pass
-        return {
-            "topic": topic,
-            "program_id": program_id,
-            "items": items[:limit],
-            "count": min(len(items), limit),
-            "spike": False,
-            "note": "Mission Context: Knowledge + World Models + graph nodes (KG.1)",
-            "version": self.VERSION,
-        }
+        """Delegate to Mission Context API (MCA.1); keep legacy gather if unbound."""
+        if self._mission_context is not None:
+            return self._mission_context.gather(
+                topic, program_id=program_id, limit=limit
+            )
+        # Fallback for hermetic tests that only inject world_models / graph.
+        from atlas.missions.context import MissionContextService
+
+        return MissionContextService(
+            knowledge=self._knowledge,
+            world_models=self._world_models,
+            knowledge_graph=self._knowledge_graph,
+        ).gather(topic, program_id=program_id, limit=limit)
 
     def _template_maps(self) -> tuple[dict[str, str], dict[str, str]]:
         name_to_id: dict[str, str] = {}

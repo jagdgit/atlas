@@ -164,7 +164,9 @@ class StrategyDecisionRule:
 def _apply_mentor_bias(options: list[ScoredOption], ctx: dict[str, Any]) -> list[ScoredOption]:
     """Light Experience OS bias from Investment Mentor advice (MI.7 / OI-MP5)."""
     advice = str(ctx.get("mentor_advice") or "").strip().lower()
-    if not advice or len(options) <= 1:
+    ctx_summary = str(ctx.get("mission_context_summary") or "").strip()
+    citations = list(ctx.get("mission_context_citations") or [])
+    if not advice and not ctx_summary:
         return options
     caution = any(
         k in advice
@@ -180,17 +182,29 @@ def _apply_mentor_bias(options: list[ScoredOption], ctx: dict[str, Any]) -> list
     reinforce = any(
         k in advice for k in ("reinforce", "positive expectancy", "profit")
     ) and not caution
+    cite_bit = ""
+    if citations:
+        cite_bit = f"; ctx {','.join(str(c) for c in citations[:3])}"
+    elif ctx_summary:
+        cite_bit = f"; ctx {ctx_summary[:80]}"
     for opt in options:
         if opt.key == "hold":
+            if cite_bit and ctx_summary:
+                opt.rationale = (opt.rationale or "hold") + cite_bit
             continue
         if caution and opt.key.startswith("buy:"):
             opt.score = max(0.05, float(opt.score) - 0.25)
-            opt.rationale = (opt.rationale or "") + "; mentor caution"
+            opt.rationale = (opt.rationale or "") + "; mentor caution" + cite_bit
             opt.experience_refs = list(opt.experience_refs or []) + ["investment_mentor"]
+            opt.knowledge_refs = list(opt.knowledge_refs or []) + citations[:3]
         elif reinforce and opt.key.startswith("buy:"):
             opt.score = float(opt.score) + 0.05
-            opt.rationale = (opt.rationale or "") + "; mentor reinforce"
+            opt.rationale = (opt.rationale or "") + "; mentor reinforce" + cite_bit
             opt.experience_refs = list(opt.experience_refs or []) + ["investment_mentor"]
+            opt.knowledge_refs = list(opt.knowledge_refs or []) + citations[:3]
+        elif cite_bit:
+            opt.rationale = (opt.rationale or "") + cite_bit
+            opt.knowledge_refs = list(opt.knowledge_refs or []) + citations[:3]
     return options
 
 

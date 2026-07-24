@@ -124,6 +124,7 @@ from atlas.missions.templates import TemplateService
 from atlas.missions.programs import ProgramService
 from atlas.world_models import default_world_model_registry
 from atlas.knowledge.graph import KnowledgeGraphService
+from atlas.missions.context import MissionContextService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
 from atlas.repositories.agent_run_repo import AgentRunRepository
@@ -535,18 +536,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.missions.templates"),
     )
 
-    # Intelligence Programs (MI.1) + World Models (WM.1) + Knowledge Graph (KG.1).
+    # World Models (WM.1) + Knowledge Graph (KG.1) — Mission Context / Programs wired after Learning.
     world_model_registry = default_world_model_registry()
     knowledge_graph_service = KnowledgeGraphService(
         knowledge_service, logger=get_logger("atlas.knowledge.graph")
     )
-    program_service = ProgramService(
-        missions=mission_service,
-        templates=template_service,
-        knowledge=knowledge_service,
-        world_models=world_model_registry,
-        knowledge_graph=knowledge_graph_service,
-    )
+    program_service = None  # set after learning_service (MCA.1)
 
     # Conversation + Chat orchestrator (Sprint 10): the shared spine (D1) that the
     # async Job Engine (S12) will reuse. ConversationService owns the transcript;
@@ -685,6 +680,23 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     # Soft bias after apply+enable is loaded inside KnowledgeService.retrieve.
     knowledge_service._learning = learning_service  # noqa: SLF001
+
+    # Mission Context API (MCA.1) + Programs cockpit — after Learning so Experience is included.
+    mission_context_service = MissionContextService(
+        knowledge=knowledge_service,
+        world_models=world_model_registry,
+        knowledge_graph=knowledge_graph_service,
+        learning=learning_service,
+        logger=get_logger("atlas.missions.context"),
+    )
+    program_service = ProgramService(
+        missions=mission_service,
+        templates=template_service,
+        knowledge=knowledge_service,
+        world_models=world_model_registry,
+        knowledge_graph=knowledge_graph_service,
+        mission_context=mission_context_service,
+    )
 
     # Policy layer (Phase C · §C.5, CC8): durable operator rules that *influence* retrieval + advice
     # (prefer/avoid/trust/distrust) — governed + reversible, never arbitration. Attached to
@@ -1217,6 +1229,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             decision_engine=decision_engine,
             portfolio=portfolio_service,
             learning=learning_service,
+            mission_context=mission_context_service,
             events=events,
             logger=get_logger("atlas.workers.paper_trading"),
         )
@@ -1362,6 +1375,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("workers", worker_manager)
     container.register_instance("templates", template_service)
     container.register_instance("programs", program_service)
+    container.register_instance("mission_context", mission_context_service)
     container.register_instance("world_models", world_model_registry)
     container.register_instance("knowledge_graph", knowledge_graph_service)
     container.register_instance("conversation", conversation_service)
@@ -1544,6 +1558,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "programs", program_service, kind="service", version=ProgramService.VERSION
+    )
+    capabilities.register(
+        "mission_context",
+        mission_context_service,
+        kind="service",
+        version=MissionContextService.VERSION,
     )
     capabilities.register(
         "world_models",

@@ -201,8 +201,8 @@ Missions never depend on which extractor produced a finding.
 | V5 | Verification + multi-dim trust | ✅ |
 | V6 | Knowledge graph | ✅ KG.1 (derived) |
 | V6.5 | World Models framework + first domain packs | ✅ WM.1 |
-| V7 | Context API + Planning OS in mission loops | Planned |
-| V8 | Experience OS + Mentors → better decisions | Planned |
+| V7 | Context API + Planning OS in mission loops | ✅ MCA.1 (Context API); Planning OS still OI-PA-PLAN |
+| V8 | Experience OS + Mentors → better decisions | Partial (MI.7 / OI-MP5) |
 
 ---
 
@@ -225,7 +225,7 @@ Missions never depend on which extractor produced a finding.
 
 1. KE.2.5–2.7 — SPO quality, structured relationship preview, provenance  
 2. Program UI + cognitive lifecycle (MI.1) ✅  
-3. Mission Context API spike (MCA.1 shape in MI.1; full API later)  
+3. Mission Context API ✅ MCA.1 (`GET /v1/context`; Decision Simulation cites)  
 4. Elevate Policy Engine + Memory hierarchy docs → code  
 5. Planning OS (generalize research/job planning)  
 6. Capability Registry enrichment  
