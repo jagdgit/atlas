@@ -289,7 +289,8 @@ def test_relationship_spo_rejects_clause_fragments():
     text = (
         "They're going to print as much money as they need tomorrow morning. "
         "Inflation reduces purchasing power for the middle class over time. "
-        "Entrepreneurship creates wealth when cash flow compounds steadily."
+        "Entrepreneurship creates wealth when cash flow compounds steadily. "
+        "What baffles me is that teaches nothing useful about investing today."
     )
     extractor = MediaKnowledgeExtractor(max_claims=2)
     payloads = extractor.extract(text)
@@ -297,9 +298,13 @@ def test_relationship_spo_rejects_clause_fragments():
     assert rels
     for rel in rels:
         value = rel["value"]
-        assert len(str(value.get("subject") or "").split()) <= 5
-        assert len(str(value.get("object") or "").split()) <= 5
-        assert "going to" not in str(value.get("subject") or "").lower()
+        subj = str(value.get("subject") or "")
+        obj = str(value.get("object") or "")
+        assert len(subj.split()) <= 4
+        assert len(obj.split()) <= 4
+        assert "going to" not in subj.lower()
+        assert "baffles" not in subj.lower()
+        assert "what " not in subj.lower()
         assert value.get("predicate") in {
             "reduces",
             "increases",
@@ -316,6 +321,25 @@ def test_relationship_spo_rejects_clause_fragments():
     # Prefer structured triples like Inflation reduces Purchasing Power.
     statements = {p["statement"] for p in rels}
     assert any("reduces" in s for s in statements)
+    assert not any("baffles" in s.lower() for s in statements)
+
+
+def test_relationship_spo_rejects_teach_clause_fragment():
+    """KE.2.5 — 'what baffles me is that teaches…' must not become an edge."""
+    text = (
+        "What baffles me is that teaches people to chase salary instead of assets. "
+        "Assets are preferred over liabilities for long-term wealth."
+    )
+    extractor = MediaKnowledgeExtractor(max_claims=2)
+    payloads = extractor.extract(text)
+    rels = [p for p in payloads if p["claim_type"] == "relationship"]
+    assert rels
+    for rel in rels:
+        blob = f"{rel.get('statement')} {rel['value'].get('subject')} {rel['value'].get('object')}"
+        assert "baffles" not in blob.lower()
+        assert "what baffles" not in blob.lower()
+    preds = {(p.get("value") or {}).get("predicate") for p in rels}
+    assert "preferred_over" in preds
 
 
 def test_provenance_attached_to_claims():

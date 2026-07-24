@@ -156,9 +156,12 @@ _FACT_PREDICATES = frozenset({_PRED_WRITTEN_BY})
 
 _CLAUSE_NOISE = re.compile(
     r"\b(going to|gonna|they're|they are|we're|we are|he's|she's|it's|"
-    r"because|which|where|when|while|although|however)\b",
+    r"because|which|where|when|while|although|however|"
+    r"baffles?|wonder|think that|is that|me is|that teaches|"
+    r"what|who|whom|whose|how|why)\b",
     re.I,
 )
+# Pronouns / determiners that cannot head a graph edge alone.
 _STOP_SUBJECTS = frozenset(
     {
         "it",
@@ -175,10 +178,35 @@ _STOP_SUBJECTS = frozenset(
         "what",
         "which",
         "who",
+        "whom",
+        "whose",
+        "how",
+        "why",
         "the",
         "a",
         "an",
+        "and",
+        "but",
+        "so",
+        "or",
+        "if",
+        "as",
+        "my",
+        "your",
+        "their",
+        "our",
+        "his",
+        "her",
+        "its",
     }
+)
+# Function words that signal a clause fragment rather than a noun phrase.
+_FRAGMENT_MARKERS = re.compile(
+    r"\b(is|are|was|were|be|been|being|do|does|did|have|has|had|"
+    r"will|would|can|could|should|may|might|must|shall|"
+    r"to|of|for|from|with|into|onto|about|over|under|"
+    r"that|than|then|them|these|those|such)\b",
+    re.I,
 )
 
 # Epistemic kinds (KE10). observation / question reserved for later extractors.
@@ -524,9 +552,9 @@ class MediaExtractBundle:
 
 
 class MediaKnowledgeExtractor:
-    """Extract typed knowledge candidates from media transcript text (KE.2.4)."""
+    """Extract typed knowledge candidates from media transcript text (KE.2.5)."""
 
-    VERSION = "ke.2.4"
+    VERSION = "ke.2.5"
 
     def __init__(
         self,
@@ -754,13 +782,18 @@ class MediaKnowledgeExtractor:
                 m = pattern.search(sentence)
                 if not m:
                     continue
-                subj = _spo_phrase(m.group(1), lexicon=lexicon)
-                obj = _spo_phrase(m.group(2), lexicon=lexicon)
+                subj = _spo_phrase(m.group(1), lexicon=lexicon, require_anchor=True)
+                obj = _spo_phrase(m.group(2), lexicon=lexicon, require_anchor=True)
                 if not subj or not obj:
                     continue
                 if normalize_statement(subj) in _STOP_SUBJECTS:
                     continue
                 if not _is_structured_spo(subj, obj):
+                    continue
+                # KE.2.5: both sides must be graphable anchors (lexicon/entity/short NP).
+                if not _is_spo_anchor(subj, lexicon=lexicon):
+                    continue
+                if not _is_spo_anchor(obj, lexicon=lexicon):
                     continue
                 key = (normalize_statement(subj), predicate, normalize_statement(obj))
                 if key in seen:
@@ -902,8 +935,27 @@ def _classify_proper_name(name: str) -> str:
     return "person"
 
 
-def _spo_phrase(raw: str, *, lexicon: frozenset[str]) -> str:
-    """Shorten a capture group into an SPO-friendly phrase (KE15)."""
+def _known_entity_names() -> frozenset[str]:
+    names: set[str] = set()
+    for group in (_KNOWN_WORKS, _KNOWN_PEOPLE, _KNOWN_PLACES, _KNOWN_ORGS):
+        for needle, display in group:
+            names.add(normalize_statement(needle))
+            names.add(normalize_statement(display))
+    return frozenset(names)
+
+
+_KNOWN_ENTITY_NORMS = _known_entity_names()
+
+
+def _spo_phrase(
+    raw: str, *, lexicon: frozenset[str], require_anchor: bool = False
+) -> str:
+    """Shorten a capture group into an SPO-friendly phrase (KE15 / KE.2.5).
+
+    When ``require_anchor`` is True (relationship emission), return only a
+    lexicon concept, known entity, or short proper-name NP — never a clause
+    fragment truncated to N words.
+    """
     phrase = _clean_phrase(raw)
     if not phrase:
         return ""
@@ -912,22 +964,102 @@ def _spo_phrase(raw: str, *, lexicon: frozenset[str]) -> str:
     for concept in sorted(lexicon, key=len, reverse=True):
         if concept and re.search(rf"\b{re.escape(concept)}\b", lowered):
             return _display_concept(concept)
-    # Keep leading noun-ish window only.
+    # Prefer a known entity contained in the phrase.
+    for entity_norm in sorted(_KNOWN_ENTITY_NORMS, key=len, reverse=True):
+        if entity_norm and re.search(rf"\b{re.escape(entity_norm)}\b", lowered):
+            return _display_known_entity(entity_norm)
+    if require_anchor:
+        # Accept a short Title-Case proper name with no clause noise.
+        words = phrase.split()
+        if (
+            1 <= len(words) <= 4
+            and not _CLAUSE_NOISE.search(phrase)
+            and not _looks_like_clause_fragment(phrase)
+            and _looks_like_noun_phrase(phrase)
+        ):
+            return phrase.strip(" ,;:")
+        return ""
+    # Legacy soften path (unused for relationships): keep leading window.
     words = phrase.split()
-    if len(words) > 5:
-        phrase = " ".join(words[:5])
+    if len(words) > 4:
+        phrase = " ".join(words[:4])
     return phrase.strip(" ,;:")
 
 
+def _display_known_entity(norm: str) -> str:
+    for group in (_KNOWN_WORKS, _KNOWN_PEOPLE, _KNOWN_PLACES, _KNOWN_ORGS):
+        for needle, display in group:
+            if normalize_statement(needle) == norm or normalize_statement(display) == norm:
+                return display
+    return _display_concept(norm)
+
+
+def _looks_like_clause_fragment(side: str) -> bool:
+    """True when the phrase still looks like prose, not a noun phrase."""
+    words = side.split()
+    if not words:
+        return True
+    first = normalize_statement(words[0])
+    if first in _STOP_SUBJECTS:
+        return True
+    if _CLAUSE_NOISE.search(side):
+        return True
+    # Multiple finite/function markers → clause, not edge endpoint.
+    markers = _FRAGMENT_MARKERS.findall(side)
+    if len(markers) >= 2:
+        return True
+    if len(words) >= 3 and _FRAGMENT_MARKERS.search(words[1]):
+        return True
+    return False
+
+
+def _looks_like_noun_phrase(side: str) -> bool:
+    """Coarse NP check: no leading pronoun, limited length, little clause noise."""
+    words = side.split()
+    if not words or len(words) > 4:
+        return False
+    if normalize_statement(words[0]) in _STOP_SUBJECTS:
+        return False
+    if len(side) > 48:
+        return False
+    return not _looks_like_clause_fragment(side)
+
+
+def _is_spo_anchor(side: str, *, lexicon: frozenset[str]) -> bool:
+    """KE.2.5 — edge endpoints must resolve to concept/entity/short NP anchors."""
+    norm = normalize_statement(side)
+    if not norm or norm in _STOP_SUBJECTS:
+        return False
+    if norm in lexicon or any(
+        re.search(rf"\b{re.escape(c)}\b", norm) for c in lexicon if len(c) >= 4
+    ):
+        return True
+    if norm in _KNOWN_ENTITY_NORMS:
+        return True
+    if any(re.search(rf"\b{re.escape(e)}\b", norm) for e in _KNOWN_ENTITY_NORMS if len(e) >= 4):
+        return True
+    # Short proper-name / Title Case NP already cleaned.
+    words = side.split()
+    if 1 <= len(words) <= 4 and _looks_like_noun_phrase(side):
+        # Prefer capitalized tokens for unknown NPs (Gold, Cash Flow Thinking).
+        caps = sum(1 for w in words if w[:1].isupper())
+        if caps >= max(1, len(words) - 1):
+            return True
+        # All-lowercase single/multi lexicon-like tokens of length >= 3.
+        if all(len(w) >= 3 for w in words) and not _FRAGMENT_MARKERS.search(side):
+            return True
+    return False
+
+
 def _is_structured_spo(subj: str, obj: str) -> bool:
-    """Reject clause fragments that are not usable as graph edges."""
+    """Reject clause fragments that are not usable as graph edges (KE.2.5)."""
     for side in (subj, obj):
         words = side.split()
-        if len(words) < 1 or len(words) > 5:
+        if len(words) < 1 or len(words) > 4:
             return False
-        if _CLAUSE_NOISE.search(side):
+        if _looks_like_clause_fragment(side):
             return False
-        if len(side) > 60:
+        if len(side) > 48:
             return False
     if normalize_statement(subj) == normalize_statement(obj):
         return False
