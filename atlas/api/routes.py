@@ -1420,7 +1420,7 @@ def program_context(
     q: str = "",
     limit: int = 12,
 ) -> dict:
-    """MCA.1 spike — everything relevant to ``q`` for this Program."""
+    """Mission Context for a Program — Knowledge + World Model structure (WM.1)."""
     try:
         _programs(request).describe(program_id)  # 404 if unknown
     except LookupError as exc:
@@ -1430,8 +1430,41 @@ def program_context(
 
 @v1_router.get("/context", tags=["programs"])
 def mission_context(request: Request, q: str = "", limit: int = 12) -> dict:
-    """MCA.1 spike — platform-wide context gather (no Program filter)."""
+    """Mission Context gather — Knowledge + World Models (platform-wide)."""
     return _programs(request).context(q, limit=limit)
+
+
+@v1_router.get("/world-models", tags=["programs"])
+def list_world_models(request: Request) -> dict:
+    """List World Model packs (WM.1 — structure, not Knowledge claims)."""
+    try:
+        reg = _app(request).container.resolve("world_models")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"world_models unavailable: {exc}") from exc
+    return reg.as_dict()
+
+
+@v1_router.get("/world-models/{pack_id}", tags=["programs"])
+def get_world_model(pack_id: str, request: Request, kind: str = "", q: str = "", limit: int = 50) -> dict:
+    """Describe a World Model pack and optionally list matching facts."""
+    try:
+        reg = _app(request).container.resolve("world_models")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"world_models unavailable: {exc}") from exc
+    pack = reg.get(pack_id)
+    if pack is None:
+        raise HTTPException(status_code=404, detail=f"unknown world model pack: {pack_id}")
+    desc = pack.describe() if hasattr(pack, "describe") else {"id": pack_id}
+    return {
+        "pack": desc,
+        "facts": reg.facts(
+            pack_id=pack_id,
+            kind=kind or None,
+            q=q or None,
+            limit=limit,
+        ),
+        "version": getattr(reg, "VERSION", "wm.1"),
+    }
 
 
 @v1_router.get("/market/providers", tags=["programs"])

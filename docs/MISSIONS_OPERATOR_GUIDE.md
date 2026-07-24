@@ -80,6 +80,8 @@ API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/
 `paper_trading` remains a **compat alias** for Chat/Jobs; prefer **`decision_simulation`**.
 Start Program instantiates all seven Market members when templates are seeded.
 
+**World Models (WM.1)** — domain *structure* (not Knowledge claims). List packs: `GET /v1/world-models`. Indian markets + solar stub (solar-plant test). Mission Context (`GET /v1/context?q=NSE`) returns `item_kind=world_fact` rows mixed with Knowledge.
+
 ---
 
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)

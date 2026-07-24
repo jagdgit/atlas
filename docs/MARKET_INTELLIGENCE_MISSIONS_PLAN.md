@@ -191,6 +191,8 @@ Operator does not have to ask.
 
 Platform owns the World Model **framework**. Market Program ships an **Indian markets pack** (exchanges, sectors, hours, settlement, corporate actions). Solar Program would ship irradiance/MPPT content — same framework.
 
+**Shipped (WM.1):** `atlas/world_models/` registry + packs `indian_markets` and `solar_plant` (stub). APIs: `GET /v1/world-models`, `GET /v1/world-models/{pack_id}`. Mission Context (`/v1/context`, `/v1/programs/{id}/context`) includes `world_fact` rows alongside Knowledge.
+
 ---
 
 ## 10. Experience OS
@@ -216,9 +218,9 @@ MI.4   News + Interesting-Event → research Jobs + verify ✅
 MI.5   Company / filings ingest (compliant) ✅
 MI.6   Promote Portfolio Ledger + Broker Profiles     ✅
 MI.7   Investment Mentor + Experience OS deepening    ✅
-WM.1   World Models (markets first)
+WM.1   World Models (markets first)                   ✅
 KG.1   Knowledge graph (Claim↔Concept↔Entity↔SPO)
-MCA.1  Mission Context API (all Programs)
+MCA.1  Mission Context API (all Programs) — deepened with WM.1 structure
 ```
 
 ---
@@ -251,3 +253,4 @@ MCA.1  Mission Context API (all Programs)
 - [x] MI.5 company intelligence (config_seed + official skeletons)  
 - [x] MI.6 Portfolio Ledger + Broker Profiles (sim fees; `GET /v1/market/broker-profiles`)  
 - [x] MI.7 Investment Mentor → Experience OS; Decision Simulation recalls advice  
+- [x] WM.1 World Models framework + indian_markets + solar_plant stub (`GET /v1/world-models`)  

@@ -122,6 +122,7 @@ from atlas.workers import HelloWatcher, RepoWatcher, WorkerManager
 from atlas.repositories.template_repo import TemplateRepository
 from atlas.missions.templates import TemplateService
 from atlas.missions.programs import ProgramService
+from atlas.world_models import default_world_model_registry
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
 from atlas.repositories.agent_run_repo import AgentRunRepository
@@ -533,12 +534,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.missions.templates"),
     )
 
-    # Intelligence Programs (MI.1): soft grouping over missions — Market /
-    # Engineering / Personal cockpits + cognitive lifecycle + context spike.
+    # Intelligence Programs (MI.1) + World Models (WM.1): soft grouping + domain structure.
+    world_model_registry = default_world_model_registry()
     program_service = ProgramService(
         missions=mission_service,
         templates=template_service,
         knowledge=knowledge_service,
+        world_models=world_model_registry,
     )
 
     # Conversation + Chat orchestrator (Sprint 10): the shared spine (D1) that the
@@ -1355,6 +1357,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("workers", worker_manager)
     container.register_instance("templates", template_service)
     container.register_instance("programs", program_service)
+    container.register_instance("world_models", world_model_registry)
     container.register_instance("conversation", conversation_service)
     container.register_instance("planner", planner)
     container.register_instance("tool_executor", tool_executor)
@@ -1535,6 +1538,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "programs", program_service, kind="service", version=ProgramService.VERSION
+    )
+    capabilities.register(
+        "world_models",
+        world_model_registry,
+        kind="service",
+        version=getattr(world_model_registry, "VERSION", "wm.1"),
+        metadata={"packs": [p["id"] for p in world_model_registry.list_packs()]},
     )
     capabilities.register(
         "notifier", notifier, kind="kernel", version=Notifier.VERSION

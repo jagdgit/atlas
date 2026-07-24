@@ -94,7 +94,7 @@ Today workers mostly own their own `interval_seconds`. Elevate to Program → Mi
 | **Policy Engine** | Constraints & governance (caps, forbidden actions) | Partial (prefer/avoid Policy store C.5) | First-class **limits** (max 5%, no pre-earnings) as reusable engine |
 | **Capability Registry** | Discover readers/extractors/verifiers/tools | Partial (`CapabilityRegistry`) | Enrich: version/health/deps; missions ask “need MarketReader” not import |
 | **Decision Engine** | Kernel arbitration | ✅ Phase D | Keep kernel; Programs supply rules + context |
-| **World Models** | Domain *structure* (not claim rows) | Planned | Markets *or* solar irradiance/MPPT — platform shape, domain content |
+| **World Models** | Domain *structure* (not claim rows) | ✅ WM.1 | Framework + `indian_markets` + `solar_plant` stub packs |
 
 ### 4.3 Memory hierarchy (explicit)
 
@@ -200,7 +200,7 @@ Missions never depend on which extractor produced a finding.
 | V4 | Typed knowledge extraction | ✅ |
 | V5 | Verification + multi-dim trust | ✅ |
 | V6 | Knowledge graph | Next |
-| V6.5 | World Models framework + first domain packs | Planned |
+| V6.5 | World Models framework + first domain packs | ✅ WM.1 |
 | V7 | Context API + Planning OS in mission loops | Planned |
 | V8 | Experience OS + Mentors → better decisions | Planned |
 
@@ -230,6 +230,6 @@ Missions never depend on which extractor produced a finding.
 5. Planning OS (generalize research/job planning)  
 6. Capability Registry enrichment  
 7. Scheduler hierarchy  
-8. World Models framework  
+8. World Models framework ✅ WM.1  
 
 Stop adding top-level OS names unless the solar-plant test forces it.

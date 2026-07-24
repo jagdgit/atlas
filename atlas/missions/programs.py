@@ -278,7 +278,7 @@ class ProgramService:
     """Derive Program cockpit views from definitions + live missions/templates."""
 
     name = "programs"
-    VERSION = "mi.7"
+    VERSION = "wm.1"
 
     def __init__(
         self,
@@ -286,10 +286,12 @@ class ProgramService:
         missions: Any | None = None,
         templates: Any | None = None,
         knowledge: Any | None = None,
+        world_models: Any | None = None,
     ) -> None:
         self._missions = missions
         self._templates = templates
         self._knowledge = knowledge
+        self._world_models = world_models
 
     def list(self) -> list[dict[str, Any]]:
         return [self.describe(p.id) for p in BUILTIN_PROGRAMS]
@@ -426,9 +428,18 @@ class ProgramService:
     def context(
         self, topic: str, *, program_id: str | None = None, limit: int = 12
     ) -> dict[str, Any]:
-        """MCA.1 spike — everything relevant to ``topic`` (chunks + findings)."""
+        """Mission Context gather — Knowledge chunks/findings + World Model structure (WM.1)."""
         topic = (topic or "").strip()
         items: list[dict[str, Any]] = []
+        if self._world_models is not None and (topic or program_id):
+            try:
+                wm_limit = max(2, min(8, limit // 2 or 2))
+                for row in self._world_models.context_for(
+                    topic, program_id=program_id, limit=wm_limit
+                ):
+                    items.append(row)
+            except Exception:  # noqa: BLE001 — context must not fail cockpit
+                pass
         if self._knowledge is not None and topic:
             retrieve = getattr(self._knowledge, "retrieve", None)
             if callable(retrieve):
@@ -471,8 +482,8 @@ class ProgramService:
             "program_id": program_id,
             "items": items[:limit],
             "count": min(len(items), limit),
-            "spike": True,
-            "note": "MCA.1 spike — full Mission Context API lands later",
+            "spike": False,
+            "note": "Mission Context: Knowledge + World Model structure (WM.1)",
             "version": self.VERSION,
         }
 

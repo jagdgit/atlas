@@ -89,7 +89,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-KV0 | 🟢 | P1 | **Knowledge Verification (V5)** — KV.0–KV.10 ✅. | `docs/KNOWLEDGE_VERIFICATION_PLAN.md` |
 | OI-MP0 | 🟢 | P1 | **Mission Philosophy** — Layer 1 vs Layer 2; kinds; lifecycle; experience shape. | `docs/ATLAS_MISSION_PHILOSOPHY.md` |
 | OI-MP1 | 🟡 | P1 | **Experience journal** — deepen; Experience OS first-class (platform). | MP · `ATLAS_PLATFORM_ARCHITECTURE.md` |
-| OI-MI0 | 🟢 | P1 | **Market Intelligence Program** — MI.1–MI.7 ✅ (seven members live). Next: WM.1 / MCA.1. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
+| OI-MI0 | 🟢 | P1 | **Market Intelligence Program** — MI.1–MI.7 ✅. WM.1 ✅. **Next:** KG.1 / MCA.1 deepen. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
 | OI-MP2 | 🟢 | P1 | **Split paper trading** — `decision_simulation` is primary; `paper_trading` remains compat alias. | `OI-MI0` |
 | OI-MP3 | 🔴 | P1 | **Daily Learning Governance Report**. | Philosophy Layer 2 |
 | OI-MP4 | 🔴 | P3 | **Engineering Mentor Mission**. | Philosophy |
@@ -99,7 +99,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-PA-MEM | 🔴 | P2 | **Memory hierarchy** — working / session / long-term ↔ Knowledge / Experience (document + wire). | Platform |
 | OI-PA-POLICY | 🔴 | P2 | **Policy Engine** — elevate prefer/avoid store to reusable hard/soft constraints across Programs. | Platform · builds on C.5 |
 | OI-PA-CAP | 🔴 | P2 | **Capability Registry enrichment** — version/health/deps; missions declare needs, not imports. | Roadmap §5.10 |
-| OI-PA-SCHED | 🔴 | P3 | **Scheduler hierarchy** — Program → Mission → Worker tick. | Platform |
+| OI-PA-WM | 🟢 | P1 | **World Models framework** — registry + indian_markets + solar_plant stub; Mission Context includes structure. | WM.1 |
 | OI-BA0 | 🟢 | P2 | **Browser → Asset** — BA.1b + BA.v2 (opt-in yt-dlp) done. BA.v2+ later. | `MEDIA_BROWSER_ACQUISITION_PLAN.md` · `atlas/ingestion/youtube_media_obtain.py` |
 | OI-M1 | 🟢 | P1 | Official YouTube captions API — executable when `plugins.youtube.api_key` set (download may still need OAuth). | `atlas/transcripts/official_captions.py` |
 | OI-UI0 | 🟡 | P1 | **Job UI live updates** — poll race fixed; hard-refresh for `app.js`. | `atlas/web/static/app.js` |
