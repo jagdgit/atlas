@@ -25,11 +25,13 @@ class EventResearchWorker(PersistentWorker):
         jobs: Any,
         event_repo: Any | None = None,
         events: Any | None = None,
+        planning: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._jobs = jobs
         self._event_repo = event_repo
         self._events = events
+        self._planning = planning
         self._logger = logger or logging.getLogger("atlas.workers.event_research")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -108,6 +110,15 @@ class EventResearchWorker(PersistentWorker):
         )
 
     def _spawn(self, ev: InterestingEvent, *, mission_id: str) -> bool:
+        plan_decision: dict[str, Any] = {}
+        if self._planning is not None:
+            try:
+                plan = self._planning.plan(
+                    ev.research_objective(), program_id="market"
+                )
+                plan_decision = dict(plan.get("decision") or {})
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("planning.plan skipped: %s", exc)
         try:
             detail = self._jobs.create_job(ev.research_objective())
             job = detail.get("job") if isinstance(detail, dict) else None
@@ -128,6 +139,8 @@ class EventResearchWorker(PersistentWorker):
                             "symbol": ev.symbol,
                             "score": ev.score,
                             "kind": ev.kind,
+                            "planning_action": plan_decision.get("action"),
+                            "planning_why": plan_decision.get("why"),
                         },
                         source=self.type,
                     )

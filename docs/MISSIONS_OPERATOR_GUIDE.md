@@ -86,6 +86,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Mission Context (MCA.1)** — shared gather for all Programs: `GET /v1/context?q=…` returns `items`, `sources`, `citations`, `summary`. Decision Simulation pulls this each tick and cites refs in the decision rationale.
 
+**Planning OS (PA.1)** — `GET /v1/planning/plan?goal=Should+I+buy+RELIANCE.NS` (or POST JSON). Returns gaps, alternatives, risks, recommended next steps, and a non-side-effecting decision (simulate / gather / hold). Never broker login (P10).
+
 ---
 
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)

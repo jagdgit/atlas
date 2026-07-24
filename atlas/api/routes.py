@@ -1467,6 +1467,36 @@ def mission_context(request: Request, q: str = "", limit: int = 12) -> dict:
         return _programs(request).context(q, limit=limit)
 
 
+@v1_router.get("/planning/plan", tags=["programs"])
+def planning_plan_get(
+    request: Request,
+    goal: str = "",
+    program_id: str | None = None,
+    limit: int = 12,
+) -> dict:
+    """Planning OS — goal → gaps → compare → risk → decide (PA.1)."""
+    try:
+        planning = _app(request).container.resolve("planning")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"planning unavailable: {exc}") from exc
+    return planning.plan(goal, program_id=program_id, limit=limit)
+
+
+@v1_router.post("/planning/plan", tags=["programs"])
+def planning_plan_post(request: Request, body: dict | None = None) -> dict:
+    """Planning OS (POST) — body: ``{goal, program_id?, limit?}``."""
+    try:
+        planning = _app(request).container.resolve("planning")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"planning unavailable: {exc}") from exc
+    payload = body or {}
+    return planning.plan(
+        str(payload.get("goal") or ""),
+        program_id=payload.get("program_id"),
+        limit=int(payload.get("limit") or 12),
+    )
+
+
 @v1_router.get("/world-models", tags=["programs"])
 def list_world_models(request: Request) -> dict:
     """List World Model packs (WM.1 — structure, not Knowledge claims)."""

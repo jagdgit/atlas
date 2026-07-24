@@ -90,7 +90,7 @@ Today workers mostly own their own `interval_seconds`. Elevate to Program → Mi
 |---------|------|---------------|-----|
 | **Verification OS** | UNVERIFIED → scored / contested; multi-dim trust | ✅ KV.0–KV.10 | Consume from Mission Context API |
 | **Memory OS** | Explicit hierarchy (below) | Partial (`memory.items` working/episodic/semantic) | Name + document hierarchy vs Knowledge/Experience |
-| **Planning OS** | Goal → gather gaps → compare → risk → decide | Thin (JobPlanner / research loop) | Multi-step goal decomposition across Programs |
+| **Planning OS** | Goal → gather gaps → compare → risk → decide | ✅ PA.1 | Multi-step across Programs; hard Policy still OI-PA-POLICY |
 | **Policy Engine** | Constraints & governance (caps, forbidden actions) | Partial (prefer/avoid Policy store C.5) | First-class **limits** (max 5%, no pre-earnings) as reusable engine |
 | **Capability Registry** | Discover readers/extractors/verifiers/tools | Partial (`CapabilityRegistry`) | Enrich: version/health/deps; missions ask “need MarketReader” not import |
 | **Decision Engine** | Kernel arbitration | ✅ Phase D | Keep kernel; Programs supply rules + context |
@@ -125,6 +125,8 @@ Goal
 ```
 
 Useful for Market *and* Engineering *and* Personal. Research loop is an early instance; generalize as Planning OS (`OI-PA-PLAN`).
+
+**Shipped (PA.1):** `PlanningService` (`GET/POST /v1/planning/plan`, tool `planning.plan`). Deterministic: Mission Context → gaps → alternatives → risks → soft Policy notes → recommended next (gather / simulate / research / verify). Event Research attaches `planning_action` when spawning Jobs.
 
 ### 4.5 Policy Engine (gap / elevate)
 
@@ -201,7 +203,7 @@ Missions never depend on which extractor produced a finding.
 | V5 | Verification + multi-dim trust | ✅ |
 | V6 | Knowledge graph | ✅ KG.1 (derived) |
 | V6.5 | World Models framework + first domain packs | ✅ WM.1 |
-| V7 | Context API + Planning OS in mission loops | ✅ MCA.1 (Context API); Planning OS still OI-PA-PLAN |
+| V7 | Context API + Planning OS in mission loops | ✅ MCA.1 + PA.1 |
 | V8 | Experience OS + Mentors → better decisions | Partial (MI.7 / OI-MP5) |
 
 ---
@@ -227,7 +229,7 @@ Missions never depend on which extractor produced a finding.
 2. Program UI + cognitive lifecycle (MI.1) ✅  
 3. Mission Context API ✅ MCA.1 (`GET /v1/context`; Decision Simulation cites)  
 4. Elevate Policy Engine + Memory hierarchy docs → code  
-5. Planning OS (generalize research/job planning)  
+5. Planning OS ✅ PA.1 (`GET /v1/planning/plan`)  
 6. Capability Registry enrichment  
 7. Scheduler hierarchy  
 8. World Models framework ✅ WM.1  

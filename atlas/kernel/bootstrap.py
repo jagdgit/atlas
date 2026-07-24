@@ -125,6 +125,7 @@ from atlas.missions.programs import ProgramService
 from atlas.world_models import default_world_model_registry
 from atlas.knowledge.graph import KnowledgeGraphService
 from atlas.missions.context import MissionContextService
+from atlas.planning import PlanningService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
 from atlas.repositories.agent_run_repo import AgentRunRepository
@@ -706,6 +707,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     knowledge_service._policy = policy_service  # noqa: SLF001
 
+    # Planning OS (PA.1 / OI-PA-PLAN) — goal → gaps → compare → risk → decide.
+    planning_service = PlanningService(
+        mission_context=mission_context_service,
+        policy=policy_service,
+        logger=get_logger("atlas.planning"),
+    )
+
     research_service = ResearchService(
         verification_service,
         report_service,
@@ -733,6 +741,19 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             "resource_profile": "optional: conservative|balanced|maximum|overnight",
         },
         plugin="research",
+    )
+    tools.register(
+        "planning.plan",
+        planning_service.plan,
+        description=(
+            "Planning OS: goal → gather gaps → compare alternatives → estimate risk "
+            "→ recommend decide/simulate (never real-world side effects)."
+        ),
+        params={
+            "goal": "what you want to achieve",
+            "program_id": "optional: market|engineering|personal",
+            "limit": "optional Mission Context item cap",
+        },
     )
 
     # Continuous Learning is constructed earlier (before ResearchService) so
@@ -1376,6 +1397,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("templates", template_service)
     container.register_instance("programs", program_service)
     container.register_instance("mission_context", mission_context_service)
+    container.register_instance("planning", planning_service)
     container.register_instance("world_models", world_model_registry)
     container.register_instance("knowledge_graph", knowledge_graph_service)
     container.register_instance("conversation", conversation_service)
@@ -1412,6 +1434,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             jobs=job_service,
             event_repo=event_repo,
             events=events,
+            planning=planning_service,
             logger=get_logger("atlas.workers.event_research"),
         )
     )
@@ -1564,6 +1587,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         mission_context_service,
         kind="service",
         version=MissionContextService.VERSION,
+    )
+    capabilities.register(
+        "planning",
+        planning_service,
+        kind="service",
+        version=PlanningService.VERSION,
     )
     capabilities.register(
         "world_models",
