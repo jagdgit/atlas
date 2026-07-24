@@ -80,6 +80,7 @@ class CapabilityInfo:
 class CapabilityRegistry:
     def __init__(self, default_version: str | None = None) -> None:
         self._capabilities: dict[str, Capability] = {}
+        self._aliases: dict[str, str] = {}
         # Fallback version for capabilities that declare none and whose provider
         # exposes no version attribute — typically the Atlas package version, so
         # artifact stamping (P2) never records a hardcoded ``"v1"``.
@@ -113,16 +114,112 @@ class CapabilityRegistry:
             metadata=dict(metadata),
         )
 
+    def alias(self, alias_name: str, target: str) -> None:
+        """Map an operator/docs name onto a registered capability id (CAP.1)."""
+        alias_name = (alias_name or "").strip()
+        target = (target or "").strip()
+        if not alias_name or not target:
+            raise ValueError("alias_name and target are required")
+        self._aliases[alias_name] = target
+        # Case-insensitive convenience
+        self._aliases[alias_name.lower()] = target
+
+    def resolve_name(self, name: str) -> str:
+        """Follow aliases to a canonical capability id."""
+        from atlas.capabilities.needs import canonicalize
+
+        raw = (name or "").strip()
+        if not raw:
+            return raw
+        if raw in self._aliases:
+            return self._aliases[raw]
+        if raw.lower() in self._aliases:
+            return self._aliases[raw.lower()]
+        canon = canonicalize(raw)
+        if canon in self._aliases:
+            return self._aliases[canon]
+        return canon
+
+    def check_needs(
+        self,
+        needs: Iterable[str],
+        *,
+        require_healthy: bool = False,
+    ) -> dict[str, Any]:
+        """Resolve mission needs against the registry (satisfied / missing / disabled).
+
+        Returns a NeedsReport dict suitable for journals and CapabilityGap payloads.
+        """
+        satisfied: list[dict[str, Any]] = []
+        missing: list[str] = []
+        disabled: list[str] = []
+        unhealthy: list[str] = []
+        seen: set[str] = set()
+        for raw in needs:
+            canon = self.resolve_name(str(raw))
+            if not canon or canon in seen:
+                continue
+            seen.add(canon)
+            cap = self._capabilities.get(canon)
+            if cap is None:
+                missing.append(canon)
+                continue
+            if not cap.enabled:
+                disabled.append(canon)
+                continue
+            info = {
+                "name": canon,
+                "requested_as": str(raw),
+                "version": self._resolve_version(cap),
+                "kind": cap.metadata.get("kind"),
+            }
+            if require_healthy:
+                healthy, detail, _ = self._probe_health(cap.provider)
+                if healthy is False:
+                    unhealthy.append(canon)
+                    info["health_detail"] = detail
+                    continue
+            satisfied.append(info)
+        ok = not missing and not disabled and not unhealthy
+        return {
+            "ok": ok,
+            "satisfied": satisfied,
+            "missing": missing,
+            "disabled": disabled,
+            "unhealthy": unhealthy,
+            "version": "cap.1",
+        }
+
+    def provider_for(self, name: str) -> Any:
+        """Resolve alias → capability → provider (raises if missing/disabled)."""
+        canon = self.resolve_name(name)
+        cap = self._capabilities.get(canon)
+        if cap is None:
+            raise CapabilityMissingError(
+                f"no capability registered named '{canon}' (from '{name}')",
+                capability=canon,
+            )
+        if not cap.enabled:
+            raise CapabilityMissingError(
+                f"capability '{canon}' is registered but disabled",
+                capability=canon,
+            )
+        return cap.provider
+
     def has(self, name: str) -> bool:
-        return name in self._capabilities
+        return self.resolve_name(name) in self._capabilities
 
     def get(self, name: str) -> Any:
         try:
-            return self._capabilities[name].provider
-        except KeyError:
-            raise CapabilityMissingError(
-                f"no capability registered named '{name}'", capability=name
-            ) from None
+            return self.provider_for(name)
+        except CapabilityMissingError:
+            # Preserve prior KeyError-style message for unknown names without alias noise
+            canon = self.resolve_name(name)
+            if canon not in self._capabilities:
+                raise CapabilityMissingError(
+                    f"no capability registered named '{name}'", capability=name
+                ) from None
+            raise
 
     def contract_of(self, name: str) -> type | None:
         cap = self._capabilities.get(name)
@@ -150,11 +247,13 @@ class CapabilityRegistry:
         """Return the required capability ids that are *not* registered.
 
         Order-preserving and de-duplicated — the input to a Gap Report (R2).
+        Resolves aliases (CAP.1).
         """
         seen: dict[str, None] = {}
         for name in required:
-            if name not in self._capabilities:
-                seen.setdefault(name, None)
+            canon = self.resolve_name(str(name))
+            if canon not in self._capabilities:
+                seen.setdefault(canon, None)
         return list(seen)
 
     def names(self) -> list[str]:

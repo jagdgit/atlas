@@ -26,11 +26,13 @@ class MarketObserverWorker(PersistentWorker):
         market_reader: Any,
         events: Any | None = None,
         jobs: Any | None = None,
+        capabilities: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._reader = market_reader
         self._events = events
         self._jobs = jobs
+        self._capabilities = capabilities
         self._logger = logger or logging.getLogger("atlas.workers.market_observer")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -38,6 +40,21 @@ class MarketObserverWorker(PersistentWorker):
         state = dict(ctx.state or {})
         ticks = int(state.get("ticks", 0)) + 1
         state["ticks"] = ticks
+
+        if self._capabilities is not None:
+            from atlas.capabilities.needs import needs_for_mission
+
+            report = self._capabilities.check_needs(needs_for_mission(self.type))
+            if not report.get("ok"):
+                missing = report.get("missing") or report.get("disabled") or []
+                state["capability_gap"] = report
+                return TickResult(
+                    state=state,
+                    note=(
+                        f"capability_gap: need {', '.join(missing) or 'unknown'} "
+                        f"(declare via Capability Registry, not imports)"
+                    ),
+                )
 
         instruments = list(cfg.get("instruments") or [])
         symbols = [str(s).strip() for s in (cfg.get("symbols") or []) if str(s).strip()]

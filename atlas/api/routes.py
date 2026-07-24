@@ -1786,6 +1786,50 @@ def list_capabilities(request: Request) -> CapabilitiesResponse:
     return CapabilitiesResponse(capabilities=[CapabilityInfo(**r) for r in rows])
 
 
+@v1_router.get("/capabilities/inspect", tags=["plugins"])
+def capabilities_inspect_all(request: Request) -> dict:
+    """Live self-inspection of every registered capability (CAP.1 / §5.10)."""
+    return {
+        "capabilities": _app(request).capabilities.inspect_all(),
+        "version": "cap.1",
+    }
+
+
+@v1_router.get("/capabilities/inspect/{name}", tags=["plugins"])
+def capabilities_inspect_one(name: str, request: Request) -> dict:
+    """Inspect one capability (aliases resolved)."""
+    from atlas.exceptions import CapabilityMissingError
+
+    registry = _app(request).capabilities
+    try:
+        canon = registry.resolve_name(name)
+        return registry.inspect(canon).as_dict()
+    except CapabilityMissingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@v1_router.post("/capabilities/needs", tags=["plugins"])
+def capabilities_check_needs(request: Request, body: dict | None = None) -> dict:
+    """Check whether named mission needs are satisfied (CAP.1 — declare, don't import)."""
+    payload = body or {}
+    needs = payload.get("needs")
+    if not needs:
+        mission = str(payload.get("mission") or payload.get("template") or "")
+        if mission:
+            from atlas.capabilities.needs import needs_for_mission
+
+            needs = list(needs_for_mission(mission))
+        else:
+            raise HTTPException(
+                status_code=400, detail="needs[] or mission/template required"
+            )
+    if isinstance(needs, str):
+        needs = [needs]
+    return _app(request).capabilities.check_needs(
+        needs, require_healthy=bool(payload.get("require_healthy"))
+    )
+
+
 @v1_router.get("/plugins", response_model=PluginsResponse, tags=["plugins"])
 def list_plugins(request: Request) -> PluginsResponse:
     manager = _app(request).container.resolve("plugins")

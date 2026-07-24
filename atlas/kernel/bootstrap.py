@@ -1273,6 +1273,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             market_reader=market_reader_service,
             events=events,
             jobs=job_service,
+            capabilities=capabilities,
             logger=get_logger("atlas.workers.market_observer"),
         )
     )
@@ -1624,6 +1625,59 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         kind="service",
         version=KnowledgeGraphService.VERSION,
     )
+    # Market Program domain capabilities + aliases (CAP.1 / OI-PA-CAP).
+    capabilities.register(
+        "market_reader",
+        market_reader_service,
+        kind="service",
+        version=getattr(market_reader_service, "VERSION", "mi.3"),
+        dependencies=("assets",),
+    )
+    capabilities.register(
+        "company_data",
+        company_data_service,
+        kind="service",
+        version=getattr(company_data_service, "VERSION", "mi.5"),
+    )
+    capabilities.register(
+        "portfolio",
+        portfolio_service,
+        kind="service",
+        version=getattr(portfolio_service, "VERSION", None),
+    )
+    capabilities.register(
+        "portfolio_ledger",
+        portfolio_ledger_service,
+        kind="service",
+        version=getattr(portfolio_ledger_service, "VERSION", "mi.6"),
+        dependencies=("portfolio",),
+    )
+    capabilities.register(
+        "policy_engine",
+        policy_engine,
+        kind="service",
+        version=PolicyEngine.VERSION,
+        dependencies=("policy",),
+    )
+    capabilities.register("events", events, kind="kernel")
+    capabilities.register(
+        "candidates",
+        candidate_consumer,
+        kind="service",
+    )
+    for alias, target in (
+        ("MarketReader", "market_reader"),
+        ("CompanyData", "company_data"),
+        ("PortfolioLedger", "portfolio_ledger"),
+        ("MissionContext", "mission_context"),
+        ("MissionContextAPI", "mission_context"),
+        ("PlanningOS", "planning"),
+        ("PolicyEngine", "policy_engine"),
+        ("WorldModels", "world_models"),
+        ("KnowledgeGraph", "knowledge_graph"),
+        ("MemoryOS", "memory_os"),
+    ):
+        capabilities.alias(alias, target)
     capabilities.register(
         "notifier", notifier, kind="kernel", version=Notifier.VERSION
     )

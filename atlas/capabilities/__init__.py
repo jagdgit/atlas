@@ -133,3 +133,18 @@ __all__ = [
     "describe_capabilities",
     "gap_report",
 ]
+
+# Re-export needs helpers for CAP.1
+from atlas.capabilities.needs import (  # noqa: E402
+    ALIASES,
+    MISSION_NEEDS,
+    canonicalize,
+    needs_for_mission,
+)
+
+__all__ += [
+    "ALIASES",
+    "MISSION_NEEDS",
+    "canonicalize",
+    "needs_for_mission",
+]

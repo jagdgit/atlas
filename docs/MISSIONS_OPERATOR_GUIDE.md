@@ -92,6 +92,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Memory OS (MEM.1)** — explicit hierarchy: working → session → long_term (then Knowledge / Experience as separate OS). `GET /v1/memory/hierarchy`, `POST /v1/memory/os/remember` `{content, layer}`, `POST /v1/memory/promote` `{memory_id, to_layer}`.
 
+**Capability Registry (CAP.1)** — missions declare needs instead of importing adapters. `POST /v1/capabilities/needs` `{needs:["MarketReader"]}` or `{mission:"market_observer"}`. `GET /v1/capabilities/inspect`. Missing needs → honest `capability_gap` (Market Observer).
+
 ---
 
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)

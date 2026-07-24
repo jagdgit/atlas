@@ -98,7 +98,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-PA-PLAN | 🟢 | P2 | **Planning OS** — goal → gaps → compare → risk → decide (`GET /v1/planning/plan`). | PA.1 |
 | OI-PA-MEM | 🟢 | P2 | **Memory hierarchy** — working / session / long_term ↔ Knowledge / Experience (`GET /v1/memory/hierarchy`). | MEM.1 |
 | OI-PA-POLICY | 🟢 | P2 | **Policy Engine** — soft influence + hard forbid/limit (`POST /v1/policy/evaluate`). | PA.2 |
-| OI-PA-CAP | 🔴 | P2 | **Capability Registry enrichment** — version/health/deps; missions declare needs, not imports. | Roadmap §5.10 |
+| OI-PA-CAP | 🟢 | P2 | **Capability Registry enrichment** — needs/aliases/inspect (`POST /v1/capabilities/needs`). | CAP.1 |
 | OI-PA-SCHED | 🔴 | P3 | **Scheduler hierarchy** — Program → Mission → Worker tick. | Platform |
 | OI-PA-WM | 🟢 | P1 | **World Models framework** — registry + indian_markets + solar_plant stub. | WM.1 |
 | OI-PA-MCA | 🟢 | P1 | **Mission Context API** — Knowledge + Graph + World Models + Experience; Decision Simulation cites. | MCA.1 |

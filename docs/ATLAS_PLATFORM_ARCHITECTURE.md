@@ -92,7 +92,7 @@ Today workers mostly own their own `interval_seconds`. Elevate to Program → Mi
 | **Memory OS** | Explicit hierarchy (below) | ✅ MEM.1 | working → session → long_term; Knowledge/Experience stay separate OS |
 | **Planning OS** | Goal → gather gaps → compare → risk → decide | ✅ PA.1 | Multi-step across Programs; hard Policy still OI-PA-POLICY |
 | **Policy Engine** | Constraints & governance (caps, forbidden actions) | ✅ PA.2 | Soft prefer/avoid + hard forbid/limit; Decision Simulation blocks hard violations |
-| **Capability Registry** | Discover readers/extractors/verifiers/tools | Partial (`CapabilityRegistry`) | Enrich: version/health/deps; missions ask “need MarketReader” not import |
+| **Capability Registry** | Discover readers/extractors/verifiers/tools | ✅ CAP.1 | Needs check + aliases; missions declare `MarketReader` etc. |
 | **Decision Engine** | Kernel arbitration | ✅ Phase D | Keep kernel; Programs supply rules + context |
 | **World Models** | Domain *structure* (not claim rows) | ✅ WM.1 | Framework + `indian_markets` + `solar_plant` stub packs |
 
@@ -149,6 +149,8 @@ Platform → Capability Registry → Readers / Extractors / Verifiers / Reasoner
 ```
 
 Missions declare **needs** (`MarketReader`, `speech_to_text`) rather than importing concrete adapters. Aligns with P15 capability-gap honesty (`OI-PA-CAP` / roadmap §5.10).
+
+**Shipped (CAP.1):** `check_needs` / aliases / `provider_for`; `POST /v1/capabilities/needs`, `GET /v1/capabilities/inspect`. Market Observer journals `capability_gap` when needs are missing. Built-in `MISSION_NEEDS` for Market Intelligence members.
 
 ---
 
@@ -234,7 +236,7 @@ Missions never depend on which extractor produced a finding.
 3. Mission Context API ✅ MCA.1 (`GET /v1/context`; Decision Simulation cites)  
 4. Elevate Policy Engine + Memory hierarchy docs → code  
 5. Planning OS ✅ PA.1 (`GET /v1/planning/plan`)  
-6. Capability Registry enrichment  
+6. Capability Registry enrichment ✅ CAP.1  
 7. Scheduler hierarchy  
 8. World Models framework ✅ WM.1  
 
