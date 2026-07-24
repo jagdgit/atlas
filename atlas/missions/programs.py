@@ -1,0 +1,516 @@
+"""Intelligence Programs — soft product grouping over Missions (MI.1 / MI11).
+
+Platform abstraction (solar-plant test): Programs are applications built on
+Mission OS. Domain adapters (Broker Profiles, MarketReader) live *inside* a
+Program definition as metadata — never as platform OS boxes.
+
+No DB table required for MI.1: definitions are code-seeded; runtime status is
+derived from templates + live missions (labels ``program:<id>``).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from atlas.missions.philosophy import (
+    LIFECYCLE_STAGES,
+    STAGE_ACTIVE,
+    STAGE_PARTIAL,
+    STAGE_WAITING,
+    philosophy_for,
+)
+
+# Member readiness for operator display.
+MEMBER_ENABLED = "enabled"  # template exists; can instantiate
+MEMBER_STUB = "stub"  # planned; template not shipped yet (MI.2+)
+MEMBER_COMPAT = "compat"  # legacy façade (paper_trading)
+
+# Cognitive lifecycle display labels (philosophy stages → operator copy).
+LIFECYCLE_LABELS: dict[str, str] = {
+    "observe": "Observe",
+    "learn": "Learn",
+    "decide": "Decide",
+    "record_why": "Record Why",
+    "evaluate": "Evaluate",
+    "reflect": "Reflect",
+    "improve": "Improve",
+}
+
+
+@dataclass(frozen=True)
+class ProgramMember:
+    """One planned or live mission role inside a Program."""
+
+    role: str
+    template: str
+    kind: str
+    cadence: str
+    status: str = MEMBER_STUB  # enabled | stub | compat
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class ProgramDefinition:
+    """Reusable Program blueprint (Market / Engineering / Personal / …)."""
+
+    id: str
+    title: str
+    description: str
+    members: tuple[ProgramMember, ...]
+    domain_adapters: tuple[str, ...] = ()
+    # Cognitive stages the Program as a whole aims to cover.
+    lifecycle: dict[str, str] = field(default_factory=dict)
+
+    def member_templates(self) -> list[str]:
+        return [m.template for m in self.members]
+
+
+def _market_lifecycle() -> dict[str, str]:
+    return {
+        "observe": STAGE_PARTIAL,  # fixture today; live = MI.3
+        "learn": STAGE_PARTIAL,  # news/company stubs until MI.4/5
+        "decide": STAGE_ACTIVE,  # paper_trading / decision sim
+        "record_why": STAGE_ACTIVE,
+        "evaluate": STAGE_ACTIVE,
+        "reflect": STAGE_PARTIAL,  # experience journal (OI-MP1)
+        "improve": STAGE_WAITING,  # mentor (M7)
+    }
+
+
+BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
+    ProgramDefinition(
+        id="market_intelligence",
+        title="Market Intelligence",
+        description=(
+            "Reference Program: observe markets, learn claims, verify, "
+            "simulate decisions, ledger fills, and mentor from outcomes. "
+            "Simulation only — never broker login (P10)."
+        ),
+        members=(
+            ProgramMember(
+                role="Market Observer",
+                template="market_observer",
+                kind="monitoring",
+                cadence="continuous",
+                status=MEMBER_STUB,
+                description="Bars, moves, interesting events",
+            ),
+            ProgramMember(
+                role="Company Intelligence",
+                template="company_intelligence",
+                kind="learning",
+                cadence="daily/weekly",
+                status=MEMBER_STUB,
+                description="Filings / ratios (official first)",
+            ),
+            ProgramMember(
+                role="News Intelligence",
+                template="news_intelligence",
+                kind="learning",
+                cadence="hourly",
+                status=MEMBER_STUB,
+                description="News claims → verify",
+            ),
+            ProgramMember(
+                role="Event Research",
+                template="event_research",
+                kind="research",
+                cadence="on trigger",
+                status=MEMBER_STUB,
+                description="Why-did-it-move Jobs",
+            ),
+            ProgramMember(
+                role="Decision Simulation",
+                template="paper_trading",
+                kind="simulation",
+                cadence="continuous",
+                status=MEMBER_COMPAT,
+                description="Buy/Sell/Hold/Watch + journal (compat façade until MI.2)",
+            ),
+            ProgramMember(
+                role="Portfolio Ledger",
+                template="portfolio_ledger",
+                kind="simulation",
+                cadence="with fills",
+                status=MEMBER_STUB,
+                description="Fee/tax-aware sim ledger (Broker Profiles)",
+            ),
+            ProgramMember(
+                role="Investment Mentor",
+                template="investment_mentor",
+                kind="maintenance",
+                cadence="weekly",
+                status=MEMBER_STUB,
+                description="Lessons + recommendations → Experience OS",
+            ),
+        ),
+        domain_adapters=(
+            "MarketReader",
+            "Broker Profiles",
+            "Interesting-event scores",
+        ),
+        lifecycle=_market_lifecycle(),
+    ),
+    ProgramDefinition(
+        id="engineering_intelligence",
+        title="Engineering Intelligence",
+        description=(
+            "Learn from repositories and design artifacts; advise on architecture. "
+            "Placeholder Program — members ship after Market proves the pattern."
+        ),
+        members=(
+            ProgramMember(
+                role="Repository Observer",
+                template="repository_learning",
+                kind="learning",
+                cadence="continuous",
+                status=MEMBER_ENABLED,
+                description="Architecture / patterns → engineering knowledge",
+            ),
+            ProgramMember(
+                role="Technology Watch",
+                template="technology_watch",
+                kind="monitoring",
+                cadence="hourly",
+                status=MEMBER_ENABLED,
+                description="Advisory feed watch",
+            ),
+            ProgramMember(
+                role="Engineering Mentor",
+                template="engineering_mentor",
+                kind="maintenance",
+                cadence="weekly",
+                status=MEMBER_STUB,
+                description="Planned (OI-MP4)",
+            ),
+        ),
+        domain_adapters=("Repo readers", "Architecture graph"),
+        lifecycle={
+            "observe": STAGE_ACTIVE,
+            "learn": STAGE_ACTIVE,
+            "decide": STAGE_PARTIAL,
+            "record_why": STAGE_ACTIVE,
+            "evaluate": STAGE_PARTIAL,
+            "reflect": STAGE_WAITING,
+            "improve": STAGE_WAITING,
+        },
+    ),
+    ProgramDefinition(
+        id="personal_intelligence",
+        title="Personal Intelligence",
+        description=(
+            "Owner archive → personal knowledge; career and life advisors. "
+            "Placeholder Program — members ship after Market proves the pattern."
+        ),
+        members=(
+            ProgramMember(
+                role="Personal Observer",
+                template="owner_knowledge",
+                kind="learning",
+                cadence="continuous",
+                status=MEMBER_ENABLED,
+                description="Docs / chats / notes → personal knowledge",
+            ),
+            ProgramMember(
+                role="Career Advisor",
+                template="job_hunting",
+                kind="career",
+                cadence="daily",
+                status=MEMBER_ENABLED,
+                description="Job hunt simulation / coaching",
+            ),
+            ProgramMember(
+                role="Personal Mentor",
+                template="personal_mentor",
+                kind="maintenance",
+                cadence="weekly",
+                status=MEMBER_STUB,
+                description="Planned",
+            ),
+        ),
+        domain_adapters=("Personal archive readers",),
+        lifecycle={
+            "observe": STAGE_ACTIVE,
+            "learn": STAGE_ACTIVE,
+            "decide": STAGE_PARTIAL,
+            "record_why": STAGE_ACTIVE,
+            "evaluate": STAGE_WAITING,
+            "reflect": STAGE_WAITING,
+            "improve": STAGE_WAITING,
+        },
+    ),
+)
+
+
+def get_program(program_id: str) -> ProgramDefinition | None:
+    for prog in BUILTIN_PROGRAMS:
+        if prog.id == program_id:
+            return prog
+    return None
+
+
+def list_programs() -> list[ProgramDefinition]:
+    return list(BUILTIN_PROGRAMS)
+
+
+def program_label(program_id: str) -> str:
+    return f"program:{program_id}"
+
+
+def lifecycle_board(lifecycle: dict[str, str] | None) -> list[dict[str, str]]:
+    """Operator-facing rows for the cognitive lifecycle strip."""
+    lc = lifecycle or {}
+    rows: list[dict[str, str]] = []
+    for stage in LIFECYCLE_STAGES:
+        status = str(lc.get(stage) or "n/a")
+        rows.append(
+            {
+                "stage": stage,
+                "label": LIFECYCLE_LABELS.get(stage, stage),
+                "status": status,
+            }
+        )
+    return rows
+
+
+class ProgramService:
+    """Derive Program cockpit views from definitions + live missions/templates."""
+
+    name = "programs"
+    VERSION = "mi.1"
+
+    def __init__(
+        self,
+        *,
+        missions: Any | None = None,
+        templates: Any | None = None,
+        knowledge: Any | None = None,
+    ) -> None:
+        self._missions = missions
+        self._templates = templates
+        self._knowledge = knowledge
+
+    def list(self) -> list[dict[str, Any]]:
+        return [self.describe(p.id) for p in BUILTIN_PROGRAMS]
+
+    def describe(self, program_id: str) -> dict[str, Any]:
+        prog = get_program(program_id)
+        if prog is None:
+            raise LookupError(f"unknown program: {program_id}")
+        name_to_id, id_to_name = self._template_maps()
+        live = self._missions_for_program(prog, id_to_name)
+        members_out: list[dict[str, Any]] = []
+        for m in prog.members:
+            template_exists = m.template in name_to_id
+            effective = m.status
+            if effective == MEMBER_STUB and template_exists:
+                effective = MEMBER_ENABLED
+            live_for = [
+                {
+                    "id": str(row.get("id")),
+                    "title": row.get("title"),
+                    "status": row.get("status"),
+                }
+                for row in live
+                if row.get("template_name") == m.template
+            ]
+            members_out.append(
+                {
+                    "role": m.role,
+                    "template": m.template,
+                    "kind": m.kind,
+                    "cadence": m.cadence,
+                    "status": effective,
+                    "description": m.description,
+                    "template_available": template_exists,
+                    "can_start": template_exists
+                    and effective in {MEMBER_ENABLED, MEMBER_COMPAT},
+                    "missions": live_for,
+                    "philosophy": philosophy_for(m.template)
+                    if template_exists
+                    else {
+                        "mission_kind": m.kind,
+                        "never_stops": True,
+                        "lifecycle": {s: STAGE_WAITING for s in LIFECYCLE_STAGES},
+                    },
+                }
+            )
+        return {
+            "id": prog.id,
+            "title": prog.title,
+            "description": prog.description,
+            "domain_adapters": list(prog.domain_adapters),
+            "label": program_label(prog.id),
+            "lifecycle": lifecycle_board(prog.lifecycle),
+            "members": members_out,
+            "mission_count": len(live),
+            "startable_count": sum(1 for x in members_out if x["can_start"]),
+            "stub_count": sum(1 for x in members_out if x["status"] == MEMBER_STUB),
+            "version": self.VERSION,
+        }
+
+    def start(
+        self,
+        program_id: str,
+        *,
+        activate: bool = True,
+        title_prefix: str | None = None,
+    ) -> dict[str, Any]:
+        """Instantiate startable members with template defaults (no raw JSON).
+
+        Stub members are listed but not created. Skips a template if a non-archived
+        mission already exists for that member under this Program.
+        """
+        view = self.describe(program_id)
+        if self._templates is None:
+            raise RuntimeError("templates service not wired")
+        started: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for member in view["members"]:
+            if not member["can_start"]:
+                skipped.append(
+                    {
+                        "template": member["template"],
+                        "role": member["role"],
+                        "reason": "stub"
+                        if member["status"] == MEMBER_STUB
+                        else "unavailable",
+                    }
+                )
+                continue
+            existing = [
+                m
+                for m in member["missions"]
+                if m.get("status") in {"active", "waiting", "paused", "draft"}
+            ]
+            if existing:
+                skipped.append(
+                    {
+                        "template": member["template"],
+                        "role": member["role"],
+                        "reason": "already_present",
+                        "mission_id": existing[0].get("id"),
+                    }
+                )
+                continue
+            prefix = title_prefix or view["title"]
+            title = f"{prefix} · {member['role']}"
+            result = self._templates.instantiate(
+                member["template"],
+                title=title,
+                config_overrides={},
+                labels=[program_label(program_id), f"role:{member['template']}"],
+                metadata={"program_id": program_id, "template": member["template"]},
+                activate=activate,
+            )
+            mission = result["mission"]
+            started.append(
+                {
+                    "template": member["template"],
+                    "role": member["role"],
+                    "mission_id": str(mission.id),
+                    "status": getattr(mission, "status", None),
+                }
+            )
+        return {
+            "program": self.describe(program_id),
+            "started": started,
+            "skipped": skipped,
+        }
+
+    def context(
+        self, topic: str, *, program_id: str | None = None, limit: int = 12
+    ) -> dict[str, Any]:
+        """MCA.1 spike — everything relevant to ``topic`` (chunks + findings)."""
+        topic = (topic or "").strip()
+        items: list[dict[str, Any]] = []
+        if self._knowledge is not None and topic:
+            retrieve = getattr(self._knowledge, "retrieve", None)
+            if callable(retrieve):
+                try:
+                    ranked = retrieve(topic, k=limit)
+                    for r in ranked or []:
+                        content = getattr(r, "content", None)
+                        if content is None and isinstance(r, dict):
+                            content = r.get("content")
+                        score = getattr(r, "similarity", None)
+                        if score is None and isinstance(r, dict):
+                            score = r.get("similarity")
+                        items.append(
+                            {"kind": "chunk", "content": content, "score": score}
+                        )
+                except Exception:  # noqa: BLE001 — spike must not fail cockpit
+                    pass
+            if len(items) < limit:
+                try:
+                    findings = self._knowledge.list_findings(limit=max(limit * 3, 30))
+                    needle = topic.lower()
+                    for f in findings:
+                        stmt = str(f.get("statement") or "")
+                        if needle in stmt.lower():
+                            items.append(
+                                {
+                                    "kind": "finding",
+                                    "id": str(f.get("id") or ""),
+                                    "statement": stmt,
+                                    "claim_type": f.get("claim_type"),
+                                    "domain": f.get("domain"),
+                                }
+                            )
+                        if len(items) >= limit:
+                            break
+                except Exception:  # noqa: BLE001
+                    pass
+        return {
+            "topic": topic,
+            "program_id": program_id,
+            "items": items[:limit],
+            "count": min(len(items), limit),
+            "spike": True,
+            "note": "MCA.1 spike — full Mission Context API lands later",
+            "version": self.VERSION,
+        }
+
+    def _template_maps(self) -> tuple[dict[str, str], dict[str, str]]:
+        name_to_id: dict[str, str] = {}
+        id_to_name: dict[str, str] = {}
+        if self._templates is None:
+            return name_to_id, id_to_name
+        try:
+            for t in self._templates.list_templates():
+                name_to_id[t.name] = str(t.id)
+                id_to_name[str(t.id)] = t.name
+        except Exception:  # noqa: BLE001
+            return {}, {}
+        return name_to_id, id_to_name
+
+    def _missions_for_program(
+        self, prog: ProgramDefinition, id_to_name: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        if self._missions is None:
+            return []
+        label = program_label(prog.id)
+        member_templates = set(prog.member_templates())
+        try:
+            all_rows = self._missions.list_missions(limit=100)
+        except Exception:  # noqa: BLE001
+            return []
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for m in all_rows or []:
+            data = m.to_dict() if hasattr(m, "to_dict") else dict(m)
+            mid = str(data.get("id"))
+            if mid in seen:
+                continue
+            labels = list(data.get("labels") or [])
+            tid = str(data.get("template_id") or "")
+            tname = id_to_name.get(tid) or (data.get("metadata") or {}).get("template")
+            in_program = label in labels
+            in_members = bool(tname and tname in member_templates)
+            if not (in_program or in_members):
+                continue
+            data["template_name"] = tname
+            out.append(data)
+            seen.add(mid)
+        return out
