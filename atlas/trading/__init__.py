@@ -8,6 +8,7 @@ Decision-Engine choice. Nothing here touches a real broker or real money (P10).
 from atlas.trading.indicators import compute_indicators, ema, macd, rsi, sma
 from atlas.trading.portfolio import PortfolioService
 from atlas.trading.strategy import StrategyDecisionRule
+from atlas.trading.market_reader import MarketReaderService
 
 __all__ = [
     "compute_indicators",
@@ -17,4 +18,5 @@ __all__ = [
     "macd",
     "PortfolioService",
     "StrategyDecisionRule",
+    "MarketReaderService",
 ]

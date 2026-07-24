@@ -137,11 +137,11 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
         "mission_kind": KIND_MONITORING,
         "never_stops": True,
         "lifecycle": _stages(
-            observe=STAGE_WAITING,
-            record_why=STAGE_PARTIAL,
-            decide=STAGE_WAITING,
-            learn=STAGE_WAITING,
-            evaluate=STAGE_WAITING,
+            observe=STAGE_ACTIVE,
+            record_why=STAGE_ACTIVE,
+            decide=STAGE_PARTIAL,  # interesting-event scoring
+            learn=STAGE_WAITING,  # claims from moves → MI.4
+            evaluate=STAGE_PARTIAL,
             reflect=STAGE_WAITING,
             improve=STAGE_WAITING,
         ),

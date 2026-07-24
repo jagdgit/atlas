@@ -123,19 +123,24 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "market_observer",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
-            "Market Intelligence M1 — observe bars/moves/interesting events (stub until MI.3)."
+            "Market Intelligence M1 — observe bars/moves via MarketReader adapters "
+            "(asset_replay default; Yahoo opt-in; keyed providers when env set)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "Market Observer",
             "roadmap": "MI.3",
+            "provider": "",
             "symbols": [],
+            "instruments": [],
+            "bars_limit": 60,
+            "move_alert_pct": 5.0,
             "tick_interval_seconds": 300,
         },
-        "worker_specs": [{"type": "program_stub", "interval_seconds": 300}],
+        "worker_specs": [{"type": "market_observer", "interval_seconds": 300}],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "market_observer"),
     },

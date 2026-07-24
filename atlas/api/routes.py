@@ -1434,6 +1434,19 @@ def mission_context(request: Request, q: str = "", limit: int = 12) -> dict:
     return _programs(request).context(q, limit=limit)
 
 
+@v1_router.get("/market/providers", tags=["programs"])
+def list_market_providers(request: Request) -> dict:
+    """List MarketReader adapters (MI.3 / OI-D1)."""
+    try:
+        reader = _app(request).container.resolve("market_reader")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"market_reader unavailable: {exc}") from exc
+    return {
+        "providers": reader.list_providers(),
+        "version": getattr(reader, "VERSION", "mi.3"),
+    }
+
+
 @v1_router.get("/workers", tags=["workers"])
 def list_workers(
     request: Request, mission_id: str | None = None, status: str | None = None

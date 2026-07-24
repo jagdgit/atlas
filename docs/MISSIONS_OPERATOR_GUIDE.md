@@ -55,7 +55,7 @@ Start Program instantiates all seven members when templates are seeded — stub 
 |------------|---------------|-------|
 | Atlas API / console login | For you to operate Atlas | Normal |
 | **Broker trading login** | **Never** | Forbidden (P10) — no real orders |
-| **Market-data provider API key** | **Not yet** | Live tape is `OI-D1` (not built). Today = fixture/replay only |
+| **Market-data provider API key** | Optional | Yahoo: `market.yahoo_enabled: true` (no key). Polygon/AV: set env from `market.*_api_key_env`. Still **no broker trading login** |
 
 When live data arrives, expect a **data vendor API key** (quotes/candles), not a brokerage password.
 

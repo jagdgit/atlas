@@ -57,6 +57,7 @@ from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
 from atlas.repositories.sim_repo import SimTradingRepository
 from atlas.trading import PortfolioService, StrategyDecisionRule
+from atlas.trading.market_reader import MarketReaderService
 from atlas.research import ResearchDecisionRule
 from atlas.career import JobDecisionRule
 from atlas.watch import AdvisoryDecisionRule, MISSION_TYPE_SECURITY, MISSION_TYPE_TECHNOLOGY
@@ -65,6 +66,7 @@ from atlas.improvement.applier import SelfImprovementApplier
 from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
 from atlas.workers.program_stub import ProgramStubWorker
+from atlas.workers.market_observer import MarketObserverWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
@@ -1175,6 +1177,15 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     market_data_reader = MarketDataReader(
         asset_store, derived_artifacts, logger=get_logger("atlas.readers.market_data")
     )
+    market_reader_service = MarketReaderService(
+        assets=asset_store,
+        market_data=market_data_reader,
+        default_provider=cfg.market.default_provider,
+        yahoo_enabled=cfg.market.yahoo_enabled,
+        polygon_api_key_env=cfg.market.polygon_api_key_env,
+        alphavantage_api_key_env=cfg.market.alphavantage_api_key_env,
+        logger=get_logger("atlas.trading.market_reader"),
+    )
     portfolio_service = PortfolioService(
         SimTradingRepository(db_manager), logger=get_logger("atlas.trading.portfolio")
     )
@@ -1188,6 +1199,14 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             learning=learning_service,
             events=events,
             logger=get_logger("atlas.workers.paper_trading"),
+        )
+    )
+    # MI.3 — Market Observer uses MarketReader adapters (asset_replay / yahoo / keyed).
+    worker_manager.register_worker_type(
+        MarketObserverWorker(
+            market_reader=market_reader_service,
+            events=events,
+            logger=get_logger("atlas.workers.market_observer"),
         )
     )
     # MI.2 — shared stub worker for planned Market (and future Program) members.
@@ -1388,6 +1407,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("decision", decision_engine)
     container.register_instance("approvals", approval_service)
     container.register_instance("portfolio", portfolio_service)
+    container.register_instance("market_reader", market_reader_service)
     container.register_instance("improvement_board", improvement_board)
     container.register_instance("ingestion_bridge", ingestion_bridge)
     container.register_instance("media_ingestor", media_ingestor)

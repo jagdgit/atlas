@@ -211,7 +211,7 @@ MI.0   Plan locked + platform master doc              ✅
 KE.2.5–2.7  SPO + report structure + provenance       ✅
 MI.1   Program UI + cognitive lifecycle + Context API spike ✅
 MI.2   Materialize 7 templates (stubs OK); split paper_trading façade ✅
-MI.3   MarketReader adapters + OI-D1 live when keys exist
+MI.3   MarketReader adapters + OI-D1 live when keys exist ✅
 MI.4   News + Interesting-Event → research Jobs + verify
 MI.5   Company / filings ingest (compliant)
 MI.6   Promote Portfolio Ledger + Broker Profiles
@@ -246,3 +246,4 @@ MCA.1  Mission Context API (all Programs)
 - [x] KE.2.7 provenance completeness  
 - [x] MI.1 Program UI  
 - [x] MI.2 templates + façade  
+- [x] MI.3 MarketReader adapters (asset_replay / yahoo opt-in / keyed skeletons)  

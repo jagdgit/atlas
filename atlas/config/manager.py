@@ -565,6 +565,16 @@ class ApiConfig(BaseModel):
         return value
 
 
+class MarketConfig(BaseModel):
+    """Market Intelligence feed providers (MI.3 / OI-D1). Simulation Program only."""
+
+    default_provider: str = "asset_replay"  # asset_replay | yahoo | polygon | …
+    yahoo_enabled: bool = False  # opt-in live Yahoo chart API
+    move_alert_pct: float = 5.0
+    polygon_api_key_env: str = "ATLAS_POLYGON_API_KEY"
+    alphavantage_api_key_env: str = "ATLAS_ALPHAVANTAGE_API_KEY"
+
+
 class AtlasConfig(BaseModel):
     system: SystemConfig
     clock: ClockConfig = ClockConfig()
@@ -595,6 +605,7 @@ class AtlasConfig(BaseModel):
     intelligence: IntelligenceConfig = IntelligenceConfig()
     plugins: PluginsConfig = PluginsConfig()
     api: ApiConfig = ApiConfig()
+    market: MarketConfig = MarketConfig()
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
