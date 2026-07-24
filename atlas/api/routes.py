@@ -1497,6 +1497,16 @@ def planning_plan_get(
     return planning.plan(goal, program_id=program_id, limit=limit)
 
 
+@v1_router.get("/governance/daily", tags=["programs"])
+def governance_daily(request: Request, limit: int = 200) -> dict:
+    """Daily Learning Governance Report — Layer 2 (OI-MP3)."""
+    try:
+        gov = _app(request).container.resolve("governance")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"governance unavailable: {exc}") from exc
+    return gov.daily(limit=limit)
+
+
 @v1_router.get("/scheduler/hierarchy", tags=["programs"])
 def scheduler_hierarchy_all(request: Request, program_id: str | None = None) -> dict:
     """Program → Mission → Worker schedule hierarchy (SCHED.1)."""

@@ -208,6 +208,19 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             decide=STAGE_WAITING,
         ),
     },
+    "learning_governance": {
+        "mission_kind": KIND_MAINTENANCE,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            evaluate=STAGE_ACTIVE,
+            reflect=STAGE_ACTIVE,
+            learn=STAGE_PARTIAL,
+            record_why=STAGE_ACTIVE,
+            improve=STAGE_WAITING,
+            decide=STAGE_WAITING,
+        ),
+    },
     "technology_watch": {
         "mission_kind": KIND_MONITORING,
         "never_stops": True,

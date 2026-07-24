@@ -74,6 +74,7 @@ from atlas.workers.event_research import EventResearchWorker
 from atlas.workers.company_intelligence import CompanyIntelligenceWorker
 from atlas.workers.portfolio_ledger import PortfolioLedgerWorker
 from atlas.workers.investment_mentor import InvestmentMentorWorker
+from atlas.workers.learning_governance import LearningGovernanceWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
@@ -127,6 +128,7 @@ from atlas.world_models import default_world_model_registry
 from atlas.knowledge.graph import KnowledgeGraphService
 from atlas.missions.context import MissionContextService
 from atlas.memory import MemoryOS
+from atlas.governance import GovernanceReportService
 from atlas.planning import PlanningService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
@@ -1263,6 +1265,16 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     portfolio_ledger_service = PortfolioLedgerService(
         portfolio_service, logger=get_logger("atlas.trading.ledger")
     )
+
+    # Learning Governance Report (OI-MP3 / Layer 2) — after portfolio exists.
+    governance_service = GovernanceReportService(
+        knowledge=knowledge_service,
+        learning=learning_service,
+        decisions=DecisionRepository(db_manager),
+        portfolio=portfolio_service,
+        coverage=coverage_service,
+        logger=get_logger("atlas.governance"),
+    )
     decision_engine.register_rule(StrategyDecisionRule())
     worker_manager.register_worker_type(
         PaperTradingWorker(
@@ -1423,6 +1435,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("programs", program_service)
     container.register_instance("mission_context", mission_context_service)
     container.register_instance("planning", planning_service)
+    container.register_instance("governance", governance_service)
     container.register_instance("world_models", world_model_registry)
     container.register_instance("knowledge_graph", knowledge_graph_service)
     container.register_instance("conversation", conversation_service)
@@ -1483,6 +1496,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             learning=learning_service,
             events=events,
             logger=get_logger("atlas.workers.investment_mentor"),
+        )
+    )
+    worker_manager.register_worker_type(
+        LearningGovernanceWorker(
+            governance=governance_service,
+            events=events,
+            logger=get_logger("atlas.workers.learning_governance"),
         )
     )
     tools.register(
@@ -1628,6 +1648,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         planning_service,
         kind="service",
         version=PlanningService.VERSION,
+    )
+    capabilities.register(
+        "governance",
+        governance_service,
+        kind="service",
+        version=GovernanceReportService.VERSION,
     )
     capabilities.register(
         "world_models",

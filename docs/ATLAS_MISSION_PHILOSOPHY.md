@@ -138,6 +138,8 @@ Daily Learning Report
 This is a **governance report**, not a research answer and not a per-video Learning Report.  
 Tracked as **OI-MP3**.
 
+**Shipped (MP3):** `GET /v1/governance/daily` + mission template `learning_governance` (daily worker). Aggregates concepts/entities/relationships, lessons, contested findings, decision capability gaps, optional sim portfolio return.
+
 ---
 
 ## Paper trading — correct idea, wrong packaging (today)

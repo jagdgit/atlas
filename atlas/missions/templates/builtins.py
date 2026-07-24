@@ -260,6 +260,26 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "investment_mentor"),
     },
     {
+        "name": "learning_governance",
+        "template_version": 1,
+        "description": (
+            "Layer 2 Daily Learning Governance Report (OI-MP3) — concepts, lessons, "
+            "conflicts, capability gaps, sim portfolio. Not a per-media Learning Report."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Learning Governance",
+            "roadmap": "OI-MP3",
+            "force": False,
+            "limit": 200,
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [{"type": "learning_governance", "interval_seconds": 86400}],
+        "knowledge_domains": ["governance", "knowledge", "experience"],
+        "success_criteria": with_philosophy({}, "learning_governance"),
+    },
+    {
         "name": "job_hunting",
         "template_version": 3,
         "description": "Continuous job search against operator constraints (Phase D — recommend-only, P14).",
