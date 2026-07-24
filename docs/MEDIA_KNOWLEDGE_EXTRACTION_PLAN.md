@@ -1,6 +1,6 @@
 # Media → Knowledge Extraction (KE*)
 
-> **Status:** KE.0–KE.2.4 ✅ · **Next:** KE.2.5 SPO + structured preview · Verification ✅ (`OI-KV0`) · **Date:** 2026-07-24  
+> **Status:** KE.0–KE.2.7 ✅ · Verification ✅ (`OI-KV0`) · **Date:** 2026-07-24  
 > **Trigger:** First COMPLETE `speech_ingested` run — transcript learning works;
 > categories showed concepts/entities/facts = 0 while RAG chunks = 71.  
 > **Parent:** [`MEDIA_ASSET_LIFECYCLE_PLAN.md`](MEDIA_ASSET_LIFECYCLE_PLAN.md) ·
@@ -63,7 +63,7 @@ Diminishing returns. Prioritize quality + graph + Mission Context API ([`ATLAS_P
 |-----|------------|
 | V4 | Media → Transcript → Knowledge Extraction ✅ |
 | V4.1 | Link / typing / normalize ✅ KE.2.4 |
-| V4.2 | SPO + structured preview + provenance **KE.2.5–2.7** |
+| V4.2 | SPO + structured preview + provenance **KE.2.5–2.7** ✅ |
 | V5 | Verification ✅ |
 | V6 | Knowledge Graph + cross-source merge |
 | V6.5 | World Models |

@@ -357,8 +357,52 @@ def test_provenance_attached_to_claims():
         assert value.get("source_url") == "https://youtu.be/x"
         assert value.get("status") == "UNVERIFIED"
         assert value.get("speaker") == "Robert Kiyosaki"
+        assert value.get("extractor_version") == MediaKnowledgeExtractor.VERSION
     # At least one claim should get a character offset / estimated timestamp.
     assert any(c["value"].get("char_start") is not None for c in claims)
+
+
+def test_provenance_complete_on_all_candidate_types():
+    """KE.2.7 — every candidate carries required provenance fields."""
+    from atlas.knowledge.media_extraction import provenance_completeness
+
+    text = (
+        "Robert Kiyosaki argues assets are preferred over liabilities. "
+        "Inflation reduces purchasing power for the middle class. "
+        "Rich Dad Poor Dad was written by Robert Kiyosaki."
+    )
+    extractor = MediaKnowledgeExtractor(max_claims=4)
+    payloads = extractor.extract(
+        text,
+        evidence_ref={
+            "asset_id": "asset-9",
+            "source_url": "https://youtu.be/y",
+            "chunk_id": "chunk-0",
+        },
+        duration_seconds=120.0,
+    )
+    assert payloads
+    for p in payloads:
+        value = p["value"]
+        assert value.get("asset_id") == "asset-9"
+        assert value.get("source_url") == "https://youtu.be/y"
+        assert value.get("chunk_id") == "chunk-0"
+        assert value.get("extractor_version") == "ke.2.7"
+        assert value.get("status") == "UNVERIFIED"
+    rels = [p for p in payloads if p["claim_type"] == "relationship"]
+    assert rels
+    assert any(r["value"].get("char_start") is not None for r in rels)
+    audit = provenance_completeness(payloads)
+    assert audit["candidates"] == len(payloads)
+    assert audit["complete_required"] == len(payloads)
+    bundle = extractor.extract_bundle(
+        text,
+        evidence_ref={"asset_id": "asset-9", "source_url": "https://youtu.be/y"},
+    )
+    assert bundle.quality.get("extractor_version") == "ke.2.7"
+    assert bundle.quality.get("provenance", {}).get("complete_required") == len(
+        bundle.candidates
+    )
 
 
 def test_expanded_relationship_patterns():

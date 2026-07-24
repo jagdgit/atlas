@@ -995,6 +995,15 @@ class ReportGenerator:
                 f"- Claims linked to concepts/entities: {quality.get('claims_linked', 0)}"
             )
             lines.append(f"- Orphan claims (no links): {quality.get('claims_orphan', 0)}")
+            if quality.get("extractor_version"):
+                lines.append(f"- Extractor version: {quality.get('extractor_version')}")
+            prov = quality.get("provenance") if isinstance(quality.get("provenance"), dict) else {}
+            if prov.get("candidates"):
+                lines.append(
+                    f"- Provenance complete: {prov.get('complete_required', 0)}/"
+                    f"{prov.get('candidates', 0)} "
+                    f"(offsets on {prov.get('with_char_offsets', 0)})"
+                )
             if quality.get("transcript_chars"):
                 lines.append(f"- Transcript characters scanned: {quality.get('transcript_chars')}")
             lines.append("")

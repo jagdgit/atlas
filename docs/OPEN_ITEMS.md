@@ -85,7 +85,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-AC0 | 🟢 | P1 | **Acquisition + learning report** — BA.v2, AL1–AL5, LR1–LR8 shipped. Remaining: Whisper ops; AL6 later. | `MEDIA_ACQUISITION_CLOSURE_PLAN.md` · `MEDIA_ASSET_LIFECYCLE_PLAN.md` · `MEDIA_LEARNING_REPORT_PLAN.md` |
 | OI-LR0 | 🟢 | P1 | **Learning Report** — media.learn jobs render Learning Report (not Research INSUFFICIENT). LS1 capability summary + OC1 reason codes done. | `MEDIA_LEARNING_REPORT_PLAN.md` · `tests/test_learning_report.py` |
 | OI-STT0 | 🟢 | P1 | **speech_to_text (Whisper)** — installed in venv + `plugins.speech.enabled` in local.yaml. Knowledge categories + metadata-vs-spoken honesty shipped. First live spoken run still needed (model download on first use). | `docs/SPEECH_TO_TEXT_OPS.md` · `config/local.yaml` |
-| OI-KE0 | 🟡 | P1 | **Knowledge Extraction** — KE.2.4 ✅ (link 12/12). **Next:** KE.2.5–2.7 SPO-only + structured preview + provenance. | `docs/MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md` |
+| OI-KE0 | 🟢 | P1 | **Knowledge Extraction** — KE.2.4–2.7 ✅ (link, SPO-only, structured preview, provenance). Next: KG.1 / live re-score. | `docs/MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md` |
 | OI-KV0 | 🟢 | P1 | **Knowledge Verification (V5)** — KV.0–KV.10 ✅. | `docs/KNOWLEDGE_VERIFICATION_PLAN.md` |
 | OI-MP0 | 🟢 | P1 | **Mission Philosophy** — Layer 1 vs Layer 2; kinds; lifecycle; experience shape. | `docs/ATLAS_MISSION_PHILOSOPHY.md` |
 | OI-MP1 | 🟡 | P1 | **Experience journal** — deepen; Experience OS first-class (platform). | MP · `ATLAS_PLATFORM_ARCHITECTURE.md` |

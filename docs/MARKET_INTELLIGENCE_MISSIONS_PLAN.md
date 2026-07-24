@@ -208,7 +208,7 @@ Mentor (M7) writes Experiences that bias future Decision context (OI-MP5).
 
 ```
 MI.0   Plan locked + platform master doc              ✅
-KE.2.5–2.7  SPO + report structure + provenance       ← with MI.1
+KE.2.5–2.7  SPO + report structure + provenance       ✅
 MI.1   Program UI + cognitive lifecycle + Context API spike
 MI.2   Materialize 7 templates (stubs OK); split paper_trading façade
 MI.3   MarketReader adapters + OI-D1 live when keys exist

@@ -373,6 +373,7 @@ def build_extraction_quality(
         value = claim.get("value") if isinstance(claim.get("value"), dict) else {}
         if value.get("related_concepts") or value.get("related_entities"):
             linked += 1
+    provenance = provenance_completeness(payloads)
     return {
         "candidates_emitted": len(payloads),
         "by_type": counts,
@@ -380,6 +381,15 @@ def build_extraction_quality(
         "claims_linked": linked,
         "claims_orphan": max(0, len(claims) - linked),
         "transcript_chars": len(text or ""),
+        "provenance": provenance,
+        "extractor_version": next(
+            (
+                str((p.get("value") or {}).get("extractor_version"))
+                for p in payloads
+                if isinstance(p.get("value"), dict) and p["value"].get("extractor_version")
+            ),
+            MediaKnowledgeExtractor.VERSION,
+        ),
         # Intentionally omitted: extraction_confidence (would violate Q5).
     }
 
@@ -483,46 +493,125 @@ def attach_provenance(
     evidence_ref: dict[str, Any] | None = None,
     default_speaker: str | None = None,
     duration_seconds: float | None = None,
+    extractor_version: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach verification-ready provenance hooks on every candidate (KE.2.3).
+    """Attach verification-ready provenance on every candidate (KE.2.3 / KE.2.7).
 
-    Speaker/timestamp remain best-effort until diarization / timed captions exist.
-    ``char_start`` + optional estimated timestamp make later verification tractable.
+    Always stores ``asset_id``, ``source_url``, ``extractor_version``, and
+    ``status``. Adds ``char_start`` / ``char_end`` / optional timestamp when the
+    statement (or SPO subject) can be located in the transcript. UI may hide
+    noisy fields; storage stays complete for verify/audit.
     """
     ev = evidence_ref or {}
     body = text or ""
     body_len = max(len(body), 1)
+    version = extractor_version or MediaKnowledgeExtractor.VERSION
     for p in payloads:
         value = p.get("value") if isinstance(p.get("value"), dict) else {}
         if not isinstance(p.get("value"), dict):
             p["value"] = value = {}
         value.setdefault("asset_id", ev.get("asset_id"))
         value.setdefault("source_url", ev.get("source_url"))
+        value.setdefault("chunk_id", ev.get("chunk_id") or ev.get("chunk_index"))
         value.setdefault("status", "UNVERIFIED")
+        value["extractor_version"] = version
         ct = str(p.get("claim_type") or "")
         if value.get("speaker") is None and default_speaker and ct in {
             "claim",
             "relationship",
             "fact",
             "observation",
+            "concept",
+            "entity",
         }:
             value["speaker"] = default_speaker
-        stmt = str(p.get("statement") or "")
-        if ct == "claim" and stmt and "char_start" not in value:
-            idx = body.find(stmt)
-            if idx < 0:
-                # Prose claims are cleaned; try a shorter anchor.
-                anchor = stmt[:80]
-                idx = body.find(anchor) if anchor else -1
-            if idx >= 0:
-                value["char_start"] = idx
-                value["char_end"] = idx + len(stmt)
-                value["transcript_offset_chars"] = idx
-                if duration_seconds and duration_seconds > 0:
-                    approx = float(duration_seconds) * (idx / body_len)
-                    value["timestamp_seconds"] = round(approx, 1)
-                    value["timestamp"] = _format_hms(approx)
+        _attach_char_offsets(
+            value,
+            body,
+            statement=str(p.get("statement") or ""),
+            claim_type=ct,
+            duration_seconds=duration_seconds,
+            body_len=body_len,
+        )
     return payloads
+
+
+def _attach_char_offsets(
+    value: dict[str, Any],
+    body: str,
+    *,
+    statement: str,
+    claim_type: str,
+    duration_seconds: float | None,
+    body_len: int,
+) -> None:
+    if "char_start" in value:
+        return
+    anchors: list[str] = []
+    if statement:
+        anchors.append(statement)
+        if len(statement) > 80:
+            anchors.append(statement[:80])
+    if claim_type in {"relationship", "fact"}:
+        subj = str(value.get("subject") or "").strip()
+        obj = str(value.get("object") or "").strip()
+        if subj:
+            anchors.append(subj)
+        if subj and obj:
+            anchors.append(f"{subj} {obj}")
+    if claim_type in {"concept", "entity"}:
+        name = str(value.get("name") or "").strip()
+        if name:
+            anchors.append(name)
+    idx = -1
+    used = ""
+    for anchor in anchors:
+        if not anchor:
+            continue
+        idx = body.find(anchor)
+        if idx < 0:
+            idx = body.lower().find(anchor.lower())
+        if idx >= 0:
+            used = anchor
+            break
+    if idx < 0 or not used:
+        return
+    value["char_start"] = idx
+    value["char_end"] = idx + len(used)
+    value["transcript_offset_chars"] = idx
+    if duration_seconds and duration_seconds > 0:
+        approx = float(duration_seconds) * (idx / body_len)
+        value["timestamp_seconds"] = round(approx, 1)
+        if not value.get("timestamp"):
+            value["timestamp"] = _format_hms(approx)
+
+
+def provenance_completeness(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    """KE.2.7 audit — how many candidates carry required provenance fields."""
+    required = ("asset_id", "extractor_version", "status")
+    optional_loc = ("char_start", "speaker", "timestamp", "timestamp_seconds")
+    total = len(payloads)
+    complete = 0
+    with_offsets = 0
+    missing: dict[str, int] = {k: 0 for k in required}
+    for p in payloads:
+        value = p.get("value") if isinstance(p.get("value"), dict) else {}
+        ok = True
+        for key in required:
+            if value.get(key) in (None, ""):
+                missing[key] += 1
+                ok = False
+        if ok:
+            complete += 1
+        if value.get("char_start") is not None:
+            with_offsets += 1
+    return {
+        "candidates": total,
+        "complete_required": complete,
+        "with_char_offsets": with_offsets,
+        "missing_required": missing,
+        "optional_fields": list(optional_loc),
+    }
 
 
 def _format_hms(seconds: float) -> str:
@@ -566,9 +655,9 @@ class MediaExtractBundle:
 
 
 class MediaKnowledgeExtractor:
-    """Extract typed knowledge candidates from media transcript text (KE.2.5)."""
+    """Extract typed knowledge candidates from media transcript text (KE.2.7)."""
 
-    VERSION = "ke.2.6"
+    VERSION = "ke.2.7"
 
     def __init__(
         self,
@@ -631,6 +720,7 @@ class MediaKnowledgeExtractor:
             evidence_ref=ev,
             default_speaker=default_speaker,
             duration_seconds=duration_seconds,
+            extractor_version=self.VERSION,
         )
         out = link_claim_graph(out, extra_concepts=self._lexicon.all_concepts())
         return out
