@@ -125,6 +125,7 @@ from atlas.missions.programs import ProgramService
 from atlas.world_models import default_world_model_registry
 from atlas.knowledge.graph import KnowledgeGraphService
 from atlas.missions.context import MissionContextService
+from atlas.memory import MemoryOS
 from atlas.planning import PlanningService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
@@ -682,12 +683,19 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # Soft bias after apply+enable is loaded inside KnowledgeService.retrieve.
     knowledge_service._learning = learning_service  # noqa: SLF001
 
-    # Mission Context API (MCA.1) + Programs cockpit — after Learning so Experience is included.
+    # Mission Context API (MCA.1) + Memory OS hierarchy (MEM.1) + Programs.
+    memory_os = MemoryOS(
+        memory_service,
+        learning=learning_service,
+        knowledge=knowledge_service,
+        logger=get_logger("atlas.memory.os"),
+    )
     mission_context_service = MissionContextService(
         knowledge=knowledge_service,
         world_models=world_model_registry,
         knowledge_graph=knowledge_graph_service,
         learning=learning_service,
+        memory_os=memory_os,
         logger=get_logger("atlas.missions.context"),
     )
     program_service = ProgramService(
@@ -1389,6 +1397,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("agent_run_repo", agent_run_repo)
     container.register_instance("agent", agent_service)
     container.register_instance("memory", memory_service)
+    container.register_instance("memory_os", memory_os)
     container.register_instance("backup", backup_manager)
     container.register_instance("storage", storage_manager)
     container.register_instance("assets", asset_store)
@@ -1552,6 +1561,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "memory", memory_service, contract=caps.MemoryCapability, kind="service"
+    )
+    capabilities.register(
+        "memory_os", memory_os, kind="service", version=MemoryOS.VERSION
     )
     capabilities.register("backup", backup_manager, kind="service")
     capabilities.register(

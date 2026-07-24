@@ -90,6 +90,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Policy Engine (PA.2)** — soft prefer/avoid plus hard `forbid` / `limit` (provenance caps). Evaluate: `POST /v1/policy/evaluate` with `{action, context}`. Decision Simulation blocks hard violations before sim fills.
 
+**Memory OS (MEM.1)** — explicit hierarchy: working → session → long_term (then Knowledge / Experience as separate OS). `GET /v1/memory/hierarchy`, `POST /v1/memory/os/remember` `{content, layer}`, `POST /v1/memory/promote` `{memory_id, to_layer}`.
+
 ---
 
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)

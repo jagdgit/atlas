@@ -96,7 +96,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-MP5 | 🟡 | P2 | **Missions teach missions** — Investment Mentor → Experience OS → Decision Simulation advice bias (MI.7). | Philosophy MP6 |
 | OI-PA0 | 🟢 | P1 | **Atlas Platform Architecture** — SETTLED master (Programs→Missions→Workers; Memory/Planning/Policy/Capability/Scheduler gaps tracked below). | `docs/ATLAS_PLATFORM_ARCHITECTURE.md` |
 | OI-PA-PLAN | 🟢 | P2 | **Planning OS** — goal → gaps → compare → risk → decide (`GET /v1/planning/plan`). | PA.1 |
-| OI-PA-MEM | 🔴 | P2 | **Memory hierarchy** — working / session / long-term ↔ Knowledge / Experience (document + wire). | Platform |
+| OI-PA-MEM | 🟢 | P2 | **Memory hierarchy** — working / session / long_term ↔ Knowledge / Experience (`GET /v1/memory/hierarchy`). | MEM.1 |
 | OI-PA-POLICY | 🟢 | P2 | **Policy Engine** — soft influence + hard forbid/limit (`POST /v1/policy/evaluate`). | PA.2 |
 | OI-PA-CAP | 🔴 | P2 | **Capability Registry enrichment** — version/health/deps; missions declare needs, not imports. | Roadmap §5.10 |
 | OI-PA-SCHED | 🔴 | P3 | **Scheduler hierarchy** — Program → Mission → Worker tick. | Platform |

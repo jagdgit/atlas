@@ -1694,6 +1694,58 @@ def remember(body: RememberRequest, request: Request) -> RememberResponse:
     return RememberResponse(item=_memory_out(item))
 
 
+@v1_router.get("/memory/hierarchy", tags=["memory"])
+def memory_hierarchy(request: Request) -> dict:
+    """Memory OS layers — working → session → long_term → Knowledge / Experience (MEM.1)."""
+    try:
+        mos = _app(request).container.resolve("memory_os")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"memory_os unavailable: {exc}") from exc
+    return mos.hierarchy()
+
+
+@v1_router.post("/memory/promote", tags=["memory"])
+def memory_promote(request: Request, body: dict | None = None) -> dict:
+    """Promote a memory item up the hierarchy (working→session→long_term)."""
+    try:
+        mos = _app(request).container.resolve("memory_os")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"memory_os unavailable: {exc}") from exc
+    payload = body or {}
+    memory_id = str(payload.get("memory_id") or payload.get("id") or "")
+    to_layer = str(payload.get("to_layer") or payload.get("layer") or "long_term")
+    if not memory_id:
+        raise HTTPException(status_code=400, detail="memory_id required")
+    return mos.promote(
+        memory_id,
+        to_layer=to_layer,
+        forget_source=bool(payload.get("forget_source")),
+        importance=payload.get("importance"),
+    )
+
+
+@v1_router.post("/memory/os/remember", tags=["memory"])
+def memory_os_remember(request: Request, body: dict | None = None) -> dict:
+    """Remember at an explicit hierarchy layer (working|session|long_term)."""
+    try:
+        mos = _app(request).container.resolve("memory_os")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"memory_os unavailable: {exc}") from exc
+    payload = body or {}
+    content = str(payload.get("content") or "")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="content required")
+    return mos.remember(
+        content,
+        layer=str(payload.get("layer") or "long_term"),
+        scope=str(payload.get("scope") or "global"),
+        importance=float(payload.get("importance") or 0.0),
+        metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None,
+        session_id=payload.get("session_id"),
+        ttl_seconds=payload.get("ttl_seconds"),
+    )
+
+
 @v1_router.post("/memory/recall", response_model=RecallResponse, tags=["memory"])
 def recall(body: RecallRequest, request: Request) -> RecallResponse:
     memory = _app(request).container.resolve("memory")

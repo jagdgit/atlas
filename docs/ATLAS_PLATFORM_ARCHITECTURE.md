@@ -89,7 +89,7 @@ Today workers mostly own their own `interval_seconds`. Elevate to Program → Mi
 | Service | Role | Exists today? | Gap |
 |---------|------|---------------|-----|
 | **Verification OS** | UNVERIFIED → scored / contested; multi-dim trust | ✅ KV.0–KV.10 | Consume from Mission Context API |
-| **Memory OS** | Explicit hierarchy (below) | Partial (`memory.items` working/episodic/semantic) | Name + document hierarchy vs Knowledge/Experience |
+| **Memory OS** | Explicit hierarchy (below) | ✅ MEM.1 | working → session → long_term; Knowledge/Experience stay separate OS |
 | **Planning OS** | Goal → gather gaps → compare → risk → decide | ✅ PA.1 | Multi-step across Programs; hard Policy still OI-PA-POLICY |
 | **Policy Engine** | Constraints & governance (caps, forbidden actions) | ✅ PA.2 | Soft prefer/avoid + hard forbid/limit; Decision Simulation blocks hard violations |
 | **Capability Registry** | Discover readers/extractors/verifiers/tools | Partial (`CapabilityRegistry`) | Enrich: version/health/deps; missions ask “need MarketReader” not import |
@@ -110,6 +110,8 @@ Experience         ← lessons from outcomes (Experience OS)
 ```
 
 Rule of thumb: scratch → working; important conclusion → Knowledge; repeated pattern → Experience.
+
+**Shipped (MEM.1):** `MemoryOS` maps layers onto `memory.items` (`working` / `episodic`+session meta / `semantic`). APIs: `GET /v1/memory/hierarchy`, `POST /v1/memory/os/remember`, `POST /v1/memory/promote`. Mission Context includes `item_kind=memory`. Promoting into Knowledge/Experience is refused — those OS own writes.
 
 ### 4.4 Planning OS (gap)
 

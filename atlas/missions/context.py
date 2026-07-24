@@ -23,12 +23,14 @@ class MissionContextService:
         world_models: Any | None = None,
         knowledge_graph: Any | None = None,
         learning: Any | None = None,
+        memory_os: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._knowledge = knowledge
         self._world_models = world_models
         self._knowledge_graph = knowledge_graph
         self._learning = learning
+        self._memory_os = memory_os
         self._logger = logger or logging.getLogger("atlas.missions.context")
 
     def gather(
@@ -41,11 +43,25 @@ class MissionContextService:
         include_world: bool = True,
         include_graph: bool = True,
         include_knowledge: bool = True,
+        include_memory: bool = True,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         """Return items + a compact citation summary for Decision / Mission loops."""
         topic = (topic or "").strip()
         items: list[dict[str, Any]] = []
         sources_used: list[str] = []
+
+        if include_memory and self._memory_os is not None and topic:
+            try:
+                mem_limit = max(1, min(4, limit // 3 or 1))
+                rows = self._memory_os.context_for(
+                    topic, limit=mem_limit, session_id=session_id
+                )
+                if rows:
+                    sources_used.append("memory")
+                items.extend(rows)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("memory_os context skipped: %s", exc)
 
         if include_world and self._world_models is not None and (topic or program_id):
             try:
@@ -160,7 +176,8 @@ class MissionContextService:
             "summary": summary,
             "spike": False,
             "note": (
-                "Mission Context API (MCA.1): Knowledge + Graph + World Models + Experience"
+                "Mission Context API (MCA.1): Knowledge + Graph + World Models + "
+                "Experience + Memory"
             ),
             "version": self.VERSION,
         }
@@ -180,6 +197,8 @@ def _citations(items: list[dict[str, Any]]) -> list[str]:
             refs.append("chunk")
         elif kind == "experience_advice":
             refs.append("experience:advice")
+        elif kind == "memory":
+            refs.append(f"memory:{it.get('layer') or it.get('id')}")
         else:
             refs.append(kind)
         if len(refs) >= 12:
