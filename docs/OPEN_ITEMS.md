@@ -99,6 +99,8 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-PA-MEM | 🔴 | P2 | **Memory hierarchy** — working / session / long-term ↔ Knowledge / Experience (document + wire). | Platform |
 | OI-PA-POLICY | 🔴 | P2 | **Policy Engine** — elevate prefer/avoid store to reusable hard/soft constraints across Programs. | Platform · builds on C.5 |
 | OI-PA-CAP | 🔴 | P2 | **Capability Registry enrichment** — version/health/deps; missions declare needs, not imports. | Roadmap §5.10 |
+| OI-PA-SCHED | 🔴 | P3 | **Scheduler hierarchy** — Program → Mission → Worker tick. | Platform |
+| OI-PA-WM | 🟢 | P1 | **World Models framework** — registry + indian_markets + solar_plant stub. | WM.1 |
 | OI-PA-MCA | 🟢 | P1 | **Mission Context API** — Knowledge + Graph + World Models + Experience; Decision Simulation cites. | MCA.1 |
 | OI-BA0 | 🟢 | P2 | **Browser → Asset** — BA.1b + BA.v2 (opt-in yt-dlp) done. BA.v2+ later. | `MEDIA_BROWSER_ACQUISITION_PLAN.md` · `atlas/ingestion/youtube_media_obtain.py` |
 | OI-M1 | 🟢 | P1 | Official YouTube captions API — executable when `plugins.youtube.api_key` set (download may still need OAuth). | `atlas/transcripts/official_captions.py` |
