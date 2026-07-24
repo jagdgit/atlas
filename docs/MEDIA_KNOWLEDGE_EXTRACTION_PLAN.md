@@ -49,9 +49,11 @@ Claim→Concept→Entity linking is now the foundation for “which concepts sup
 
 | Signal | Action |
 |--------|--------|
-| Relationships still sentence fragments (`what baffles me is that teaches…`) | **KE.2.5** — emit only real SPO triples |
-| Preview shows raw relationship text | **KE.2.6** — Subject / Predicate / Object in Learning Report |
-| Provenance should be complete even if UI hides it | **KE.2.7** — asset, chunk, speaker, timestamp, extractor version |
+| Relationships were sentence fragments | **KE.2.5** ✅ SPO-only + anchors |
+| Preview showed raw relationship text | **KE.2.6** ✅ Subject / Predicate / Object |
+| Provenance incomplete on some types | **KE.2.7** ✅ asset/chunk/offsets/version |
+
+Live re-score on the Kiyosaki video is the next operator check (expect cleaner Top Relationships).
 
 ### Do not expand claim_types
 
@@ -183,9 +185,9 @@ Learning Report (preview + quality)
 ```
 KE.0–KE.2.3   Metrics, typed extract, preview, provenance     ✅
 KE.2.4        Claim link + SPO tighten + entity typing        ✅
-KE.2.5        SPO-only relationships (reject fragments)       ← next
-KE.2.6        Structured relationship preview in Learning Report
-KE.2.7        Provenance completeness (asset/chunk/speaker/ts/version)
+KE.2.5        SPO-only relationships (reject fragments)       ✅
+KE.2.6        Structured relationship preview in Learning Report ✅
+KE.2.7        Provenance completeness (asset/chunk/speaker/ts/version) ✅
 KE.4 / V5     Verification                                    ✅ KNOWLEDGE_VERIFICATION_PLAN
 KG.1 / V6     Knowledge graph                                 platform
 ```
@@ -200,6 +202,6 @@ KG.1 / V6     Knowledge graph                                 platform
 - [x] KE.2.4 Relationship SPO quality (partial — still fragments on live report)  
 - [x] KE.2.4 Entity place/role typing  
 - [x] Tests + OI-KE0 update  
-- [ ] KE.2.5 SPO-only emission  
-- [ ] KE.2.6 Structured Top Relationships in report  
-- [ ] KE.2.7 Provenance completeness audit  
+- [x] KE.2.5 SPO-only emission  
+- [x] KE.2.6 Structured Top Relationships in report  
+- [x] KE.2.7 Provenance completeness audit  
