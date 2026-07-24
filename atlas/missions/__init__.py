@@ -10,5 +10,13 @@ from __future__ import annotations
 
 from atlas.missions.repository import MissionRepository
 from atlas.missions.service import MissionError, MissionService
+from atlas.missions.programs import ProgramService, list_programs, get_program
 
-__all__ = ["MissionService", "MissionRepository", "MissionError"]
+__all__ = [
+    "MissionService",
+    "MissionRepository",
+    "MissionError",
+    "ProgramService",
+    "list_programs",
+    "get_program",
+]

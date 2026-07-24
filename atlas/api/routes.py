@@ -1120,6 +1120,10 @@ def _templates(request: Request):
     return _app(request).container.resolve("templates")
 
 
+def _programs(request: Request):
+    return _app(request).container.resolve("programs")
+
+
 def _configuration(request: Request):
     return _app(request).container.resolve("configuration")
 
@@ -1376,10 +1380,58 @@ def list_templates(request: Request) -> dict:
                 "config_schema_type": t.config_schema_type,
                 "knowledge_domains": t.knowledge_domains,
                 "default_config": t.default_config,
+                "success_criteria": t.success_criteria,
             }
             for t in templates.list_templates()
         ]
     }
+
+
+# --- Intelligence Programs (MI.1) ----------------------------------------
+@v1_router.get("/programs", tags=["programs"])
+def list_programs(request: Request) -> dict:
+    """List Market / Engineering / Personal Programs with member status."""
+    return {"programs": _programs(request).list(), "version": "mi.1"}
+
+
+@v1_router.get("/programs/{program_id}", tags=["programs"])
+def get_program(program_id: str, request: Request) -> dict:
+    try:
+        return _programs(request).describe(program_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@v1_router.post("/programs/{program_id}/start", tags=["programs"])
+def start_program(program_id: str, request: Request, activate: bool = True) -> dict:
+    """Start startable Program members using template defaults (no raw JSON)."""
+    try:
+        return _programs(request).start(program_id, activate=activate)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
+
+
+@v1_router.get("/programs/{program_id}/context", tags=["programs"])
+def program_context(
+    program_id: str,
+    request: Request,
+    q: str = "",
+    limit: int = 12,
+) -> dict:
+    """MCA.1 spike — everything relevant to ``q`` for this Program."""
+    try:
+        _programs(request).describe(program_id)  # 404 if unknown
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _programs(request).context(q, program_id=program_id, limit=limit)
+
+
+@v1_router.get("/context", tags=["programs"])
+def mission_context(request: Request, q: str = "", limit: int = 12) -> dict:
+    """MCA.1 spike — platform-wide context gather (no Program filter)."""
+    return _programs(request).context(q, limit=limit)
 
 
 @v1_router.get("/workers", tags=["workers"])
