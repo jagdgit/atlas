@@ -62,11 +62,23 @@ API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/
   }
   ```
 
-`paper_trading` / `decision_simulation` may set `broker_profile` to charge the same schedules on fills. Remaining Program stub: `investment_mentor`.
+`paper_trading` / `decision_simulation` may set `broker_profile` to charge the same schedules on fills.
+
+**Investment Mentor (MI.7)** — weekly synthesis of market Experiences into a Lesson written back to Experience OS. Decision Simulation pulls `advice_for` into each tick and lightly biases buy scores (caution vs reinforce). Example:
+
+  ```json
+  {
+    "focus": "markets",
+    "lookback": 40,
+    "force": true,
+    "seed_experiences": [
+      {"title": "Paper trade closed on DEMO: loss -10", "tags": ["demo", "paper_trading", "loss", "markets"], "lessons": "Lesson: re-check"}
+    ]
+  }
+  ```
 
 `paper_trading` remains a **compat alias** for Chat/Jobs; prefer **`decision_simulation`**.
-Start Program instantiates members when templates are seeded — remaining stub
-(`investment_mentor`) journals waiting notes.
+Start Program instantiates all seven Market members when templates are seeded.
 
 ---
 

@@ -12,6 +12,7 @@ from atlas.trading.market_reader import MarketReaderService
 from atlas.trading.company import CompanyDataService
 from atlas.trading.broker_profiles import compute_fees, get_broker_profile, list_broker_profiles
 from atlas.trading.ledger import PortfolioLedgerService
+from atlas.trading.mentor import MentorLesson, synthesize_mentor_lesson
 
 __all__ = [
     "compute_indicators",
@@ -27,4 +28,6 @@ __all__ = [
     "compute_fees",
     "get_broker_profile",
     "list_broker_profiles",
+    "MentorLesson",
+    "synthesize_mentor_lesson",
 ]

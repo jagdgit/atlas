@@ -125,7 +125,7 @@ class StrategyDecisionRule:
                     )
                 )
 
-        return options
+        return _apply_mentor_bias(options, ctx)
 
     # --- sizing ---------------------------------------------------------
     def _buy_quantity(
@@ -159,6 +159,39 @@ class StrategyDecisionRule:
         frac = _as_float(ctx.get("sell_fraction"), default=1.0)
         frac = min(max(frac, 0.0), 1.0)
         return held * frac if frac < 1.0 else held
+
+
+def _apply_mentor_bias(options: list[ScoredOption], ctx: dict[str, Any]) -> list[ScoredOption]:
+    """Light Experience OS bias from Investment Mentor advice (MI.7 / OI-MP5)."""
+    advice = str(ctx.get("mentor_advice") or "").strip().lower()
+    if not advice or len(options) <= 1:
+        return options
+    caution = any(
+        k in advice
+        for k in (
+            "loss",
+            "re-check",
+            "caution",
+            "prefer hold",
+            "lower trade_fraction",
+            "contradicted",
+        )
+    )
+    reinforce = any(
+        k in advice for k in ("reinforce", "positive expectancy", "profit")
+    ) and not caution
+    for opt in options:
+        if opt.key == "hold":
+            continue
+        if caution and opt.key.startswith("buy:"):
+            opt.score = max(0.05, float(opt.score) - 0.25)
+            opt.rationale = (opt.rationale or "") + "; mentor caution"
+            opt.experience_refs = list(opt.experience_refs or []) + ["investment_mentor"]
+        elif reinforce and opt.key.startswith("buy:"):
+            opt.score = float(opt.score) + 0.05
+            opt.rationale = (opt.rationale or "") + "; mentor reinforce"
+            opt.experience_refs = list(opt.experience_refs or []) + ["investment_mentor"]
+    return options
 
 
 def _as_float(value: Any, *, default: float | None = None) -> float | None:

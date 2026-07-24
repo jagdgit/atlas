@@ -141,8 +141,8 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 template="investment_mentor",
                 kind="maintenance",
                 cadence="weekly",
-                status=MEMBER_STUB,
-                description="Lessons + recommendations → Experience OS",
+                status=MEMBER_ENABLED,
+                description="Lessons + recommendations → Experience OS (OI-MP5)",
             ),
         ),
         domain_adapters=(
@@ -278,7 +278,7 @@ class ProgramService:
     """Derive Program cockpit views from definitions + live missions/templates."""
 
     name = "programs"
-    VERSION = "mi.6"
+    VERSION = "mi.7"
 
     def __init__(
         self,

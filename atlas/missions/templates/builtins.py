@@ -239,18 +239,23 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "investment_mentor",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
-            "Market Intelligence M7 — lessons + recommendations → Experience OS (stub until MI.7)."
+            "Market Intelligence M7 — weekly lessons + recommendations → Experience OS "
+            "(Decision Simulation recalls via advice_for)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "Investment Mentor",
             "roadmap": "MI.7",
+            "focus": "markets",
+            "lookback": 40,
+            "force": False,
+            "seed_experiences": [],
             "tick_interval_seconds": 604800,
         },
-        "worker_specs": [{"type": "program_stub", "interval_seconds": 604800}],
+        "worker_specs": [{"type": "investment_mentor", "interval_seconds": 604800}],
         "knowledge_domains": ["finance", "markets", "experience"],
         "success_criteria": with_philosophy({}, "investment_mentor"),
     },

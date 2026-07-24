@@ -73,6 +73,7 @@ from atlas.workers.news_intelligence import NewsIntelligenceWorker
 from atlas.workers.event_research import EventResearchWorker
 from atlas.workers.company_intelligence import CompanyIntelligenceWorker
 from atlas.workers.portfolio_ledger import PortfolioLedgerWorker
+from atlas.workers.investment_mentor import InvestmentMentorWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
@@ -1404,6 +1405,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             ledger=portfolio_ledger_service,
             events=events,
             logger=get_logger("atlas.workers.portfolio_ledger"),
+        )
+    )
+    worker_manager.register_worker_type(
+        InvestmentMentorWorker(
+            learning=learning_service,
+            events=events,
+            logger=get_logger("atlas.workers.investment_mentor"),
         )
     )
     tools.register(

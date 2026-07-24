@@ -215,7 +215,7 @@ MI.3   MarketReader adapters + OI-D1 live when keys exist ✅
 MI.4   News + Interesting-Event → research Jobs + verify ✅
 MI.5   Company / filings ingest (compliant) ✅
 MI.6   Promote Portfolio Ledger + Broker Profiles     ✅
-MI.7   Investment Mentor + Experience OS deepening
+MI.7   Investment Mentor + Experience OS deepening    ✅
 WM.1   World Models (markets first)
 KG.1   Knowledge graph (Claim↔Concept↔Entity↔SPO)
 MCA.1  Mission Context API (all Programs)
@@ -250,3 +250,4 @@ MCA.1  Mission Context API (all Programs)
 - [x] MI.4 news + interesting-event → research Jobs  
 - [x] MI.5 company intelligence (config_seed + official skeletons)  
 - [x] MI.6 Portfolio Ledger + Broker Profiles (sim fees; `GET /v1/market/broker-profiles`)  
+- [x] MI.7 Investment Mentor → Experience OS; Decision Simulation recalls advice  

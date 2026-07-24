@@ -203,6 +203,14 @@ class PaperTradingWorker(PersistentWorker):
         held = float(position.get("quantity", 0.0))
         snapshot = self._portfolio.snapshot(portfolio_id, prices={symbol: price})
 
+        mentor_advice = ""
+        if self._learning is not None:
+            try:
+                adv = self._learning.advice_for(f"markets trading {symbol}", limit=3)
+                mentor_advice = str(adv.get("advice") or "")[:500]
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("mentor advice_for skipped: %s", exc)
+
         request = DecisionRequest(
             mission_id=mission_id,
             mission_type=MISSION_TYPE_PAPER_TRADING,
@@ -221,6 +229,7 @@ class PaperTradingWorker(PersistentWorker):
                 "trade_fraction": strategy.get("trade_fraction", 0.1),
                 "rsi_overbought": strategy.get("rsi_overbought", 70.0),
                 "rsi_oversold": strategy.get("rsi_oversold", 30.0),
+                "mentor_advice": mentor_advice,
             },
         )
         decision = self._engine.decide(request)
