@@ -242,6 +242,7 @@ MCA.1  Mission Context API (all Programs)
 - [x] KE.2.5–2.7 + graph/API/models noted as ship-along  
 - [x] Verification how-to for operators (§3)  
 - [x] Platform vs Market Program split (Broker Profiles domain-only)  
+- [x] KE.2.5 SPO hardening + structured relationship preview  
+- [x] KE.2.7 provenance completeness  
 - [ ] MI.1 Program UI  
-- [ ] KE.2.5 SPO hardening + structured relationship preview  
 - [ ] MI.2 templates + façade  
