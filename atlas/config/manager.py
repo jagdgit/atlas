@@ -318,8 +318,9 @@ class YouTubePluginConfig(BaseModel):
     # When true and the binary is on PATH, SourceFetcher can produce Video/Audio Assets.
     media_obtain_enabled: bool = False
     media_obtain_binary: str = "yt-dlp"
-    media_obtain_format: str = "bestaudio/best"  # prefer audio for speech_to_text
-    media_obtain_timeout: float = 300.0
+    media_obtain_format: str = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+    media_obtain_timeout: float = 0.0  # 0 = no wall-clock timeout (wait until yt-dlp finishes)
+    media_obtain_max_bytes: int = 209_715_200  # 200 MiB
 
 
 class GitPluginConfig(BaseModel):
@@ -349,7 +350,7 @@ class SpeechPluginConfig(BaseModel):
     model: str = "base"  # whisper model size: tiny|base|small|medium|large
     language: str = ""  # empty => auto-detect
     binary: str = "whisper"  # CLI name on PATH (openai-whisper); Python package is fallback
-    timeout: float = 600.0  # hard wall-clock per transcription
+    timeout: float = 0.0  # 0 = no wall-clock limit (long videos on CPU)
 
 
 class BrowserPluginConfig(BaseModel):

@@ -101,9 +101,11 @@ _METHODOLOGY_ACQUIRE_WAITING = (
 
 _METHODOLOGY_LEARNING = (
     "Media was acquired into a registered Asset. Media Readers extracted metadata "
-    "(and transcript/speech when available). Knowledge was updated from what Readers "
-    "produced. Research verification, Evidence Budget, and convergence assessment "
-    "did not run — this is a Learning Report, not a Research verification report."
+    "(and transcript/speech when available). Transcript text was chunked into the RAG "
+    "store; a bounded typed extractor emitted concept/entity/relationship/fact/claim "
+    "candidates that the Consolidator turned into UNVERIFIED findings. Research "
+    "verification, Evidence Budget, and convergence assessment did not run — this is "
+    "a Learning Report, not a Research verification report."
 )
 
 _SUMMARY_SYSTEM = (
@@ -286,16 +288,34 @@ class ReportGenerator:
         """Learning Report product (LR1–LR7) — not Research verification."""
         stages = dict(termination.get("stages") or {})
         kp = int(termination.get("knowledge_produced") or 0)
+        breakdown = termination.get("knowledge_breakdown")
+        if not isinstance(breakdown, dict):
+            breakdown = None
         learning_status = str(
             termination.get("learning_status")
             or _learning_status_from_stages(stages)
         )
         overall = learning_status  # Job/UI “overall_confidence” slot = learning status
+        pending = _pending_capabilities(stages, termination.get("speech_to_text_status"))
+        # Prefer termination observations, but always merge preview samples when present.
         observations = list(termination.get("observations") or [])
         if not observations:
             observations = _default_learning_observations(termination)
+        else:
+            extra = _default_learning_observations(termination)
+            seen = {
+                (o.get("label"), o.get("value"))
+                for o in observations
+                if isinstance(o, dict)
+            }
+            for row in extra:
+                key = (row.get("label"), row.get("value"))
+                if key not in seen and str(row.get("label") or "").startswith(
+                    ("top_", "sample_", "extraction_")
+                ):
+                    observations.append(row)
+                    seen.add(key)
 
-        pending = _pending_capabilities(stages, termination.get("speech_to_text_status"))
         confidence_block: dict[str, Any] = {
             "overall": overall,
             "learning_status": learning_status,
@@ -304,6 +324,9 @@ class ReportGenerator:
             "status": str(termination.get("status") or learning_status.lower()),
             "stages": stages,
             "knowledge_produced": kp,
+            "knowledge_breakdown": breakdown,
+            "knowledge_preview": termination.get("knowledge_preview"),
+            "extraction_quality": termination.get("extraction_quality"),
             "asset_id": termination.get("asset_id"),
             "asset_kind": termination.get("asset_kind"),
             "reasoning": "not_started",
@@ -335,8 +358,12 @@ class ReportGenerator:
                 "transcript/speech paths completed or were not applicable."
             )
 
-        default_answer = answer.strip() or _learning_answer(termination, kp, learning_status)
-        executive = _learning_executive_summary(objective, termination, kp, learning_status)
+        default_answer = answer.strip() or _learning_answer(
+            termination, kp, learning_status, breakdown=breakdown
+        )
+        executive = _learning_executive_summary(
+            objective, termination, kp, learning_status, breakdown=breakdown
+        )
         limitations = (
             "Verification and research convergence were not part of this job. "
             "Spoken content remains unlearned while transcript/speech stages are waiting."
@@ -367,6 +394,9 @@ class ReportGenerator:
             "executive_summary": executive,
             "pending_capabilities": pending,
             "stages": stages,
+            "knowledge_breakdown": breakdown,
+            "knowledge_preview": termination.get("knowledge_preview") or {},
+            "extraction_quality": termination.get("extraction_quality") or {},
         }
         if notes and notes.strip() and notes.strip() not in default_answer:
             sections["answer"] = f"{default_answer}\n\n{notes.strip()[:600]}"
@@ -891,10 +921,79 @@ class ReportGenerator:
         lines += [
             "## Learning Status",
             f"Status: **{overall}**",
-            f"Knowledge Produced: **{conf.get('knowledge_produced', 0)}**",
+            (
+                f"Knowledge Produced (RAG transcript chunks): "
+                f"**{conf.get('knowledge_produced', 0)}**"
+            ),
             "Verification: **Not Executed** (learning job)",
             "",
         ]
+        breakdown = conf.get("knowledge_breakdown") or sections.get("knowledge_breakdown")
+        if isinstance(breakdown, dict) and breakdown:
+            lines.append("### Knowledge categories")
+            lines.append(
+                "_Category counts are artifacts/findings — they do not sum to RAG chunk total._"
+            )
+            lines.append("| Category | Count |")
+            lines.append("| --- | ---: |")
+            for key in (
+                "metadata",
+                "transcript",
+                "transcript_chunks",
+                "concepts",
+                "entities",
+                "relationships",
+                "facts",
+                "claims",
+                "summaries",
+            ):
+                if key in breakdown:
+                    label = key
+                    if key == "facts":
+                        label = "facts (structured)"
+                    elif key == "claims":
+                        label = "claims (speaker assertions)"
+                    elif key == "transcript_chunks":
+                        label = "transcript_chunks (RAG)"
+                    lines.append(f"| {label} | {int(breakdown.get(key) or 0)} |")
+            lines.append("")
+        preview = conf.get("knowledge_preview") or sections.get("knowledge_preview") or {}
+        if isinstance(preview, dict) and any(preview.get(k) for k in preview):
+            lines.append("### Knowledge preview")
+            lines.append("_Sample extracted findings for operator validation (not exhaustive)._")
+            lines.append("")
+            for title, key in (
+                ("Top Concepts", "concepts"),
+                ("Top Entities", "entities"),
+                ("Top Relationships", "relationships"),
+                ("Top Facts", "facts"),
+                ("Top Claims", "claims"),
+            ):
+                items = preview.get(key) or []
+                if not items:
+                    continue
+                lines.append(f"**{title}**")
+                for item in items:
+                    lines.append(f"- {item}")
+                lines.append("")
+        quality = conf.get("extraction_quality") or sections.get("extraction_quality") or {}
+        if isinstance(quality, dict) and quality.get("candidates_emitted"):
+            lines.append("### Extraction quality")
+            lines.append(
+                "_Extractor health — not truth confidence (verification assigns confidence later)._"
+            )
+            lines.append("")
+            lines.append(f"- Candidates emitted: {quality.get('candidates_emitted', 0)}")
+            caps_hit = quality.get("caps_hit") or []
+            if caps_hit:
+                lines.append(f"- Caps hit: {', '.join(str(c) for c in caps_hit)}")
+            lines.append(
+                f"- Claims linked to concepts/entities: {quality.get('claims_linked', 0)}"
+            )
+            lines.append(f"- Orphan claims (no links): {quality.get('claims_orphan', 0)}")
+            if quality.get("transcript_chars"):
+                lines.append(f"- Transcript characters scanned: {quality.get('transcript_chars')}")
+            lines.append("")
         # LS1: operator-facing capability summary (why PARTIAL / COMPLETE).
         lines.extend(_learning_capability_summary_lines(stages))
         lines.append("")
@@ -979,10 +1078,10 @@ def _learning_capability_mark(state: str) -> str:
         return "✓ Learned"
     if s == "waiting":
         return "Pending"
-    if s in ("skipped", "empty"):
-        return "Not started" if s == "skipped" else "Empty"
     if s == "failed":
         return "Failed"
+    if s in ("skipped", "empty"):
+        return "Not started" if s == "skipped" else "Empty"
     return (state or "unknown").replace("_", " ").title()
 
 
@@ -1005,13 +1104,16 @@ def _pending_capabilities(
     stages: dict[str, Any], speech_status: Any
 ) -> list[str]:
     pending: list[str] = []
-    if str(stages.get("transcript") or "") in ("waiting", "skipped", ""):
-        if str(stages.get("transcript") or "") == "waiting":
-            pending.append("transcript")
-    if str(stages.get("speech") or "") == "waiting":
+    tr = str(stages.get("transcript") or "")
+    sp = str(stages.get("speech") or "")
+    if tr in ("waiting", "failed"):
+        pending.append("transcript")
+    if sp in ("waiting", "failed"):
         pending.append("speech_to_text")
         if speech_status and speech_status != "ready":
             pending.append(f"speech_to_text status: {speech_status}")
+        elif sp == "failed":
+            pending.append("retry speech_to_text (previous attempt failed)")
     # Dedupe preserving order
     seen: set[str] = set()
     out: list[str] = []
@@ -1047,6 +1149,33 @@ def _default_learning_observations(termination: dict[str, Any]) -> list[dict[str
     kp = termination.get("knowledge_produced")
     if kp is not None:
         obs.append({"label": "knowledge_produced", "value": str(kp)})
+    # Belt-and-suspenders: surface preview samples even if markdown section is skimmed.
+    preview = termination.get("knowledge_preview") if isinstance(
+        termination.get("knowledge_preview"), dict
+    ) else {}
+    for key, label in (
+        ("concepts", "top_concepts"),
+        ("entities", "top_entities"),
+        ("claims", "sample_claims"),
+        ("relationships", "top_relationships"),
+    ):
+        items = preview.get(key) or []
+        if items:
+            obs.append({"label": label, "value": "; ".join(str(x) for x in items[:5])})
+    quality = termination.get("extraction_quality") if isinstance(
+        termination.get("extraction_quality"), dict
+    ) else {}
+    if quality.get("candidates_emitted"):
+        obs.append(
+            {
+                "label": "extraction_quality",
+                "value": (
+                    f"emitted={quality.get('candidates_emitted')}, "
+                    f"claims_linked={quality.get('claims_linked', 0)}, "
+                    f"orphan_claims={quality.get('claims_orphan', 0)}"
+                ),
+            }
+        )
     return obs
 
 
@@ -1065,19 +1194,41 @@ def _learning_references(termination: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _learning_answer(
-    termination: dict[str, Any], kp: int, learning_status: str
+    termination: dict[str, Any],
+    kp: int,
+    learning_status: str,
+    *,
+    breakdown: dict[str, Any] | None = None,
 ) -> str:
     source = termination.get("source") or termination.get("source_url") or "media"
     aid = termination.get("asset_id") or "unknown"
-    if learning_status == LEARNING_STATUS_COMPLETE:
+    bd = breakdown if isinstance(breakdown, dict) else {}
+    meta_n = int(bd.get("metadata") or 0)
+    tr_n = int(bd.get("transcript") or 0)
+    if learning_status == LEARNING_STATUS_COMPLETE and tr_n > 0:
+        claims_n = int(bd.get("claims") or 0)
+        facts_n = int(bd.get("facts") or 0)
+        concepts_n = int(bd.get("concepts") or 0)
+        entities_n = int(bd.get("entities") or 0)
+        rel_n = int(bd.get("relationships") or 0)
+        chunks = int(bd.get("transcript_chunks") or kp)
         return (
-            f"Learned from '{source}' (asset_id={aid}). "
-            f"Knowledge produced: {kp}. Transcript/speech paths completed."
+            f"Spoken content learned from '{source}' (asset_id={aid}). "
+            f"RAG transcript chunks: {chunks}; "
+            f"concepts={concepts_n}, entities={entities_n}, relationships={rel_n}, "
+            f"facts={facts_n}, claims={claims_n} "
+            f"(transcript artifact={tr_n}, metadata={meta_n})."
+        )
+    if meta_n > 0 and tr_n == 0:
+        return (
+            f"Metadata learned successfully from '{source}' (asset_id={aid}). "
+            f"Spoken content has not yet been learned because no transcript or "
+            f"speech processing was available. Knowledge produced: metadata={meta_n} "
+            f"(total={kp}); concepts/entities/facts=0."
         )
     return (
-        f"Learned from '{source}' (asset_id={aid}). "
-        f"Knowledge produced: {kp} from metadata. "
-        "Transcript and speech content are still pending."
+        f"Learning status {learning_status} for '{source}' (asset_id={aid}). "
+        f"Knowledge produced: {kp}."
     )
 
 
@@ -1086,18 +1237,31 @@ def _learning_executive_summary(
     termination: dict[str, Any],
     kp: int,
     learning_status: str,
+    *,
+    breakdown: dict[str, Any] | None = None,
 ) -> str:
     source = termination.get("source") or termination.get("source_url") or "the media"
-    if learning_status == LEARNING_STATUS_COMPLETE:
+    bd = breakdown if isinstance(breakdown, dict) else {}
+    meta_n = int(bd.get("metadata") or 0)
+    tr_n = int(bd.get("transcript") or 0)
+    if learning_status == LEARNING_STATUS_COMPLETE and tr_n > 0:
+        facts_n = int(bd.get("facts") or 0)
+        claims_n = int(bd.get("claims") or 0)
+        concepts_n = int(bd.get("concepts") or 0)
+        entities_n = int(bd.get("entities") or 0)
+        rel_n = int(bd.get("relationships") or 0)
+        chunks = int(bd.get("transcript_chunks") or kp)
         return (
-            f"Objective: {objective.strip()}. Atlas acquired {source}, ran Media Readers, "
-            f"and ingested Knowledge ({kp}). Learning status: {learning_status}. "
-            "Verification was not executed (learning job)."
+            f"Objective: {objective.strip()}. Atlas acquired {source}, transcribed spoken "
+            f"content, and extracted Knowledge (transcript={tr_n}, "
+            f"RAG chunks={chunks}, concepts={concepts_n}, entities={entities_n}, "
+            f"relationships={rel_n}, facts={facts_n}, claims={claims_n}). "
+            f"Learning status: {learning_status}. Verification was not executed (learning job)."
         )
     return (
         f"Objective: {objective.strip()}. Atlas successfully acquired the media and "
-        f"ingested metadata into the Knowledge Base (knowledge_produced={kp}). "
-        "Speech content has not yet been learned because transcript/speech processing "
+        f"ingested metadata into the Knowledge Base (metadata={meta_n or kp}, total={kp}). "
+        "Spoken content has not yet been learned because transcript/speech processing "
         f"has not completed. Learning status: {learning_status}."
     )
 

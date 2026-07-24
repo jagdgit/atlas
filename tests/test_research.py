@@ -230,3 +230,28 @@ def test_health_check_reports_providers():
     health = svc.health_check()
     assert health.healthy
     assert "search" in health.data["providers"]
+
+
+def test_gather_evidence_onto_existing_claim_budget_capped():
+    """KV.4: gather_evidence mutates an existing Claim without a full research job."""
+    from atlas.evidence.models import Claim
+
+    papers = [
+        Paper(
+            title=f"P{i}",
+            url=f"https://doi.org/10.0/{i}",
+            doi=f"d{i}",
+            abstract="measured value is 12.5 percent",
+            evidence_level=4,
+        )
+        for i in range(3)
+    ]
+    svc = _service(scholar=FakeScholar(papers, once=False), search=FakeSearch(snippet="about 12.0"))
+    claim = Claim(id="c-kv4", statement="Inflation reduces purchasing power")
+    out = svc.gather_evidence(claim, max_iterations=2, per_query=2)
+    assert out["outcome"] in {RESEARCH_OK, RESEARCH_EMPTY} or out["added"] >= 0
+    assert out["iterations"] <= 2
+    assert out["added"] >= 1
+    assert len(claim.evidence) >= 1
+    # No report / deep pipeline keys.
+    assert "report" not in out

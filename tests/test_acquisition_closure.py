@@ -363,3 +363,32 @@ def test_readiness_media_obtain_not_configured_hint():
     )
     assert readiness["automatic_path_viable"] is False
     assert "media_obtain_enabled" in readiness["assessment"]
+
+
+def test_youtube_media_obtain_rejects_part_files(tmp_path):
+    from pathlib import Path
+    from atlas.ingestion.youtube_media_obtain import YoutubeMediaObtain
+
+    class _Proc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, **kwargs):
+        # Simulate yt-dlp abort leaving only an incomplete .part
+        dest = Path(cmd[cmd.index("-o") + 1].replace("%(ext)s", "webm.part"))
+        # path is media.%(ext)s → media.webm.part when we write wrong; write as media.webm.part
+        out_arg = cmd[cmd.index("-o") + 1]
+        # Create incomplete file next to template dir
+        folder = Path(out_arg).parent
+        (folder / "media.webm.part").write_bytes(b"x" * 1000)
+        return _Proc()
+
+    obt = YoutubeMediaObtain(
+        enabled=True,
+        which=lambda _: "/bin/yt-dlp",
+        run=fake_run,
+    )
+    out = obt.fetch("https://youtu.be/abcdefghijk")
+    assert out["outcome"] == "error"
+    assert out["reason_code"] == "incomplete_download"

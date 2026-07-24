@@ -22,6 +22,7 @@ from atlas.capabilities import (
     CAP_BROWSER,
     CAP_GIT,
     CAP_KNOWLEDGE,
+    CAP_KNOWLEDGE_LIFECYCLE,
     CAP_LLM,
     CAP_MAIL,
     CAP_MEDIA_LEARN,
@@ -60,6 +61,7 @@ class Intent:
     REACT = "react"  # escalation: open-ended reasoning + tools via the ReAct strategy
     INSTANTIATE_MISSION = "instantiate_mission"
     REGISTER_MARKET_DATA = "register_market_data"
+    VERIFY_KNOWLEDGE = "verify_knowledge"
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,14 @@ _MEDIA_LEARN_RE = re.compile(
     r"(?:learn|ingest|understand|summarize|summarise)\b"
     r"|\b[\w./~\-]+\.(?:mp4|mp3|wav|m4a|webm|mkv|vtt|srt)\b",
     re.IGNORECASE,
+)
+# Verify learned claims (KV.6) — must beat bare YouTube → media_learn when verify verbs present.
+_VERIFY_KNOWLEDGE_RE = re.compile(
+    r"\b(?:verify|re-?verify|corroborat(?:e|ion)|check\s+(?:the\s+)?(?:claims?|findings?))\b"
+    r".{0,80}\b(?:claims?|findings?|knowledge|learned|from|video|youtube|url|asset)\b"
+    r"|\b(?:verify|corroborate)\b.{0,40}\b(?:https?://|youtu\.?be)\b"
+    r"|\bverify\s+claims?\s+learned\s+from\b",
+    re.IGNORECASE | re.DOTALL,
 )
 # A fenced ```python code block, or an explicit "run this python …" instruction.
 _PYTHON_FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -352,6 +362,28 @@ def _media_learn_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     # Same fallback as youtube args for bare 11-char ids in learn phrasing.
     token = re.search(r"\b[A-Za-z0-9_-]{11}\b", message)
     return {"source": token.group(0) if token else ""}
+
+
+def _verify_knowledge_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    match = _YOUTUBE_URL_RE.search(message) or _URL_RE.search(message)
+    source_url = match.group(0).rstrip(".,);") if match else ""
+    asset = re.search(r"\basset[_ ]?id\s*[:=]?\s*([A-Za-z0-9\-]+)\b", message, re.I)
+    finding = re.search(r"\bfinding[_ ]?id\s*[:=]?\s*([A-Za-z0-9\-]+)\b", message, re.I)
+    gather = bool(
+        re.search(
+            r"\b(?:with\s+(?:web\s+)?(?:search|gather)|gather\s+evidence|"
+            r"search\s+for\s+sources|look\s+up\s+sources|online\s+corroborat)\b",
+            message,
+            re.I,
+        )
+    )
+    return {
+        "source_url": source_url or None,
+        "asset_id": asset.group(1) if asset else None,
+        "finding_id": finding.group(1) if finding else None,
+        "limit": 25,
+        "gather": gather,
+    }
 
 
 def _python_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
@@ -638,6 +670,12 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         _youtube_args,
     ),
     (
+        Intent.VERIFY_KNOWLEDGE,
+        CAP_KNOWLEDGE_LIFECYCLE,
+        _VERIFY_KNOWLEDGE_RE,
+        _verify_knowledge_args,
+    ),
+    (
         Intent.MEDIA_LEARN,
         CAP_MEDIA_LEARN,
         _MEDIA_LEARN_RE,
@@ -718,6 +756,7 @@ _DESCRIPTIONS = {
     Intent.SCHOLAR_SEARCH: "Search academic sources (arXiv, Semantic Scholar).",
     Intent.YOUTUBE_TRANSCRIPT: "Fetch a YouTube video transcript.",
     Intent.MEDIA_LEARN: "Learn from media.",
+    Intent.VERIFY_KNOWLEDGE: "Verify UNVERIFIED knowledge findings via VerificationEngine.",
     Intent.RUN_PYTHON: "Run Python code in the sandbox.",
     Intent.GIT_STATUS: "Inspect a local git repository (read-only).",
     Intent.SQL_QUERY: "Run a read-only SQL query on a local database.",

@@ -324,6 +324,7 @@ def test_gate_bootstrap_exposes_d_core_and_d_missions(tmp_path):
         "job_watcher",
         "tech_security_watcher",
         "self_improvement",
+        "knowledge_verification",
     }
     known_workers = set(workers.known_types())
     assert expected_workers <= known_workers

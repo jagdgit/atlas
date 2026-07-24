@@ -359,6 +359,63 @@ class FindingRepository(BaseRepository):
             (job_id, limit),
         )
 
+    def list_unverified(
+        self,
+        *,
+        asset_id: str | None = None,
+        job_id: str | None = None,
+        source_url: str | None = None,
+        claim_types: list[str] | None = None,
+        confidence: str = "UNVERIFIED",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Active head findings awaiting verification (KV.2 queue selection)."""
+        clauses = [
+            "confidence = %s",
+            "status IN ('active', 'contested')",
+        ]
+        params: list[Any] = [confidence]
+        if asset_id:
+            clauses.append("provenance->>'asset_id' = %s")
+            params.append(asset_id)
+        if job_id:
+            clauses.append("(job_id = %s OR provenance->>'job_id' = %s)")
+            params.extend([job_id, job_id])
+        if source_url:
+            clauses.append(
+                "(provenance->>'source_url' ILIKE %s OR provenance->>'url' ILIKE %s)"
+            )
+            like = f"%{source_url.rstrip('/')}%"
+            params.extend([like, like])
+        if claim_types:
+            clauses.append("lower(claim_type) = ANY(%s)")
+            params.append([str(t).lower() for t in claim_types])
+        where = " AND ".join(clauses)
+        params.append(limit)
+        return self.fetch_all(
+            f"""
+            SELECT DISTINCT ON (canonical_id) *
+            FROM knowledge.findings
+            WHERE {where}
+            ORDER BY canonical_id, revision DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+
+    def merge_quality(self, finding_id: str, quality: dict[str, Any]) -> dict[str, Any] | None:
+        """Merge keys into findings.quality (KV10 trust slots)."""
+        return self.fetch_one(
+            """
+            UPDATE knowledge.findings
+            SET quality = COALESCE(quality, '{}'::jsonb) || %s::jsonb,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (Jsonb(quality or {}), finding_id),
+        )
+
     def list_active_by_repo_uid(
         self, repo_uid: str, *, domain: str = "code"
     ) -> list[dict[str, Any]]:

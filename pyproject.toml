@@ -39,6 +39,14 @@ browser = [
 media = [
     "yt-dlp>=2024.4.9",
 ]
+# M.5 / OI-STT0: optional local speech_to_text. Prefer CPU torch first to avoid
+# multi‑GB CUDA wheels::
+#   uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   uv sync --extra speech
+# Then set ``plugins.speech.enabled: true`` (see config/local.yaml).
+speech = [
+    "openai-whisper>=20231117",
+]
 
 [project.scripts]
 atlas = "atlas.cli.main:main"

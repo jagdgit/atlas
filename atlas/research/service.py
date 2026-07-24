@@ -156,6 +156,105 @@ class ResearchService:
         self._last_throttle_reason: str | None = None
 
     # --- capability -----------------------------------------------------
+    def gather_evidence(
+        self,
+        claim: Claim,
+        *,
+        budget: dict[str, Any] | None = None,
+        max_iterations: int | None = None,
+        per_query: int | None = None,
+        graph: EvidenceGraph | None = None,
+    ) -> dict[str, Any]:
+        """Budget-capped Tier-0 gather onto an existing Claim (KV.4).
+
+        Reuses ``_gather`` / ``_absorb`` + EvidenceBudget decide — **not** a full
+        ``research()`` job (no deep pipeline, librarian, extractor, or report).
+        Safe when scholar/search are missing: returns ``outcome=unavailable``.
+        """
+        if claim is None or not str(getattr(claim, "statement", "") or "").strip():
+            return {"outcome": RESEARCH_ERROR, "reason": "empty claim", "added": 0}
+
+        scholar = self._resolve("scholar", self._scholar)
+        search = self._resolve("search", self._search)
+        if scholar is None and search is None:
+            return {
+                "outcome": RESEARCH_UNAVAILABLE,
+                "reason": "no research providers available (need scholar and/or search)",
+                "added": 0,
+                "iterations": 0,
+                "log": [],
+            }
+
+        # Verify-gather budget is intentionally looser than a full research job —
+        # we only need a few independent sources before re-scoring, not peer-review quotas.
+        kv_defaults = {
+            "min_sources": 2,
+            "min_peer_reviewed": 0,
+            "min_government": 0,
+            "convergence": 0.85,
+            "max_search_iterations": 3,
+        }
+        merged = {**kv_defaults, **(budget or {})}
+        eb = self._budget(merged, max_iterations)
+        n = per_query or min(self._per_query, 5)
+        g = graph if graph is not None else EvidenceGraph()
+        if claim.id not in g.claims:
+            g.add_claim(claim)
+
+        seen: set[str] = {e.source_id for e in claim.evidence if e.source_id}
+        for sid in seen:
+            if sid not in g.sources:
+                # Placeholder so absorb dedupe stays consistent without full Source rows.
+                g.sources[sid] = Source(id=sid, evidence_level=2)
+
+        full_plan = query_plan(claim.statement, max_iterations=len(_VARIANTS) * 2)
+        plan = [
+            (mode, query)
+            for mode, query in full_plan
+            if (mode == "scholar" and scholar is not None)
+            or (mode == "web" and search is not None)
+        ][: eb.max_search_iterations]
+
+        log: list[dict[str, Any]] = []
+        decision = None
+        iterations = 0
+        total_added = 0
+
+        for mode, query in plan:
+            provider = scholar if mode == "scholar" else search
+            iterations += 1
+            added = self._absorb(self._gather(mode, provider, query, n), claim, g, seen)
+            total_added += added
+            self._verification.verify_claim(claim)
+            decision = self._verification.decide(claim, iteration=iterations, budget=eb)
+            log.append(
+                {
+                    "iteration": iterations,
+                    "mode": mode,
+                    "query": query,
+                    "added": added,
+                    "total_sources": len(claim.evidence),
+                    "convergence": round(decision.convergence, 3),
+                    "decision": decision.decision,
+                }
+            )
+            if decision.should_stop:
+                break
+
+        outcome = RESEARCH_OK if claim.evidence else RESEARCH_EMPTY
+        if total_added == 0 and not claim.evidence:
+            outcome = RESEARCH_EMPTY
+        return {
+            "outcome": outcome,
+            "added": total_added,
+            "iterations": iterations,
+            "log": log,
+            "budget": eb.as_dict(),
+            "decision": decision.as_dict() if decision is not None else None,
+            "claim": claim.as_dict(),
+            "sources": len(claim.evidence),
+        }
+
     def research(
         self,
         objective: str,

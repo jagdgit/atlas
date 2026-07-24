@@ -108,6 +108,9 @@ def finding_identity_key(data: dict[str, Any]) -> tuple[Any, ...]:
     Engineering findings (``domain == "code"``) key on their structural coordinates instead
     (Q-B5): ``repo_uid + path + symbol + claim_type + reader`` — two readers can produce
     different findings for the same symbol, so the reader is part of identity.
+
+    Typed media knowledge (KE.2 / KE8) keys on ``claim_type`` + structured ``value`` so a
+    concept named "Inflation" does not collide with a claim sentence about inflation.
     """
     domain = str(data.get("domain", "research") or "research")
     if domain == "code":
@@ -131,14 +134,32 @@ def finding_identity_key(data: dict[str, Any]) -> tuple[Any, ...]:
         if not skill:
             skill = normalize_statement(str(data.get("statement", "")))
         return ("experience", skill, context)
-    value = data.get("value")
+
+    claim_type = str(data.get("claim_type", "") or "").strip().lower()
+    value = data.get("value") if isinstance(data.get("value"), dict) else {}
+    if claim_type in {"concept", "entity"}:
+        name = str(value.get("name") or data.get("statement") or "").strip()
+        return ("typed", domain, claim_type, normalize_statement(name))
+    if claim_type in {"relationship", "fact"}:
+        subj = normalize_statement(str(value.get("subject") or ""))
+        pred = normalize_statement(str(value.get("predicate") or claim_type))
+        obj = normalize_statement(str(value.get("object") or ""))
+        if subj and pred and obj:
+            return ("typed", domain, claim_type, subj, pred, obj)
+        return ("typed", domain, claim_type, normalize_statement(str(data.get("statement", ""))))
+    if claim_type == "claim":
+        return ("typed", domain, "claim", normalize_statement(str(data.get("statement", ""))))
+
     if isinstance(value, dict) and (value.get("kind") or "").strip():
-        return (
-            "quant",
-            domain,
-            str(value.get("kind", "")).strip().lower(),
-            normalize_unit(str(value.get("unit", ""))),
-        )
+        kind = str(value.get("kind", "")).strip().lower()
+        # Typed kinds must not fall through to the quantitative branch.
+        if kind not in {"concept", "entity", "relationship", "fact", "claim"}:
+            return (
+                "quant",
+                domain,
+                kind,
+                normalize_unit(str(value.get("unit", ""))),
+            )
     return ("prose", domain, normalize_statement(str(data.get("statement", ""))))
 
 

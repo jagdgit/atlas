@@ -524,45 +524,39 @@ class KnowledgeLifecycleService:
         if row is None:
             return {"status": "missing", "finding_id": finding_id}
 
-        from atlas.evidence.models import Claim
+        from atlas.verification.adapt import (
+            claim_verification_writeback,
+            finding_row_to_claim,
+        )
         from atlas.verification.engine import VerificationEngine
 
-        claim_ids = (row.get("provenance") or {}).get("claim_ids") or []
-        claim_id = (
-            str(claim_ids[0])
-            if isinstance(claim_ids, list) and claim_ids
-            else f"review:{finding_id}"
-        )
-        claim = Claim.from_dict(
-            {
-                "id": claim_id,
-                "statement": row.get("statement", ""),
-                "value": row.get("value"),
-                "supporting_sources": list(
-                    row.get("supporting") or row.get("supporting_sources") or []
-                ),
-                "contradicting_sources": list(
-                    row.get("contradicting") or row.get("contradicting_sources") or []
-                ),
-            }
-        )
-
+        claim = finding_row_to_claim(row, claim_id=f"review:{finding_id}")
         VerificationEngine().verify_claim(claim)
-        freshness = "current"
-        if claim.confidence in {"INSUFFICIENT", "UNVERIFIED"}:
-            freshness = "stale"
-        elif row.get("freshness") == "stale" and claim.confidence in {"HIGH", "MEDIUM"}:
+        writeback = claim_verification_writeback(claim, row=row)
+        freshness = writeback["freshness"]
+        if row.get("freshness") == "stale" and claim.confidence in {"HIGH", "MEDIUM"}:
             freshness = "current"
 
         updated = None
         if hasattr(self._store, "update_verification"):
             updated = self._store.update_verification(
                 finding_id,
-                confidence=claim.confidence,
-                confidence_score=float(claim.confidence_score or 0.0),
-                last_verified=claim.last_verified or _utcnow_iso(),
+                confidence=writeback["confidence"],
+                confidence_score=float(writeback["confidence_score"] or 0.0),
+                last_verified=writeback["last_verified"] or _utcnow_iso(),
                 freshness=freshness,
             )
+        if writeback.get("trust") and hasattr(self._store, "merge_quality"):
+            try:
+                quality = dict((updated or row).get("quality") or {})
+                quality["trust"] = writeback["trust"]
+                self._store.merge_quality(finding_id, quality)
+            except Exception:  # noqa: BLE001
+                pass
+        elif writeback.get("trust") and finding_id in getattr(self._store, "rows", {}):
+            quality = dict(self._store.rows[finding_id].get("quality") or {})
+            quality["trust"] = writeback["trust"]
+            self._store.rows[finding_id]["quality"] = quality
         else:
             self._store.set_freshness(finding_id, freshness)
             updated = self._store.get(finding_id)
@@ -911,3 +905,49 @@ class InMemoryFindingStore:
             if prev is None or int(row["revision"]) > int(prev["revision"]):
                 by_canon[cid] = row
         return [dict(r) for r in by_canon.values()]
+
+    def list_unverified(
+        self,
+        *,
+        asset_id: str | None = None,
+        job_id: str | None = None,
+        source_url: str | None = None,
+        claim_types: list[str] | None = None,
+        confidence: str = "UNVERIFIED",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        types = (
+            {str(t).lower() for t in claim_types} if claim_types is not None else None
+        )
+        out: list[dict[str, Any]] = []
+        for row in self.list_active_heads(include_archive=False):
+            if str(row.get("confidence") or "") != confidence:
+                continue
+            ctype = str(row.get("claim_type") or "").lower()
+            if types is not None and ctype and ctype not in types:
+                continue
+            prov = row.get("provenance") if isinstance(row.get("provenance"), dict) else {}
+            if asset_id and str(prov.get("asset_id") or "") != str(asset_id):
+                continue
+            if job_id:
+                row_job = str(row.get("job_id") or prov.get("job_id") or "")
+                if row_job != str(job_id):
+                    continue
+            if source_url:
+                url = str(prov.get("source_url") or prov.get("url") or "")
+                if source_url.rstrip("/") not in url:
+                    continue
+            out.append(dict(row))
+            if len(out) >= limit:
+                break
+        return out
+
+    def merge_quality(self, finding_id: str, quality: dict[str, Any]) -> dict[str, Any] | None:
+        row = self.rows.get(finding_id)
+        if not row:
+            return None
+        merged = dict(row.get("quality") or {})
+        merged.update(quality or {})
+        row["quality"] = merged
+        row["updated_at"] = _utcnow_iso()
+        return dict(row)

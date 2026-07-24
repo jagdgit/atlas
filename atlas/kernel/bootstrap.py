@@ -36,6 +36,7 @@ from atlas.ingestion.media import MediaIngestor
 from atlas.ingestion.service import IngestionService
 from atlas.ingestion.source_fetch import SourceFetcher
 from atlas.knowledge.candidate_consumer import CandidateConsumer
+from atlas.knowledge.media_extraction import MediaKnowledgeExtractor
 from atlas.knowledge.prose_extraction import ProseKnowledgeExtractor
 from atlas.learning.experience_extraction import ExperienceWriter
 from atlas.personal import PersonalService
@@ -371,6 +372,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         "review_finding",
         knowledge_lifecycle.review_finding,
     )
+
 
     # Memory service (Sprint 6): working/episodic/semantic memory over memory.items.
     # Created after the scheduler so it can enqueue its durable prune task.
@@ -949,20 +951,29 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     from atlas.ingestion.youtube_media_obtain import YoutubeMediaObtain
 
+    yt_max = int(
+        getattr(cfg.plugins.youtube, "media_obtain_max_bytes", 209_715_200) or 209_715_200
+    )
     yt_media_obtain = YoutubeMediaObtain(
         enabled=bool(getattr(cfg.plugins.youtube, "media_obtain_enabled", False)),
         binary=str(getattr(cfg.plugins.youtube, "media_obtain_binary", "yt-dlp") or "yt-dlp"),
         format_spec=str(
-            getattr(cfg.plugins.youtube, "media_obtain_format", "bestaudio/best")
-            or "bestaudio/best"
+            getattr(
+                cfg.plugins.youtube,
+                "media_obtain_format",
+                "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            )
+            or "bestaudio[ext=m4a]/bestaudio/best"
         ),
-        timeout=float(getattr(cfg.plugins.youtube, "media_obtain_timeout", 300.0) or 300.0),
+        timeout=float(getattr(cfg.plugins.youtube, "media_obtain_timeout", 0.0) or 0.0),
+        max_bytes=yt_max,
         logger=get_logger("atlas.ingestion.youtube_media_obtain"),
     )
     source_fetcher = SourceFetcher(
         asset_acquirer,
         fetch_client,
         youtube_fetch=(yt_media_obtain.fetch if yt_media_obtain.enabled else None),
+        max_bytes=max(52_428_800, yt_max),
         logger=get_logger("atlas.ingestion.source_fetch"),
     )
     media_ingestor = MediaIngestor(
@@ -1114,6 +1125,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         browser_render=_browser_render_for_media,
         timedtext_fetch=_timedtext_fetch,
         readiness=_media_readiness,
+        extractor=MediaKnowledgeExtractor(),
+        candidates=candidate_consumer,
         logger=get_logger("atlas.ingestion.media_learn"),
     )
     capabilities.register(
@@ -1303,6 +1316,47 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("code", code_service)
     container.register_instance("python", python_service)
     container.register_instance("verification", verification_service)
+    from atlas.verification.queue import KnowledgeVerificationService
+
+    knowledge_verification = KnowledgeVerificationService(
+        finding_repo,
+        verification_service,
+        research=research_service,
+        enqueue=scheduler_service.enqueue,
+        logger=get_logger("atlas.verification.queue"),
+    )
+    handlers.register("verify_finding", knowledge_verification.verify_finding)
+    container.register_instance("knowledge_verification", knowledge_verification)
+    tools.register(
+        "knowledge.verify",
+        knowledge_verification.knowledge_verify,
+        description=(
+            "Verify UNVERIFIED knowledge findings (from a media asset/URL/job) "
+            "via the VerificationEngine. Optional gather=true runs a budget-capped "
+            "Research search for corroborating sources (KV.4)."
+        ),
+        params={
+            "source_url": "Optional source URL filter (e.g. YouTube link)",
+            "asset_id": "Optional asset_id filter",
+            "job_id": "Optional job_id filter",
+            "finding_id": "Optional single finding id",
+            "limit": "Max findings to verify (default 25)",
+            "enqueue_only": "If true, queue scheduler tasks instead of verifying inline",
+            "gather": "If true, budget-capped Research gather before verify (default false)",
+            "max_gather_iterations": "Max search rounds when gather=true (default 3)",
+            "detect_contradictions": "If true (default), mark cross-source contradictions contested",
+        },
+    )
+    # Continuous Verification Mission (KV.7) — drains UNVERIFIED findings on a schedule.
+    from atlas.workers.knowledge_verification import KnowledgeVerificationWatcher
+
+    worker_manager.register_worker_type(
+        KnowledgeVerificationWatcher(
+            verification=knowledge_verification,
+            events=events,
+            logger=get_logger("atlas.workers.knowledge_verification"),
+        )
+    )
     container.register_instance("reports", report_service)
     container.register_instance("research", research_service)
     container.register_instance("librarian", librarian)

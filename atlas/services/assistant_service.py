@@ -412,6 +412,7 @@ class AssistantService:
             Intent.SCHOLAR_SEARCH: self._do_scholar_search,
             Intent.YOUTUBE_TRANSCRIPT: self._do_youtube,
             Intent.MEDIA_LEARN: self._do_media_learn,
+            Intent.VERIFY_KNOWLEDGE: self._do_verify_knowledge,
             Intent.RUN_PYTHON: self._do_run_python,
             Intent.GIT_STATUS: self._do_git,
             Intent.SQL_QUERY: self._do_sql,
@@ -726,6 +727,83 @@ class AssistantService:
         )
         return _Outcome(answer=summary)
 
+    def _do_verify_knowledge(self, args, context, tool_calls) -> _Outcome:
+        """KV.6 — verify claims learned from a media URL / asset via VerificationEngine."""
+        del context
+        params = {
+            k: args.get(k)
+            for k in (
+                "source_url",
+                "asset_id",
+                "job_id",
+                "finding_id",
+                "limit",
+                "enqueue_only",
+                "gather",
+                "max_gather_iterations",
+            )
+            if args.get(k) is not None
+        }
+        if not any(params.get(k) for k in ("source_url", "asset_id", "job_id", "finding_id")):
+            return _Outcome(
+                answer=(
+                    "Which findings should I verify? Give a source URL "
+                    "(e.g. the YouTube link), asset_id, job_id, or finding_id."
+                )
+            )
+        if self._tools is None or not self._tools.has("knowledge.verify"):
+            return _Outcome(
+                answer="Blocked: knowledge.verify is not available.",
+                blocked=True,
+                blocked_reason="needs tool: knowledge.verify",
+            )
+        result = self._executor.execute("knowledge.verify", params)
+        data = result.data if isinstance(result.data, dict) else {}
+        tool_calls.append(
+            {
+                "intent": Intent.VERIFY_KNOWLEDGE,
+                "action": "knowledge.verify",
+                "ok": result.ok,
+                "verification": data.get("verification") or "executed",
+                "selected": data.get("selected"),
+                "still_unverified": data.get("still_unverified"),
+                "gather_requested": data.get("gather_requested"),
+            }
+        )
+        if not result.ok:
+            return _Outcome(
+                answer=f"Verification failed: {result.error}",
+                blocked=True,
+                blocked_reason="knowledge.verify failed",
+            )
+        selected = int(data.get("selected") or 0)
+        still = int(data.get("still_unverified") or 0)
+        scored = int(data.get("promoted_or_scored") or 0)
+        lines = [
+            f"Verification ran on {selected} finding(s).",
+            f"Scored (LOW/MEDIUM/HIGH): {scored}. Still UNVERIFIED/INSUFFICIENT: {still}.",
+        ]
+        if data.get("gather_requested"):
+            lines.append("Gather (budget-capped Research search) was requested.")
+        else:
+            lines.append(
+                "Single YouTube evidence alone does not promote to HIGH — "
+                "say “with web search” to gather independent sources."
+            )
+        for row in (data.get("before_after") or [])[:8]:
+            stmt = str(row.get("statement") or "")[:80]
+            extra = ""
+            if row.get("gather_added"):
+                extra = f" (+{row.get('gather_added')} gathered)"
+            trust_bit = ""
+            if row.get("overall_trust") is not None:
+                trust_bit = f"  overall_trust={row.get('overall_trust')}"
+            lines.append(
+                f"- {stmt}…  {row.get('confidence')} → {row.get('after_confidence')}"
+                f"{extra}{trust_bit}"
+            )
+        return _Outcome(answer="\n".join(lines), extras={"verification": data})
+
     def _do_media_learn(self, args, context, tool_calls) -> _Outcome:
         source = (args.get("source") or args.get("video") or "").strip()
         if not source:
@@ -774,6 +852,9 @@ class AssistantService:
             "readiness": data.get("readiness"),
             "stages": data.get("stages"),
             "knowledge_produced": int(data.get("knowledge_produced") or 0),
+            "knowledge_breakdown": data.get("knowledge_breakdown"),
+            "knowledge_preview": data.get("knowledge_preview"),
+            "extraction_quality": data.get("extraction_quality"),
             "outcome": data.get("outcome"),
             "source": data.get("source") or source,
             "title": data.get("title"),
@@ -791,22 +872,44 @@ class AssistantService:
             text = (data.get("text") or "").strip()
             title = data.get("title") or source
             stages = data.get("stages") or {}
-            stage_line = ""
-            if stages:
-                stage_line = (
-                    " Stages: "
-                    + ", ".join(f"{k}={v}" for k, v in stages.items())
-                    + "."
+            breakdown = data.get("knowledge_breakdown") if isinstance(data.get("knowledge_breakdown"), dict) else {}
+            meta_n = int(breakdown.get("metadata") or 0)
+            tr_n = int(breakdown.get("transcript") or 0)
+            speech_pending = str(stages.get("speech") or "") == "waiting" or (
+                meta_n > 0 and tr_n == 0
+            )
+            if speech_pending and tr_n == 0:
+                fallback = (
+                    f"Metadata learned successfully from '{title}'. "
+                    "Spoken content has not yet been learned because no transcript "
+                    "or speech processing was available. "
+                    f"Knowledge: metadata={meta_n or extras['knowledge_produced']}, "
+                    f"transcript=0, concepts=0."
+                )
+            elif tr_n > 0:
+                chunks = int(breakdown.get("transcript_chunks") or extras["knowledge_produced"])
+                facts_n = int(breakdown.get("facts") or 0)
+                claims_n = int(breakdown.get("claims") or 0)
+                concepts_n = int(breakdown.get("concepts") or 0)
+                entities_n = int(breakdown.get("entities") or 0)
+                rel_n = int(breakdown.get("relationships") or 0)
+                fallback = (
+                    f"Spoken content learned from '{title}' "
+                    f"(transcript={tr_n}, RAG chunks={chunks}, "
+                    f"concepts={concepts_n}, entities={entities_n}, "
+                    f"relationships={rel_n}, facts={facts_n}, claims={claims_n}, "
+                    f"{len(text)} characters)."
+                )
+            else:
+                fallback = (
+                    f"Learning update for '{title}' "
+                    f"(knowledge_produced={extras['knowledge_produced']}, "
+                    f"{len(text)} characters)."
                 )
             summary = self._responder.compose(
                 _WEB_SUMMARY_SYSTEM,
                 f"Summarize what was learned from this media ({title}):\n\n{text[:4000]}",
-                fallback=(
-                    f"Learned from '{title}' "
-                    f"(knowledge_produced={extras['knowledge_produced']}, "
-                    f"{len(text)} characters). "
-                    f"Strategies: {len(strategies)}.{stage_line}"
-                ),
+                fallback=fallback,
             )
             return _Outcome(answer=summary, extras=extras)
 

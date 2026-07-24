@@ -62,7 +62,15 @@ class PaperTradingWorker(PersistentWorker):
         state = dict(ctx.state or {})
         instruments = cfg.get("instruments") or []
         if not instruments:
-            return TickResult(state=state, note="")  # nothing configured yet — idle quietly
+            # Operator-visible idle reason (empty note looked like "doing nothing silently").
+            return TickResult(
+                state=state,
+                note=(
+                    "idle: no instruments in config — register sample market_data "
+                    "(Missions UI) and set instruments=[{symbol, asset}], or use "
+                    "Chat/Job: start paper trading with 10000 on DEMO"
+                ),
+            )
 
         config_note = ""
         if ctx.config_version is not None and ctx.config_version != state.get("config_version"):
@@ -93,6 +101,7 @@ class PaperTradingWorker(PersistentWorker):
         totals = {"decisions": 0, "buys": 0, "sells": 0, "holds": 0, "gaps": 0, "errors": 0}
         marks: dict[str, float] = {}
         exhausted = 0
+        last_actions: list[str] = []
 
         for inst in instruments:
             symbol = str(inst.get("symbol") or "").strip()
@@ -104,15 +113,22 @@ class PaperTradingWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001 - a bad feed must not stop the others
                 totals["errors"] += 1
                 self._logger.warning("feed load failed for %s (%s): %s", symbol, asset_name, exc)
+                last_actions.append(f"{symbol}: feed_error")
                 continue
             if not bars:
                 exhausted += 1
+                last_actions.append(f"{symbol}: empty_feed")
                 continue
 
             cursor = int(cursors.get(symbol, 0))
+            if cursor >= len(bars):
+                exhausted += 1
+                last_actions.append(f"{symbol}: feed_exhausted ({len(bars)} bars)")
+                continue
+
             processed = 0
             while cursor < len(bars) and processed < bars_per_tick:
-                self._decide_bar(
+                action = self._decide_bar(
                     symbol=symbol,
                     bars=bars,
                     cursor=cursor,
@@ -126,6 +142,8 @@ class PaperTradingWorker(PersistentWorker):
                     totals=totals,
                     marks=marks,
                 )
+                if action:
+                    last_actions.append(action)
                 # Track equity peak + drawdown per bar so an intra-replay drawdown is caught (not
                 # just the end-of-tick value) — reboot-safe via the persisted peak in state.
                 bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
@@ -143,12 +161,19 @@ class PaperTradingWorker(PersistentWorker):
         state["equity"] = snapshot["equity"]
 
         done = exhausted >= len(instruments) and exhausted > 0
+        action_bit = ""
+        if last_actions:
+            # Keep journal readable: last few actions only.
+            action_bit = " | " + "; ".join(last_actions[-4:])
         note = (
             f"{config_note}tick: {totals['decisions']} decision(s) "
             f"(+{totals['buys']} buy, +{totals['sells']} sell, {totals['holds']} hold"
             + (f", {totals['gaps']} gap" if totals["gaps"] else "")
+            + (f", {totals['errors']} error" if totals["errors"] else "")
             + f"); equity {snapshot['equity']:.2f} "
             f"(P&L {snapshot['realized_pnl'] + snapshot['unrealized_pnl']:+.2f})"
+            f"{action_bit}"
+            + (" | DONE: all feeds exhausted (fixture replay complete)" if done else "")
         ).strip()
         return TickResult(state=state, done=done, note=note)
 
@@ -168,7 +193,7 @@ class PaperTradingWorker(PersistentWorker):
         config_version: int | None,
         totals: dict[str, int],
         marks: dict[str, float],
-    ) -> None:
+    ) -> str | None:
         closes = [float(b["close"]) for b in bars[: cursor + 1]]
         indicators = compute_indicators(closes, strategy)
         price = closes[-1]
@@ -199,24 +224,26 @@ class PaperTradingWorker(PersistentWorker):
         )
         decision = self._engine.decide(request)
         totals["decisions"] += 1
+        why = (decision.why or "").strip()
+        why_short = (why[:80] + "…") if len(why) > 80 else why
         if decision.action_kind != ACTION_RECOMMEND:
             if decision.action_kind == "capability_gap":
                 totals["gaps"] += 1
-            else:
-                totals["holds"] += 1
-            return
+                return f"{symbol}: gap ({why_short or 'missing capability'})"
+            totals["holds"] += 1
+            return f"{symbol}: hold @ {price:.2f}"
 
         # The engine wraps the chosen option under action["payload"] (action["kind"] == "recommend").
         payload = (decision.action or {}).get("payload") or {}
         kind = payload.get("kind")
         if kind not in ("buy", "sell"):
             totals["holds"] += 1
-            return
+            return f"{symbol}: hold @ {price:.2f}"
 
         qty = float(payload.get("quantity") or 0.0)
         if qty <= 0:
             totals["holds"] += 1
-            return
+            return f"{symbol}: hold @ {price:.2f}"
         try:
             trade = self._portfolio.apply_trade(
                 portfolio_id,
@@ -230,7 +257,7 @@ class PaperTradingWorker(PersistentWorker):
         except Exception as exc:  # noqa: BLE001 - a rejected sim fill is reported, never fatal
             totals["errors"] += 1
             self._logger.warning("sim fill rejected (%s %s %s): %s", kind, qty, symbol, exc)
-            return
+            return f"{symbol}: fill_rejected ({exc})"
 
         totals["buys" if kind == "buy" else "sells"] += 1
         self._emit("PaperTradingFill", {
@@ -239,22 +266,72 @@ class PaperTradingWorker(PersistentWorker):
             "realized_pnl": float(trade.get("realized_pnl", 0.0)),
         })
         if kind == "sell":
-            self._remember_outcome(symbol, trade, decision)
+            self._remember_outcome(symbol, trade, decision, indicators=indicators)
+        return f"{symbol}: {kind} {qty:g} @ {price:.2f} ({why_short or 'signal'})"
 
     # --- learning loop ---------------------------------------------------
-    def _remember_outcome(self, symbol: str, trade: dict[str, Any], decision: Any) -> None:
+    def _remember_outcome(
+        self,
+        symbol: str,
+        trade: dict[str, Any],
+        decision: Any,
+        *,
+        indicators: dict[str, Any] | None = None,
+    ) -> None:
+        """Record an Experience Journal entry (MP3): Observation→…→Lesson."""
         if self._learning is None:
             return
         pnl = float(trade.get("realized_pnl", 0.0))
         outcome = "profit" if pnl > 0 else ("loss" if pnl < 0 else "flat")
+        why = (decision.why or "").strip() or "strategy exit signal"
+        ind = indicators if isinstance(indicators, dict) else {}
+        observation_bits = []
+        if ind.get("rsi") is not None:
+            observation_bits.append(f"RSI={ind.get('rsi')}")
+        if ind.get("sma_fast") is not None and ind.get("sma_slow") is not None:
+            observation_bits.append(
+                f"SMA fast/slow={ind.get('sma_fast')}/{ind.get('sma_slow')}"
+            )
+        observation = (
+            "; ".join(str(b) for b in observation_bits)
+            if observation_bits
+            else f"Exit signal on {symbol} at realized P&L {pnl:+.2f}"
+        )
+        reflection = (
+            "Outcome matched thesis."
+            if pnl > 0
+            else (
+                "Outcome contradicted thesis — review entry timing and open risk events."
+                if pnl < 0
+                else "Flat outcome — little signal for strategy update."
+            )
+        )
+        lesson = (
+            "Reinforce setups that produced positive expectancy under current constraints."
+            if pnl > 0
+            else (
+                "Before similar entries, re-check catalysts and risk limits; "
+                "do not treat a single indicator as sufficient."
+                if pnl < 0
+                else "Treat flat outcomes as inconclusive; avoid overfitting to noise."
+            )
+        )
+        problem = (
+            f"Observation: {observation}\n"
+            f"Reasoning: {why}\n"
+            f"Decision: sell {symbol} (simulation)\n"
+            f"Outcome: {outcome} {pnl:+.2f}"
+        )
+        solution = f"Reflection: {reflection}"
+        lessons = f"Lesson: {lesson}"
         try:
             self._learning.remember_experience(
                 title=f"Paper trade closed on {symbol}: {outcome} {pnl:+.2f}",
-                problem=f"Exited {symbol} following the MA-crossover strategy.",
-                solution=decision.why or "strategy exit signal",
-                lessons=f"Realized P&L {pnl:+.2f} ({outcome}).",
+                problem=problem,
+                solution=solution,
+                lessons=lessons,
                 domain="markets",
-                tags=[symbol.lower(), "paper_trading", outcome],
+                tags=[symbol.lower(), "paper_trading", outcome, "experience_journal"],
             )
         except Exception as exc:  # noqa: BLE001 - learning is best-effort, never breaks a tick
             self._logger.warning("remember_experience failed for %s: %s", symbol, exc)

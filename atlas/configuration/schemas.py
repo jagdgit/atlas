@@ -169,6 +169,27 @@ class ResearchWatcherConfig(BaseModel):
     tick_interval_seconds: int = Field(default=86400, ge=1)
 
 
+class KnowledgeVerificationConfig(BaseModel):
+    """Config for the Continuous Verification Mission (KV.7).
+
+    Drains UNVERIFIED knowledge findings through the shared VerificationEngine.
+    ``gather`` defaults off so search budget is not spent automatically (KV.4 opt-in).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_limit: int = Field(default=10, ge=1, le=100)
+    gather: bool = False
+    max_gather_iterations: int = Field(default=2, ge=1, le=10)
+    claim_types: list[str] = Field(default_factory=lambda: ["claim"])
+    asset_id: str = ""
+    job_id: str = ""
+    source_url: str = ""
+    alert_on_promoted: bool = True
+    detect_contradictions: bool = True
+    tick_interval_seconds: int = Field(default=3600, ge=1)
+
+
 class JobWatcherConfig(BaseModel):
     """Config for the Job Watcher mission (Phase D · §D.8) — recommend-only (P14).
 
@@ -288,6 +309,7 @@ def default_registry() -> SchemaRegistry:
     registry.register("owner_knowledge", OwnerKnowledgeConfig, schema_version=1)
     registry.register("paper_trading", PaperTradingConfig, schema_version=1)
     registry.register("research_watcher", ResearchWatcherConfig, schema_version=1)
+    registry.register("knowledge_verification", KnowledgeVerificationConfig, schema_version=1)
     registry.register("job_watcher", JobWatcherConfig, schema_version=1)
     registry.register("tech_security_watcher", TechSecurityWatcherConfig, schema_version=1)
     registry.register("self_improvement", SelfImprovementConfig, schema_version=1)

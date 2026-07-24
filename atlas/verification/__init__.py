@@ -14,10 +14,33 @@ from atlas.verification.engine import (
     VerificationEngine,
 )
 from atlas.verification.service import VerificationService
+from atlas.verification.adapt import finding_row_to_claim, claim_verification_writeback
+from atlas.verification.queue import KnowledgeVerificationService
+from atlas.verification.contradiction import (
+    ContradictionHit,
+    attach_contradictions,
+    contradiction_reason,
+    find_contradictions,
+)
+from atlas.verification.trust import (
+    DEFAULT_TRUST_WEIGHTS,
+    build_trust_profile,
+    overall_trust_from_finding,
+)
 
 __all__ = [
     "VerificationEngine",
     "EvidenceBudget",
     "BudgetDecision",
     "VerificationService",
+    "KnowledgeVerificationService",
+    "finding_row_to_claim",
+    "claim_verification_writeback",
+    "ContradictionHit",
+    "find_contradictions",
+    "attach_contradictions",
+    "contradiction_reason",
+    "DEFAULT_TRUST_WEIGHTS",
+    "build_trust_profile",
+    "overall_trust_from_finding",
 ]

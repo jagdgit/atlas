@@ -18,7 +18,11 @@ if TYPE_CHECKING:
     from atlas.assets.service import AssetStore
 
 SPEECH_TO_TEXT_READER_ID = "speech_to_text"
-SPEECH_TO_TEXT_READER_VERSION = "1.0.0"
+# 1.0.1: do not cache error/unavailable (so timeout/config fixes can retry the same Asset).
+SPEECH_TO_TEXT_READER_VERSION = "1.0.1"
+
+# Outcomes safe to reuse from the artifact cache.
+_CACHEABLE_OUTCOMES = frozenset({STT_OK, "empty"})
 
 
 class SpeechToTextReader:
@@ -57,7 +61,8 @@ class SpeechToTextReader:
         version = self._resolve_version(asset_id, asset_version)
         if not force:
             cached = self._artifacts.get(asset_id, version, self.id, self.VERSION)
-            if cached is not None:
+            # Never reuse a failed STT attempt — operator may have fixed timeout/model.
+            if cached is not None and str(cached.get("outcome") or "") in _CACHEABLE_OUTCOMES:
                 return cached
 
         asset_row = self._assets.get(asset_id) if hasattr(self._assets, "get") else None
@@ -84,6 +89,7 @@ class SpeechToTextReader:
                 "reason": f"speech_to_text expects audio/video, got {kind!r}",
                 "capability_gap": CAPABILITY_GAP,
             }
+            # Unsupported kind is stable — cache it.
             self._artifacts.put(asset_id, version, self.id, self.VERSION, art)
             return art
 
@@ -98,7 +104,7 @@ class SpeechToTextReader:
                 "reason": f"cannot resolve media path: {exc}",
                 "capability_gap": CAPABILITY_GAP,
             }
-            self._artifacts.put(asset_id, version, self.id, self.VERSION, art)
+            # Transient path errors — do not cache.
             return art
 
         result = self._client.transcribe(path)
@@ -117,7 +123,9 @@ class SpeechToTextReader:
                 None if result.get("outcome") == STT_OK else (result.get("capability_gap") or CAPABILITY_GAP)
             ),
         }
-        self._artifacts.put(asset_id, version, self.id, self.VERSION, art)
+        # Cache successes only — timeouts/errors must be retryable after config fixes.
+        if str(art.get("outcome") or "") in _CACHEABLE_OUTCOMES:
+            self._artifacts.put(asset_id, version, self.id, self.VERSION, art)
         return art
 
     def _resolve_version(self, asset_id: str, asset_version: int | None) -> int:

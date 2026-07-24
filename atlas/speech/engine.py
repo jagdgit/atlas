@@ -60,11 +60,12 @@ class WhisperEngine:
         self,
         *,
         binary: str = "whisper",
-        timeout: float = 600.0,
+        timeout: float = 0.0,
         logger: logging.Logger | None = None,
     ) -> None:
         self._binary = binary
-        self._timeout = timeout
+        # 0 / None ⇒ no subprocess wall-clock timeout (long lectures on CPU).
+        self._timeout = None if timeout is None or float(timeout) <= 0 else float(timeout)
         self._logger = logger or logging.getLogger("atlas.speech.whisper")
 
     def available(self) -> bool:
@@ -99,15 +100,19 @@ class WhisperEngine:
             if language:
                 cmd.extend(["--language", language])
             try:
-                proc = subprocess.run(
-                    cmd,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=self._timeout,
-                )
+                run_kwargs: dict[str, Any] = {
+                    "check": False,
+                    "capture_output": True,
+                    "text": True,
+                }
+                if self._timeout is not None:
+                    run_kwargs["timeout"] = self._timeout
+                proc = subprocess.run(cmd, **run_kwargs)
             except subprocess.TimeoutExpired as exc:
-                raise SpeechEngineError(f"whisper timed out after {self._timeout}s") from exc
+                raise SpeechEngineError(
+                    f"whisper timed out after {self._timeout}s "
+                    "(set plugins.speech.timeout: 0 to wait indefinitely)"
+                ) from exc
             except FileNotFoundError as exc:
                 raise SpeechUnavailable(f"whisper binary not found: {exc}") from exc
             if proc.returncode != 0:

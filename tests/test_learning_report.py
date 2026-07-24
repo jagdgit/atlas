@@ -74,9 +74,12 @@ def test_learning_report_not_research_insufficient():
     assert "governed by a per-job Evidence Budget" not in md
     assert "Learning Status" in md
     assert "PARTIAL" in md
-    assert "knowledge_produced=1" in report["sections"]["executive_summary"] or (
-        "Knowledge Produced: **1**" in md
+    assert "metadata" in report["sections"]["executive_summary"].lower() or (
+        "Knowledge categories" in md
     )
+    # Prefer category table when breakdown present
+    assert "Spoken content has not yet been learned" in report["sections"]["executive_summary"]
+    assert "Knowledge Produced" in md
     assert "Observations" in md
     assert "asset_id" in md.lower() or "asset-54mb" in md
     assert "Next Action" in md
@@ -150,3 +153,42 @@ def test_ls1_learning_status_capability_summary():
     assert "| Transcript | Pending |" in md
     assert "| Speech | Pending |" in md
     assert "| Knowledge | ✓ Learned |" in md or "| Knowledge |" in md
+
+
+def test_knowledge_categories_in_learning_report():
+    report = ReportGenerator().generate(
+        "learn investing video",
+        termination={
+            "mode": "learning",
+            "learning_status": LEARNING_STATUS_PARTIAL,
+            "knowledge_produced": 1,
+            "knowledge_breakdown": {
+                "metadata": 1,
+                "transcript": 0,
+                "transcript_chunks": 0,
+                "concepts": 0,
+                "entities": 0,
+                "relationships": 0,
+                "facts": 0,
+                "summaries": 0,
+            },
+            "source": "https://youtu.be/zHt5Mdr0QFk",
+            "asset_id": "a1",
+            "stages": {
+                "acquire": "success",
+                "metadata": "success",
+                "transcript": "waiting",
+                "speech": "waiting",
+                "knowledge": "success",
+            },
+        },
+    )
+    md = report["markdown"]
+    assert "### Knowledge categories" in md
+    assert "| metadata | 1 |" in md
+    assert "| transcript | 0 |" in md
+    assert "| concepts | 0 |" in md
+    assert "Metadata learned successfully" in report["sections"]["answer"] or (
+        "Spoken content has not yet been learned" in report["sections"]["answer"]
+    )
+    assert "Learned from '" not in report["sections"]["answer"] or "Spoken content" in report["sections"]["answer"]

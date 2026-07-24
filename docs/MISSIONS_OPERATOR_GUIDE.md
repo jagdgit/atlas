@@ -1,10 +1,81 @@
-# Atlas Missions — Operator Guide
+# Missions — Operator Guide
 
 > **Audience:** you (the operator) using the console / Jobs / API.  
-> **Last updated:** 2026-07-22  
-> **Related:** `docs/PHASE_A_PLAN.md` (Missions/Workers), `docs/PHASE_D_PLAN.md` (Paper Trading + Decision Engine), `docs/OPEN_ITEMS.md` (`OI-D1` live market feed).
+> **Last updated:** 2026-07-24  
+> **Related:** [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) (master),
+> [`ATLAS_MISSION_PHILOSOPHY.md`](ATLAS_MISSION_PHILOSOPHY.md),
+> [`MARKET_INTELLIGENCE_MISSIONS_PLAN.md`](MARKET_INTELLIGENCE_MISSIONS_PLAN.md) (Market Program — locked),
+> [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md),
+> `docs/PHASE_A_PLAN.md`, `docs/PHASE_D_PLAN.md`,
+> `docs/OPEN_ITEMS.md` (`OI-D1`, `OI-MP*`, `OI-MI0`, `OI-PA0`).
 
-This document captures how Missions work, how to use each template, the setup work done for paper-trading onboarding, and a clear answer to: *“Can Atlas learn from live markets and simulate real trading on its own books?”*
+This guide is **how to run** missions. For **why missions exist** and the
+Observe→Learn→Decide→Reflect→Improve loop, read the philosophy doc first.
+
+---
+
+## 0. Paper trading FAQ (read this if the mission “does nothing”)
+
+### What is Atlas doing right now?
+
+| You see | Meaning |
+|---------|---------|
+| Journal: `idle: no instruments…` | Mission is running but **config has empty `instruments`**. Defaults alone do not trade. |
+| Journal: `tick: N decision(s) (+buys/sells/holds); equity… \| DEMO: hold @ …` | Fixture replay is live — decisions each tick. |
+| Journal: `feed_exhausted` / `DONE: all feeds exhausted` | Sample/historical bars finished — simulation complete until you load more data. |
+| Empty / silent ticks | Older builds idled quietly; restart Atlas to pick up clearer idle notes. |
+
+**Default config is not enough.** You must:
+
+1. **Register sample market data** (Missions UI button) **or** `POST /v1/assets` with `generate_sample: true`  
+2. Set `instruments` to something like `[{"symbol":"DEMO","asset":"demo-feed"}]`  
+3. Or Chat/Job: `start paper trading with 10000 on DEMO`
+
+### Does it need logins for live markets?
+
+| Credential | Needed today? | Notes |
+|------------|---------------|-------|
+| Atlas API / console login | For you to operate Atlas | Normal |
+| **Broker trading login** | **Never** | Forbidden (P10) — no real orders |
+| **Market-data provider API key** | **Not yet** | Live tape is `OI-D1` (not built). Today = fixture/replay only |
+
+When live data arrives, expect a **data vendor API key** (quotes/candles), not a brokerage password.
+
+### Does the mission learn from the web (screener, news sites)?
+
+**Not as part of the paper-trading tick today.**
+
+| Path | Today |
+|------|-------|
+| Replay OHLCV → indicators → virtual buy/sell → experience on sells | ✅ |
+| Screener websites (e.g. Screener.in) inside the tick | ❌ not built |
+| News / web research | ✅ as **separate Jobs/Chat** (`research`, `media.learn`) — **not auto-wired** into each trading decision |
+| Verifying claims from videos/news into trusted knowledge | 📋 [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md) |
+
+So: start paper trading for **decision practice on sample/historical bars**. Use separate Jobs to learn from YouTube/news. Verification plan makes that knowledge trustworthy for later mission context.
+
+### How do I verify claims after media.learn?
+
+Learning Reports say **Verification: Not Executed** on purpose (learn ≠ verify).
+
+After a COMPLETE learn (e.g. the Kiyosaki video), in Chat/Job:
+
+```text
+Verify claims learned from https://youtu.be/zHt5Mdr0QFk
+```
+
+With optional web corroboration:
+
+```text
+Verify claims learned from https://youtu.be/zHt5Mdr0QFk with web search
+```
+
+Or use `asset_id` from the report Observations. Continuous option: mission template `knowledge_verification`.  
+Expect trust labels / contested flags; a single YouTube source alone will not become HIGH confidence.
+
+Platform framing: [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) · Market Program: [`MARKET_INTELLIGENCE_MISSIONS_PLAN.md`](MARKET_INTELLIGENCE_MISSIONS_PLAN.md).
+
+---
 
 ---
 
@@ -120,6 +191,14 @@ Workers survive reboot via checkpoints. Archiving a mission does **not** delete 
 **Purpose:** Continuously research a `topic` → promote findings → notify on notable confidence.  
 **Config:** `topic`, `max_iterations`, `max_documents`, `per_query`, `embed`, `alert_min_confidence`, `tick_interval_seconds`.  
 **How to use:** Set `topic` in config (UI JSON or API overrides), instantiate, watch journal / knowledge.
+
+---
+
+### `knowledge_verification`
+
+**Purpose:** Continuously drain **UNVERIFIED** knowledge findings through the shared VerificationEngine (KV.7). Same path as chat *“Verify claims learned from …”* — no parallel truth store.  
+**Config:** `batch_limit`, `gather` (default **false**), `max_gather_iterations`, `claim_types`, optional `asset_id` / `source_url` / `job_id` filters, `alert_on_promoted`, `detect_contradictions` (default **true** — marks opposing KB claims contested), `tick_interval_seconds`.  
+**How to use:** Instantiate the template after media learning has produced claims. Idle ticks are quiet when the queue is empty. Prefer operator verify for one-shot; use this mission for ongoing hygiene.
 
 ---
 

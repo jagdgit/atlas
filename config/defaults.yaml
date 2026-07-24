@@ -278,8 +278,9 @@ plugins:
     api_key: ""             # OI-M1: YouTube Data API v3 key for official captions
     media_obtain_enabled: false  # BA.v2: opt-in yt-dlp media obtain (policy-gated)
     media_obtain_binary: yt-dlp
-    media_obtain_format: bestaudio/best
-    media_obtain_timeout: 300
+    media_obtain_format: "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+    media_obtain_timeout: 0          # 0 = no timeout; wait for yt-dlp to finish
+    media_obtain_max_bytes: 209715200  # 200 MiB
   git:                      # S20a: read-only local VCS inspection (network-free)
     git_binary: git
     timeout: 15             # hard wall-clock per git invocation
@@ -298,7 +299,7 @@ plugins:
     model: base             # tiny|base|small|medium|large
     language: ""            # empty => auto-detect
     binary: whisper         # openai-whisper CLI on PATH
-    timeout: 600            # hard wall-clock per transcription
+    timeout: 0              # 0 = no timeout; wait for Whisper to finish
   mail:                     # S20d: read-only IMAP mailbox (degrades if unconfigured)
     host: ""                # IMAP host; empty => capability reports "unavailable"
     port: 993

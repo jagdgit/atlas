@@ -133,7 +133,7 @@ def test_al3_metadata_knowledge_succeeds_without_whisper():
     assert result["knowledge_produced"] == 3
     assert result["stages"]["acquire"] == "success"
     assert result["stages"]["metadata"] == "success"
-    assert result["stages"]["speech"] == "waiting"
+    assert result["stages"]["speech"] == "failed"
     assert result["stages"]["knowledge"] == "success"
     assert result["acquisition"]["asset_id"] == "asset-54mb"
     names = [s["strategy"] for s in result["strategies"]]

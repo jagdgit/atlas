@@ -84,7 +84,22 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-RH1 | 🟢 | P1 | **Job report honesty** — waiting + Next Action. Stop investing. | `MEDIA_REPORT_HONESTY_AMENDMENT.md` |
 | OI-AC0 | 🟢 | P1 | **Acquisition + learning report** — BA.v2, AL1–AL5, LR1–LR8 shipped. Remaining: Whisper ops; AL6 later. | `MEDIA_ACQUISITION_CLOSURE_PLAN.md` · `MEDIA_ASSET_LIFECYCLE_PLAN.md` · `MEDIA_LEARNING_REPORT_PLAN.md` |
 | OI-LR0 | 🟢 | P1 | **Learning Report** — media.learn jobs render Learning Report (not Research INSUFFICIENT). LS1 capability summary + OC1 reason codes done. | `MEDIA_LEARNING_REPORT_PLAN.md` · `tests/test_learning_report.py` |
-| OI-STT0 | 🟡 | P2 | **speech_to_text (Whisper)** — only remaining gap for spoken-content learning; ops install + `plugins.speech.enabled`. | `plugins.speech` · operator guide |
+| OI-STT0 | 🟢 | P1 | **speech_to_text (Whisper)** — installed in venv + `plugins.speech.enabled` in local.yaml. Knowledge categories + metadata-vs-spoken honesty shipped. First live spoken run still needed (model download on first use). | `docs/SPEECH_TO_TEXT_OPS.md` · `config/local.yaml` |
+| OI-KE0 | 🟡 | P1 | **Knowledge Extraction** — KE.2.4 ✅ (link 12/12). **Next:** KE.2.5–2.7 SPO-only + structured preview + provenance. | `docs/MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md` |
+| OI-KV0 | 🟢 | P1 | **Knowledge Verification (V5)** — KV.0–KV.10 ✅. | `docs/KNOWLEDGE_VERIFICATION_PLAN.md` |
+| OI-MP0 | 🟢 | P1 | **Mission Philosophy** — Layer 1 vs Layer 2; kinds; lifecycle; experience shape. | `docs/ATLAS_MISSION_PHILOSOPHY.md` |
+| OI-MP1 | 🟡 | P1 | **Experience journal** — deepen; Experience OS first-class (platform). | MP · `ATLAS_PLATFORM_ARCHITECTURE.md` |
+| OI-MP2 | 🟡 | P1 | **Split paper trading** — expanded as Market Intelligence **Program** (7 missions, stubs OK). | `OI-MI0` |
+| OI-MP3 | 🔴 | P1 | **Daily Learning Governance Report**. | Philosophy Layer 2 |
+| OI-MP4 | 🔴 | P3 | **Engineering Mentor Mission**. | Philosophy |
+| OI-MP5 | 🔴 | P2 | **Missions teach missions**. | Philosophy MP6 |
+| OI-MI0 | 🟡 | P1 | **Market Intelligence Program** — Q1–Q6 locked; platform vs domain split aligned; ship Program + KE.2.5–2.7; MI.1 UI next. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
+| OI-PA0 | 🟢 | P1 | **Atlas Platform Architecture** — SETTLED master (Programs→Missions→Workers; Memory/Planning/Policy/Capability/Scheduler gaps tracked below). | `docs/ATLAS_PLATFORM_ARCHITECTURE.md` |
+| OI-PA-PLAN | 🔴 | P2 | **Planning OS** — goal → gather gaps → compare → risk → decide (generalize research/job planning). | Platform |
+| OI-PA-MEM | 🔴 | P2 | **Memory hierarchy** — working / session / long-term ↔ Knowledge / Experience (document + wire). | Platform |
+| OI-PA-POLICY | 🔴 | P2 | **Policy Engine** — elevate prefer/avoid store to reusable hard/soft constraints across Programs. | Platform · builds on C.5 |
+| OI-PA-CAP | 🔴 | P2 | **Capability Registry enrichment** — version/health/deps; missions declare needs, not imports. | Roadmap §5.10 |
+| OI-PA-SCHED | 🔴 | P3 | **Scheduler hierarchy** — Program → Mission → Worker tick. | Platform |
 | OI-BA0 | 🟢 | P2 | **Browser → Asset** — BA.1b + BA.v2 (opt-in yt-dlp) done. BA.v2+ later. | `MEDIA_BROWSER_ACQUISITION_PLAN.md` · `atlas/ingestion/youtube_media_obtain.py` |
 | OI-M1 | 🟢 | P1 | Official YouTube captions API — executable when `plugins.youtube.api_key` set (download may still need OAuth). | `atlas/transcripts/official_captions.py` |
 | OI-UI0 | 🟡 | P1 | **Job UI live updates** — poll race fixed; hard-refresh for `app.js`. | `atlas/web/static/app.js` |
