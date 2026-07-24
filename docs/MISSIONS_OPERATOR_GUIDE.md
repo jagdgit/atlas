@@ -14,6 +14,22 @@ Observe→Learn→Decide→Reflect→Improve loop, read the philosophy doc first
 
 ---
 
+## Programs (MI.1)
+
+Console **Programs** groups cooperating missions (Market / Engineering / Personal).
+
+1. Open **Programs** → **Market Intelligence**
+2. Read the **Cognitive lifecycle** strip (Observe → … → Improve)
+3. Click **Start Program** — instantiates startable members with template defaults (**no JSON**)
+4. Stub members stay listed until MI.2 ships their templates
+5. Optional: **Context** box gathers “everything relevant to X” (MCA.1 spike)
+
+API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/context?q=…`
+
+`paper_trading` remains the Decision Simulation **compat** façade until MI.2 splits it.
+
+---
+
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)
 
 ### What is Atlas doing right now?

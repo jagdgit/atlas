@@ -244,5 +244,5 @@ MCA.1  Mission Context API (all Programs)
 - [x] Platform vs Market Program split (Broker Profiles domain-only)  
 - [x] KE.2.5 SPO hardening + structured relationship preview  
 - [x] KE.2.7 provenance completeness  
-- [ ] MI.1 Program UI  
+- [x] MI.1 Program UI  
 - [ ] MI.2 templates + façade  
