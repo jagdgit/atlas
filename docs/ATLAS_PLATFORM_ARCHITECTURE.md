@@ -199,7 +199,7 @@ Missions never depend on which extractor produced a finding.
 |-----|------------|--------|
 | V4 | Typed knowledge extraction | ✅ |
 | V5 | Verification + multi-dim trust | ✅ |
-| V6 | Knowledge graph | Next |
+| V6 | Knowledge graph | ✅ KG.1 (derived) |
 | V6.5 | World Models framework + first domain packs | ✅ WM.1 |
 | V7 | Context API + Planning OS in mission loops | Planned |
 | V8 | Experience OS + Mentors → better decisions | Planned |

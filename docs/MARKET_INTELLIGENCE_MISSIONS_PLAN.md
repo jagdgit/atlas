@@ -219,8 +219,8 @@ MI.5   Company / filings ingest (compliant) ✅
 MI.6   Promote Portfolio Ledger + Broker Profiles     ✅
 MI.7   Investment Mentor + Experience OS deepening    ✅
 WM.1   World Models (markets first)                   ✅
-KG.1   Knowledge graph (Claim↔Concept↔Entity↔SPO)
-MCA.1  Mission Context API (all Programs) — deepened with WM.1 structure
+KG.1   Knowledge graph (Claim↔Concept↔Entity↔SPO)     ✅
+MCA.1  Mission Context API (all Programs) — deepened with WM.1 + KG.1
 ```
 
 ---
@@ -254,3 +254,4 @@ MCA.1  Mission Context API (all Programs) — deepened with WM.1 structure
 - [x] MI.6 Portfolio Ledger + Broker Profiles (sim fees; `GET /v1/market/broker-profiles`)  
 - [x] MI.7 Investment Mentor → Experience OS; Decision Simulation recalls advice  
 - [x] WM.1 World Models framework + indian_markets + solar_plant stub (`GET /v1/world-models`)  
+- [x] KG.1 derived Knowledge Graph (`GET /v1/knowledge/graph`) + context graph_node rows  

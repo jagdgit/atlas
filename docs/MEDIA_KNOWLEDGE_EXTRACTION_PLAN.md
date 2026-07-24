@@ -189,7 +189,7 @@ KE.2.5        SPO-only relationships (reject fragments)       ✅
 KE.2.6        Structured relationship preview in Learning Report ✅
 KE.2.7        Provenance completeness (asset/chunk/speaker/ts/version) ✅
 KE.4 / V5     Verification                                    ✅ KNOWLEDGE_VERIFICATION_PLAN
-KG.1 / V6     Knowledge graph                                 platform
+KG.1 / V6     Knowledge graph (derived over findings)         ✅
 ```
 
 ---

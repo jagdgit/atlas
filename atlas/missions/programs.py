@@ -278,7 +278,7 @@ class ProgramService:
     """Derive Program cockpit views from definitions + live missions/templates."""
 
     name = "programs"
-    VERSION = "wm.1"
+    VERSION = "kg.1"
 
     def __init__(
         self,
@@ -287,11 +287,13 @@ class ProgramService:
         templates: Any | None = None,
         knowledge: Any | None = None,
         world_models: Any | None = None,
+        knowledge_graph: Any | None = None,
     ) -> None:
         self._missions = missions
         self._templates = templates
         self._knowledge = knowledge
         self._world_models = world_models
+        self._knowledge_graph = knowledge_graph
 
     def list(self) -> list[dict[str, Any]]:
         return [self.describe(p.id) for p in BUILTIN_PROGRAMS]
@@ -440,6 +442,13 @@ class ProgramService:
                     items.append(row)
             except Exception:  # noqa: BLE001 — context must not fail cockpit
                 pass
+        if self._knowledge_graph is not None and topic:
+            try:
+                g_limit = max(2, min(6, limit // 3 or 2))
+                for row in self._knowledge_graph.context_nodes(topic, limit=g_limit):
+                    items.append(row)
+            except Exception:  # noqa: BLE001
+                pass
         if self._knowledge is not None and topic:
             retrieve = getattr(self._knowledge, "retrieve", None)
             if callable(retrieve):
@@ -483,7 +492,7 @@ class ProgramService:
             "items": items[:limit],
             "count": min(len(items), limit),
             "spike": False,
-            "note": "Mission Context: Knowledge + World Model structure (WM.1)",
+            "note": "Mission Context: Knowledge + World Models + graph nodes (KG.1)",
             "version": self.VERSION,
         }
 

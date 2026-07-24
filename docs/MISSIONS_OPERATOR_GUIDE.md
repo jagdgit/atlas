@@ -82,6 +82,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **World Models (WM.1)** — domain *structure* (not Knowledge claims). List packs: `GET /v1/world-models`. Indian markets + solar stub (solar-plant test). Mission Context (`GET /v1/context?q=NSE`) returns `item_kind=world_fact` rows mixed with Knowledge.
 
+**Knowledge Graph (KG.1)** — derived Claim↔Concept↔Entity↔SPO view over findings (no separate graph DB). `GET /v1/knowledge/graph?q=cash+flow`. Context also returns `item_kind=graph_node`.
+
 ---
 
 ## 0. Paper trading FAQ (read this if the mission “does nothing”)

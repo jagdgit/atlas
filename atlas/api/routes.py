@@ -724,6 +724,31 @@ def knowledge_coverage(request: Request) -> dict:
     return _app(request).container.resolve("coverage").summary()
 
 
+@v1_router.get("/knowledge/graph", tags=["knowledge"])
+def knowledge_graph(
+    request: Request,
+    q: str = "",
+    domain: str | None = None,
+    limit_findings: int = 200,
+    limit_nodes: int = 80,
+    limit_edges: int = 120,
+) -> dict:
+    """Derived Knowledge Graph over findings (KG.1) — Claim↔Concept↔Entity↔SPO."""
+    try:
+        graph = _app(request).container.resolve("knowledge_graph")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"knowledge_graph unavailable: {exc}"
+        ) from exc
+    return graph.snapshot(
+        q=q or None,
+        domain=domain,
+        limit_findings=limit_findings,
+        limit_nodes=limit_nodes,
+        limit_edges=limit_edges,
+    )
+
+
 @v1_router.get("/policy/rules", tags=["policy"])
 def policy_rules(
     request: Request,

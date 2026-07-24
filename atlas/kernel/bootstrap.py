@@ -123,6 +123,7 @@ from atlas.repositories.template_repo import TemplateRepository
 from atlas.missions.templates import TemplateService
 from atlas.missions.programs import ProgramService
 from atlas.world_models import default_world_model_registry
+from atlas.knowledge.graph import KnowledgeGraphService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
 from atlas.repositories.agent_run_repo import AgentRunRepository
@@ -534,13 +535,17 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.missions.templates"),
     )
 
-    # Intelligence Programs (MI.1) + World Models (WM.1): soft grouping + domain structure.
+    # Intelligence Programs (MI.1) + World Models (WM.1) + Knowledge Graph (KG.1).
     world_model_registry = default_world_model_registry()
+    knowledge_graph_service = KnowledgeGraphService(
+        knowledge_service, logger=get_logger("atlas.knowledge.graph")
+    )
     program_service = ProgramService(
         missions=mission_service,
         templates=template_service,
         knowledge=knowledge_service,
         world_models=world_model_registry,
+        knowledge_graph=knowledge_graph_service,
     )
 
     # Conversation + Chat orchestrator (Sprint 10): the shared spine (D1) that the
@@ -1358,6 +1363,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("templates", template_service)
     container.register_instance("programs", program_service)
     container.register_instance("world_models", world_model_registry)
+    container.register_instance("knowledge_graph", knowledge_graph_service)
     container.register_instance("conversation", conversation_service)
     container.register_instance("planner", planner)
     container.register_instance("tool_executor", tool_executor)
@@ -1545,6 +1551,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         kind="service",
         version=getattr(world_model_registry, "VERSION", "wm.1"),
         metadata={"packs": [p["id"] for p in world_model_registry.list_packs()]},
+    )
+    capabilities.register(
+        "knowledge_graph",
+        knowledge_graph_service,
+        kind="service",
+        version=KnowledgeGraphService.VERSION,
     )
     capabilities.register(
         "notifier", notifier, kind="kernel", version=Notifier.VERSION
