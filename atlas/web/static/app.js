@@ -9,6 +9,7 @@ const state = {
   sessionId: null,
   jobId: null,
   missionId: null,
+  programId: null,
   missionPoll: null,
   sending: false,
   jobPoll: null,
@@ -128,6 +129,7 @@ function switchView(view) {
   if (view !== "engineering") stopEngStream();
   if (view === "overview") loadOverview();
   else if (view === "chat") renderSessionSidebar();
+  else if (view === "programs") loadPrograms();
   else if (view === "missions") loadMissions();
   else if (view === "engineering") loadEngineering();
   else if (view === "jobs") loadJobs();
@@ -752,6 +754,184 @@ function stopJobPoll() {
   state.jobPollFailures = 0;
 }
 
+/* ---------- programs (MI.1) ---------- */
+let programsCache = [];
+
+async function loadPrograms() {
+  try {
+    const data = await api("/v1/programs");
+    programsCache = data.programs || [];
+    renderProgramsList(programsCache);
+    const prefer = state.programId || "market_intelligence";
+    const hit = programsCache.find((p) => p.id === prefer) || programsCache[0];
+    if (hit) showProgramDetail(hit.id);
+  } catch (err) { toast(err.message); }
+}
+
+function renderProgramsList(programs) {
+  const list = $("#programs-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!programs.length) {
+    list.append(el("div", { class: "muted", style: "padding:18px", text: "No Programs registered." }));
+    return;
+  }
+  for (const p of programs) {
+    list.append(el("div", {
+      class: "job-row" + (p.id === state.programId ? " active" : ""),
+      onclick: () => showProgramDetail(p.id),
+    },
+      el("div", { class: "obj", text: p.title }),
+      el("div", {},
+        el("span", { class: "badge " + (p.startable_count ? "active" : "draft"),
+          text: p.startable_count ? `${p.startable_count} startable` : "stubs" }),
+        el("span", { class: "muted small",
+          text: `  ${p.members?.length || 0} missions · ${p.stub_count || 0} stub` }),
+      ),
+    ));
+  }
+}
+
+async function showProgramDetail(id) {
+  state.programId = id;
+  document.querySelectorAll("#programs-list .job-row").forEach((r) => r.classList.remove("active"));
+  // Mark active in list without refetching everyone.
+  document.querySelectorAll("#programs-list .job-row").forEach((r, i) => {
+    const p = programsCache[i];
+    if (p) r.classList.toggle("active", p.id === id);
+  });
+  try {
+    const p = await api(`/v1/programs/${id}`);
+    renderProgramDetail(p);
+  } catch (err) { toast(err.message); }
+}
+
+function renderLifecycleBoard(board, title) {
+  const wrap = el("div", { class: "lifecycle-board" });
+  if (title) wrap.append(el("h3", { class: "section-h", text: title }));
+  const row = el("div", { class: "lifecycle-row" });
+  for (const stage of (board || [])) {
+    row.append(el("div", { class: "lifecycle-stage status-" + (stage.status || "n-a").replace("/", "-") },
+      el("div", { class: "lifecycle-label", text: stage.label || stage.stage }),
+      el("div", { class: "lifecycle-status", text: stage.status || "n/a" }),
+    ));
+  }
+  wrap.append(row);
+  return wrap;
+}
+
+function renderProgramDetail(p) {
+  const box = $("#program-detail");
+  if (!box) return;
+  box.innerHTML = "";
+  box.append(el("div", { class: "obj-title", text: p.title }));
+  box.append(el("div", { class: "muted", style: "margin:6px 0 12px", text: p.description || "" }));
+  if (p.domain_adapters && p.domain_adapters.length) {
+    box.append(el("div", { class: "muted small", style: "margin-bottom:12px",
+      text: "Domain adapters: " + p.domain_adapters.join(" · ") }));
+  }
+
+  box.append(renderLifecycleBoard(p.lifecycle, "Cognitive lifecycle"));
+
+  const actions = el("div", { class: "job-actions" });
+  const startBtn = el("button", {
+    onclick: async () => {
+      startBtn.disabled = true;
+      try {
+        const result = await api(`/v1/programs/${p.id}/start`, { method: "POST" });
+        const n = (result.started || []).length;
+        const skip = (result.skipped || []).length;
+        toast(n ? `Started ${n} mission(s); ${skip} skipped/stub` : `Nothing new started (${skip} skipped/stub)`);
+        await loadPrograms();
+        showProgramDetail(p.id);
+      } catch (err) { toast(err.message); }
+      finally { startBtn.disabled = false; }
+    },
+  }, p.startable_count ? "Start Program" : "Start Program (stubs only)");
+  actions.append(startBtn);
+  actions.append(el("button", { onclick: () => showProgramDetail(p.id) }, "Refresh"));
+  box.append(actions);
+
+  // Context spike
+  const ctx = el("div", { class: "program-context" });
+  ctx.append(el("h3", { class: "section-h", text: "Context (MCA.1 spike)" }));
+  const ctxRow = el("div", { class: "program-context-row" });
+  const ctxInput = el("input", { placeholder: "Topic, e.g. inflation or Reliance", style: "flex:1" });
+  const ctxBtn = el("button", {
+    onclick: async () => {
+      const q = (ctxInput.value || "").trim();
+      if (!q) return;
+      try {
+        const data = await api(`/v1/programs/${p.id}/context?q=${encodeURIComponent(q)}&limit=8`);
+        renderProgramContextResults(ctxResults, data);
+      } catch (err) { toast(err.message); }
+    },
+  }, "Gather");
+  ctxRow.append(ctxInput, ctxBtn);
+  ctx.append(ctxRow);
+  const ctxResults = el("div", { class: "program-context-results muted small" });
+  ctx.append(ctxResults);
+  box.append(ctx);
+
+  box.append(el("h3", { class: "section-h", text: "Program members" }));
+  for (const m of (p.members || [])) {
+    const card = el("div", { class: "program-member" });
+    card.append(el("div", { class: "program-member-head" },
+      el("strong", { text: m.role }),
+      el("span", { class: "badge " + (m.status === "stub" ? "draft" : m.can_start ? "active" : "paused"),
+        text: m.status }),
+    ));
+    card.append(el("div", { class: "muted small",
+      text: `${m.template} · ${m.kind} · ${m.cadence}` }));
+    if (m.description) card.append(el("div", { class: "muted small", text: m.description }));
+    if (m.missions && m.missions.length) {
+      for (const miss of m.missions) {
+        card.append(el("div", { class: "small", style: "margin-top:4px" },
+          el("a", {
+            href: "#",
+            class: "link",
+            onclick: (e) => {
+              e.preventDefault();
+              switchView("missions");
+              showMissionDetail(miss.id);
+            },
+          }, `${miss.title || miss.id} (${miss.status})`),
+        ));
+      }
+    } else if (m.status === "stub") {
+      card.append(el("div", { class: "muted small", text: "Disabled stub — ships in MI.2+" }));
+    }
+    // Mini lifecycle from member philosophy
+    const lc = m.philosophy && m.philosophy.lifecycle;
+    if (lc) {
+      const board = Object.keys(lc).map((stage) => ({
+        stage,
+        label: stage.replace(/_/g, " "),
+        status: lc[stage],
+      }));
+      // Keep canonical order if possible
+      const order = ["observe","learn","decide","record_why","evaluate","reflect","improve"];
+      board.sort((a, b) => order.indexOf(a.stage) - order.indexOf(b.stage));
+      card.append(renderLifecycleBoard(board));
+    }
+    box.append(card);
+  }
+}
+
+function renderProgramContextResults(box, data) {
+  box.innerHTML = "";
+  if (!data || !(data.items || []).length) {
+    box.textContent = data?.note || "No matching context yet.";
+    return;
+  }
+  box.append(el("div", { text: `${data.count} item(s) — ${data.note || ""}` }));
+  for (const item of data.items) {
+    const line = item.statement || item.content || JSON.stringify(item);
+    box.append(el("div", { class: "program-context-item",
+      text: `[${item.kind}] ${String(line).slice(0, 200)}` }));
+  }
+}
+
 /* ---------- missions (Phase A · §A.7) ---------- */
 let missionTemplates = [];
 
@@ -941,6 +1121,20 @@ function renderMissionDetail(d) {
       + (m.max_concurrent_tasks != null ? ` · cap ${m.max_concurrent_tasks}` : "") }),
   ));
   if (m.objective) box.append(el("div", { class: "muted", style: "margin:6px 0", text: m.objective }));
+
+  // Cognitive lifecycle (philosophy) — MI.1
+  const phil = (m.success_criteria && m.success_criteria.philosophy) || null;
+  if (phil && phil.lifecycle) {
+    const order = ["observe","learn","decide","record_why","evaluate","reflect","improve"];
+    const board = order.map((stage) => ({
+      stage,
+      label: stage.replace(/_/g, " "),
+      status: phil.lifecycle[stage] || "n/a",
+    }));
+    box.append(renderLifecycleBoard(board, "Cognitive lifecycle"));
+    box.append(el("div", { class: "muted small", style: "margin-bottom:8px",
+      text: `Kind: ${phil.mission_kind || "?"} · never_stops=${phil.never_stops ? "yes" : "no"}` }));
+  }
 
   const actions = el("div", { class: "job-actions" });
   for (const a of (MISSION_ACTIONS[m.status] || [])) {
@@ -1271,6 +1465,8 @@ function init() {
   });
   $("#jobs-refresh").addEventListener("click", loadJobs);
   $("#missions-refresh").addEventListener("click", loadMissions);
+  const programsRefresh = $("#programs-refresh");
+  if (programsRefresh) programsRefresh.addEventListener("click", loadPrograms);
   $("#mission-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const tpl = $("#mission-template").value;

@@ -26,6 +26,7 @@
       <nav class="nav">
         <button class="nav-btn active" data-view="overview">Overview</button>
         <button class="nav-btn" data-view="chat">Chat</button>
+        <button class="nav-btn" data-view="programs">Programs</button>
         <button class="nav-btn" data-view="missions">Missions</button>
         <button class="nav-btn" data-view="engineering">Engineering</button>
         <button class="nav-btn" data-view="jobs">Jobs</button>
@@ -58,6 +59,22 @@
           <textarea id="composer-input" rows="1" placeholder="Ask Atlas anything…  (Enter to send, Shift+Enter for a new line)"></textarea>
           <button id="composer-send" type="submit">Send</button>
         </form>
+      </section>
+
+      <!-- Programs (MI.1) -->
+      <section id="view-programs" class="view hidden">
+        <div class="panel-head">
+          <h2>Programs</h2>
+          <button id="programs-refresh" class="link">refresh</button>
+        </div>
+        <p class="muted programs-intro" style="padding:0 22px 8px;margin:0">
+          Intelligence Programs group cooperating missions. Start Market Intelligence without editing JSON —
+          stubs stay visible until enabled.
+        </p>
+        <div class="jobs-layout">
+          <div id="programs-list" class="jobs-list"></div>
+          <div id="program-detail" class="job-detail"></div>
+        </div>
       </section>
 
       <!-- Missions -->
@@ -134,6 +151,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js"></script>
+  <script src="./app.js?v=mi1"></script>
 </body>
 </html>

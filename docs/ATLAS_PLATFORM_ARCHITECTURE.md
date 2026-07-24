@@ -224,8 +224,8 @@ Missions never depend on which extractor produced a finding.
 ## 10. Implementation priority (not new concepts)
 
 1. KE.2.5–2.7 — SPO quality, structured relationship preview, provenance  
-2. Program UI + cognitive lifecycle (MI.1)  
-3. Mission Context API spike  
+2. Program UI + cognitive lifecycle (MI.1) ✅  
+3. Mission Context API spike (MCA.1 shape in MI.1; full API later)  
 4. Elevate Policy Engine + Memory hierarchy docs → code  
 5. Planning OS (generalize research/job planning)  
 6. Capability Registry enrichment  

@@ -240,6 +240,51 @@ button { cursor: pointer; font: inherit; }
 .eng-embed input { width: auto; }
 .eng-group { font-size: 12px; color: var(--text); margin: 14px 0 6px; font-weight: 600; }
 
+/* Programs / cognitive lifecycle (MI.1) */
+.lifecycle-board { margin: 10px 0 14px; }
+.lifecycle-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.lifecycle-stage {
+  flex: 1 1 88px; min-width: 88px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px;
+}
+.lifecycle-label {
+  font-size: 11px; font-weight: 600; text-transform: capitalize; color: var(--text);
+}
+.lifecycle-status {
+  font-size: 11px; margin-top: 4px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.lifecycle-stage.status-active { border-color: rgba(63,185,80,.45); }
+.lifecycle-stage.status-active .lifecycle-status { color: var(--ok); }
+.lifecycle-stage.status-partial { border-color: rgba(210,153,34,.45); }
+.lifecycle-stage.status-partial .lifecycle-status { color: var(--warn); }
+.lifecycle-stage.status-waiting { border-color: rgba(79,157,255,.35); }
+.lifecycle-stage.status-waiting .lifecycle-status { color: var(--accent); }
+.lifecycle-stage.status-n-a .lifecycle-status { color: var(--muted); }
+
+.program-member {
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; margin: 8px 0;
+}
+.program-member-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 4px;
+}
+.program-context { margin: 14px 0; }
+.program-context-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.program-context-row input {
+  background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit;
+}
+.program-context-row button {
+  background: var(--bg-elev2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+}
+.program-context-item { padding: 4px 0; border-bottom: 1px solid var(--border); }
+
 .status-cards { display: flex; gap: 14px; padding: 20px 22px; flex-wrap: wrap; }
 .card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; min-width: 120px; }
 .card .k { font-size: 12px; color: var(--muted); }
