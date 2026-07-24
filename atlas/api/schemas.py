@@ -146,6 +146,33 @@ class IngestResponse(BaseModel):
     deduped: bool
 
 
+class BridgeIngestRequest(BaseModel):
+    """Unified Asset-first ingest (OI-C5) — path on the Atlas host or inline content."""
+
+    path: str | None = None
+    content: str | None = None
+    filename: str | None = None
+    kind: str = "document"
+    domain: str = "external"
+    title: str | None = None
+    embed: bool = True
+    extract_findings: bool = True
+    drain_candidates: bool = True
+
+
+class BridgeIngestResponse(BaseModel):
+    asset_id: str | None = None
+    asset_version: int | None = None
+    document_id: str | None = None
+    chunks: int = 0
+    candidates: int = 0
+    findings: int = 0
+    deduped: bool = False
+    outcome: str = "ok"
+    reason: str | None = None
+    asset_reused: bool = False
+
+
 class RememberRequest(BaseModel):
     content: str = Field(min_length=1)
     kind: str = Field(default="semantic", pattern="^(working|episodic|semantic)$")

@@ -558,6 +558,37 @@ def cmd_ingest(args: argparse.Namespace, app: "Application | None" = None) -> in
         print(f"error: no extractable text in {path}", file=sys.stderr)
         return 1
     app = app or build_application()
+    # OI-C5: prefer unified Asset→Reader→chunks(+candidates) bridge when available.
+    try:
+        bridge = app.container.resolve("ingestion_bridge")
+        result = bridge.ingest_file(
+            path,
+            kind="document",
+            domain="external",
+            embed=True,
+            extract_findings=True,
+            source="document",
+        )
+        out = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+        if out.get("outcome") == "ok" or out.get("document_id"):
+            print(
+                f"ingested {path.name}: asset={out.get('asset_id')} "
+                f"document={out.get('document_id')} chunks={out.get('chunks', 0)} "
+                f"candidates={out.get('candidates', 0)} deduped={out.get('deduped')} "
+                f"outcome={out.get('outcome')}"
+            )
+            # Drain candidates so CLI leaves findings, not just an inbox.
+            try:
+                candidates = app.container.resolve("candidates")
+                drained = candidates.consume_pending(limit=200)
+                if drained:
+                    print(f"  consolidated {len(drained)} candidate(s) → findings")
+            except Exception:  # noqa: BLE001
+                pass
+            return 0 if out.get("outcome") in (None, "ok") or out.get("document_id") else 1
+    except Exception as exc:  # noqa: BLE001 — fall back to legacy text ingest
+        print(f"warning: bridge ingest unavailable ({exc}); using legacy path", file=sys.stderr)
+
     knowledge = app.container.resolve("knowledge")
     summary = knowledge.ingest_text(
         "cli",

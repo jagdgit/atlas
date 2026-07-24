@@ -381,10 +381,20 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.scheduler"),
     )
     from atlas.knowledge.consolidation import KnowledgeLifecycleService
+    from atlas.knowledge.nn_identity import EmbeddingIdentityResolver
+    from atlas.repositories.finding_embedding_repo import FindingEmbeddingRepository
 
+    finding_embedding_repo = FindingEmbeddingRepository(db_manager)
+    nn_identity = EmbeddingIdentityResolver(
+        llm_service,
+        finding_embedding_repo,
+        model=cfg.llm.embedding_model,
+        logger=get_logger("atlas.knowledge.nn_identity"),
+    )
     knowledge_lifecycle = KnowledgeLifecycleService(
         finding_repo,
         enqueue=scheduler_service.enqueue,
+        nn_resolver=nn_identity,
         logger=get_logger("atlas.knowledge.lifecycle"),
     )
     knowledge_service._lifecycle = knowledge_lifecycle  # noqa: SLF001
@@ -998,8 +1008,15 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     candidate_consumer = CandidateConsumer(
         CandidateRepository(db_manager),
         knowledge_lifecycle,
+        enqueue=scheduler_service.enqueue,
+        count_pending=task_repo.count_pending_of_type,
+        drain_interval=300,
+        prune_interval=86400,
+        prune_older_than_days=30,
         logger=get_logger("atlas.knowledge.candidate_consumer"),
     )
+    handlers.register("candidates_drain", candidate_consumer.drain_task)
+    handlers.register("candidates_prune", candidate_consumer.prune_task)
     ingestion_bridge = IngestionService(
         asset_acquirer,
         document_reader,
@@ -1846,6 +1863,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     registry.register(learning_service)
     registry.register(intelligence_service)
     registry.register(ingestion_source)
+    registry.register(candidate_consumer)
 
     # 7. Application object — holds the shared registries by reference, so it can
     # be constructed here and still see services/plugins registered below.

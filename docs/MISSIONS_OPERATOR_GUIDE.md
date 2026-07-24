@@ -94,6 +94,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Experience OS (EX.1)** — Observation→Reasoning→Decision→Outcome→Reflection→Lesson over `learning.experiences`. `GET /v1/experience/shape`, `POST /v1/experience/journal`, `GET /v1/experience/recall` / `advice`. Decision Simulation + Investment Mentor write through it.
 
+**Unified ingest (OI-C5)** — `atlas ingest <path>` and `POST /v1/ingest` go through the Asset→Reader bridge (with prose candidates). Global candidate drain/prune runs on the scheduler (`candidates_drain` / `candidates_prune`); manual: `POST /v1/candidates/drain`.
+
 **Capability Registry (CAP.1)** — missions declare needs instead of importing adapters. `POST /v1/capabilities/needs` `{needs:["MarketReader"]}` or `{mission:"market_observer"}`. `GET /v1/capabilities/inspect`. Missing needs → honest `capability_gap` (Market Observer).
 
 **Capability gaps (OI-F5 / P15)** — `GET /v1/capabilities/gaps` (or `atlas capability-gaps`): catalog missing + mission need gaps + unhealthy providers + Decision Engine backlog (`GET /v1/decision/gaps`).

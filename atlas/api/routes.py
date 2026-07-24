@@ -30,6 +30,8 @@ from atlas.api.schemas import (
     HistoryResponse,
     IngestRequest,
     IngestResponse,
+    BridgeIngestRequest,
+    BridgeIngestResponse,
     InvokeToolRequest,
     InvokeToolResponse,
     InstantiateMissionRequest,
@@ -1780,6 +1782,87 @@ def ingest(body: IngestRequest, request: Request) -> IngestResponse:
         embed=body.embed,
     )
     return IngestResponse(**summary)
+
+
+@v1_router.post("/ingest", response_model=BridgeIngestResponse, tags=["knowledge"])
+def ingest_bridge(body: BridgeIngestRequest, request: Request) -> BridgeIngestResponse:
+    """Unified Asset-first ingest (OI-C5): path or inline content → bridge → optional drain."""
+    try:
+        bridge = _app(request).container.resolve("ingestion_bridge")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"ingestion_bridge unavailable: {exc}"
+        ) from exc
+
+    if body.path:
+        result = bridge.ingest_file(
+            body.path,
+            kind=body.kind,
+            domain=body.domain,
+            title=body.title,
+            embed=body.embed,
+            extract_findings=body.extract_findings,
+            source="document" if body.kind == "document" else body.kind,
+        )
+    elif body.content:
+        result = bridge.ingest_bytes(
+            body.content.encode("utf-8"),
+            filename=body.filename or (body.title or "inline.txt"),
+            kind=body.kind,
+            domain=body.domain,
+            title=body.title,
+            embed=body.embed,
+            extract_findings=body.extract_findings,
+            source="document" if body.kind == "document" else body.kind,
+        )
+    else:
+        raise HTTPException(status_code=400, detail="path or content required")
+
+    findings = 0
+    if body.drain_candidates and body.extract_findings:
+        try:
+            candidates = _app(request).container.resolve("candidates")
+            drained = candidates.consume_pending(limit=200)
+            findings = len(drained)
+        except Exception:  # noqa: BLE001
+            findings = 0
+
+    return BridgeIngestResponse(
+        asset_id=result.asset_id,
+        asset_version=result.asset_version,
+        document_id=result.document_id,
+        chunks=int(result.chunks or 0),
+        candidates=int(result.candidates or 0),
+        findings=findings,
+        deduped=bool(result.deduped),
+        outcome=str(result.outcome or "ok"),
+        reason=result.reason,
+        asset_reused=bool(result.asset_reused),
+    )
+
+
+@v1_router.post("/candidates/drain", tags=["knowledge"])
+def candidates_drain(request: Request, body: dict | None = None) -> dict:
+    """Manually drain pending knowledge candidates through the Consolidator (OI-C5)."""
+    try:
+        candidates = _app(request).container.resolve("candidates")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"candidates unavailable: {exc}") from exc
+    payload = body or {}
+    limit = int(payload.get("limit") or 200)
+    drained = candidates.consume_pending(limit=limit)
+    return {"drained": len(drained), "items": drained[:20]}
+
+
+@v1_router.post("/candidates/prune", tags=["knowledge"])
+def candidates_prune(request: Request, body: dict | None = None) -> dict:
+    """Prune consumed/discarded candidates older than N days (OI-C5)."""
+    try:
+        candidates = _app(request).container.resolve("candidates")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"candidates unavailable: {exc}") from exc
+    payload = body or {}
+    return candidates.prune_task(payload)
 
 
 @v1_router.get("/knowledge/orphans", tags=["knowledge"])

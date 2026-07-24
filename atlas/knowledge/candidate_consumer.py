@@ -28,10 +28,22 @@ class CandidateConsumer:
         store: Any,
         consolidator: Any,
         *,
+        enqueue: Any | None = None,
+        count_pending: Any | None = None,
+        drain_interval: int = 300,
+        prune_interval: int = 86400,
+        prune_older_than_days: int = 30,
+        drain_limit: int = 200,
         logger: logging.Logger | None = None,
     ) -> None:
         self._store = store              # CandidateRepository | InMemoryCandidateStore
         self._consolidator = consolidator  # KnowledgeLifecycleService
+        self._enqueue = enqueue
+        self._count_pending = count_pending
+        self._drain_interval = int(drain_interval or 0)
+        self._prune_interval = int(prune_interval or 0)
+        self._prune_older_than_days = int(prune_older_than_days or 30)
+        self._drain_limit = max(1, int(drain_limit or 200))
         self._logger = logger or logging.getLogger("atlas.knowledge.candidate_consumer")
 
     # --- emit ----------------------------------------------------------
@@ -75,6 +87,64 @@ class CandidateConsumer:
     def consume_pending(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Drain the pending candidate inbox through the Consolidator."""
         return [self.consume(c) for c in self._store.list_pending(limit=limit)]
+
+    # --- scheduler (OI-C5) ---------------------------------------------
+    def drain_task(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Scheduler handler ``candidates_drain`` — global inbox drain + reschedule."""
+        payload = payload or {}
+        limit = int(payload.get("limit") or self._drain_limit)
+        drained = self.consume_pending(limit=limit)
+        if self._enqueue is not None and self._drain_interval > 0:
+            self._enqueue(
+                "candidates_drain", {}, delay_seconds=float(self._drain_interval)
+            )
+        return {"drained": len(drained), "interval": self._drain_interval}
+
+    def prune_task(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Scheduler handler ``candidates_prune`` — drop old consumed/discarded rows."""
+        payload = payload or {}
+        days = int(payload.get("older_than_days") or self._prune_older_than_days)
+        removed = 0
+        if hasattr(self._store, "prune_consumed"):
+            try:
+                removed = int(self._store.prune_consumed(older_than_days=days) or 0)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("prune_consumed failed: %s", exc)
+        if self._enqueue is not None and self._prune_interval > 0:
+            self._enqueue(
+                "candidates_prune", {}, delay_seconds=float(self._prune_interval)
+            )
+        return {"pruned": removed, "older_than_days": days}
+
+    def start(self) -> None:
+        """Seed durable drain/prune chains (idempotent across restarts)."""
+        self._seed("candidates_drain", self._drain_interval)
+        self._seed("candidates_prune", self._prune_interval)
+
+    def stop(self) -> None:
+        return None
+
+    def health_check(self) -> Any:
+        from atlas.services.base import HealthStatus
+
+        try:
+            pending = (
+                int(self._store.count_by_status("pending"))
+                if hasattr(self._store, "count_by_status")
+                else len(self._store.list_pending(limit=1000))
+            )
+        except Exception as exc:  # noqa: BLE001
+            return HealthStatus.fail(f"candidates unreachable: {exc}")
+        return HealthStatus.ok(f"{pending} pending candidates", pending=pending)
+
+    def _seed(self, task_type: str, interval: int) -> None:
+        if self._enqueue is None or interval <= 0:
+            return
+        if self._count_pending is not None and self._count_pending(task_type) > 0:
+            self._logger.info("%s already queued; not seeding another", task_type)
+            return
+        self._enqueue(task_type, {}, delay_seconds=float(interval))
+        self._logger.info("seeded initial %s (interval %ds)", task_type, interval)
 
     # --- internals -----------------------------------------------------
     def _to_finding(self, candidate: dict[str, Any]) -> dict[str, Any]:
