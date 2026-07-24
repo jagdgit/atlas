@@ -135,8 +135,14 @@ class KnowledgeService:
         )
         doc_id = document.id
 
-        # Dedup hit that is already embedded: nothing to do.
+        # Dedup hit: avoid re-chunking when the document is already past pending.
+        # OI-C3 — ``embed=False`` used to re-run chunk_text/add_many on every
+        # ingest of identical content (wasteful; asset/doc rows were already deduped).
         if document.status == "embedded":
+            return self._summary(doc_id, deduped=True)
+        if document.status == "chunked":
+            if embed:
+                self.embed_document(doc_id)
             return self._summary(doc_id, deduped=True)
 
         pieces = chunk_text(

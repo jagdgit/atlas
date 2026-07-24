@@ -99,8 +99,10 @@ class FakeChunkRepo:
         self.by_doc = {}
         self.doc_domains = {}
         self._n = 0
+        self.add_many_calls = 0
 
     def add_many(self, doc_id, chunks):
+        self.add_many_calls += 1
         rows = []
         for ch in chunks:
             self._n += 1
@@ -247,6 +249,37 @@ def test_ingest_dedup_skips_when_already_embedded():
     summary = svc.ingest_text("note", "same content here")  # identical
     assert summary["deduped"] is True
     assert len(embs.vectors) == n_before  # no re-embedding
+
+
+def test_ingest_dedup_skips_rechunk_when_chunked_embed_false():
+    """OI-C3: non-embed path must not re-chunk identical content."""
+    svc, docs, chunks, embs = _service()
+    first = svc.ingest_text("note", "chunk only once please", embed=False)
+    assert first["status"] == "chunked"
+    assert first["deduped"] is False
+    calls_after_first = chunks.add_many_calls
+    assert calls_after_first == 1
+    n_chunks = chunks.count_for_document(first["document_id"])
+
+    second = svc.ingest_text("note", "chunk only once please", embed=False)
+    assert second["deduped"] is True
+    assert second["document_id"] == first["document_id"]
+    assert second["status"] == "chunked"
+    assert chunks.add_many_calls == calls_after_first  # no second add_many
+    assert chunks.count_for_document(first["document_id"]) == n_chunks
+
+
+def test_ingest_dedup_chunked_then_embed_skips_rechunk():
+    """OI-C3: chunked → later embed=True embeds without re-chunking."""
+    svc, docs, chunks, embs = _service()
+    first = svc.ingest_text("note", "later embed path", embed=False)
+    assert first["status"] == "chunked"
+    calls = chunks.add_many_calls
+    third = svc.ingest_text("note", "later embed path", embed=True)
+    assert third["deduped"] is True
+    assert third["status"] == "embedded"
+    assert chunks.add_many_calls == calls
+    assert len(embs.vectors) == chunks.count_for_document(first["document_id"])
 
 
 def test_search_ranks_by_similarity():
