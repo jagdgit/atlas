@@ -973,6 +973,10 @@ class ReportGenerator:
                 if not items:
                     continue
                 lines.append(f"**{title}**")
+                if key == "relationships":
+                    lines.append(
+                        "_Subject / Predicate / Object (extraction structure — not verification confidence)._"
+                    )
                 for item in items:
                     lines.append(f"- {item}")
                 lines.append("")

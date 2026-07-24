@@ -399,7 +399,7 @@ def test_learning_report_includes_knowledge_preview():
                 "claims": [
                     "Traditional education does not teach financial literacy."
                 ],
-                "relationships": ["assets preferred_over liabilities"],
+                "relationships": ["Assets / preferred_over / Liabilities"],
                 "facts": [],
             },
             "extraction_quality": {
@@ -424,6 +424,9 @@ def test_learning_report_includes_knowledge_preview():
     assert "### Knowledge preview" in md
     assert "**Top Concepts**" in md
     assert "Investing" in md
+    assert "**Top Relationships**" in md
+    assert "Subject / Predicate / Object" in md
+    assert "Assets / preferred_over / Liabilities" in md
     assert "**Top Claims**" in md
     assert "### Extraction quality" in md
     assert "Claims linked to concepts/entities: 9" in md
@@ -432,3 +435,23 @@ def test_learning_report_includes_knowledge_preview():
         isinstance(o, dict) and o.get("label") == "top_concepts"
         for o in report["sections"]["observations"]
     )
+
+
+def test_knowledge_preview_formats_relationships_as_spo():
+    """KE.2.6 — preview uses Subject / Predicate / Object, not raw prose."""
+    from atlas.knowledge.media_extraction import build_knowledge_preview
+
+    payloads = [
+        {
+            "statement": "Assets preferred_over Liabilities",
+            "claim_type": "relationship",
+            "value": {
+                "kind": "relationship",
+                "subject": "Assets",
+                "predicate": "preferred_over",
+                "object": "Liabilities",
+            },
+        }
+    ]
+    preview = build_knowledge_preview(payloads)
+    assert preview["relationships"] == ["Assets / preferred_over / Liabilities"]

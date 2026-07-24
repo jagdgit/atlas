@@ -302,7 +302,7 @@ def count_candidates_by_type(payloads: list[dict[str, Any]]) -> dict[str, int]:
 def build_knowledge_preview(
     payloads: list[dict[str, Any]], *, limit: int = 5
 ) -> dict[str, list[str]]:
-    """Operator-facing samples for the Learning Report (KE.2.2)."""
+    """Operator-facing samples for the Learning Report (KE.2.2 / KE.2.6)."""
     buckets: dict[str, list[str]] = {
         "concepts": [],
         "entities": [],
@@ -332,11 +332,25 @@ def build_knowledge_preview(
             name = str(value.get("name") or "").strip()
             et = str(value.get("entity_type") or "").strip()
             label = f"{name} ({et})" if name and et else name or str(p.get("statement") or "")
+        elif ct in {"relationship", "fact"}:
+            label = format_spo_preview(value) or str(p.get("statement") or "").strip()
         else:
             label = str(p.get("statement") or "").strip()
         if label and label not in buckets[bucket]:
             buckets[bucket].append(label)
     return buckets
+
+
+def format_spo_preview(value: dict[str, Any] | None) -> str:
+    """KE.2.6 — Subject / Predicate / Object for Learning Report Top Relationships."""
+    if not isinstance(value, dict):
+        return ""
+    subj = str(value.get("subject") or "").strip()
+    pred = str(value.get("predicate") or "").strip()
+    obj = str(value.get("object") or "").strip()
+    if subj and pred and obj:
+        return f"{subj} / {pred} / {obj}"
+    return ""
 
 
 def build_extraction_quality(
@@ -554,7 +568,7 @@ class MediaExtractBundle:
 class MediaKnowledgeExtractor:
     """Extract typed knowledge candidates from media transcript text (KE.2.5)."""
 
-    VERSION = "ke.2.5"
+    VERSION = "ke.2.6"
 
     def __init__(
         self,
