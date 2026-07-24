@@ -117,6 +117,7 @@ from atlas.missions import MissionRepository, MissionService
 from atlas.configuration import ConfigRepository, ConfigurationService
 from atlas.repositories.schedule_repo import ScheduleRepository
 from atlas.scheduler.schedules import ScheduleService
+from atlas.scheduler.hierarchy import SchedulerHierarchyService
 from atlas.repositories.worker_repo import WorkerRepository
 from atlas.workers import HelloWatcher, RepoWatcher, WorkerManager
 from atlas.repositories.template_repo import TemplateRepository
@@ -705,6 +706,15 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         world_models=world_model_registry,
         knowledge_graph=knowledge_graph_service,
         mission_context=mission_context_service,
+    )
+
+    # Scheduler hierarchy (SCHED.1) — Program → Mission → Worker cadence view.
+    scheduler_hierarchy = SchedulerHierarchyService(
+        programs=program_service,
+        templates=template_service,
+        workers=worker_manager,
+        schedules=schedule_service,
+        logger=get_logger("atlas.scheduler.hierarchy"),
     )
 
     # Policy layer (Phase C · §C.5, CC8): durable operator rules that *influence* retrieval + advice
@@ -1407,6 +1417,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("missions", mission_service)
     container.register_instance("configuration", configuration_service)
     container.register_instance("schedules", schedule_service)
+    container.register_instance("scheduler_hierarchy", scheduler_hierarchy)
     container.register_instance("workers", worker_manager)
     container.register_instance("templates", template_service)
     container.register_instance("programs", program_service)
@@ -1590,6 +1601,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "schedules", schedule_service, kind="service", version=ScheduleService.VERSION
+    )
+    capabilities.register(
+        "scheduler_hierarchy",
+        scheduler_hierarchy,
+        kind="service",
+        version=SchedulerHierarchyService.VERSION,
     )
     capabilities.register(
         "workers", worker_manager, kind="service", version=WorkerManager.VERSION

@@ -99,7 +99,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-PA-MEM | 🟢 | P2 | **Memory hierarchy** — working / session / long_term ↔ Knowledge / Experience (`GET /v1/memory/hierarchy`). | MEM.1 |
 | OI-PA-POLICY | 🟢 | P2 | **Policy Engine** — soft influence + hard forbid/limit (`POST /v1/policy/evaluate`). | PA.2 |
 | OI-PA-CAP | 🟢 | P2 | **Capability Registry enrichment** — needs/aliases/inspect (`POST /v1/capabilities/needs`). | CAP.1 |
-| OI-PA-SCHED | 🔴 | P3 | **Scheduler hierarchy** — Program → Mission → Worker tick. | Platform |
+| OI-PA-SCHED | 🟢 | P3 | **Scheduler hierarchy** — Program → Mission → Worker (`GET /v1/scheduler/hierarchy`). | SCHED.1 |
 | OI-PA-WM | 🟢 | P1 | **World Models framework** — registry + indian_markets + solar_plant stub. | WM.1 |
 | OI-PA-MCA | 🟢 | P1 | **Mission Context API** — Knowledge + Graph + World Models + Experience; Decision Simulation cites. | MCA.1 |
 | OI-BA0 | 🟢 | P2 | **Browser → Asset** — BA.1b + BA.v2 (opt-in yt-dlp) done. BA.v2+ later. | `MEDIA_BROWSER_ACQUISITION_PLAN.md` · `atlas/ingestion/youtube_media_obtain.py` |

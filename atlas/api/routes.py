@@ -1497,6 +1497,37 @@ def planning_plan_get(
     return planning.plan(goal, program_id=program_id, limit=limit)
 
 
+@v1_router.get("/scheduler/hierarchy", tags=["programs"])
+def scheduler_hierarchy_all(request: Request, program_id: str | None = None) -> dict:
+    """Program → Mission → Worker schedule hierarchy (SCHED.1)."""
+    try:
+        hier = _app(request).container.resolve("scheduler_hierarchy")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"scheduler_hierarchy unavailable: {exc}"
+        ) from exc
+    return hier.view(program_id)
+
+
+@v1_router.post("/scheduler/resolve", tags=["programs"])
+def scheduler_resolve(request: Request, body: dict | None = None) -> dict:
+    """Resolve effective tick interval (worker > mission cadence > program default)."""
+    try:
+        hier = _app(request).container.resolve("scheduler_hierarchy")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"scheduler_hierarchy unavailable: {exc}"
+        ) from exc
+    payload = body or {}
+    return hier.resolve_interval(
+        program_id=payload.get("program_id"),
+        template=payload.get("template"),
+        worker_type=payload.get("worker_type"),
+        cadence=payload.get("cadence"),
+        worker_interval=payload.get("worker_interval"),
+    )
+
+
 @v1_router.post("/planning/plan", tags=["programs"])
 def planning_plan_post(request: Request, body: dict | None = None) -> dict:
     """Planning OS (POST) — body: ``{goal, program_id?, limit?}``."""

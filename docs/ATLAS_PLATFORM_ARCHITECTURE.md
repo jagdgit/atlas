@@ -72,6 +72,8 @@ Worker Tick         (e.g. every 5 minutes)
 
 Today workers mostly own their own `interval_seconds`. Elevate to Program → Mission → Worker as mission count grows (`OI-PA-SCHED`).
 
+**Shipped (SCHED.1):** `SchedulerHierarchyService` — cascade `worker_specs > mission cadence > program default`. APIs: `GET /v1/scheduler/hierarchy`, `POST /v1/scheduler/resolve`. Durable ticks remain on `scheduler.schedules`.
+
 ---
 
 ## 4. Platform OS layers
@@ -237,7 +239,7 @@ Missions never depend on which extractor produced a finding.
 4. Elevate Policy Engine + Memory hierarchy docs → code  
 5. Planning OS ✅ PA.1 (`GET /v1/planning/plan`)  
 6. Capability Registry enrichment ✅ CAP.1  
-7. Scheduler hierarchy  
+7. Scheduler hierarchy ✅ SCHED.1  
 8. World Models framework ✅ WM.1  
 
 Stop adding top-level OS names unless the solar-plant test forces it.
