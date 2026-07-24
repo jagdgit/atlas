@@ -44,7 +44,6 @@ Scope cuts recorded at plan time; remaining rows are post-Phase-D deferrals / fo
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
 | OI-D1 | 🟡 | P2 | **Live market-data feed** — MarketReader adapters shipped (asset_replay default; Yahoo opt-in; Polygon/AV/NSE/BSE skeletons + CapabilityGap). Full live clients when keys/ToS allow. | MI.3 · `atlas/trading/adapters.py` |
-| OI-MI0 | 🟡 | P1 | **Market Intelligence Program** — MI.1–MI.3 ✅. **Next:** MI.4 news + interesting-event → research. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
 | OI-D2 | 🔴 | P3 | **RM arbitration beyond weighted-priority + hard cap** (preemption, fair-share). | A7 — refine empirically. |
 | OI-D3 | 🟢 | P2 | **Phase D complete** (D.1–D.11 ✅), including applied watchers + e2e gate. | PHASE_D §3 |
 | OI-D4 | ⚪ | — | **Real-world side-effecting appliers** (e.g. actually submitting a draft) stay behind the P14 approval gate — out of scope until explicitly requested. | PHASE_D DD3/P14 |
