@@ -37,6 +37,7 @@ the DI container, so they work without a running API server:
     atlas plugins               # list loaded plugins
     atlas tools                 # list available tools
     atlas capabilities          # list capabilities (provided + missing, R2)
+    atlas capability-gaps       # P15 gap self-report (catalog + missions + decisions)
     atlas tool web.fetch --arg url=https://example.com   # invoke a tool
     atlas backup                # run an on-demand database backup (pg_dump)
 
@@ -132,6 +133,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "capabilities", help="list capabilities (provided + missing, honest per R2)"
     )
+    p_cap = sub.add_parser(
+        "capability-gaps",
+        help="P15 gap self-report: catalog + mission needs (+ decision backlog)",
+    )
+    p_cap.add_argument("--no-missions", action="store_true", help="skip mission need gaps")
+    p_cap.add_argument("--no-decisions", action="store_true", help="skip decision gap backlog")
+    p_cap.add_argument("--limit", type=int, default=50)
 
     p_tool = sub.add_parser("tool", help="invoke a tool by name")
     p_tool.add_argument("name")
@@ -630,6 +638,32 @@ def cmd_capabilities(args: argparse.Namespace, app: "Application | None" = None)
         print(f"  [{flag}] {row['id']}{suffix}: {row['summary']}")
         if not row["provided"] and row.get("unlocks"):
             print(f"          unlocks: {row['unlocks']} (since {row.get('since')})")
+    return 0
+
+
+def cmd_capability_gaps(args: argparse.Namespace, app: "Application | None" = None) -> int:
+    """P15 first-class gap self-report (OI-F5)."""
+    import json
+
+    app = app or build_application()
+    report = app.capabilities.self_report_gaps(
+        include_missions=not bool(getattr(args, "no_missions", False))
+    )
+    decision_gaps: list = []
+    if not bool(getattr(args, "no_decisions", False)):
+        try:
+            decision = app.container.resolve("decision")
+            decision_gaps = list(
+                decision.list_gaps(limit=int(getattr(args, "limit", 50) or 50)) or []
+            )
+        except Exception:  # noqa: BLE001
+            decision_gaps = []
+    report["decision_gaps"] = decision_gaps
+    report["summary"] = {
+        **dict(report.get("summary") or {}),
+        "decision_gaps": len(decision_gaps),
+    }
+    print(json.dumps(report, indent=2, default=str))
     return 0
 
 
@@ -1591,6 +1625,7 @@ _HANDLERS = {
     "plugins": cmd_plugins,
     "tools": cmd_tools,
     "capabilities": cmd_capabilities,
+    "capability-gaps": cmd_capability_gaps,
     "tool": cmd_tool,
     "coverage": cmd_coverage,
     "policy": cmd_policy,

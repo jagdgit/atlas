@@ -96,6 +96,8 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Capability Registry (CAP.1)** — missions declare needs instead of importing adapters. `POST /v1/capabilities/needs` `{needs:["MarketReader"]}` or `{mission:"market_observer"}`. `GET /v1/capabilities/inspect`. Missing needs → honest `capability_gap` (Market Observer).
 
+**Capability gaps (OI-F5 / P15)** — `GET /v1/capabilities/gaps` (or `atlas capability-gaps`): catalog missing + mission need gaps + unhealthy providers + Decision Engine backlog (`GET /v1/decision/gaps`).
+
 **Scheduler hierarchy (SCHED.1)** — Program → Mission → Worker cadence. `GET /v1/scheduler/hierarchy?program_id=market` (alias for `market_intelligence`). Resolve interval: `POST /v1/scheduler/resolve` `{program_id, template}` (worker_specs > mission cadence > program default 300s).
 
 **Daily Learning Governance (OI-MP3)** — Layer 2: `GET /v1/governance/daily`. Mission template `learning_governance` journals a daily snapshot (concepts, lessons, conflicts, capability gaps). Not a per-video Learning Report.

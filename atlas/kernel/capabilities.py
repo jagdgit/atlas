@@ -320,6 +320,66 @@ class CapabilityRegistry:
         """Live self-inspection of every registered capability (name -> info dict)."""
         return {name: self.inspect(name).as_dict() for name in sorted(self._capabilities)}
 
+    def self_report_gaps(self, *, include_missions: bool = True) -> dict[str, Any]:
+        """First-class P15 gap self-report (OI-F5): what Atlas cannot do *right now*.
+
+        Aggregates:
+        - **catalog_gaps** — known capabilities in ``CAPABILITY_CATALOG`` that are not registered
+        - **mission_gaps** — built-in mission need sets that are unsatisfied
+        - **unhealthy** — registered providers whose health_check fails
+        """
+        from atlas.capabilities.contracts import describe_capabilities, gap_report
+        from atlas.capabilities.needs import MISSION_NEEDS
+
+        rows = describe_capabilities(self)
+        catalog_missing = [str(r["id"]) for r in rows if not r.get("provided")]
+        catalog_gaps = gap_report(catalog_missing)
+
+        mission_gaps: list[dict[str, Any]] = []
+        if include_missions:
+            for mission, needs in sorted(MISSION_NEEDS.items()):
+                report = self.check_needs(needs)
+                if report.get("ok"):
+                    continue
+                mission_gaps.append(
+                    {
+                        "mission": mission,
+                        "missing": list(report.get("missing") or []),
+                        "disabled": list(report.get("disabled") or []),
+                        "unhealthy": list(report.get("unhealthy") or []),
+                    }
+                )
+
+        unhealthy: list[dict[str, Any]] = []
+        for name in self.names():
+            info = self.inspect(name)
+            if info.healthy is False:
+                unhealthy.append(
+                    {
+                        "name": name,
+                        "detail": info.health_detail,
+                        "version": info.version,
+                    }
+                )
+
+        return {
+            "version": "f5.1",
+            "ok": not catalog_gaps and not mission_gaps and not unhealthy,
+            "catalog_gaps": catalog_gaps,
+            "mission_gaps": mission_gaps,
+            "unhealthy": unhealthy,
+            "summary": {
+                "catalog_missing": len(catalog_gaps),
+                "missions_blocked": len(mission_gaps),
+                "unhealthy": len(unhealthy),
+            },
+            "principle": "P15 — never pretend a missing capability exists",
+            "related": {
+                "decision_gaps": "GET /v1/decision/gaps",
+                "needs_check": "POST /v1/capabilities/needs",
+            },
+        }
+
     def _resolve_version(self, cap: Capability) -> str | None:
         if cap.version is not None:
             return cap.version

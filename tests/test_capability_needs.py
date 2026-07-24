@@ -61,3 +61,36 @@ def test_market_observer_gap_note():
         TickContext(worker_id="w", mission_id="m", config={}, config_version=1, state={})
     )
     assert "capability_gap" in result.note
+
+
+def test_self_report_gaps_catalog_and_mission():
+    """OI-F5 — registry self-report surfaces catalog + mission gaps (P15)."""
+    from atlas.capabilities.contracts import CAPABILITY_CATALOG
+
+    reg = CapabilityRegistry()
+    reg.register(NEED_MARKET_READER, object(), kind="service", version="t")
+    report = reg.self_report_gaps(include_missions=True)
+    assert report["version"] == "f5.1"
+    assert report["ok"] is False
+    missing_ids = {g["missing_capability"] for g in report["catalog_gaps"]}
+    # At least one catalog cap beyond market_reader should be missing
+    assert any(cid != NEED_MARKET_READER for cid in missing_ids) or len(CAPABILITY_CATALOG) <= 1
+    assert any(m["mission"] == "market_observer" for m in report["mission_gaps"])
+    # events still missing for market_observer
+    mo = next(m for m in report["mission_gaps"] if m["mission"] == "market_observer")
+    assert "events" in mo["missing"]
+    # With only market_reader, portfolio missions should also gap
+    assert report["summary"]["missions_blocked"] >= 1
+
+
+def test_self_report_gaps_ok_when_needs_met():
+    reg = CapabilityRegistry()
+    for name in ("market_reader", "events", "candidates", "jobs", "planning",
+                 "portfolio", "mission_context", "policy_engine", "experience_os",
+                 "portfolio_ledger", "learning", "company_data"):
+        reg.register(name, object(), kind="service")
+    # Don't include full catalog — ok refers to catalog+mission+unhealthy
+    report = reg.self_report_gaps(include_missions=True)
+    assert report["mission_gaps"] == []
+    # catalog will still have gaps for unused catalog ids
+    assert isinstance(report["catalog_gaps"], list)

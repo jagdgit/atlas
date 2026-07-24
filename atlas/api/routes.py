@@ -1888,6 +1888,32 @@ def list_capabilities(request: Request) -> CapabilitiesResponse:
     return CapabilitiesResponse(capabilities=[CapabilityInfo(**r) for r in rows])
 
 
+@v1_router.get("/capabilities/gaps", tags=["plugins"])
+def capabilities_gaps(
+    request: Request,
+    include_missions: bool = True,
+    include_decisions: bool = True,
+    limit: int = 100,
+) -> dict:
+    """P15 capability-gap self-report (OI-F5): catalog + mission needs + decision backlog."""
+    registry = _app(request).capabilities
+    report = registry.self_report_gaps(include_missions=include_missions)
+    decision_gaps: list[dict] = []
+    if include_decisions:
+        try:
+            decision = _app(request).container.resolve("decision")
+            decision_gaps = list(decision.list_gaps(limit=limit) or [])
+        except Exception:  # noqa: BLE001 — decisions optional for this surface
+            decision_gaps = []
+    report["decision_gaps"] = decision_gaps
+    report["summary"] = {
+        **dict(report.get("summary") or {}),
+        "decision_gaps": len(decision_gaps),
+    }
+    report["ok"] = bool(report.get("ok")) and not decision_gaps
+    return report
+
+
 @v1_router.get("/capabilities/inspect", tags=["plugins"])
 def capabilities_inspect_all(request: Request) -> dict:
     """Live self-inspection of every registered capability (CAP.1 / §5.10)."""

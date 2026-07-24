@@ -65,7 +65,7 @@ implementation exposes a genuine limit. Mirrored in `ATLAS_OS_ROADMAP.md` §13.
 | OI-F2 | 🔴 | P3 | **Temporal Knowledge layer** — distinguish historical / current / **predicted** truth (forecasting, market/infra planning). | Rides on freshness + lineage + revisions. Introduce when a mission needs prediction-vs-fact. |
 | OI-F3 | 🔴 | P3 | **System Introspection mission** — periodic self-analysis (what do I know / am uncertain about / which readers fail most / mission cost / policies blocking decisions / what to improve). | Generalizes the D.10 Self-Improvement Watcher + the P15 capability-gap self-report. |
 | OI-F4 | 🔴 | P3 | **Standardized post-decision feedback loops** — `Recommendation → Outcome → Difference → Learning` as a cross-mission convention (not just D.6 Paper Trading). | Architecture already supports it; make it a convention once ≥2 applied missions run. |
-| OI-F5 | 🟡 | P2 | **Capability-gap honesty (P15)** — surface *what Atlas can't do* (missing reader/data-source/rule/tool) to the operator. Partially realized today (honest-failure readers `unsupported`/`empty`, coverage map). To first-class: a Capability Registry gap self-report + the Decision-Engine `capability_gap` outcome (D.1). | Requested by the operator 2026-07-19. Land the `capability_gap` outcome in D.1; the registry self-report is a small Phase-D add. |
+| OI-F5 | 🟢 | P2 | **Capability-gap honesty (P15)** — Decision Engine `capability_gap` + `GET /v1/decision/gaps` + registry `self_report_gaps` (`GET /v1/capabilities/gaps`, `atlas capability-gaps`). | closed F5 |
 
 ---
 

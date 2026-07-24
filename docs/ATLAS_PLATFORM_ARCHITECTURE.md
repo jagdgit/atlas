@@ -154,6 +154,8 @@ Missions declare **needs** (`MarketReader`, `speech_to_text`) rather than import
 
 **Shipped (CAP.1):** `check_needs` / aliases / `provider_for`; `POST /v1/capabilities/needs`, `GET /v1/capabilities/inspect`. Market Observer journals `capability_gap` when needs are missing. Built-in `MISSION_NEEDS` for Market Intelligence members.
 
+**Shipped (OI-F5):** `CapabilityRegistry.self_report_gaps` + `GET /v1/capabilities/gaps` (+ `atlas capability-gaps`) merges catalog missing, mission need gaps, unhealthy providers, and the Decision Engine gap backlog (`GET /v1/decision/gaps`).
+
 ---
 
 ## 5. Platform vs Program (do not mix)
