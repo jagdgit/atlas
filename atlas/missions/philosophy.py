@@ -110,10 +110,103 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
         "planned_split": [
-            "market_watch",
-            "market_research",
+            "market_observer",
+            "company_intelligence",
+            "news_intelligence",
+            "event_research",
             "decision_simulation",
+            "portfolio_ledger",
+            "investment_mentor",
         ],
+    },
+    "decision_simulation": {
+        "mission_kind": KIND_SIMULATION,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_PARTIAL,
+            learn=STAGE_PARTIAL,
+            decide=STAGE_ACTIVE,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_ACTIVE,
+            reflect=STAGE_PARTIAL,
+            improve=STAGE_WAITING,
+        ),
+        "compat_alias": "paper_trading",
+    },
+    "market_observer": {
+        "mission_kind": KIND_MONITORING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_WAITING,
+            record_why=STAGE_PARTIAL,
+            decide=STAGE_WAITING,
+            learn=STAGE_WAITING,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "company_intelligence": {
+        "mission_kind": KIND_LEARNING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_WAITING,
+            learn=STAGE_WAITING,
+            record_why=STAGE_PARTIAL,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "news_intelligence": {
+        "mission_kind": KIND_LEARNING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_WAITING,
+            learn=STAGE_WAITING,
+            record_why=STAGE_PARTIAL,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "event_research": {
+        "mission_kind": KIND_RESEARCH,
+        "never_stops": False,
+        "lifecycle": _stages(
+            observe=STAGE_WAITING,
+            learn=STAGE_WAITING,
+            decide=STAGE_WAITING,
+            record_why=STAGE_PARTIAL,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "portfolio_ledger": {
+        "mission_kind": KIND_SIMULATION,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_WAITING,
+            decide=STAGE_WAITING,
+            record_why=STAGE_PARTIAL,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "investment_mentor": {
+        "mission_kind": KIND_MAINTENANCE,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_WAITING,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+            record_why=STAGE_PARTIAL,
+            learn=STAGE_WAITING,
+            decide=STAGE_WAITING,
+        ),
     },
     "technology_watch": {
         "mission_kind": KIND_MONITORING,
@@ -188,6 +281,11 @@ def philosophy_for(template_name: str) -> dict[str, Any]:
         **(
             {"planned_split": list(row["planned_split"])}
             if row.get("planned_split")
+            else {}
+        ),
+        **(
+            {"compat_alias": row["compat_alias"]}
+            if row.get("compat_alias")
             else {}
         ),
     }

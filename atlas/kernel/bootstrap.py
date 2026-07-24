@@ -64,6 +64,7 @@ from atlas.improvement import ImprovementBoard, SelfImprovementDecisionRule
 from atlas.improvement.applier import SelfImprovementApplier
 from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
+from atlas.workers.program_stub import ProgramStubWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
@@ -1188,6 +1189,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             events=events,
             logger=get_logger("atlas.workers.paper_trading"),
         )
+    )
+    # MI.2 — shared stub worker for planned Market (and future Program) members.
+    worker_manager.register_worker_type(
+        ProgramStubWorker(logger=get_logger("atlas.workers.program_stub"))
     )
 
     # Research Watcher (Phase D · §D.7): continuous literature research on a configured topic.

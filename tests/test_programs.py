@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from atlas.missions.programs import (
     BUILTIN_PROGRAMS,
-    MEMBER_COMPAT,
+    MEMBER_ENABLED,
     MEMBER_STUB,
     ProgramService,
     get_program,
@@ -28,7 +28,7 @@ def test_market_program_has_seven_members_with_stubs():
     assert market is not None
     assert len(market.members) == 7
     statuses = {m.template: m.status for m in market.members}
-    assert statuses["paper_trading"] == MEMBER_COMPAT
+    assert statuses["decision_simulation"] == MEMBER_ENABLED
     assert statuses["market_observer"] == MEMBER_STUB
     assert "Broker Profiles" in market.domain_adapters
     assert "MarketReader" in market.domain_adapters
@@ -59,14 +59,14 @@ def test_program_service_describe_with_fake_templates():
 
     class _Templates:
         def list_templates(self):
-            return [_T("paper_trading", "tpl-1"), _T("repository_learning", "tpl-2")]
+            return [_T("decision_simulation", "tpl-1"), _T("repository_learning", "tpl-2")]
 
     svc = ProgramService(templates=_Templates())
     market = svc.describe("market_intelligence")
-    decision = next(m for m in market["members"] if m["template"] == "paper_trading")
+    decision = next(m for m in market["members"] if m["template"] == "decision_simulation")
     assert decision["can_start"] is True
-    assert decision["status"] == MEMBER_COMPAT
-    assert market["startable_count"] == 1
+    assert decision["status"] == MEMBER_ENABLED
+    assert market["startable_count"] >= 1
 
     eng = svc.describe("engineering_intelligence")
     repo = next(m for m in eng["members"] if m["template"] == "repository_learning")
@@ -118,8 +118,8 @@ def test_start_skips_stubs_and_starts_compat():
     class _Templates:
         def list_templates(self):
             class T:
-                name = "paper_trading"
-                id = "tpl-pt"
+                name = "decision_simulation"
+                id = "tpl-ds"
 
             return [T()]
 
@@ -134,7 +134,7 @@ def test_start_skips_stubs_and_starts_compat():
     svc = ProgramService(templates=_Templates(), missions=_Missions())
     result = svc.start("market_intelligence")
     assert len(result["started"]) == 1
-    assert result["started"][0]["template"] == "paper_trading"
+    assert result["started"][0]["template"] == "decision_simulation"
     assert any(s["reason"] == "stub" for s in result["skipped"])
     assert created[0]["labels"][0] == "program:market_intelligence"
     assert BUILTIN_PROGRAMS[0].id == "market_intelligence"

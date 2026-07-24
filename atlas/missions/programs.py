@@ -122,11 +122,11 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
             ),
             ProgramMember(
                 role="Decision Simulation",
-                template="paper_trading",
+                template="decision_simulation",
                 kind="simulation",
                 cadence="continuous",
-                status=MEMBER_COMPAT,
-                description="Buy/Sell/Hold/Watch + journal (compat façade until MI.2)",
+                status=MEMBER_ENABLED,
+                description="Buy/Sell/Hold/Watch + journal (paper_trading is compat alias)",
             ),
             ProgramMember(
                 role="Portfolio Ledger",
@@ -278,7 +278,7 @@ class ProgramService:
     """Derive Program cockpit views from definitions + live missions/templates."""
 
     name = "programs"
-    VERSION = "mi.1"
+    VERSION = "mi.2"
 
     def __init__(
         self,
@@ -314,6 +314,10 @@ class ProgramService:
                 }
                 for row in live
                 if row.get("template_name") == m.template
+                or (
+                    m.template == "decision_simulation"
+                    and row.get("template_name") == "paper_trading"
+                )
             ]
             members_out.append(
                 {
@@ -492,6 +496,9 @@ class ProgramService:
             return []
         label = program_label(prog.id)
         member_templates = set(prog.member_templates())
+        # Compat: legacy paper_trading missions belong to Decision Simulation.
+        if "decision_simulation" in member_templates:
+            member_templates.add("paper_trading")
         try:
             all_rows = self._missions.list_missions(limit=100)
         except Exception:  # noqa: BLE001

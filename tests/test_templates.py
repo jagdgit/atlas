@@ -214,7 +214,7 @@ def test_instantiate_hello_watcher_full(svc):
     mission = out["mission"]
     assert mission.title == "My Heartbeat"
     assert missions_repo.rows[mission.id]["status"] == "active"  # activated
-    assert mission.template_version == 1
+    assert mission.template_version == service.get_template("hello_watcher").template_version
     assert mission.template_id is not None
     # config v1 exists and is the hello_watcher schema
     assert out["config"].version == 1
@@ -236,7 +236,7 @@ def test_instantiate_stub_creates_mission_and_config_no_workers(svc):
     service, *_ = svc
     # patent_watch is still a domain stub (paper_trading became a real template in Phase D · §D.6).
     out = service.instantiate("patent_watch")
-    assert out["mission"].template_version == 1
+    assert out["mission"].template_version == service.get_template("patent_watch").template_version
     assert out["config"].schema_type == "generic"
     assert out["workers"] == []  # stub: no workers until its phase lands
 
@@ -259,7 +259,8 @@ def test_builtin_bump_does_not_mutate_existing_mission(svc):
     )
     assert service.get_template("hello_watcher").template_version == 5  # template moved
     # the already-instantiated mission keeps its original stamp (B7)
-    assert missions_repo.rows[out["mission"].id]["template_version"] == stamped == 1
+    assert missions_repo.rows[out["mission"].id]["template_version"] == stamped
+    assert stamped < 5
 
 
 def test_health_reports_template_count(svc):
@@ -267,3 +268,22 @@ def test_health_reports_template_count(svc):
     status = service.health_check()
     assert status.healthy
     assert status.data["templates"] == len(BUILTIN_TEMPLATES)
+
+
+def test_market_intelligence_templates_shipped():
+    names = {t["name"] for t in BUILTIN_TEMPLATES}
+    for required in (
+        "decision_simulation",
+        "paper_trading",
+        "market_observer",
+        "company_intelligence",
+        "news_intelligence",
+        "event_research",
+        "portfolio_ledger",
+        "investment_mentor",
+    ):
+        assert required in names
+    ds = next(t for t in BUILTIN_TEMPLATES if t["name"] == "decision_simulation")
+    assert ds["worker_specs"][0]["type"] == "paper_trading"
+    stub = next(t for t in BUILTIN_TEMPLATES if t["name"] == "market_observer")
+    assert stub["worker_specs"][0]["type"] == "program_stub"

@@ -27,7 +27,28 @@ def test_builtins_seed_philosophy_into_success_criteria():
     assert phil["mission_kind"] == KIND_SIMULATION
     assert phil["never_stops"] is True
     assert phil["lifecycle"]["decide"] == "active"
-    assert "market_watch" in phil["planned_split"]
+    assert "decision_simulation" in phil["planned_split"]
+    assert "market_observer" in phil["planned_split"]
+
+
+def test_decision_simulation_philosophy_aliases_paper_trading():
+    phil = philosophy_for("decision_simulation")
+    assert phil["mission_kind"] == KIND_SIMULATION
+    assert phil["compat_alias"] == "paper_trading"
+    assert phil["lifecycle"]["decide"] == "active"
+
+
+def test_market_stub_templates_have_philosophy():
+    for name in (
+        "market_observer",
+        "company_intelligence",
+        "news_intelligence",
+        "event_research",
+        "portfolio_ledger",
+        "investment_mentor",
+    ):
+        phil = philosophy_for(name)
+        assert set(phil["lifecycle"]) == set(LIFECYCLE_STAGES)
 
 
 def test_with_philosophy_preserves_existing_criteria():

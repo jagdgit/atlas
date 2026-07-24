@@ -76,10 +76,11 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "paper_trading",
-        "template_version": 3,
+        "template_version": 4,
         "description": (
-            "Simulation-only paper trading (Phase D — Decision Engine flagship; "
-            "NO real money — P10). Reflect→Improve via experience journal (MP3)."
+            "COMPAT alias for decision_simulation (Market Intelligence M5). "
+            "Simulation-only — NO real money (P10). Prefer template "
+            "decision_simulation for new missions."
         ),
         "config_schema_type": "paper_trading",
         "config_schema_version": 1,
@@ -96,6 +97,136 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "worker_specs": [{"type": "paper_trading", "interval_seconds": 300}],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "paper_trading"),
+    },
+    {
+        "name": "decision_simulation",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence M5 — Buy/Sell/Hold/Watch simulation via Decision Engine "
+            "(P10, no broker login). Compat worker type paper_trading until ledger split (M6)."
+        ),
+        "config_schema_type": "paper_trading",
+        "config_schema_version": 1,
+        "default_config": {
+            "instruments": [],
+            "starting_cash": 100000,
+            "strategy": {"sma_fast": 10, "sma_slow": 30, "rsi_period": 14},
+            "max_position_qty": 0,
+            "max_exposure_pct": 0,
+            "bars_per_tick": 1,
+            "drawdown_alert_pct": 0,
+            "tick_interval_seconds": 300,
+        },
+        "worker_specs": [{"type": "paper_trading", "interval_seconds": 300}],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "decision_simulation"),
+    },
+    {
+        "name": "market_observer",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence M1 — observe bars/moves/interesting events (stub until MI.3)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Market Observer",
+            "roadmap": "MI.3",
+            "symbols": [],
+            "tick_interval_seconds": 300,
+        },
+        "worker_specs": [{"type": "program_stub", "interval_seconds": 300}],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "market_observer"),
+    },
+    {
+        "name": "company_intelligence",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence M2 — filings/ratios learning (stub until MI.5)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Company Intelligence",
+            "roadmap": "MI.5",
+            "tickers": [],
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [{"type": "program_stub", "interval_seconds": 86400}],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "company_intelligence"),
+    },
+    {
+        "name": "news_intelligence",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence M3 — news claims → verify (stub until MI.4)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "News Intelligence",
+            "roadmap": "MI.4",
+            "sources": [],
+            "tick_interval_seconds": 3600,
+        },
+        "worker_specs": [{"type": "program_stub", "interval_seconds": 3600}],
+        "knowledge_domains": ["finance", "markets", "external"],
+        "success_criteria": with_philosophy({}, "news_intelligence"),
+    },
+    {
+        "name": "event_research",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence M4 — why-did-it-move research Jobs (stub until MI.4)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Event Research",
+            "roadmap": "MI.4",
+            "score_threshold": 0.7,
+            "tick_interval_seconds": 3600,
+        },
+        "worker_specs": [{"type": "program_stub", "interval_seconds": 3600}],
+        "knowledge_domains": ["finance", "markets", "research"],
+        "success_criteria": with_philosophy({}, "event_research"),
+    },
+    {
+        "name": "portfolio_ledger",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence M6 — fee/tax-aware sim ledger + Broker Profiles (stub until MI.6)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Portfolio Ledger",
+            "roadmap": "MI.6",
+            "broker_profile": "paper_demo",
+            "tick_interval_seconds": 300,
+        },
+        "worker_specs": [{"type": "program_stub", "interval_seconds": 300}],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "portfolio_ledger"),
+    },
+    {
+        "name": "investment_mentor",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence M7 — lessons + recommendations → Experience OS (stub until MI.7)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Investment Mentor",
+            "roadmap": "MI.7",
+            "tick_interval_seconds": 604800,
+        },
+        "worker_specs": [{"type": "program_stub", "interval_seconds": 604800}],
+        "knowledge_domains": ["finance", "markets", "experience"],
+        "success_criteria": with_philosophy({}, "investment_mentor"),
     },
     {
         "name": "job_hunting",

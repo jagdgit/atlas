@@ -26,7 +26,9 @@ Console **Programs** groups cooperating missions (Market / Engineering / Persona
 
 API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/context?q=…`
 
-`paper_trading` remains the Decision Simulation **compat** façade until MI.2 splits it.
+`paper_trading` remains a **compat alias** for Chat/Jobs; prefer **`decision_simulation`**.
+Start Program instantiates all seven members when templates are seeded — stub workers journal
+`stub: … waiting (MI.N)` until real capability lands.
 
 ---
 
