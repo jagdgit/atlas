@@ -26,9 +26,15 @@ Console **Programs** groups cooperating missions (Market / Engineering / Persona
 
 API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/context?q=…`
 
+**MI.4 — News / Events**
+
+- **News Intelligence** config: `headlines: ["…"]` or `items: [{text, symbol}]` → extracts claims into Knowledge. Optional `verify: true`.
+- **Event Research** polls `MarketInterestingMove` and enqueues research Jobs when `score ≥ score_threshold` (default 0.7).
+- **Market Observer** scores price+volume; set `spawn_research: true` to spawn Jobs directly (default off — Event Research owns that path).
+
 `paper_trading` remains a **compat alias** for Chat/Jobs; prefer **`decision_simulation`**.
-Start Program instantiates all seven members when templates are seeded — stub workers journal
-`stub: … waiting (MI.N)` until real capability lands.
+Start Program instantiates all seven members when templates are seeded — remaining stubs
+(`company_intelligence`, `portfolio_ledger`, `investment_mentor`) journal waiting notes.
 
 ---
 

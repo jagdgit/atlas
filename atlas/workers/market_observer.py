@@ -1,7 +1,8 @@
-"""MarketObserverWorker — Market Intelligence M1 (MI.3).
+"""MarketObserverWorker — Market Intelligence M1 (MI.3 / MI.4).
 
-Observes configured symbols/instruments via MarketReader, journals moves, and
-flags interesting percent changes. Simulation Program only — never broker login.
+Observes configured symbols/instruments via MarketReader, scores interesting
+events (price + volume), journals moves, emits ``MarketInterestingMove``, and
+optionally spawns research Jobs when ``spawn_research`` is enabled (default off).
 """
 
 from __future__ import annotations
@@ -10,12 +11,13 @@ import logging
 from typing import Any
 
 from atlas.decision.rules import CapabilityGap
+from atlas.trading.interesting_events import score_observation
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 
 class MarketObserverWorker(PersistentWorker):
     type = "market_observer"
-    VERSION = 1
+    VERSION = 2
     journal_ticks = True
 
     def __init__(
@@ -23,10 +25,12 @@ class MarketObserverWorker(PersistentWorker):
         *,
         market_reader: Any,
         events: Any | None = None,
+        jobs: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._reader = market_reader
         self._events = events
+        self._jobs = jobs
         self._logger = logger or logging.getLogger("atlas.workers.market_observer")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -40,6 +44,9 @@ class MarketObserverWorker(PersistentWorker):
         provider = str(cfg.get("provider") or "").strip() or None
         limit = max(2, int(cfg.get("bars_limit", 60)))
         alert_pct = float(cfg.get("move_alert_pct", 5.0) or 5.0)
+        volume_min = float(cfg.get("volume_min_ratio", 2.5) or 2.5)
+        spawn_research = bool(cfg.get("spawn_research") or False)
+        score_threshold = float(cfg.get("score_threshold") or 0.7)
 
         targets: list[dict[str, str]] = []
         for inst in instruments:
@@ -66,6 +73,9 @@ class MarketObserverWorker(PersistentWorker):
         interesting: list[dict[str, Any]] = []
         gaps = 0
         ok = 0
+        spawned = 0
+        spawned_keys = set(state.get("spawned_keys") or [])
+
         for target in targets:
             try:
                 result = self._reader.bars_for(
@@ -89,19 +99,36 @@ class MarketObserverWorker(PersistentWorker):
             prov = result.get("provider")
             move_s = f"{move:+.2f}%" if isinstance(move, (int, float)) else "n/a"
             notes.append(f"{target['symbol']}@{prov}: {count} bars, move {move_s}")
-            if isinstance(move, (int, float)) and abs(move) >= alert_pct:
-                interesting.append(
-                    {
-                        "symbol": target["symbol"],
-                        "pct_move": round(float(move), 3),
-                        "provider": prov,
-                        "score": min(1.0, abs(float(move)) / max(alert_pct, 1e-6) / 4.0),
-                    }
-                )
+
+            event = score_observation(
+                target["symbol"],
+                pct_move=move if isinstance(move, (int, float)) else None,
+                bars=list(result.get("bars") or []),
+                alert_pct=alert_pct,
+                volume_min_ratio=volume_min,
+                provider=str(prov) if prov else None,
+            )
+            if event is None:
+                continue
+            interesting.append(event.as_dict())
+            if (
+                spawn_research
+                and self._jobs is not None
+                and event.score >= score_threshold
+            ):
+                key = f"{event.symbol}:{event.kind}:{round(event.pct_move or 0, 1)}"
+                if key not in spawned_keys:
+                    try:
+                        self._jobs.create_job(event.research_objective())
+                        spawned_keys.add(key)
+                        spawned += 1
+                    except Exception as exc:  # noqa: BLE001
+                        self._logger.warning("spawn research failed: %s", exc)
 
         state["last_interesting"] = interesting
         state["last_ok"] = ok
         state["last_gaps"] = gaps
+        state["spawned_keys"] = list(spawned_keys)[-50:]
         if interesting and self._events is not None:
             try:
                 self._events.emit(
@@ -110,6 +137,7 @@ class MarketObserverWorker(PersistentWorker):
                         "mission_id": ctx.mission_id,
                         "events": interesting,
                     },
+                    source=self.type,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -117,5 +145,7 @@ class MarketObserverWorker(PersistentWorker):
         head = f"observe: {ok} ok, {gaps} gap(s)"
         if interesting:
             head += f", {len(interesting)} interesting"
+        if spawned:
+            head += f", spawned {spawned} research job(s)"
         detail = "; ".join(notes[:6])
         return TickResult(state=state, note=f"{head} | {detail}" if detail else head)

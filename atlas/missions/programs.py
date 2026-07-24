@@ -69,8 +69,8 @@ class ProgramDefinition:
 def _market_lifecycle() -> dict[str, str]:
     return {
         "observe": STAGE_ACTIVE,  # MI.3 MarketReader
-        "learn": STAGE_PARTIAL,  # news/company stubs until MI.4/5
-        "decide": STAGE_ACTIVE,  # decision_simulation
+        "learn": STAGE_PARTIAL,  # news live; company stub until MI.5
+        "decide": STAGE_ACTIVE,  # decision_simulation + event spawn
         "record_why": STAGE_ACTIVE,
         "evaluate": STAGE_ACTIVE,
         "reflect": STAGE_PARTIAL,  # experience journal (OI-MP1)
@@ -109,16 +109,16 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 template="news_intelligence",
                 kind="learning",
                 cadence="hourly",
-                status=MEMBER_STUB,
-                description="News claims → verify",
+                status=MEMBER_ENABLED,
+                description="News claims → Knowledge (optional verify)",
             ),
             ProgramMember(
                 role="Event Research",
                 template="event_research",
                 kind="research",
                 cadence="on trigger",
-                status=MEMBER_STUB,
-                description="Why-did-it-move Jobs",
+                status=MEMBER_ENABLED,
+                description="Interesting events → research Jobs",
             ),
             ProgramMember(
                 role="Decision Simulation",

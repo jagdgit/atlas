@@ -67,6 +67,8 @@ from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
 from atlas.workers.program_stub import ProgramStubWorker
 from atlas.workers.market_observer import MarketObserverWorker
+from atlas.workers.news_intelligence import NewsIntelligenceWorker
+from atlas.workers.event_research import EventResearchWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
@@ -1201,15 +1203,16 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )
-    # MI.3 — Market Observer uses MarketReader adapters (asset_replay / yahoo / keyed).
+    # MI.3 — Market Observer (interesting events; optional research spawn).
     worker_manager.register_worker_type(
         MarketObserverWorker(
             market_reader=market_reader_service,
             events=events,
+            jobs=job_service,
             logger=get_logger("atlas.workers.market_observer"),
         )
     )
-    # MI.2 — shared stub worker for planned Market (and future Program) members.
+    # MI.2 — shared stub worker for remaining planned Program members.
     worker_manager.register_worker_type(
         ProgramStubWorker(logger=get_logger("atlas.workers.program_stub"))
     )
@@ -1361,6 +1364,23 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     handlers.register("verify_finding", knowledge_verification.verify_finding)
     container.register_instance("knowledge_verification", knowledge_verification)
+    # MI.4 — News Intelligence + Event Research (after verify service exists).
+    worker_manager.register_worker_type(
+        NewsIntelligenceWorker(
+            candidates=candidate_consumer,
+            knowledge_verification=knowledge_verification,
+            events=events,
+            logger=get_logger("atlas.workers.news_intelligence"),
+        )
+    )
+    worker_manager.register_worker_type(
+        EventResearchWorker(
+            jobs=job_service,
+            event_repo=event_repo,
+            events=events,
+            logger=get_logger("atlas.workers.event_research"),
+        )
+    )
     tools.register(
         "knowledge.verify",
         knowledge_verification.knowledge_verify,

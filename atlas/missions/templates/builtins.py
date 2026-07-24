@@ -138,6 +138,9 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "instruments": [],
             "bars_limit": 60,
             "move_alert_pct": 5.0,
+            "volume_min_ratio": 2.5,
+            "spawn_research": False,
+            "score_threshold": 0.7,
             "tick_interval_seconds": 300,
         },
         "worker_specs": [{"type": "market_observer", "interval_seconds": 300}],
@@ -164,37 +167,46 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "news_intelligence",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
-            "Market Intelligence M3 — news claims → verify (stub until MI.4)."
+            "Market Intelligence M3 — headlines/items → typed candidates → Knowledge "
+            "(optional verify). Hermetic headlines config; live RSS later."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "News Intelligence",
             "roadmap": "MI.4",
-            "sources": [],
+            "headlines": [],
+            "items": [],
+            "verify": False,
+            "gather": False,
+            "verify_batch_limit": 5,
             "tick_interval_seconds": 3600,
         },
-        "worker_specs": [{"type": "program_stub", "interval_seconds": 3600}],
+        "worker_specs": [{"type": "news_intelligence", "interval_seconds": 3600}],
         "knowledge_domains": ["finance", "markets", "external"],
         "success_criteria": with_philosophy({}, "news_intelligence"),
     },
     {
         "name": "event_research",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
-            "Market Intelligence M4 — why-did-it-move research Jobs (stub until MI.4)."
+            "Market Intelligence M4 — interesting events → research Jobs (MI6). "
+            "Polls MarketInterestingMove; score_threshold gated."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "Event Research",
             "roadmap": "MI.4",
+            "spawn_research": True,
             "score_threshold": 0.7,
+            "pending_events": [],
+            "event_scan_limit": 20,
             "tick_interval_seconds": 3600,
         },
-        "worker_specs": [{"type": "program_stub", "interval_seconds": 3600}],
+        "worker_specs": [{"type": "event_research", "interval_seconds": 3600}],
         "knowledge_domains": ["finance", "markets", "research"],
         "success_criteria": with_philosophy({}, "event_research"),
     },

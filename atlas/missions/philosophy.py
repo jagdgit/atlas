@@ -162,10 +162,10 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
         "mission_kind": KIND_LEARNING,
         "never_stops": True,
         "lifecycle": _stages(
-            observe=STAGE_WAITING,
-            learn=STAGE_WAITING,
-            record_why=STAGE_PARTIAL,
-            evaluate=STAGE_WAITING,
+            observe=STAGE_ACTIVE,
+            learn=STAGE_ACTIVE,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_PARTIAL,  # optional verify
             reflect=STAGE_WAITING,
             improve=STAGE_WAITING,
         ),
@@ -174,11 +174,11 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
         "mission_kind": KIND_RESEARCH,
         "never_stops": False,
         "lifecycle": _stages(
-            observe=STAGE_WAITING,
-            learn=STAGE_WAITING,
-            decide=STAGE_WAITING,
-            record_why=STAGE_PARTIAL,
-            evaluate=STAGE_WAITING,
+            observe=STAGE_ACTIVE,
+            learn=STAGE_PARTIAL,
+            decide=STAGE_ACTIVE,  # spawn Job when score clears
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_PARTIAL,
             reflect=STAGE_WAITING,
             improve=STAGE_WAITING,
         ),

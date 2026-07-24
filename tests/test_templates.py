@@ -285,7 +285,11 @@ def test_market_intelligence_templates_shipped():
         assert required in names
     ds = next(t for t in BUILTIN_TEMPLATES if t["name"] == "decision_simulation")
     assert ds["worker_specs"][0]["type"] == "paper_trading"
-    stub = next(t for t in BUILTIN_TEMPLATES if t["name"] == "news_intelligence")
+    stub = next(t for t in BUILTIN_TEMPLATES if t["name"] == "company_intelligence")
     assert stub["worker_specs"][0]["type"] == "program_stub"
     observer = next(t for t in BUILTIN_TEMPLATES if t["name"] == "market_observer")
     assert observer["worker_specs"][0]["type"] == "market_observer"
+    news = next(t for t in BUILTIN_TEMPLATES if t["name"] == "news_intelligence")
+    assert news["worker_specs"][0]["type"] == "news_intelligence"
+    ev = next(t for t in BUILTIN_TEMPLATES if t["name"] == "event_research")
+    assert ev["worker_specs"][0]["type"] == "event_research"
