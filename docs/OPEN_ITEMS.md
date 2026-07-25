@@ -147,7 +147,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 | ID | Item | Closed by |
 |----|------|-----------|
 | OI-D2 | **Fair-share arbitration** — soft recent-admit penalty; no preemption. | _(pending commit)_ |
-| OI-C7 | **Migration-number honesty** — registry through `0042`; next free `0043`. | _(pending commit)_ |
+| OI-C7 | **Migration-number honesty** — registry through `0042`; next free `0043`. | `2dde699` |
 | OI-A3 | **Resource caps** — `llm_units_per_window` + `ram_mb` on MissionArbiter tick admit. | `86438ad` |
 | OI-A2 | **Job-advance priority threading** — plan/advance tasks inherit mission effective_priority. | `a68daf5` |
 | OI-A1 | **Cron schedules** — 5-field crontab on `scheduler.schedules` + claim advance. | `7facc54` |
