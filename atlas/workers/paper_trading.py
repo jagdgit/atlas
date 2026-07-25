@@ -343,7 +343,9 @@ class PaperTradingWorker(PersistentWorker):
             "realized_pnl": float(trade.get("realized_pnl", 0.0)),
         })
         if kind == "sell":
-            self._remember_outcome(symbol, trade, decision, indicators=indicators)
+            self._remember_outcome(
+                symbol, trade, decision, indicators=indicators, cfg=cfg
+            )
         return f"{symbol}: {kind} {qty:g} @ {price:.2f} ({why_short or 'signal'})"
 
     # --- learning loop ---------------------------------------------------
@@ -354,12 +356,23 @@ class PaperTradingWorker(PersistentWorker):
         decision: Any,
         *,
         indicators: dict[str, Any] | None = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
-        """Record an Experience Journal entry (OI-MP1): Observation→…→Lesson."""
+        """Record Decision→Outcome Experience Journal (OI-MP1 / OI-F1)."""
         if self._experience_os is None and self._learning is None:
             return
+        from atlas.decision.knowledge import (
+            bias_recommendations,
+            decision_knowledge_tags,
+            experience_id_from_result,
+            link_metadata,
+            outcome_label,
+            should_enable_decision_bias,
+        )
+
         pnl = float(trade.get("realized_pnl", 0.0))
-        outcome = "profit" if pnl > 0 else ("loss" if pnl < 0 else "flat")
+        outcome = outcome_label(pnl)
+        decision_id = str(getattr(decision, "id", None) or "") or None
         why = (decision.why or "").strip() or "strategy exit signal"
         ind = indicators if isinstance(indicators, dict) else {}
         observation_bits = []
@@ -394,10 +407,17 @@ class PaperTradingWorker(PersistentWorker):
             )
         )
         title = f"Paper trade closed on {symbol}: {outcome} {pnl:+.2f}"
-        tags = [symbol.lower(), "paper_trading", outcome, "experience_journal"]
+        tags = decision_knowledge_tags(symbol, outcome, decision_id=decision_id)
+        meta = link_metadata(
+            decision_id=decision_id, symbol=symbol, outcome=outcome, pnl=pnl
+        )
+        recs = bias_recommendations(symbol, outcome, pnl)
+        cfg = cfg if isinstance(cfg, dict) else {}
+        enable_bias = bool(cfg.get("enable_decision_soft_bias", True))
+        journal_result: dict[str, Any] | None = None
         if self._experience_os is not None:
             try:
-                self._experience_os.journal(
+                journal_result = self._experience_os.journal(
                     title=title,
                     observation=observation,
                     reasoning=why,
@@ -407,28 +427,48 @@ class PaperTradingWorker(PersistentWorker):
                     lesson=lesson,
                     domain="markets",
                     tags=tags,
+                    recommendations=recs,
+                    metadata=meta,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._logger.warning("experience_os.journal failed for %s: %s", symbol, exc)
-            return
-        # Legacy path when Experience OS is not wired
-        problem = (
-            f"Observation: {observation}\n"
-            f"Reasoning: {why}\n"
-            f"Decision: sell {symbol} (simulation)\n"
-            f"Outcome: {outcome} {pnl:+.2f}"
-        )
-        try:
-            self._learning.remember_experience(
-                title=title,
-                problem=problem,
-                solution=f"Reflection: {reflection}",
-                lessons=f"Lesson: {lesson}",
-                domain="markets",
-                tags=tags,
+                journal_result = None
+        else:
+            # Legacy path when Experience OS is not wired
+            problem = (
+                f"Observation: {observation}\n"
+                f"Reasoning: {why}\n"
+                f"Decision: sell {symbol} (simulation)\n"
+                f"Outcome: {outcome} {pnl:+.2f}"
             )
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning("remember_experience failed for %s: %s", symbol, exc)
+            try:
+                journal_result = self._learning.remember_experience(
+                    title=title,
+                    problem=problem,
+                    solution=f"Reflection: {reflection}",
+                    lessons=f"Lesson: {lesson}",
+                    domain="markets",
+                    tags=tags,
+                    recommendations=recs,
+                    metadata=meta,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("remember_experience failed for %s: %s", symbol, exc)
+                return
+
+        # OI-F1 — decisive outcomes soft-bias future Decision Engine scoring.
+        if (
+            enable_bias
+            and should_enable_decision_bias(outcome)
+            and self._learning is not None
+            and hasattr(self._learning, "enable_bias")
+        ):
+            exp_id = experience_id_from_result(journal_result)
+            if exp_id:
+                try:
+                    self._learning.enable_bias(str(exp_id), enabled=True)
+                except Exception as exc:  # noqa: BLE001
+                    self._logger.debug("enable_bias skipped: %s", exc)
 
     # --- notifications ---------------------------------------------------
     def _check_drawdown(

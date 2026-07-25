@@ -29,6 +29,14 @@ from atlas.decision.approvals import (
 )
 from atlas.decision.context import IntelligenceContext
 from atlas.decision.engine import DecisionEngine
+from atlas.decision.knowledge import (
+    bias_recommendations,
+    decision_knowledge_tags,
+    experience_id_from_result,
+    link_metadata,
+    outcome_label,
+    should_enable_decision_bias,
+)
 from atlas.decision.rules import (
     CapabilityGap,
     DecisionRule,
@@ -38,6 +46,12 @@ from atlas.decision.rules import (
 
 __all__ = [
     "DecisionEngine",
+    "bias_recommendations",
+    "decision_knowledge_tags",
+    "experience_id_from_result",
+    "link_metadata",
+    "outcome_label",
+    "should_enable_decision_bias",
     "DecisionRequest",
     "Decision",
     "ScoredOption",

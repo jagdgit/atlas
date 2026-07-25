@@ -303,7 +303,7 @@ class LearningService:
             "readers", "paywalls", "timings", "strategies", "recommendations",
             "component_observations", "domain", "provisional", "overall_confidence",
             # Experience OS (EX.1 / OI-MP1) structured journal + provenance
-            "journal", "experience_os", "source_experience_ids",
+            "journal", "experience_os", "source_experience_ids", "metadata",
         ):
             if fields.get(key) is not None:
                 payload[key] = fields[key]
@@ -469,10 +469,19 @@ class LearningService:
         terms: list[str] = []
         for exp in self._repo.list_bias_enabled(limit=limit):
             payload = exp.payload or {}
-            for key in ("title", "problem", "solution"):
+            for key in ("title", "problem", "solution", "lessons"):
                 val = getattr(exp, key, "") or ""
                 if val:
                     terms.append(str(val)[:80])
+            for tag in getattr(exp, "tags", None) or []:
+                if tag:
+                    terms.append(str(tag)[:80])
+            journal = payload.get("journal") if isinstance(payload, dict) else None
+            if isinstance(journal, dict):
+                for key in ("lesson", "decision", "outcome"):
+                    val = journal.get(key) or ""
+                    if val:
+                        terms.append(str(val)[:80])
             for rec in payload.get("recommendations") or []:
                 if isinstance(rec, dict):
                     t = rec.get("title") or rec.get("why") or ""

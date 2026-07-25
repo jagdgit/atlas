@@ -127,9 +127,11 @@ class ExperienceJournal:
         }
         if self.recommendations:
             payload["recommendations"] = list(self.recommendations)
-        src_ids = (self.metadata or {}).get("source_experience_ids")
-        if src_ids:
-            payload["source_experience_ids"] = list(src_ids)
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+            src_ids = self.metadata.get("source_experience_ids")
+            if src_ids:
+                payload["source_experience_ids"] = list(src_ids)
         return payload
 
 

@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-B4 additive domain stub readers closed).
+> **Last updated:** 2026-07-25 (OI-F1 Decision Knowledge closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -61,7 +61,7 @@ implementation exposes a genuine limit. Mirrored in `ATLAS_OS_ROADMAP.md` §13.
 
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
-| OI-F1 | 🔴 | P3 | **Decision Knowledge** — learn *which decisions consistently produced good outcomes* (`Decision → outcome → Decision Knowledge`), biasing future scoring. | Rides on `decision.decisions` (D) + experience consolidator (C.6). Needs Phase-D decisions+outcomes first. |
+| OI-F1 | 🟢 | P3 | **Decision Knowledge** — paper-trade Decision→outcome journals stamp `decision_id` + enable soft-bias on profit/loss (`atlas/decision/knowledge.py`); reuses OI-MP5 Decision Engine exp-bias. Flat outcomes stay advice-only. | Experience consolidator (C.6) | closed OI-F1 |
 | OI-F2 | 🔴 | P3 | **Temporal Knowledge layer** — distinguish historical / current / **predicted** truth (forecasting, market/infra planning). | Rides on freshness + lineage + revisions. Introduce when a mission needs prediction-vs-fact. |
 | OI-F3 | 🔴 | P3 | **System Introspection mission** — periodic self-analysis (what do I know / am uncertain about / which readers fail most / mission cost / policies blocking decisions / what to improve). | Generalizes the D.10 Self-Improvement Watcher + the P15 capability-gap self-report. |
 | OI-F4 | 🔴 | P3 | **Standardized post-decision feedback loops** — `Recommendation → Outcome → Difference → Learning` as a cross-mission convention (not just D.6 Paper Trading). | Architecture already supports it; make it a convention once ≥2 applied missions run. |
@@ -146,6 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-F1 | **Decision Knowledge** — Decision→outcome → bias-enabled Experience soft-bias. | _(pending commit)_ |
 | OI-B4 | **Additive domain stub readers** — CAD/MATLAB/PLC/UML/PSpice registry stubs. | `ba2c93f` |
 | OI-D2 | **Fair-share arbitration** — soft recent-admit penalty; no preemption. | `7b7a349` |
 | OI-C7 | **Migration-number honesty** — registry through `0042`; next free `0043`. | `2dde699` |

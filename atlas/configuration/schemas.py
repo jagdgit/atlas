@@ -152,6 +152,8 @@ class PaperTradingConfig(BaseModel):
     tick_interval_seconds: int = Field(default=300, ge=1)
     # Optional Market Program Broker Profile id (MI.6); empty → fee=0.
     broker_profile: str = ""
+    # OI-F1: soft-bias Decision Engine from decisive paper-trade outcomes (profit/loss).
+    enable_decision_soft_bias: bool = True
 
 
 class ResearchWatcherConfig(BaseModel):
