@@ -1183,8 +1183,9 @@ existing abstractions. Tracked as `OI-F*` in `docs/OPEN_ITEMS.md`.
 - **F2 — Temporal Knowledge layer (historical / current / predicted truth).** Today's lifecycle
   captures *validity over time*; a temporal layer would explicitly distinguish **what was true**,
   **what is true now**, and **what is predicted** — valuable for market analysis, infra planning, and
-  forecasting. Rides on existing freshness/lineage + revision history. **Deferred** — introduce when a
-  mission genuinely needs prediction-vs-fact separation.
+  forecasting. Rides on existing freshness/lineage + revision history. **Closed (OI-F2):** helpers
+  classify via `valid_from`/`valid_until` + provenance; MCA annotates findings; paper trading keeps
+  predicted context separate from operative facts. No new Knowledge DB.
 - **F3 — System Introspection ("Atlas understands itself").** A periodic **self-analysis mission**:
   *what do I know? what am I uncertain about? which readers fail most? which missions cost most? which
   policies block decisions? what should I improve next?* Overlaps the Phase-D **Self-Improvement

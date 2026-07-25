@@ -146,7 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-F2 | **Temporal Knowledge** — historical / current / predicted via validity + MCA. | _(pending commit)_ |
+| OI-F2 | **Temporal Knowledge** — historical / current / predicted via validity + MCA. | `39c88a7` |
 | OI-F1 | **Decision Knowledge** — Decision→outcome → bias-enabled Experience soft-bias. | `7a3ede3` |
 | OI-B4 | **Additive domain stub readers** — CAD/MATLAB/PLC/UML/PSpice registry stubs. | `ba2c93f` |
 | OI-D2 | **Fair-share arbitration** — soft recent-admit penalty; no preemption. | `7b7a349` |
