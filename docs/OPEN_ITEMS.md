@@ -145,7 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-D1 | **Live market-data feed** — Yahoo + Polygon/AV live clients; NSE/BSE skeletons. | (this commit) |
+| OI-D1 | **Live market-data feed** — Yahoo + Polygon/AV live clients; NSE/BSE skeletons. | `df2d71b` |
 | OI-C11 | **Personal proficiency + timeline years + heuristic professional.** | `869ec44` |
 | OI-C13 | **Conversation → experience extraction** — `build_conversation_experiences` + ingest wire. | `7f35a28` |
 | OI-T1/T2/T3 | **Live-DB test hygiene** — session cleanup + `atlas-db test-clean`; `list_pending(source=)`. | `44dd079` |
