@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from atlas.assets.service import AssetStore
 
 DOCUMENT_READER_ID = "document"
-DOCUMENT_READER_VERSION = "1.0.0"
+DOCUMENT_READER_VERSION = "1.1.0"  # OI-M7: PDF ReaderStrategyChain (text → OCR)
 
 
 class DocumentReader:
@@ -40,11 +40,15 @@ class DocumentReader:
         artifacts: Any,
         *,
         documents: DocumentService | None = None,
+        pdf_ocr: Any | None = None,
+        min_pdf_text_chars: int = 40,
         logger: logging.Logger | None = None,
     ) -> None:
         self._assets = assets
         self._artifacts = artifacts  # DerivedArtifactStore (duck-typed: get/put)
         self._docs = documents or DocumentService()
+        self._pdf_ocr = pdf_ocr
+        self._min_pdf_text_chars = int(min_pdf_text_chars)
         self._logger = logger or logging.getLogger("atlas.readers.document")
 
     def supported_extensions(self) -> list[str]:
@@ -90,7 +94,10 @@ class DocumentReader:
         with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
             tmp.write(data)
             tmp.flush()
-            result = self._docs.extract(tmp.name)
+            path = tmp.name
+            if suffix == ".pdf":
+                return self._extract_pdf_chained(path, asset_id, version, suffix)
+            result = self._docs.extract(path)
         text = result.text or ""
         return {
             "reader": self.id,
@@ -103,8 +110,151 @@ class DocumentReader:
             "text": text,
             "chars": len(text),
             "reason": result.reason,
-            # A minimal section model; richer page/section splitting can land later without a
-            # reader_version bump for callers that only read `text`.
+            "method": "document",
+            "strategies_tried": [],
+            "sections": [{"ordinal": 0, "text": text}] if text else [],
+        }
+
+    def _extract_pdf_chained(
+        self, path: str, asset_id: str, version: int, suffix: str
+    ) -> dict[str, Any]:
+        """OI-M7 — ReaderStrategyChain: pdf_text_layer → pdf_ocr (first ok wins)."""
+        from atlas.readers.strategy_chain import ReaderStrategyChain, StrategyResult
+
+        def text_layer() -> StrategyResult:
+            result = self._docs.extract(path)
+            text = (result.text or "").strip()
+            if result.outcome == "ok" and len(text) >= self._min_pdf_text_chars:
+                return StrategyResult(
+                    name="pdf_text_layer",
+                    outcome="ok",
+                    reason=None,
+                    bytes_read=len(text),
+                    value=result,
+                )
+            return StrategyResult(
+                name="pdf_text_layer",
+                outcome="empty" if not text else "weak",
+                reason=result.reason or "weak_or_empty_text_layer",
+                reason_code="weak_text",
+                bytes_read=len(text),
+                value=result,
+            )
+
+        def ocr_layer() -> StrategyResult:
+            if self._pdf_ocr is None:
+                return StrategyResult(
+                    name="pdf_ocr",
+                    outcome="unavailable",
+                    reason="pdf_ocr not configured",
+                    reason_code="ocr_unavailable",
+                )
+            try:
+                if callable(self._pdf_ocr):
+                    out = self._pdf_ocr(path)
+                elif hasattr(self._pdf_ocr, "ocr_pdf"):
+                    out = self._pdf_ocr.ocr_pdf(path)
+                else:
+                    return StrategyResult(
+                        name="pdf_ocr",
+                        outcome="unavailable",
+                        reason="pdf_ocr missing ocr_pdf",
+                        reason_code="ocr_unavailable",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                return StrategyResult(
+                    name="pdf_ocr",
+                    outcome="error",
+                    reason=str(exc),
+                    reason_code="ocr_failed",
+                )
+            if isinstance(out, dict):
+                text = str(out.get("text") or "").strip()
+                ok = bool(text) and out.get("outcome", "ok") in {"ok", "partial", None}
+            else:
+                text = str(getattr(out, "text", "") or "").strip()
+                ok = bool(text)
+            if ok:
+                return StrategyResult(
+                    name="pdf_ocr",
+                    outcome="ok",
+                    bytes_read=len(text),
+                    value=out,
+                )
+            return StrategyResult(
+                name="pdf_ocr",
+                outcome="empty",
+                reason="ocr produced no text",
+                reason_code="empty_text",
+                value=out,
+            )
+
+        chain = ReaderStrategyChain()
+        ran = chain.execute(
+            [
+                ("pdf_text_layer", text_layer),
+                ("pdf_ocr", ocr_layer),
+            ]
+        )
+        tried = [r.as_dict() for r in ran.tried]
+        if ran.ok and ran.winner is not None:
+            winner = ran.winner
+            raw = winner.value
+            if hasattr(raw, "text"):
+                text = raw.text or ""
+                content_type = getattr(raw, "content_type", "application/pdf")
+                outcome = "ok"
+                reason = None
+            elif isinstance(raw, dict):
+                text = str(raw.get("text") or "")
+                content_type = "application/pdf"
+                outcome = "ok"
+                reason = raw.get("reason")
+            else:
+                text = ""
+                content_type = "application/pdf"
+                outcome = "ok"
+                reason = None
+            return {
+                "reader": self.id,
+                "reader_version": self.VERSION,
+                "asset_id": asset_id,
+                "asset_version": version,
+                "outcome": outcome,
+                "content_type": content_type,
+                "extension": suffix,
+                "text": text,
+                "chars": len(text),
+                "reason": reason,
+                "method": winner.name,
+                "strategies_tried": tried,
+                "sections": [{"ordinal": 0, "text": text}] if text else [],
+            }
+
+        # No winner — surface best effort from text layer if present.
+        first = ran.tried[0].value if ran.tried else None
+        text = ""
+        content_type = "application/pdf"
+        outcome = "empty"
+        reason = "pdf strategies exhausted"
+        if first is not None and hasattr(first, "text"):
+            text = first.text or ""
+            content_type = getattr(first, "content_type", content_type)
+            outcome = getattr(first, "outcome", outcome) or outcome
+            reason = getattr(first, "reason", None) or reason
+        return {
+            "reader": self.id,
+            "reader_version": self.VERSION,
+            "asset_id": asset_id,
+            "asset_version": version,
+            "outcome": outcome,
+            "content_type": content_type,
+            "extension": suffix,
+            "text": text,
+            "chars": len(text),
+            "reason": reason,
+            "method": None,
+            "strategies_tried": tried,
             "sections": [{"ordinal": 0, "text": text}] if text else [],
         }
 

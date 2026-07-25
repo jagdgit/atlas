@@ -166,6 +166,15 @@ def default_media_readers() -> list[Reader]:
             coverage={CAP_TRANSCRIPT: True, CAP_TEXT: True, CAP_METADATA: False, CAP_AUDIO: False},
             priority=15,
         ),
+        Reader(
+            id="video_frames",
+            name="Video Frames Reader",
+            version="1.0.0",
+            extensions=(".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"),
+            languages=("media",),
+            coverage={CAP_TEXT: False, CAP_METADATA: False, CAP_TRANSCRIPT: False, CAP_AUDIO: False},
+            priority=25,
+        ),
     ]
 
 
@@ -281,7 +290,7 @@ class ReaderRegistry:
     """Maps extensions/languages → reader and answers coverage questions honestly (BB10)."""
 
     name = "readers"
-    VERSION = "2.2.0"  # OI-M2: speaker_diarization reader
+    VERSION = "2.3.0"  # OI-M6: video_frames reader
 
     def __init__(
         self,

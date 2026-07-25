@@ -319,6 +319,8 @@ plugins:
     enabled: false          # label-preserving when on; ML diarization later
   live_captions:            # OI-M3: chunked live caption ingest; default OFF
     enabled: false          # no livestream client — push chunks via tools/API
+  frames:                   # OI-M6: video frame extract for OCR; default OFF
+    enabled: false
   mail:                     # S20d: read-only IMAP mailbox (degrades if unconfigured)
     host: ""                # IMAP host; empty => capability reports "unavailable"
     port: 993

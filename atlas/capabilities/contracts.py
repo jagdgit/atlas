@@ -44,6 +44,7 @@ CAP_RESEARCH = "research"
 CAP_SPEECH_TO_TEXT = "speech_to_text"
 CAP_SPEAKER_DIARIZATION = "speaker_diarization"
 CAP_LIVE_CAPTION_INGEST = "live_caption_ingest"
+CAP_VIDEO_FRAME_EXTRACT = "video_frame_extract"
 # Stage 3B knowledge-OS capabilities (stubs until providers land; D3B.25).
 CAP_RETRIEVAL = "retrieval"
 CAP_SYNTHESIS = "synthesis"
@@ -236,6 +237,13 @@ class LiveCaptionIngestCapability(Protocol):
     def open(self, *args: Any, **kwargs: Any) -> Any: ...
     def append(self, *args: Any, **kwargs: Any) -> Any: ...
     def finalize(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class VideoFrameExtractCapability(Protocol):
+    """Sample a video frame for Image/OCR (OI-M6)."""
+
+    def extract_frame(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @runtime_checkable
@@ -463,6 +471,18 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         quality_notes=(
             "Default off (plugins.live_captions.enabled). No livestream socket client — "
             "chunk buffer + finalize only (P15 gap when disabled)."
+        ),
+    ),
+    CAP_VIDEO_FRAME_EXTRACT: CapabilitySpec(
+        CAP_VIDEO_FRAME_EXTRACT,
+        VideoFrameExtractCapability,
+        "Extract a still frame from video for Image/OCR (slides/diagrams).",
+        "Align visual content with speech; optional — gap when off/ffmpeg missing (P15).",
+        "OI-M6",
+        cost_class=COST_EXPENSIVE,
+        quality_notes=(
+            "Default off (plugins.frames.enabled). Hermetic Fake extract for tests; "
+            "speech↔frame timeline alignment deferred."
         ),
     ),
     CAP_MAIL: CapabilitySpec(

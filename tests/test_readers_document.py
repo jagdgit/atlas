@@ -60,7 +60,7 @@ def test_reader_extracts_text_and_caches():
     art = reader.read("a1", 1, filename="note.txt")
     assert art["outcome"] == "ok"
     assert "hello from a text file" in art["text"]
-    assert art["reader"] == "document" and art["reader_version"] == "1.0.0"
+    assert art["reader"] == "document" and art["reader_version"] == "1.1.0"
     assert art["asset_id"] == "a1" and art["asset_version"] == 1
     assert art["sections"] and art["sections"][0]["ordinal"] == 0
     assert arts.puts == 1

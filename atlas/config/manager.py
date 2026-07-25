@@ -369,6 +369,11 @@ class LiveCaptionsPluginConfig(BaseModel):
     enabled: bool = False
 
 
+class FramesPluginConfig(BaseModel):
+    # Optional video frame extract for OCR (OI-M6). Default OFF.
+    enabled: bool = False
+
+
 class BrowserPluginConfig(BaseModel):
     # Headless browser automation (S20e). Degrades gracefully if Playwright/browser
     # binary are absent. Read-only: navigate + extract only, robots respected.
@@ -410,6 +415,7 @@ class PluginsConfig(BaseModel):
     speech: SpeechPluginConfig = SpeechPluginConfig()
     diarization: DiarizationPluginConfig = DiarizationPluginConfig()
     live_captions: LiveCaptionsPluginConfig = LiveCaptionsPluginConfig()
+    frames: FramesPluginConfig = FramesPluginConfig()
     mail: MailPluginConfig = MailPluginConfig()
     browser: BrowserPluginConfig = BrowserPluginConfig()
 
