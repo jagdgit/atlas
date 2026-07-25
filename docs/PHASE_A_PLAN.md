@@ -240,8 +240,9 @@ DB migration where noted.
   criticality_weight`, via `Mission.effective_priority`) into schedule-fired tasks:
   `ScheduleService` now takes an optional `mission_repo` and stamps each fired task with its
   mission's priority (`_priority_for`; non-mission schedules → `0`). Worker ticks flow through
-  schedules, so this covers the worker path. **Job-advance priority** threading is deferred (no
-  mission currently *owns* jobs until Phase D) — tracked in Architectural Debt.
+  schedules, so this covers the worker path. **Job-advance priority** threading ✅ closed OI-A2:
+  `JobService` stamps `plan_job` / `advance_job` with `Mission.effective_priority` when
+  `job.mission_id` is set (market/event research spawners pass `ctx.mission_id`).
 - **Done — claim ordering (B2):** `TaskRepository.claim_next` (and `list_by_status`) now order by
   **`priority DESC, scheduled_at ASC, id ASC`** — deterministic tie-break. Equal-priority tasks
   keep FIFO-by-`scheduled_at`; `id ASC` breaks exact ties. Verified on live DB (high-priority task
@@ -257,7 +258,7 @@ DB migration where noted.
   `tests/test_workers.py` (budget throttle + release), `tests/test_schedules.py` (mission-priority
   enqueue). Full suite **1190 passed**.
 - **Debt:** the budget gate is **in-memory (single-process Phase A)** — move to a durable/shared
-  counter when the scheduler runs multi-process. Job-advance priority threading pending Phase D.
+  counter when the scheduler runs multi-process. Job-advance priority threading ✅ OI-A2.
 
 ### A.7 API + Operations Dashboard surfacing  ✅ 2026-07-18
 - **Done — API** (`atlas/api/routes.py`, all API-key gated): `GET /v1/missions` (status/label

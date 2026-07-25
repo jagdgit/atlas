@@ -136,7 +136,10 @@ class MarketObserverWorker(PersistentWorker):
                 key = f"{event.symbol}:{event.kind}:{round(event.pct_move or 0, 1)}"
                 if key not in spawned_keys:
                     try:
-                        self._jobs.create_job(event.research_objective())
+                        self._jobs.create_job(
+                            event.research_objective(),
+                            mission_id=ctx.mission_id,
+                        )
                         spawned_keys.add(key)
                         spawned += 1
                     except Exception as exc:  # noqa: BLE001

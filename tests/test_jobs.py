@@ -39,12 +39,13 @@ class FakeJobRepo:
         self._seq += 1
         return f"{prefix}-{self._seq}"
 
-    def create_job(self, objective, *, session_id=None, metadata=None):
+    def create_job(self, objective, *, session_id=None, metadata=None, mission_id=None):
         jid = self._id("job")
         job = Job(
             id=jid,
             objective=objective,
             session_id=session_id,
+            mission_id=mission_id,
             metadata=dict(metadata or {}),
         )
         self._jobs[jid] = job
@@ -167,7 +168,7 @@ def _drive(service, job_id, enqueue_log, limit=50):
     while enqueue_log and seen < limit:
         item = enqueue_log.pop(0)
         if isinstance(item, tuple):
-            task_type, jid = item
+            task_type, jid = item[0], item[1]
         else:
             task_type, jid = ADVANCE_TASK, item
         if jid != job_id:
@@ -197,17 +198,17 @@ class FakeLearning:
 
 
 def _make(planner_steps, runner, *, reports=None, events=None, learning=None,
-          workspace_root=None, planner=None):
+          workspace_root=None, planner=None, mission_repo=None):
     repo = FakeJobRepo()
     enqueue_log = []
 
-    def enqueue(task_type, payload):
-        enqueue_log.append((task_type, payload["job_id"]))
+    def enqueue(task_type, payload, *, priority=0, **_kw):
+        enqueue_log.append((task_type, payload["job_id"], priority))
 
     service = JobService(
         repo, planner or FakePlanner(planner_steps), runner,
         enqueue=enqueue, reports=reports, events=events, learning=learning,
-        workspace_root=workspace_root,
+        workspace_root=workspace_root, mission_repo=mission_repo,
     )
     return repo, service, enqueue_log
 
@@ -219,7 +220,7 @@ def test_create_job_queues_planning_without_steps():
     assert detail["phase"] == PHASE_PLANNING_QUEUED
     assert detail["progress"]["total"] == 0
     assert detail["steps"] == []
-    assert log == [(PLAN_TASK, detail["job"].id)]
+    assert log == [(PLAN_TASK, detail["job"].id, 0)]
     assert detail["job"].metadata.get(JOB_PHASE_KEY) == PHASE_PLANNING_QUEUED
 
 
@@ -234,7 +235,7 @@ def test_plan_job_persists_steps_and_enqueues_advance():
     planned = service.job_detail(jid)
     assert planned["phase"] == PHASE_READY
     assert planned["progress"]["total"] == 1
-    assert (ADVANCE_TASK, jid) in log
+    assert any(t == ADVANCE_TASK and j == jid for t, j, *_ in log)
 
 
 def test_create_returns_fast_with_slow_llm_planner(tmp_path):
@@ -428,7 +429,7 @@ def test_recovery_reenqueues_unfinished_and_resets_running_steps():
 
     service.start()
     assert repo.list_steps(jid)[0].status == STEP_PENDING
-    assert (ADVANCE_TASK, jid) in log
+    assert any(t == ADVANCE_TASK and j == jid for t, j, *_ in log)
 
 
 def test_recovery_reenqueues_planning_without_steps():
@@ -438,7 +439,7 @@ def test_recovery_reenqueues_planning_without_steps():
     jid = detail["job"].id
     log.clear()
     service.start()
-    assert (PLAN_TASK, jid) in log
+    assert any(t == PLAN_TASK and j == jid for t, j, *_ in log)
 
 
 def test_advance_unknown_job_is_safe():
@@ -581,3 +582,36 @@ def test_finalize_uses_workspace_claims_not_empty_report(tmp_path):
     assert "SVR linear kernel" in md
     assert job.result["overall_confidence"] == "LOW"
     assert "Data-driven soiling detection" in md
+
+
+def test_plan_and_advance_inherit_mission_priority():
+    """OI-A2: mission-owned jobs enqueue plan/advance at Mission.effective_priority."""
+    from atlas.models.mission import Mission
+
+    class FakeMissions:
+        def get(self, mission_id):
+            return Mission(
+                id=str(mission_id),
+                title="hot",
+                scheduling_policy="realtime",
+                priority=10,
+                criticality="critical",
+            )
+
+    steps = [DecomposedStep("react", "agent", {"query": "x"}, "reason")]
+    repo, service, log = _make(steps, ScriptedRunner(), mission_repo=FakeMissions())
+    detail = service.create_job("urgent research", mission_id="m-hot")
+    jid = detail["job"].id
+    assert detail["job"].mission_id == "m-hot"
+    # realtime(60) + 10 + critical(40) = 110
+    assert log[0] == (PLAN_TASK, jid, 110)
+    service.plan_job_task({"job_id": jid})
+    assert any(t == ADVANCE_TASK and j == jid and p == 110 for t, j, p in log)
+
+
+def test_unowned_job_enqueues_at_priority_zero():
+    steps = [DecomposedStep("react", "agent", {}, "a")]
+    _, service, log = _make(steps, ScriptedRunner(), mission_repo=object())
+    detail = service.create_job("ad-hoc")
+    assert detail["job"].mission_id is None
+    assert log[0][2] == 0

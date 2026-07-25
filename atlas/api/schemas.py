@@ -456,6 +456,7 @@ class VerifyResponse(BaseModel):
 class CreateJobRequest(BaseModel):
     objective: str = Field(min_length=1)
     session_id: str | None = None
+    mission_id: str | None = None
 
 
 class JobInputRequest(BaseModel):
@@ -486,6 +487,7 @@ class JobOut(BaseModel):
     # 3.2e: planning_queued | planning | ready (status stays familiar queued/running/…)
     phase: str = "ready"
     session_id: str | None = None
+    mission_id: str | None = None
     result: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     created_at: str | None = None

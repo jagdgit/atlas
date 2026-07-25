@@ -820,6 +820,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         events=events,
         learning=learning_service,
         knowledge=knowledge_service,
+        mission_repo=mission_repo,  # OI-A2: plan/advance at mission effective_priority
         workspace_root=cfg.paths.data,  # §5a/C3: per-job on-disk workspaces
         step_max_retries=cfg.jobs.step_max_retries,
         retry_delay=cfg.jobs.retry_delay,

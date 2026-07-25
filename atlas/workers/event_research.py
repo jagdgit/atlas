@@ -120,7 +120,9 @@ class EventResearchWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("planning.plan skipped: %s", exc)
         try:
-            detail = self._jobs.create_job(ev.research_objective())
+            detail = self._jobs.create_job(
+                ev.research_objective(), mission_id=mission_id
+            )
             job = detail.get("job") if isinstance(detail, dict) else None
             job_id = getattr(job, "id", None) or (job.get("id") if isinstance(job, dict) else None)
             self._logger.info(

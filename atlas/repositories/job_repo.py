@@ -24,7 +24,7 @@ from atlas.models.job import (
 from atlas.repositories.base import BaseRepository
 
 _JOB_COLS = (
-    "id, session_id, objective, status, result, error, metadata, "
+    "id, session_id, mission_id, objective, status, result, error, metadata, "
     "created_at, updated_at, started_at, completed_at"
 )
 _STEP_COLS = (
@@ -41,15 +41,16 @@ class JobRepository(BaseRepository):
         objective: str,
         *,
         session_id: str | None = None,
+        mission_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Job:
         row = self.fetch_one(
             f"""
-            INSERT INTO job.jobs (objective, session_id, metadata)
-            VALUES (%s, %s, %s)
+            INSERT INTO job.jobs (objective, session_id, mission_id, metadata)
+            VALUES (%s, %s, %s, %s)
             RETURNING {_JOB_COLS}
             """,
-            (objective, session_id, Jsonb(metadata or {})),
+            (objective, session_id, mission_id, Jsonb(metadata or {})),
         )
         return Job.from_row(row)
 

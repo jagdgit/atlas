@@ -84,6 +84,7 @@ class JobService:
         events: Any = None,
         learning: Any = None,
         knowledge: Any = None,
+        mission_repo: Any | None = None,
         workspace_root: str | Path | None = None,
         step_max_retries: int = 2,
         retry_delay: float = 2.0,
@@ -99,6 +100,8 @@ class JobService:
         self._learning = learning
         # Stage 3 C6: knowledge sink for domain-tagged promotion of read docs + claims.
         self._knowledge = knowledge
+        # OI-A2: resolve Mission.effective_priority when enqueueing plan/advance tasks.
+        self._missions = mission_repo
         # Per-job on-disk workspace root (§5a, C3). When set (``<data>``), each job
         # gets ``<data>/jobs/job_<id>/`` with a manifest, notes, and final report —
         # so work is durable and inspectable ("open the workspace"). Best-effort:
@@ -110,17 +113,25 @@ class JobService:
 
     # --- public API -----------------------------------------------------
     def create_job(
-        self, objective: str, *, session_id: str | None = None
+        self,
+        objective: str,
+        *,
+        session_id: str | None = None,
+        mission_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a job and schedule async planning (3.2e).
 
         Returns immediately after the job row exists and ``plan_job`` is enqueued.
         LLM JobPlanner decompose runs in the background; steps appear when planning
         finishes (or falls back to the deterministic plan).
+
+        When ``mission_id`` is set, ``plan_job`` / ``advance_job`` tasks inherit that
+        mission's effective priority (OI-A2 / A7).
         """
         job = self._repo.create_job(
             objective,
             session_id=session_id,
+            mission_id=mission_id,
             metadata={JOB_PHASE_KEY: PHASE_PLANNING_QUEUED},
         )
         self._logger.info("created job %s (planning queued): %s", job.id, objective[:80])
@@ -1137,12 +1148,41 @@ class JobService:
     def _enqueue_advance(self, job_id: str) -> None:
         if self._enqueue is None:
             return
-        self._enqueue(ADVANCE_TASK, {"job_id": str(job_id)})
+        self._enqueue(
+            ADVANCE_TASK,
+            {"job_id": str(job_id)},
+            priority=self._priority_for_job(job_id),
+        )
 
     def _enqueue_plan(self, job_id: str) -> None:
         if self._enqueue is None:
             return
-        self._enqueue(PLAN_TASK, {"job_id": str(job_id)})
+        self._enqueue(
+            PLAN_TASK,
+            {"job_id": str(job_id)},
+            priority=self._priority_for_job(job_id),
+        )
+
+    def _priority_for_job(self, job_id: str) -> int:
+        """Effective scheduler priority for a job's plan/advance task (OI-A2 / A7).
+
+        Mirrors :meth:`ScheduleService._priority_for`: look up the owning mission and
+        use ``Mission.effective_priority``. Unowned jobs stay at priority 0.
+        """
+        if self._missions is None:
+            return 0
+        try:
+            job = self._repo.get_job(job_id)
+        except Exception:  # noqa: BLE001
+            return 0
+        mid = getattr(job, "mission_id", None) if job is not None else None
+        if not mid:
+            return 0
+        try:
+            mission = self._missions.get(mid)
+        except Exception:  # noqa: BLE001 - priority lookup must not break enqueue
+            return 0
+        return int(mission.effective_priority) if mission is not None else 0
 
     @staticmethod
     def _phase_of(job: Job) -> str:

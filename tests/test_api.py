@@ -192,7 +192,7 @@ class FakeJobs:
             "phase": "ready",
         }
 
-    def create_job(self, objective, *, session_id=None):
+    def create_job(self, objective, *, session_id=None, mission_id=None):
         return self._detail()
 
     def list_jobs(self, *, status=None, limit=50):

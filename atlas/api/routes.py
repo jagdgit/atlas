@@ -280,6 +280,7 @@ def _job_out(job, *, phase: str | None = None) -> JobOut:
         status=job.status,
         phase=str(resolved),
         session_id=job.session_id,
+        mission_id=getattr(job, "mission_id", None),
         result=job.result,
         error=job.error,
         created_at=job.created_at.isoformat() if job.created_at else None,
@@ -1240,7 +1241,9 @@ def verify(body: VerifyRequest, request: Request) -> VerifyResponse:
 @v1_router.post("/jobs", response_model=JobDetailResponse, tags=["jobs"])
 def create_job(body: CreateJobRequest, request: Request) -> JobDetailResponse:
     jobs = _app(request).container.resolve("jobs")
-    detail = jobs.create_job(body.objective, session_id=body.session_id)
+    detail = jobs.create_job(
+        body.objective, session_id=body.session_id, mission_id=body.mission_id
+    )
     return _job_detail(detail)
 
 

@@ -59,7 +59,7 @@ class InMemoryJobRepo:
         self._jobs: dict[str, Job] = {}
         self._steps: dict[str, JobStep] = {}
 
-    def create_job(self, objective, *, session_id=None, metadata=None) -> Job:
+    def create_job(self, objective, *, session_id=None, metadata=None, mission_id=None) -> Job:
         job = Job(
             id=str(uuid.uuid4()),
             objective=objective,

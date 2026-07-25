@@ -73,6 +73,7 @@ class Job(Model):
     objective: str
     status: str = JOB_QUEUED
     session_id: str | None = None
+    mission_id: str | None = None
     result: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
