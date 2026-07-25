@@ -87,13 +87,13 @@ def default_readers() -> list[Reader]:
             priority=100,
         ),
         Reader(
-            id="jsts", name="JavaScript/TypeScript Reader", version="1.0.0",
+            id="jsts", name="JavaScript/TypeScript Reader", version="1.1.0",
             extensions=(".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"),
             languages=("javascript", "typescript", "tsx"),
             coverage={
                 CAP_SYMBOLS: True, CAP_IMPORTS: True, CAP_EXPORTS: True,
                 CAP_MODULES: True, CAP_TYPING: True,
-                CAP_CALL_GRAPH: False,
+                CAP_CALL_GRAPH: True,  # OI-B1 — heuristic call_expression edges
                 CAP_DECORATORS: False,
             },
             priority=90,

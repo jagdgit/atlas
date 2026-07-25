@@ -1,8 +1,9 @@
 """Language detection + the v1 grammar set (§5b.2).
 
 Maps file extensions/names to a canonical language id. Python is parsed natively
-(stdlib ``ast``, full call resolution); the rest are parsed via tree-sitter at the
-symbol/import level. Everything else falls back to plain-text (honest, R2).
+(stdlib ``ast``, full call resolution); JS/TS add tree-sitter call sites (OI-B1);
+other languages are parsed via tree-sitter at the symbol/import level. Everything
+else falls back to plain-text (honest, R2).
 """
 
 from __future__ import annotations
@@ -61,6 +62,9 @@ TREE_SITTER_LANGS = frozenset(
         "bash",
     }
 )
+
+# Languages with cross-file call-graph resolution (Python ast + JS/TS OI-B1).
+CALL_GRAPH_LANGS = frozenset({PYTHON, "javascript", "typescript", "tsx"})
 
 # Languages we can parse structurally at all (Python + tree-sitter set).
 SUPPORTED_LANGS = frozenset({PYTHON}) | TREE_SITTER_LANGS

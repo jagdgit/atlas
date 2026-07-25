@@ -1,6 +1,8 @@
-"""Tests for the code graph (S14): import + cross-file call graph (Python-first)."""
+"""Tests for the code graph (S14): import + cross-file call graph (Python + JS/TS)."""
 
 from __future__ import annotations
+
+import pytest
 
 from atlas.code.graph import build_graph
 from atlas.code.parser import CodeParser
@@ -76,3 +78,25 @@ def test_builtins_are_not_counted_as_unresolved():
     # print/len are not repo symbols -> ignored, not counted
     assert g.unresolved_calls == 0
     assert g.call_edges == []
+
+
+def test_javascript_cross_file_and_this_calls():
+    pytest.importorskip("tree_sitter_language_pack")
+    parser = CodeParser()
+    util = "export function helper(x) { return x + 1; }\n"
+    main = (
+        "import { helper } from './util';\n"
+        "export function run(n) { return helper(n); }\n"
+        "export class Service {\n"
+        "  do() { return this.step(); }\n"
+        "  step() { return run(1); }\n"
+        "}\n"
+    )
+    parses = [
+        parser.parse_text(util, "src/util.ts", "typescript"),
+        parser.parse_text(main, "src/main.ts", "typescript"),
+    ]
+    g = build_graph(parses)
+    assert ("src/main.ts::run", "src/util.ts::helper") in g.call_edges
+    assert ("src/main.ts::Service.do", "src/main.ts::Service.step") in g.call_edges
+    assert ("src/main.ts::Service.step", "src/main.ts::run") in g.call_edges

@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (Personal Mentor shipped; all three Programs stub-free).
+> **Last updated:** 2026-07-25 (OI-B1 JS/TS call-graph closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -131,7 +131,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Status | Pri | Item | Source |
 |----|--------|-----|------|--------|
-| OI-B1 | 🔴 | P2 | **JS/TS call-graph resolution.** Python has full call graphs; JS/TS is symbols/imports/exports/modules only. A later reader upgrade (honestly reported by the coverage matrix today). | PHASE_B §BB5/BB10 |
+| OI-B1 | 🟢 | P2 | **JS/TS call-graph resolution.** Tree-sitter collects `call_expression` sites; graph resolves unique / same-file / `this`→`self` edges (OI-B1). Go/etc. remain symbols/imports only. | PHASE_B §BB5/BB10 | closed OI-B1 |
 | OI-B2 | 🔴 | P2 | **Partial / per-file re-ingest.** RepoWatcher re-ingests whole repos; the interface is shaped for "one file changed → partial ingest" but partial ingest itself is out of scope for B. | PHASE_B §B.6 |
 | OI-B3 | 🟡 | P2 | **Knowledge Conflict *Resolver*** (reasoning about a delta, not just superseding). Consolidator (C.3) handles evolution-vs-conflict routing; deeper Decision-Engine reasoning about contradictions is later (C/D). | PHASE_B "not building" |
 | OI-B4 | 🔴 | P3 | **Additive readers:** CAD / MATLAB / PLC / UML / PSpice, etc. Register in the (unified, OI-C2) Reader Registry with no changes elsewhere. | PHASE_B "not building" |
@@ -146,6 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-B1 | **JS/TS call-graph resolution** — tree-sitter call sites + heuristic edges. | _(pending commit)_ |
 | OI-PM0 | **Personal Mentor Mission** — owner/career weekly lessons; Programs stub-free. | `4742c4c` |
 | OI-MP4 | **Engineering Mentor Mission** — weekly judgment lessons → Experience OS. | `005b8c6` |
 | OI-C12 | **Personal/Owner SPA dashboard** — `/ui` Personal panel + coverage/confirm/infer/draft. | `6835729` |

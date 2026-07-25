@@ -1,15 +1,16 @@
 """Code graph (§5b.1 layer 4, Tier B): import graph + cross-file call graph.
 
 Import edges are resolved for every language we can (Python fully, via module-path
-mapping incl. relative imports); the **cross-file call graph** is Python-first — calls
-are resolved against the repo's symbol table with conservative heuristics (exact
-qualname, unique name, or ``self.method`` within the caller's class). Unresolved but
-*known* names are counted (never guessed); builtins/externals are ignored, not faked.
+mapping incl. relative imports); the **cross-file call graph** covers Python (stdlib
+``ast``) and JS/TS (tree-sitter ``call_expression``, OI-B1) with conservative
+heuristics (exact qualname, unique name, or ``self``/``this`` method within the
+caller's class). Unresolved but *known* names are counted (never guessed);
+builtins/externals are ignored, not faked.
 """
 
 from __future__ import annotations
 
-from atlas.code.languages import PYTHON
+from atlas.code.languages import CALL_GRAPH_LANGS, PYTHON
 from atlas.code.models import KIND_CLASS, CodeGraph, FileParse, Symbol
 
 
@@ -90,7 +91,7 @@ def _call_graph(parses: list[FileParse]) -> tuple[list[tuple[str, str]], int]:
     edges: list[tuple[str, str]] = []
     unresolved = 0
     for fp in parses:
-        if fp.lang != PYTHON:
+        if fp.lang not in CALL_GRAPH_LANGS:
             continue
         for call in fp.calls:
             tokens = call.callee.split(".")
@@ -98,7 +99,7 @@ def _call_graph(parses: list[FileParse]) -> tuple[list[tuple[str, str]], int]:
             cands = by_name.get(last)
             if not cands:
                 continue  # external/builtin — not counted, not guessed
-            if tokens[0] in ("self", "cls") and len(tokens) == 2:
+            if tokens[0] in ("self", "cls", "this") and len(tokens) == 2:
                 cands = _in_caller_class(cands, fp.path, call.caller)
             target = _pick(cands, fp.path)
             if target is None:

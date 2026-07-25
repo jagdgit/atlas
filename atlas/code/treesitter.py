@@ -2,9 +2,9 @@
 
 Extracts symbols (functions/classes/methods) and imports for the v1 grammar set via
 prebuilt grammars (``tree-sitter-language-pack``). Cross-file **call** resolution is
-Python-first (see ``pyast``); other languages degrade to symbol + import level here,
-which is exactly the Tier-B contract (D9). If a grammar is unavailable the file is
-returned as ``shallow`` (honest, R2) rather than raising.
+Python-native (``pyast``) plus JS/TS via ``call_expression`` collection here (OI-B1);
+other tree-sitter languages stay at symbol + import level (Tier-B / D9). If a grammar
+is unavailable the file is returned as ``shallow`` (honest, R2) rather than raising.
 
 The grammar library is imported lazily so the rest of Atlas runs without it.
 """
@@ -20,12 +20,16 @@ from atlas.code.models import (
     KIND_METHOD,
     OUTCOME_OK,
     OUTCOME_SHALLOW,
+    CallRef,
     FileParse,
     ImportRef,
     Symbol,
 )
 
 _logger = logging.getLogger("atlas.code.treesitter")
+
+# Languages where we collect call_expression sites (resolved in atlas.code.graph).
+_CALL_LANGS = frozenset({"javascript", "typescript", "tsx"})
 
 # Per-language node-type maps: symbol node type -> kind, and import node types.
 # Kept intentionally small and robust; unknown nodes are ignored.
@@ -124,6 +128,7 @@ def parse_treesitter(text: str, path: str, lang: str) -> FileParse:
         outcome=OUTCOME_OK,
         symbols=collector.symbols,
         imports=collector.imports,
+        calls=collector.calls,
         loc=loc,
     )
 
@@ -148,14 +153,18 @@ class _Collector:
         self.data = data
         self.symbols: list[Symbol] = []
         self.imports: list[ImportRef] = []
+        self.calls: list[CallRef] = []
         self._sym_types = _SYMBOLS.get(lang, {})
         self._imp_types = _IMPORTS.get(lang, set())
+        self._capture_calls = lang in _CALL_LANGS
 
     def walk(self, node: Any, scope: list[str]) -> None:
         for child in node.children:
             ntype = child.type
             if ntype in self._imp_types:
                 self._add_import(child)
+            if self._capture_calls and ntype == "call_expression":
+                self._add_call(child, scope)
             if ntype in self._sym_types:
                 name = self._name_of(child)
                 if name:
@@ -184,6 +193,45 @@ class _Collector:
             self.imports.append(
                 ImportRef(module=module, file=self.path, line=node.start_point[0] + 1)
             )
+
+    def _add_call(self, node: Any, scope: list[str]) -> None:
+        callee = self._callee_of(node)
+        if not callee:
+            return
+        # Reuse Python graph heuristics: this.foo → self.foo
+        if callee == "this" or callee.startswith("this."):
+            callee = "self" + callee[4:]
+        self.calls.append(
+            CallRef(
+                caller=".".join(scope),
+                callee=callee,
+                file=self.path,
+                line=node.start_point[0] + 1,
+            )
+        )
+
+    def _callee_of(self, node: Any) -> str:
+        func = node.child_by_field_name("function")
+        if func is None:
+            return ""
+        return self._dotted(func)
+
+    def _dotted(self, node: Any) -> str:
+        if node.type in ("identifier", "property_identifier", "type_identifier"):
+            return self._text(node)
+        if node.type == "this":
+            return "this"
+        if node.type == "member_expression":
+            obj = node.child_by_field_name("object")
+            prop = node.child_by_field_name("property")
+            if obj is None or prop is None:
+                return self._text(node).strip()[:120]
+            left = self._dotted(obj)
+            right = self._text(prop)
+            if left and right:
+                return f"{left}.{right}"
+            return left or right
+        return self._text(node).strip()[:120]
 
     # --- text helpers ---------------------------------------------------
     def _text(self, node: Any) -> str:

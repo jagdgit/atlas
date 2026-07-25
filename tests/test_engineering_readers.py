@@ -1,7 +1,8 @@
 """Hermetic tests for the Reader Registry + JS/TS pipeline (Phase B · §B.4, BB10).
 
-The registry maps extensions → readers and answers coverage questions **honestly** (e.g. no
-JS/TS call graph). A real tree-sitter JS/TS repo then flows through the *same* artifact-first
+The registry maps extensions → readers and answers coverage questions **honestly**.
+JS/TS now declare call_graph (OI-B1 heuristic resolution); Go/etc. still do not.
+A real tree-sitter JS/TS repo then flows through the *same* artifact-first
 pipeline as Python (repo map + symbols + findings), proving multi-language support.
 """
 
@@ -42,14 +43,17 @@ def test_reader_for_path_and_language():
     assert reg.reader_for_language("cobol") is None
 
 
-def test_call_graph_supported_only_for_python():
+def test_call_graph_supported_for_python_and_jsts():
     reg = ReaderRegistry()
     py = reg.can_produce(CAP_CALL_GRAPH, language="python")
     assert py["supported"] is True and py["reader"] == "python"
 
     js = reg.can_produce(CAP_CALL_GRAPH, language="javascript")
-    assert js["supported"] is False and js["reader"] == "jsts"
-    assert "call_graph" in js["reason"]  # honest, not silently empty
+    assert js["supported"] is True and js["reader"] == "jsts"
+
+    go = reg.can_produce(CAP_CALL_GRAPH, language="go")
+    assert go["supported"] is False and go["reader"] == "treesitter"
+    assert "call_graph" in go["reason"]
 
     unknown = reg.can_produce(CAP_CALL_GRAPH, language="matlab")
     assert unknown["supported"] is False and unknown["reader"] is None
@@ -61,7 +65,8 @@ def test_supports_and_coverage_matrix():
     assert reg.supports(CAP_EXPORTS, language="python") is False
     matrix = reg.coverage_matrix()
     assert matrix["python"][CAP_CALL_GRAPH] is True
-    assert matrix["jsts"][CAP_CALL_GRAPH] is False
+    assert matrix["jsts"][CAP_CALL_GRAPH] is True
+    assert matrix["treesitter"][CAP_CALL_GRAPH] is False
 
 
 def test_extension_map_and_metrics_and_health():
@@ -149,7 +154,7 @@ def test_js_ts_repo_ingests_like_python(tmp_path):
     reg = ReaderRegistry()
     code = CodeService(CodeParser(), readers=reg)
 
-    # The reader that will handle these files is jsts, which honestly lacks a call graph.
+    # jsts declares call_graph (OI-B1); edges resolve when names are unique.
     art = code.artifact(root)
     assert "typescript" in art["repo_map"]["languages"]
     assert art["symbol_count"] > 0  # tree-sitter parsed real symbols
@@ -157,9 +162,11 @@ def test_js_ts_repo_ingests_like_python(tmp_path):
     assert "Express" in art["repo_map"]["frameworks"]
     ts_attr = next(a for a in art["readers"] if a["language"] == "typescript")
     assert ts_attr["reader"] == "jsts"
-    assert ts_attr["call_graph"] is False  # declared, not faked
-    assert art["graph"]["call_edges"] == []  # consistent with the coverage matrix
-
+    assert ts_attr["call_graph"] is True
+    assert any(
+        "Widget.render" in e[0] and e[1].endswith("::foo")
+        for e in art["graph"]["call_edges"]
+    )
     # Full governed learn → engineering findings, retrievable exactly like a Python repo.
     intel_repo = FakeIntelRepo()
     finding_repo = FakeFindingRepo()

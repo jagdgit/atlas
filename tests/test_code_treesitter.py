@@ -47,6 +47,23 @@ def test_go_functions():
     assert any(s.name == "main" and s.kind == KIND_FUNCTION for s in fp.symbols)
 
 
+def test_javascript_call_sites_with_caller_scope():
+    src = (
+        "function helper(x) { return x; }\n"
+        "function run(n) { return helper(n); }\n"
+        "class Service {\n"
+        "  do() { return this.step(); }\n"
+        "  step() { return run(1); }\n"
+        "}\n"
+    )
+    fp = _parse(src, "app.js", "javascript")
+    assert fp.outcome == OUTCOME_OK
+    callees = {(c.caller, c.callee) for c in fp.calls}
+    assert ("run", "helper") in callees
+    assert ("Service.do", "self.step") in callees  # this. → self.
+    assert ("Service.step", "run") in callees
+
+
 def test_method_parent_scope_tracked():
     src = "class Foo { bar() { return 1; } }\n"
     fp = _parse(src, "a.js", "javascript")
