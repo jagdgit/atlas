@@ -61,7 +61,25 @@ class EventRepository(BaseRepository):
             "SELECT * FROM audit.events WHERE id = %s", (str(event_id),)
         )
 
-    def list_pending(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list_pending(
+        self, limit: int = 100, *, source: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Oldest pending first (dispatcher fairness). Optional ``source`` scopes the scan.
+
+        OI-T2: callers that only care about their own rows (e.g. hermetic tests with
+        ``source='test'``) must pass ``source`` — a shared DB can hold >``limit``
+        pending events from live subsystems, which would otherwise hide new rows.
+        """
+        if source is not None:
+            return self.fetch_all(
+                """
+                SELECT * FROM audit.events
+                WHERE status = 'pending' AND source = %s
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (source, limit),
+            )
         return self.fetch_all(
             """
             SELECT * FROM audit.events

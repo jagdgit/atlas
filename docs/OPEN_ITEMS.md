@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-22 (Media Reader Family complete; **Media Report Honesty** RH.1–RH.4 ✅).
+> **Last updated:** 2026-07-25 (OI-T1/T2/T3 live-DB test hygiene; OI-C9/UI0/MP5 closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -118,9 +118,9 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
-| OI-T1 | 🔴 | P1 | **Live-DB tests share one Postgres with no teardown.** e2e tests insert into `learning.repositories`, `knowledge.*`, `asset.*`, `audit.events` and don't clean up. After a reboot clears `/tmp` (tmpfs), pytest's temp counter restarts and fresh tmp paths **collide** with stale `active` rows (e.g. `uq_learning_repositories_root_active`). Needs a proper isolation strategy: per-test transaction rollback, a disposable schema/db per run, or session teardown fixtures. | Caused 3 false failures on 2026-07-19; mitigated by a manual cleanup of `/tmp/pytest%` rows. |
-| OI-T2 | 🟡 | P2 | **`test_event_lifecycle` flake.** `EventRepository.list_pending(limit=100)` is `ORDER BY created_at ASC LIMIT 100` (oldest-first), so once >100 **undispatched** `pending` `audit.events` accumulate in the shared dev DB the newly-recorded test event falls outside the window and the assertion fails. Confirmed 2026-07-19: 187 pending events from *real* subsystems (scheduler 75, kernel 54, recovery 40, …), not test rows — deleting them is a broader cleanup decision, not made unprompted. Pre-existing; unrelated to feature code (full suite otherwise 1339 green after C.3). Fix with OI-T1 isolation, a scoped cleanup fixture, or make the test query keyed/newest-first. | Known before Phase C. |
-| OI-T3 | 🔴 | P3 | **A `make test-clean` / cleanup helper** for the shared dev DB (delete `/tmp/pytest%` assets/repos, stale pending events) so contributors don't hit OI-T1/T2 manually. | Ties into OI-T1. |
+| OI-T1 | 🟢 | P1 | **Live-DB tests share one Postgres with no teardown.** Session autouse cleanup + `atlas-db test-clean` deactivate `/tmp/pytest%` `learning.repositories` and delete matching `asset.assets` / pending `source=test` events (OI-T3). | closed OI-T1 |
+| OI-T2 | 🟢 | P2 | **`test_event_lifecycle` flake.** `list_pending` gains optional `source=`; the test scopes to `source='test'` so >100 pending system events cannot hide it. Dispatcher still oldest-first globally. | closed OI-T2 |
+| OI-T3 | 🟢 | P3 | **`atlas-db test-clean` / cleanup helper** for shared-dev-DB pytest residue (`--dry-run` supported). | closed OI-T3 |
 
 ---
 
@@ -145,6 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-T1/T2/T3 | **Live-DB test hygiene** — session cleanup + `atlas-db test-clean`; `list_pending(source=)`. | (this commit) |
 | OI-MP5 | **Missions teach missions** — mentor soft-bias + Decision Engine Experience nudge. | `9d22b66` |
 | OI-UI0 | **Job UI live updates** — sequential poll + SSE refresh; `/ui` no-cache headers. | `efc7091` |
 | OI-RH0 | **Media Report Honesty** (acquire-stop UX: NOT_APPLICABLE, Research blocked, operator strategies). | RH.1–RH.4 / `tests/test_media_report_honesty.py` |

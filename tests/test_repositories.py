@@ -73,8 +73,10 @@ def test_event_lifecycle(db):
     event_id = event["id"]
     assert event["status"] == "pending"
 
-    pending_ids = {e["id"] for e in repo.list_pending()}
+    # Scope by source so a shared DB with >100 pending system events (OI-T2) cannot hide us.
+    pending_ids = {e["id"] for e in repo.list_pending(source="test")}
     assert event_id in pending_ids
+    assert repo.get(event_id)["status"] == "pending"
 
     assert repo.mark(event_id, "processed") is True
     assert repo.get(event_id)["status"] == "processed"
