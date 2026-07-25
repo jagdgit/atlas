@@ -1195,8 +1195,9 @@ existing abstractions. Tracked as `OI-F*` in `docs/OPEN_ITEMS.md`.
   eval remediation gate.
 - **F4 — Standardized post-decision feedback loops.** Make `Recommendation → Outcome → Difference →
   Learning` a **standard cycle across all missions** (not just Paper Trading's learning loop, D.6). The
-  architecture already supports it (decisions + experiences + consolidator); **deferred** to a
-  cross-mission convention once ≥2 applied missions run.
+  architecture already supports it (decisions + experiences + consolidator). **Closed (OI-F4):** shared
+  `atlas/decision/feedback.py` convention; paper trading refactored onto it; job + tech/security
+  watchers accept hermetic `outcome_feedback` and journal Difference→Learning (still recommend-only).
 
 > These stay parked here (and in `OPEN_ITEMS.md`) so they are neither lost nor prematurely built. They
 > are revisited **after** Phase D, or sooner **only if** implementation exposes a concrete limitation
