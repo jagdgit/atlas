@@ -146,7 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-M2 | **Speaker diarization** — capability + label-preserving enrich + P15 gap. | _(pending commit)_ |
+| OI-M2 | **Speaker diarization** — capability + label-preserving enrich + P15 gap. | `3b41768` |
 | OI-F4 | **Post-decision feedback loops** — Recommendation→Outcome→Difference→Learning convention. | `39fbfcd` |
 | OI-F3 | **System Introspection** — aggregate self-analysis mission + report API. | `709bb4c` |
 | OI-F2 | **Temporal Knowledge** — historical / current / predicted via validity + MCA. | `39c88a7` |
