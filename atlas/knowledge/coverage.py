@@ -152,6 +152,30 @@ class CoverageService:
             },
         }
 
+    def reader_failures(self) -> list[dict[str, Any]]:
+        """Rank readers by failed + unsupported attempts (OI-F3 introspection)."""
+        ranked: list[dict[str, Any]] = []
+        for row in self._coverage.summary(by="reader"):
+            failed = int(row.get("failed") or 0)
+            unsupported = int(row.get("unsupported") or 0)
+            empty = int(row.get("empty") or 0)
+            trouble = failed + unsupported
+            if trouble <= 0 and empty <= 0:
+                continue
+            ranked.append(
+                {
+                    "reader": row.get("group_key"),
+                    "total": int(row.get("total") or 0),
+                    "done": int(row.get("done") or 0),
+                    "failed": failed,
+                    "unsupported": unsupported,
+                    "empty": empty,
+                    "trouble": trouble,
+                }
+            )
+        ranked.sort(key=lambda r: (r["trouble"], r["failed"], r["empty"]), reverse=True)
+        return ranked
+
     # --- targeted re-extraction (A10) -------------------------------------
     def stale_for_reader(
         self,

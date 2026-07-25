@@ -324,6 +324,27 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "learning_governance"),
     },
     {
+        "name": "system_introspection",
+        "template_version": 1,
+        "description": (
+            "System Introspection (OI-F3) — periodic self-analysis of knowledge, "
+            "uncertainty, reader failures, mission cost, policy blocks, and improve-next."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "System Introspection",
+            "roadmap": "OI-F3",
+            "force": False,
+            "limit": 200,
+            "journal_experience": True,
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [{"type": "system_introspection", "interval_seconds": 86400}],
+        "knowledge_domains": ["governance", "engineering", "knowledge"],
+        "success_criteria": with_philosophy({}, "system_introspection"),
+    },
+    {
         "name": "job_hunting",
         "template_version": 3,
         "description": "Continuous job search against operator constraints (Phase D — recommend-only, P14).",

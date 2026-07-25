@@ -111,12 +111,14 @@ class CoverageRepository(BaseRepository):
         )
 
     def summary(self, *, by: str = "domain") -> list[dict[str, Any]]:
-        """Coverage rollup grouped by ``domain`` or ``source``.
+        """Coverage rollup grouped by ``domain``, ``source``, or ``reader``.
 
         Returns one row per group with total attempts, done, and the failing statuses so the service
         can compute coverage % = done / total.
         """
-        column = "domain" if by == "domain" else "source"
+        column = {"domain": "domain", "source": "source", "reader": "reader"}.get(
+            by, "domain"
+        )
         return self.fetch_all(
             f"""
             SELECT COALESCE({column}, 'unknown') AS group_key,

@@ -77,6 +77,7 @@ from atlas.workers.investment_mentor import InvestmentMentorWorker
 from atlas.workers.engineering_mentor import EngineeringMentorWorker
 from atlas.workers.personal_mentor import PersonalMentorWorker
 from atlas.workers.learning_governance import LearningGovernanceWorker
+from atlas.workers.system_introspection import SystemIntrospectionWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
@@ -132,6 +133,7 @@ from atlas.missions.context import MissionContextService
 from atlas.memory import MemoryOS
 from atlas.experience import ExperienceOS
 from atlas.governance import GovernanceReportService
+from atlas.introspection import IntrospectionService
 from atlas.planning import PlanningService
 from atlas.planner.planner import Planner
 from atlas.plugins.manager import PluginManager
@@ -1406,6 +1408,19 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         )
     )
 
+    # System Introspection (OI-F3) — aggregates D.10 / P15 / coverage / arbiter / policy.
+    introspection_service = IntrospectionService(
+        knowledge=knowledge_service,
+        coverage=coverage_service,
+        capabilities=capabilities,
+        decisions=DecisionRepository(db_manager),
+        improvement_board=improvement_board,
+        arbiter=mission_arbiter,
+        policy=policy_service,
+        governance=governance_service,
+        logger=get_logger("atlas.introspection"),
+    )
+
     # Python Execution Sandbox (Sprint 16, D6 — hybrid): run analysis code in a
     # resource-limited child interpreter (subprocess default; docker swappable) with
     # network disabled by default; computed results can become L5 evidence (§5a.6).
@@ -1471,6 +1486,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("mission_context", mission_context_service)
     container.register_instance("planning", planning_service)
     container.register_instance("governance", governance_service)
+    container.register_instance("introspection", introspection_service)
     container.register_instance("world_models", world_model_registry)
     container.register_instance("knowledge_graph", knowledge_graph_service)
     container.register_instance("conversation", conversation_service)
@@ -1555,6 +1571,14 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             governance=governance_service,
             events=events,
             logger=get_logger("atlas.workers.learning_governance"),
+        )
+    )
+    worker_manager.register_worker_type(
+        SystemIntrospectionWorker(
+            introspection=introspection_service,
+            experience_os=experience_os,
+            events=events,
+            logger=get_logger("atlas.workers.system_introspection"),
         )
     )
     tools.register(
@@ -1709,6 +1733,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         governance_service,
         kind="service",
         version=GovernanceReportService.VERSION,
+    )
+    capabilities.register(
+        "introspection",
+        introspection_service,
+        kind="service",
+        version=IntrospectionService.VERSION,
     )
     capabilities.register(
         "world_models",

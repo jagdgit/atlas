@@ -1660,6 +1660,18 @@ def governance_daily(request: Request, limit: int = 200) -> dict:
     return gov.daily(limit=limit)
 
 
+@v1_router.get("/introspection/report", tags=["programs"])
+def introspection_report(request: Request, limit: int = 200) -> dict:
+    """System Introspection report — knowledge / gaps / readers / cost (OI-F3)."""
+    try:
+        intro = _app(request).container.resolve("introspection")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"introspection unavailable: {exc}"
+        ) from exc
+    return intro.report(limit=limit)
+
+
 @v1_router.get("/scheduler/hierarchy", tags=["programs"])
 def scheduler_hierarchy_all(request: Request, program_id: str | None = None) -> dict:
     """Program → Mission → Worker schedule hierarchy (SCHED.1)."""
