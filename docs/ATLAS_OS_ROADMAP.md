@@ -1177,8 +1177,9 @@ existing abstractions. Tracked as `OI-F*` in `docs/OPEN_ITEMS.md`.
 - **F1 — Decisions as first-class historical knowledge ("Decision Knowledge").** Beyond `Knowledge →
   Decision`, learn *which decisions consistently produced good outcomes* (`Decision → outcome →
   Decision Knowledge`). Rides on `decision.decisions` (Phase D) + the experience consolidator (C.6);
-  becomes a distilled, queryable track record that biases future scoring. **Deferred** until Phase D
-  decisions + outcomes exist to learn from.
+  becomes a distilled, queryable track record that biases future scoring. **Closed (OI-F1):** paper
+  trading stamps `decision_id` on outcome journals and enables Experience soft-bias on profit/loss
+  via OI-MP5; no parallel Knowledge DB.
 - **F2 — Temporal Knowledge layer (historical / current / predicted truth).** Today's lifecycle
   captures *validity over time*; a temporal layer would explicitly distinguish **what was true**,
   **what is true now**, and **what is predicted** — valuable for market analysis, infra planning, and

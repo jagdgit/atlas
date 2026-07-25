@@ -146,7 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-F1 | **Decision Knowledge** — Decision→outcome → bias-enabled Experience soft-bias. | _(pending commit)_ |
+| OI-F1 | **Decision Knowledge** — Decision→outcome → bias-enabled Experience soft-bias. | `7a3ede3` |
 | OI-B4 | **Additive domain stub readers** — CAD/MATLAB/PLC/UML/PSpice registry stubs. | `ba2c93f` |
 | OI-D2 | **Fair-share arbitration** — soft recent-admit penalty; no preemption. | `7b7a349` |
 | OI-C7 | **Migration-number honesty** — registry through `0042`; next free `0043`. | `2dde699` |
