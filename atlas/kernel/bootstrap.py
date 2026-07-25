@@ -1366,6 +1366,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             postings_reader=job_postings_reader,
             decision_engine=decision_engine,
             personal=personal_service,
+            experience_os=experience_os,
+            learning=learning_service,
             events=events,
             logger=get_logger("atlas.workers.job_watcher"),
         )
@@ -1384,6 +1386,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             assets=asset_store,
             advisory_reader=advisory_feed_reader,
             decision_engine=decision_engine,
+            experience_os=experience_os,
+            learning=learning_service,
             events=events,
             logger=get_logger("atlas.workers.tech_security"),
         )

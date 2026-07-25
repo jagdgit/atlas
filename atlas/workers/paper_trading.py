@@ -378,13 +378,19 @@ class PaperTradingWorker(PersistentWorker):
         indicators: dict[str, Any] | None = None,
         cfg: dict[str, Any] | None = None,
     ) -> None:
-        """Record Decision→Outcome Experience Journal (OI-MP1 / OI-F1)."""
+        """Record Decision→Outcome via the OI-F4 feedback convention (OI-MP1 / OI-F1)."""
         if self._experience_os is None and self._learning is None:
             return
+        from atlas.decision.feedback import (
+            DIFF_MATCHED,
+            DIFF_MISSED,
+            DIFF_UNKNOWN,
+            build_feedback_journal,
+            record_feedback_loop,
+        )
         from atlas.decision.knowledge import (
             bias_recommendations,
             decision_knowledge_tags,
-            experience_id_from_result,
             link_metadata,
             outcome_label,
             should_enable_decision_bias,
@@ -392,6 +398,11 @@ class PaperTradingWorker(PersistentWorker):
 
         pnl = float(trade.get("realized_pnl", 0.0))
         outcome = outcome_label(pnl)
+        difference = {
+            "profit": DIFF_MATCHED,
+            "loss": DIFF_MISSED,
+            "flat": DIFF_UNKNOWN,
+        }.get(outcome, DIFF_UNKNOWN)
         decision_id = str(getattr(decision, "id", None) or "") or None
         why = (decision.why or "").strip() or "strategy exit signal"
         ind = indicators if isinstance(indicators, dict) else {}
@@ -427,68 +438,48 @@ class PaperTradingWorker(PersistentWorker):
             )
         )
         title = f"Paper trade closed on {symbol}: {outcome} {pnl:+.2f}"
+        recommendation = f"sell {symbol} (simulation)"
+        outcome_text = f"{outcome} {pnl:+.2f}"
+        cfg = cfg if isinstance(cfg, dict) else {}
+        enable_bias = bool(cfg.get("enable_decision_soft_bias", True)) and should_enable_decision_bias(
+            outcome
+        )
         tags = decision_knowledge_tags(symbol, outcome, decision_id=decision_id)
         meta = link_metadata(
             decision_id=decision_id, symbol=symbol, outcome=outcome, pnl=pnl
         )
-        recs = bias_recommendations(symbol, outcome, pnl)
-        cfg = cfg if isinstance(cfg, dict) else {}
-        enable_bias = bool(cfg.get("enable_decision_soft_bias", True))
-        journal_result: dict[str, Any] | None = None
-        if self._experience_os is not None:
-            try:
-                journal_result = self._experience_os.journal(
-                    title=title,
-                    observation=observation,
-                    reasoning=why,
-                    decision=f"sell {symbol} (simulation)",
-                    outcome=f"{outcome} {pnl:+.2f}",
-                    reflection=reflection,
-                    lesson=lesson,
-                    domain="markets",
-                    tags=tags,
-                    recommendations=recs,
-                    metadata=meta,
-                )
-            except Exception as exc:  # noqa: BLE001
-                self._logger.warning("experience_os.journal failed for %s: %s", symbol, exc)
-                journal_result = None
-        else:
-            # Legacy path when Experience OS is not wired
-            problem = (
-                f"Observation: {observation}\n"
-                f"Reasoning: {why}\n"
-                f"Decision: sell {symbol} (simulation)\n"
-                f"Outcome: {outcome} {pnl:+.2f}"
-            )
-            try:
-                journal_result = self._learning.remember_experience(
-                    title=title,
-                    problem=problem,
-                    solution=f"Reflection: {reflection}",
-                    lessons=f"Lesson: {lesson}",
-                    domain="markets",
-                    tags=tags,
-                    recommendations=recs,
-                    metadata=meta,
-                )
-            except Exception as exc:  # noqa: BLE001
-                self._logger.warning("remember_experience failed for %s: %s", symbol, exc)
-                return
-
-        # OI-F1 — decisive outcomes soft-bias future Decision Engine scoring.
-        if (
-            enable_bias
-            and should_enable_decision_bias(outcome)
-            and self._learning is not None
-            and hasattr(self._learning, "enable_bias")
-        ):
-            exp_id = experience_id_from_result(journal_result)
-            if exp_id:
-                try:
-                    self._learning.enable_bias(str(exp_id), enabled=True)
-                except Exception as exc:  # noqa: BLE001
-                    self._logger.debug("enable_bias skipped: %s", exc)
+        meta["feedback_loop"] = True
+        meta["difference"] = difference
+        journal_kwargs = build_feedback_journal(
+            title=title,
+            recommendation=recommendation,
+            outcome=outcome_text,
+            difference=difference,
+            observation=observation,
+            reasoning=why,
+            reflection=reflection,
+            lesson=lesson,
+            domain="markets",
+            mission_type=MISSION_TYPE_PAPER_TRADING,
+            decision_id=decision_id,
+            subject=symbol,
+            recommendations=bias_recommendations(symbol, outcome, pnl),
+            metadata_extra=meta,
+            tags_extra=tags,
+        )
+        # Prefer OI-F1 decision_knowledge tags ordering / content.
+        journal_kwargs["tags"] = tags + [
+            t for t in journal_kwargs["tags"] if t not in tags
+        ]
+        journal_kwargs["metadata"] = {**journal_kwargs["metadata"], **meta}
+        record_feedback_loop(
+            experience_os=self._experience_os,
+            learning=self._learning,
+            journal_kwargs=journal_kwargs,
+            enable_bias=enable_bias,
+            difference=difference,
+            logger=self._logger,
+        )
 
     # --- notifications ---------------------------------------------------
     def _check_drawdown(

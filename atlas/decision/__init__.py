@@ -37,6 +37,15 @@ from atlas.decision.knowledge import (
     outcome_label,
     should_enable_decision_bias,
 )
+from atlas.decision.feedback import (
+    build_feedback_journal,
+    collect_outcome_feedback,
+    difference_label,
+    feedback_metadata,
+    feedback_tags,
+    record_feedback_loop,
+    should_enable_feedback_bias,
+)
 from atlas.decision.rules import (
     CapabilityGap,
     DecisionRule,
@@ -47,11 +56,18 @@ from atlas.decision.rules import (
 __all__ = [
     "DecisionEngine",
     "bias_recommendations",
+    "build_feedback_journal",
+    "collect_outcome_feedback",
     "decision_knowledge_tags",
+    "difference_label",
     "experience_id_from_result",
+    "feedback_metadata",
+    "feedback_tags",
     "link_metadata",
     "outcome_label",
+    "record_feedback_loop",
     "should_enable_decision_bias",
+    "should_enable_feedback_bias",
     "DecisionRequest",
     "Decision",
     "ScoredOption",

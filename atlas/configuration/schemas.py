@@ -215,6 +215,8 @@ class JobWatcherConfig(BaseModel):
     include_inferred_skills: bool = True
     max_recommendations: int = Field(default=5, ge=1)
     tick_interval_seconds: int = Field(default=86400, ge=1)
+    enable_soft_bias: bool = True
+    outcome_feedback: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TechSecurityWatcherConfig(BaseModel):
@@ -233,6 +235,8 @@ class TechSecurityWatcherConfig(BaseModel):
     focus: list[str] = Field(default_factory=list)         # optional unified focus
     severity_floor: str = Field(default="medium", pattern="^(critical|high|medium|low|info|)$")
     tick_interval_seconds: int = Field(default=86400, ge=1)
+    enable_soft_bias: bool = True
+    outcome_feedback: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SelfImprovementConfig(BaseModel):

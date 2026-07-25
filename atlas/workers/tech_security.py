@@ -41,21 +41,35 @@ class TechSecurityWatcher(PersistentWorker):
         assets: Any,
         advisory_reader: Any,
         decision_engine: Any,
+        experience_os: Any = None,
+        learning: Any = None,
         events: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._assets = assets
         self._reader = advisory_reader
         self._engine = decision_engine
+        self._experience_os = experience_os
+        self._learning = learning
         self._events = events
         self._logger = logger or logging.getLogger("atlas.workers.tech_security")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
         cfg = ctx.config or {}
         state = dict(ctx.state or {})
+        mode = str(cfg.get("mode") or "technology").lower()
+        mission_type = _MODE_TO_MISSION.get(mode, MISSION_TYPE_TECHNOLOGY)
+        feedback_n = self._process_outcome_feedback(
+            ctx,
+            cfg,
+            state,
+            mission_type=mission_type,
+            domain="security" if mission_type == MISSION_TYPE_SECURITY else "engineering",
+        )
         sources = [str(s).strip() for s in (cfg.get("sources") or []) if str(s).strip()]
         if not sources:
-            return TickResult(state=state, note="")
+            note = f"feedback={feedback_n}" if feedback_n else ""
+            return TickResult(state=state, note=note)
 
         force = any(bool(item.get("force")) for item in ctx.inputs)
         config_note = ""
@@ -63,8 +77,6 @@ class TechSecurityWatcher(PersistentWorker):
             config_note = f"config v{ctx.config_version} picked up; "
             state["config_version"] = ctx.config_version
 
-        mode = str(cfg.get("mode") or "technology").lower()
-        mission_type = _MODE_TO_MISSION.get(mode, MISSION_TYPE_TECHNOLOGY)
         focus = self._focus_terms(cfg)
 
         advisories, load_errors = self._load_all(sources)
@@ -72,6 +84,8 @@ class TechSecurityWatcher(PersistentWorker):
         if not force and fingerprint == state.get("sources_fingerprint") and not load_errors:
             state["ticks"] = int(state.get("ticks", 0)) + 1
             note = f"{config_note}no change (advisories unchanged)".strip() if config_note else ""
+            if feedback_n:
+                note = f"{note}; feedback={feedback_n}".strip("; ")
             return TickResult(state=state, note=note)
 
         decision = self._engine.decide(
@@ -124,8 +138,71 @@ class TechSecurityWatcher(PersistentWorker):
             f"{config_note}{mode} watch: {len(advisories)} advisory(ies)"
             + (f", {load_errors} source error(s)" if load_errors else "")
             + (f"; recommended {new_recs[0].get('title', '')[:50]}" if new_recs else "; hold")
+            + (f"; feedback={feedback_n}" if feedback_n else "")
         ).strip()
         return TickResult(state=state, note=note)
+
+    def _process_outcome_feedback(
+        self,
+        ctx: TickContext,
+        cfg: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        mission_type: str,
+        domain: str,
+    ) -> int:
+        """OI-F4 — drain Recommendation→Outcome→Difference→Learning feedback."""
+        if self._experience_os is None and self._learning is None:
+            return 0
+        from atlas.decision.feedback import (
+            build_feedback_journal,
+            collect_outcome_feedback,
+            difference_label,
+            record_feedback_loop,
+        )
+
+        items = collect_outcome_feedback(list(ctx.inputs or []), cfg)
+        if not items:
+            return 0
+        enable_bias = bool(cfg.get("enable_soft_bias", True))
+        count = 0
+        for item in items:
+            decision_id = str(
+                item.get("decision_id") or state.get("last_decision_id") or ""
+            ) or None
+            recommendation = str(
+                item.get("recommendation")
+                or item.get("title")
+                or "prior advisory recommendation"
+            )
+            outcome = str(item.get("outcome") or item.get("actual") or "unknown")
+            expected = str(item.get("expected") or "recommend")
+            difference = str(item.get("difference") or difference_label(expected, outcome))
+            subject = str(item.get("subject") or item.get("advisory_id") or "") or None
+            journal_kwargs = build_feedback_journal(
+                title=str(item.get("title") or f"Advisory feedback: {difference}"),
+                recommendation=recommendation,
+                outcome=outcome,
+                difference=difference,
+                observation=str(item.get("observation") or recommendation),
+                reasoning=str(item.get("reasoning") or "Operator outcome on an advisory recommend"),
+                domain=domain,
+                mission_type=mission_type,
+                decision_id=decision_id,
+                subject=subject,
+            )
+            result = record_feedback_loop(
+                experience_os=self._experience_os,
+                learning=self._learning,
+                journal_kwargs=journal_kwargs,
+                enable_bias=enable_bias,
+                difference=difference,
+                logger=self._logger,
+            )
+            if result.get("ok"):
+                count += 1
+        state["last_feedback_count"] = count
+        return count
 
     # --- helpers --------------------------------------------------------
     @staticmethod
