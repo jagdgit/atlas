@@ -146,7 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-C10 | **Experience evidence-retraction on revert** — peel repo_uid from shared experiences; archive if alone. | _(pending commit)_ |
+| OI-C10 | **Experience evidence-retraction on revert** — peel repo_uid from shared experiences; archive if alone. | `2393b65` |
 | OI-B3 | **Knowledge Conflict Resolver** — conflict quality + list/resolve API + DE rule. | `3602eab` |
 | OI-B2 | **Partial / per-file re-ingest** — file Detect + `paths=` merge into prior artifact. | `a5975aa` |
 | OI-B1 | **JS/TS call-graph resolution** — tree-sitter call sites + heuristic edges. | `3fb8f3c` |
