@@ -26,6 +26,7 @@
       <nav class="nav">
         <button class="nav-btn active" data-view="overview">Overview</button>
         <button class="nav-btn" data-view="chat">Chat</button>
+        <button class="nav-btn" data-view="personal">Personal</button>
         <button class="nav-btn" data-view="programs">Programs</button>
         <button class="nav-btn" data-view="missions">Missions</button>
         <button class="nav-btn" data-view="engineering">Engineering</button>
@@ -59,6 +60,23 @@
           <textarea id="composer-input" rows="1" placeholder="Ask Atlas anything…  (Enter to send, Shift+Enter for a new line)"></textarea>
           <button id="composer-send" type="submit">Send</button>
         </form>
+      </section>
+
+      <!-- Personal / Owner (OI-C12) -->
+      <section id="view-personal" class="view hidden">
+        <div class="panel-head">
+          <h2>Personal</h2>
+          <div class="panel-actions">
+            <button id="personal-infer" class="link" type="button">infer</button>
+            <button id="personal-draft" class="link" type="button">draft resume</button>
+            <button id="personal-refresh" class="link" type="button">refresh</button>
+          </div>
+        </div>
+        <p class="muted" style="padding:0 22px 8px;margin:0">
+          Owner profile from Experience + Engineering — confirm or reject inferred facts (P9).
+        </p>
+        <div id="personal-coverage" class="personal-coverage"></div>
+        <div id="personal-body" class="personal-body"></div>
       </section>
 
       <!-- Programs (MI.1) -->
@@ -151,6 +169,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=ui0"></script>
+  <script src="./app.js?v=c12"></script>
 </body>
 </html>

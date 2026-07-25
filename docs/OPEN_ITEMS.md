@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-T1/T2/T3 live-DB test hygiene; OI-C9/UI0/MP5 closed).
+> **Last updated:** 2026-07-25 (OI-C12 Personal SPA dashboard closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -32,7 +32,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
 | OI-C7 | 🟡 | P3 | **Migration-number placeholders.** Real numbers are assigned sequentially at build time. Through Phase C: `0028`–`0038` as listed; C.8/C.9 needed no migration. Post-C: `0039`=decision, `0040`=decision_approvals, `0041`=sim_trading. **Next free slot: `0042`.** Keep the PHASE_C table honest as slots are built. | C.2 | ongoing |
-| OI-C12 | 🔴 | P3 | **Personal/Owner SPA dashboard view.** C.8d ships the *data* — `GET /v1/personal/dashboard` (per-domain coverage + understanding + skills/timeline/professional) and live updates over the shared `/v1/events/stream` SSE feed — and a CLI (`atlas personal dashboard`), but no dedicated `/ui` panel. Add a console view rendering the coverage bars + profile with the P9 "why" and confirm/correct controls. | C.8d | Phase D / UI pass |
+| OI-C12 | 🟢 | P3 | **Personal/Owner SPA dashboard view.** Console `/ui` Personal panel: coverage bars, skills/timeline/professional/identity with P9 "why", Confirm/Reject for inferred facts, Infer + draft-resume actions over `/v1/personal/*`. | C.8d | closed OI-C12 |
 | OI-C13 | 🟢 | P3 | **Conversation → experience extraction.** `build_conversation_experiences` distills owner-stated skills from user turns; `IngestionService` writes them when `source=conversation` + `extract_findings` (Owner Knowledge). | C.8a | closed OI-C13 |
 
 ---
@@ -145,6 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-C12 | **Personal/Owner SPA dashboard** — `/ui` Personal panel + coverage/confirm/infer/draft. | _(pending commit)_ |
 | OI-D1 | **Live market-data feed** — Yahoo + Polygon/AV live clients; NSE/BSE skeletons. | `df2d71b` |
 | OI-C11 | **Personal proficiency + timeline years + heuristic professional.** | `869ec44` |
 | OI-C13 | **Conversation → experience extraction** — `build_conversation_experiences` + ingest wire. | `7f35a28` |

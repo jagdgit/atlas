@@ -133,6 +133,7 @@ function switchView(view) {
   else if (view === "programs") loadPrograms();
   else if (view === "missions") loadMissions();
   else if (view === "engineering") loadEngineering();
+  else if (view === "personal") loadPersonal();
   else if (view === "jobs") { loadJobs(); startJobStream(); }
   else if (view === "system") loadSystem();
 }
@@ -254,6 +255,160 @@ async function sendMessage(text) {
     state.sending = false;
     $("#composer-send").disabled = false;
   }
+}
+
+/* ---------- personal / owner dashboard (OI-C12) ---------- */
+async function loadPersonal() {
+  try {
+    const d = await api("/v1/personal/dashboard?include_inferred=true");
+    renderPersonalDashboard(d);
+  } catch (err) { toast(err.message); }
+}
+
+function renderPersonalDashboard(d) {
+  const covBox = $("#personal-coverage");
+  const body = $("#personal-body");
+  if (!covBox || !body) return;
+  covBox.innerHTML = "";
+  body.innerHTML = "";
+
+  const domains = (d.coverage && d.coverage.domains) || [];
+  const overall = (d.coverage && d.coverage.overall) || {};
+  covBox.append(el("div", { class: "panel-head" },
+    el("h3", { class: "section-h", text: "Knowledge coverage" }),
+    el("span", { class: "muted small",
+      text: overall.coverage_pct != null
+        ? ` overall ${overall.coverage_pct}% cov · ${overall.understanding_pct || 0}% understanding`
+        : "" })));
+  if (!domains.length) {
+    covBox.append(el("div", { class: "muted", style: "padding:8px 22px",
+      text: "No coverage rows yet — Owner Knowledge ticks fill this." }));
+  } else {
+    const list = el("div", { class: "cov-list" });
+    for (const row of domains) {
+      list.append(covBar(row.domain, row.coverage_pct, row.understanding_pct));
+    }
+    covBox.append(list);
+  }
+
+  const counts = d.counts || {};
+  body.append(el("div", { class: "status-cards", style: "padding-top:8px" },
+    opsCard("skills", counts.skills || (d.skills || []).length),
+    opsCard("timeline", counts.timeline || (d.timeline || []).length),
+    opsCard("professional", counts.professional || (d.professional || []).length),
+    opsCard("identity", (d.identity || []).length),
+  ));
+
+  body.append(personalFactSection("Skills", d.skills || [], { why: true }));
+  body.append(personalFactSection("Timeline", d.timeline || [], { why: true }));
+  body.append(personalFactSection("Professional", d.professional || [], { why: true }));
+  body.append(personalFactSection("Identity", d.identity || [], { why: true }));
+}
+
+function covBar(domain, covPct, undPct) {
+  const c = Math.max(0, Math.min(100, Number(covPct) || 0));
+  const u = Math.max(0, Math.min(100, Number(undPct) || 0));
+  const row = el("div", { class: "cov-row" });
+  row.append(el("div", { class: "cov-label", text: domain }));
+  const track = el("div", { class: "cov-track" });
+  // Dual bars: coverage (accent) + understanding (muted) — width via background-size
+  track.append(el("div", { class: "cov-fill cov",
+    style: `background-size:${c}% 100%`, title: `coverage ${c}%` }));
+  track.append(el("div", { class: "cov-fill und",
+    style: `background-size:${u}% 100%`, title: `understanding ${u}%` }));
+  row.append(track);
+  row.append(el("div", { class: "cov-pct muted small", text: `${c}% / ${u}%` }));
+  return row;
+}
+
+function personalFactSection(title, facts, opts) {
+  const wrap = el("div", { class: "personal-section" });
+  wrap.append(el("h3", { class: "section-h", text: `${title} (${facts.length})` }));
+  if (!facts.length) {
+    wrap.append(el("div", { class: "muted", style: "padding:4px 22px 12px", text: "None yet." }));
+    return wrap;
+  }
+  for (const f of facts) {
+    wrap.append(personalFactCard(f, opts));
+  }
+  return wrap;
+}
+
+function personalFactCard(f, opts) {
+  const card = el("div", { class: "personal-fact" });
+  const head = el("div", { class: "personal-fact-head" });
+  head.append(el("span", {
+    class: "badge " + (f.state === "verified" ? "ok" : f.state === "rejected" ? "fail" : "warn"),
+    text: f.state || "?",
+  }));
+  const skill = (f.value && f.value.proficiency) ? ` · ${f.value.proficiency}` : "";
+  head.append(el("span", { class: "muted small",
+    text: ` ${(f.category || "")}${skill}` }));
+  card.append(head);
+  card.append(el("div", { class: "personal-stmt", text: f.statement || f.key || f.id }));
+  if (opts && opts.why) {
+    const whyBits = [];
+    if (f.source) whyBits.push(`source ${f.source}`);
+    if (f.confidence) whyBits.push(f.confidence);
+    const prov = f.provenance || {};
+    if (prov.maturity) whyBits.push(`maturity ${prov.maturity}`);
+    if (prov.proficiency) whyBits.push(prov.proficiency);
+    if ((prov.sources || []).length) whyBits.push(`${prov.sources.length} evidence`);
+    if (whyBits.length) {
+      card.append(el("div", { class: "muted small", text: "why: " + whyBits.join(" · ") }));
+    }
+  }
+  if (f.state === "inferred") {
+    const actions = el("div", { class: "personal-actions" });
+    actions.append(el("button", {
+      class: "link", type: "button",
+      onclick: () => personalConfirm(f.id),
+    }, "Confirm"));
+    actions.append(el("button", {
+      class: "link", type: "button",
+      onclick: () => personalReject(f.id),
+    }, "Reject"));
+    card.append(actions);
+  }
+  return card;
+}
+
+async function personalConfirm(id) {
+  try {
+    await api(`/v1/personal/facts/${id}/confirm`, { method: "POST" });
+    toast("Confirmed");
+    loadPersonal();
+  } catch (err) { toast(err.message); }
+}
+
+async function personalReject(id) {
+  try {
+    await api(`/v1/personal/facts/${id}/reject`, { method: "POST" });
+    toast("Rejected");
+    loadPersonal();
+  } catch (err) { toast(err.message); }
+}
+
+async function personalInfer() {
+  try {
+    toast("Inferring profile…");
+    const out = await api("/v1/personal/infer", { method: "POST" });
+    toast(`Inferred skills=${out.skills || 0} timeline=${out.timeline || 0} professional=${out.professional || 0}`);
+    loadPersonal();
+  } catch (err) { toast(err.message); }
+}
+
+async function personalDraft() {
+  try {
+    const out = await api("/v1/personal/draft?kind=resume&include_inferred=false");
+    const body = $("#personal-body");
+    if (!body) return;
+    const pre = el("pre", { class: "personal-draft", text: out.markdown || "(empty — confirm skills first)" });
+    const existing = body.querySelector(".personal-draft");
+    if (existing) existing.replaceWith(pre);
+    else body.prepend(pre);
+    toast("Resume draft (verified facts only)");
+  } catch (err) { toast(err.message); }
 }
 
 /* ---------- engineering (Phase B · §B.7) ---------- */
@@ -1533,6 +1688,9 @@ function init() {
   if (feedBtn) feedBtn.addEventListener("click", registerSampleMarketData);
   $("#system-refresh").addEventListener("click", loadSystem);
   $("#overview-refresh").addEventListener("click", refreshOps);
+  $("#personal-refresh")?.addEventListener("click", loadPersonal);
+  $("#personal-infer")?.addEventListener("click", personalInfer);
+  $("#personal-draft")?.addEventListener("click", personalDraft);
   $("#eng-refresh").addEventListener("click", loadEngineering);
   $("#eng-form").addEventListener("submit", (e) => {
     e.preventDefault();

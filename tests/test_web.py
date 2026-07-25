@@ -34,6 +34,8 @@ def test_ui_index_served_without_auth():
     assert resp.status_code == 200
     assert "Atlas Console" in resp.text
     assert "app.js" in resp.text
+    assert 'data-view="personal"' in resp.text
+    assert 'id="view-personal"' in resp.text
 
 
 def test_ui_assets_served():
@@ -41,10 +43,13 @@ def test_ui_assets_served():
     js = client.get("/ui/app.js")
     assert js.status_code == 200
     assert "/v1/chat" in js.text  # the SPA talks to the real API
+    assert "loadPersonal" in js.text
+    assert "/v1/personal/dashboard" in js.text
     assert "no-cache" in (js.headers.get("cache-control") or "").lower()
     css = client.get("/ui/styles.css")
     assert css.status_code == 200
     assert "--accent" in css.text
+    assert "personal-coverage" in css.text
     assert "no-cache" in (css.headers.get("cache-control") or "").lower()
 
 
