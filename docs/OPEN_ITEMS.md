@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-A3 resource caps closed).
+> **Last updated:** 2026-07-25 (OI-C7 migration honesty + OI-D2 fair-share closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -31,7 +31,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C11 | 🟢 | P2 | **Personal auto-inference: proficiency + timeline years + heuristic professional.** Skills get graded `proficiency`; stated `years` feed timeline tenure; role/publication heuristics from Experience text. Full CV / Research-finding professional auto-inference still deferred. | C.7b | closed OI-C11 |
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
-| OI-C7 | 🟡 | P3 | **Migration-number placeholders.** Real numbers are assigned sequentially at build time. Through Phase C: `0028`–`0038` as listed; C.8/C.9 needed no migration. Post-C: `0039`=decision, `0040`=decision_approvals, `0041`=sim_trading, `0042`=schedule_cron. **Next free slot: `0043`.** Keep the PHASE_C table honest as slots are built. | C.2 | ongoing |
+| OI-C7 | 🟢 | P3 | **Migration-number placeholders.** Registry honest through `0042`=schedule_cron. Through Phase C: `0028`–`0038`; C.8/C.9 no migration; post-C: `0039`–`0042`. **Next free slot: `0043`.** Re-open this row when a new migration lands without updating the plans. | C.2 | closed OI-C7 |
 | OI-C12 | 🟢 | P3 | **Personal/Owner SPA dashboard view.** Console `/ui` Personal panel: coverage bars, skills/timeline/professional/identity with P9 "why", Confirm/Reject for inferred facts, Infer + draft-resume actions over `/v1/personal/*`. | C.8d | closed OI-C12 |
 | OI-C13 | 🟢 | P3 | **Conversation → experience extraction.** `build_conversation_experiences` distills owner-stated skills from user turns; `IngestionService` writes them when `source=conversation` + `extract_findings` (Owner Knowledge). | C.8a | closed OI-C13 |
 
@@ -44,7 +44,7 @@ Scope cuts recorded at plan time; remaining rows are post-Phase-D deferrals / fo
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
 | OI-D1 | 🟢 | P2 | **Live market-data feed** — `asset_replay` default; Yahoo opt-in; **Alpha Vantage + Polygon live** when env keys set; NSE/BSE remain ToS-gated skeletons + CapabilityGap. | MI.3 · `atlas/trading/adapters.py` | closed OI-D1 |
-| OI-D2 | 🔴 | P3 | **RM arbitration beyond weighted-priority + hard cap** (preemption, fair-share). | A7 — refine empirically. |
+| OI-D2 | 🟢 | P3 | **RM arbitration beyond weighted-priority + hard cap** — soft fair-share usage penalty on MissionArbiter (OI-D2). Preemption of *running* ticks remains out of scope (single-process; release-on-finish). | A7 | closed OI-D2 |
 | OI-D3 | 🟢 | P2 | **Phase D complete** (D.1–D.11 ✅), including applied watchers + e2e gate. | PHASE_D §3 |
 | OI-D4 | ⚪ | — | **Real-world side-effecting appliers** (e.g. actually submitting a draft) stay behind the P14 approval gate — out of scope until explicitly requested. | PHASE_D DD3/P14 |
 
@@ -146,6 +146,8 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-D2 | **Fair-share arbitration** — soft recent-admit penalty; no preemption. | _(pending commit)_ |
+| OI-C7 | **Migration-number honesty** — registry through `0042`; next free `0043`. | _(pending commit)_ |
 | OI-A3 | **Resource caps** — `llm_units_per_window` + `ram_mb` on MissionArbiter tick admit. | `86438ad` |
 | OI-A2 | **Job-advance priority threading** — plan/advance tasks inherit mission effective_priority. | `a68daf5` |
 | OI-A1 | **Cron schedules** — 5-field crontab on `scheduler.schedules` + claim advance. | `7facc54` |
