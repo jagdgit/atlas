@@ -146,8 +146,8 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-M7 | **Document strategy chain** — PDF text→OCR via ReaderStrategyChain. | _(pending commit)_ |
-| OI-M6 | **Video frames → OCR** — frame extract capability + reader. | _(pending commit)_ |
+| OI-M7 | **Document strategy chain** — PDF text→OCR via ReaderStrategyChain. | `f69a439` |
+| OI-M6 | **Video frames → OCR** — frame extract capability + reader. | `f69a439` |
 | OI-M5 | **Cloud STT seam** — pluggable cloud engine stub behind SpeechEngine. | `a05c5c1` |
 | OI-M3 | **Live caption ingest** — chunk buffer → transcript/VTT. | `325caae` |
 | OI-M2 | **Speaker diarization** — capability + label-preserving enrich + P15 gap. | `3b41768` |
