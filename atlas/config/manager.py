@@ -346,7 +346,11 @@ class SpeechPluginConfig(BaseModel):
     # Optional local speech-to-text (Media Reader Family · M.5 / MD5). Default OFF —
     # missing Whisper must never block boot; operators opt in when the binary/model
     # is installed. Evidence L1; model stamped on transcript artifacts (P9).
+    # OI-M5: engine=cloud selects CloudSttEngine stub (credential-gated; no live HTTP).
     enabled: bool = False
+    engine: str = "whisper"  # whisper | cloud
+    provider: str = ""  # informational cloud provider id (e.g. openai_whisper_api)
+    api_key_env: str = "ATLAS_SPEECH_API_KEY"
     model: str = "base"  # whisper model size: tiny|base|small|medium|large
     language: str = ""  # empty => auto-detect
     binary: str = "whisper"  # CLI name on PATH (openai-whisper); Python package is fallback

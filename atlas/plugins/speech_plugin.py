@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from atlas.plugins.base import BasePlugin
 from atlas.services.base import HealthStatus
-from atlas.speech.engine import SpeechClient, WhisperEngine
+from atlas.speech.engine import SpeechClient
 
 if TYPE_CHECKING:
     from atlas.config import AtlasConfig
@@ -57,7 +57,12 @@ class SpeechPlugin(BasePlugin):
         elif ready:
             detail = f"speech_to_text ready (model={self._client.model})"
         else:
-            detail = "speech_to_text unavailable (whisper not installed)"
+            eng = getattr(self._client._engine, "name", "speech")  # noqa: SLF001
+            detail = (
+                "speech_to_text unavailable (cloud credentials missing)"
+                if eng == "cloud_stt"
+                else "speech_to_text unavailable (whisper not installed)"
+            )
         return HealthStatus(
             healthy=True,  # missing STT is degraded, not failed
             detail=detail,
@@ -66,9 +71,11 @@ class SpeechPlugin(BasePlugin):
 
 
 def build(config: "AtlasConfig") -> SpeechPlugin:
+    from atlas.speech.cloud import build_speech_engine
+
     speech = config.plugins.speech
     client = SpeechClient(
-        WhisperEngine(binary=speech.binary, timeout=speech.timeout),
+        build_speech_engine(speech),
         enabled=speech.enabled,
         model=speech.model,
         language=speech.language or None,

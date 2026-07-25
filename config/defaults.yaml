@@ -308,6 +308,9 @@ plugins:
     max_bytes: 10485760     # 10 MiB per-image cap
   speech:                   # M.5: optional speech_to_text (Whisper); default OFF
     enabled: false          # set true when whisper CLI/package is installed
+    engine: whisper         # whisper | cloud (OI-M5 stub; cloud needs api_key_env)
+    provider: ""            # e.g. openai_whisper_api (informational until live provider)
+    api_key_env: ATLAS_SPEECH_API_KEY
     model: base             # tiny|base|small|medium|large
     language: ""            # empty => auto-detect
     binary: whisper         # openai-whisper CLI on PATH

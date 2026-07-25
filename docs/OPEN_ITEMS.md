@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-M3 live caption ingest closed).
+> **Last updated:** 2026-07-25 (OI-M5 cloud STT seam closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -109,7 +109,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-M2 | 🟢 | P3 | Speaker diarization on transcripts — `speaker_diarization` capability + label-preserving engine; P15 gap when off/no labels; MediaIngestor enrich hook. | ML diarization later behind same seam | closed OI-M2 |
 | OI-M3 | 🟢 | P3 | Streaming / live caption ingest — `live_caption_ingest` chunk buffer → VTT/transcript; P15 gap when off. | No livestream socket client | closed OI-M3 |
 | OI-M4 | ⚪ | — | CCTV / continuous video missions. | out of scope until requested |
-| OI-M5 | 🔴 | P3 | Cloud STT providers (only if local Whisper insufficient). | defer |
+| OI-M5 | 🟢 | P3 | Cloud STT providers — `CloudSttEngine` seam (`engine: cloud`); credential-gated stub, no live HTTP; P15 gap without key / until provider wired. | Live OpenAI/Deepgram deferred | closed OI-M5 |
 | OI-M6 | 🔴 | P3 | **Video frames → Image/OCR Readers** (slides/diagrams aligned with speech). | Architecture allows; not now |
 | OI-M7 | 🔴 | P3 | Reuse `ReaderStrategyChain` for non-media Readers (documents, git, OCR, CAD). | After media proves the pattern |
 
@@ -146,6 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-M5 | **Cloud STT seam** — pluggable cloud engine stub behind SpeechEngine. | _(pending commit)_ |
 | OI-M3 | **Live caption ingest** — chunk buffer → transcript/VTT. | `325caae` |
 | OI-M2 | **Speaker diarization** — capability + label-preserving enrich + P15 gap. | `3b41768` |
 | OI-F4 | **Post-decision feedback loops** — Recommendation→Outcome→Difference→Learning convention. | `39fbfcd` |

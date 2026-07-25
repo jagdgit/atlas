@@ -217,7 +217,7 @@ class SpeechClient:
         base: dict[str, Any] = {
             "path": str(p),
             "engine": getattr(self._engine, "name", "unknown"),
-            "model": f"whisper:{self._model}",
+            "model": f"{getattr(self._engine, 'name', 'speech')}:{self._model}",
             "capability_gap": CAPABILITY_GAP,
             "evidence_level": 1,
         }
@@ -230,12 +230,20 @@ class SpeechClient:
                 "reason": "speech_to_text disabled (set plugins.speech.enabled)",
             }
         if not self._engine.available():
+            eng = getattr(self._engine, "name", "speech")
+            if eng == "cloud_stt":
+                reason = (
+                    "speech_to_text unavailable "
+                    f"(cloud STT missing credentials for {getattr(self._engine, 'api_key_env', 'API key')})"
+                )
+            else:
+                reason = "speech_to_text unavailable (whisper not installed)"
             return {
                 **base,
                 "outcome": STT_UNAVAILABLE,
                 "text": "",
                 "segments": [],
-                "reason": "speech_to_text unavailable (whisper not installed)",
+                "reason": reason,
             }
         if not p.is_file():
             return {

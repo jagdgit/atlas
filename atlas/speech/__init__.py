@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from atlas.speech.cloud import CloudSttEngine, build_speech_engine
 from atlas.speech.engine import (
     CAPABILITY_GAP,
     STT_EMPTY,
@@ -16,6 +17,7 @@ from atlas.speech.engine import (
 
 __all__ = [
     "CAPABILITY_GAP",
+    "CloudSttEngine",
     "STT_EMPTY",
     "STT_ERROR",
     "STT_OK",
@@ -24,4 +26,5 @@ __all__ = [
     "SpeechEngineError",
     "SpeechUnavailable",
     "WhisperEngine",
+    "build_speech_engine",
 ]

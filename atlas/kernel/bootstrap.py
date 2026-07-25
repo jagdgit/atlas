@@ -51,7 +51,7 @@ from atlas.readers import (
     SpeechToTextReader,
     TranscriptFileReader,
 )
-from atlas.speech.engine import SpeechClient, WhisperEngine
+from atlas.speech.engine import SpeechClient
 from atlas.repositories.candidate_repo import CandidateRepository
 from atlas.repositories.experience_store import ExperienceStore
 from atlas.repositories.personal_repo import PersonalRepository
@@ -1048,8 +1048,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.readers.audio_demux"),
     )
     speech_cfg = cfg.plugins.speech
+    from atlas.speech.cloud import build_speech_engine
+
     speech_client = SpeechClient(
-        WhisperEngine(binary=speech_cfg.binary, timeout=speech_cfg.timeout),
+        build_speech_engine(speech_cfg),
         enabled=speech_cfg.enabled,
         model=speech_cfg.model,
         language=speech_cfg.language or None,
