@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-M2 speaker diarization closed).
+> **Last updated:** 2026-07-25 (OI-M3 live caption ingest closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -107,7 +107,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-M1 | 🟢 | P1 | Official YouTube captions API — executable when `plugins.youtube.api_key` set (download may still need OAuth). | `atlas/transcripts/official_captions.py` |
 | OI-UI0 | 🟢 | P1 | **Job UI live updates** — sequential poll (no race) + SSE `job.activity`/`job.step_blocked`/`job.finalized` refresh; static `/ui` assets served with `Cache-Control: no-cache` so deploys do not require a hard-refresh. | `atlas/web/` · `app.js` | closed OI-UI0 |
 | OI-M2 | 🟢 | P3 | Speaker diarization on transcripts — `speaker_diarization` capability + label-preserving engine; P15 gap when off/no labels; MediaIngestor enrich hook. | ML diarization later behind same seam | closed OI-M2 |
-| OI-M3 | 🔴 | P3 | Streaming / live caption ingest. | defer |
+| OI-M3 | 🟢 | P3 | Streaming / live caption ingest — `live_caption_ingest` chunk buffer → VTT/transcript; P15 gap when off. | No livestream socket client | closed OI-M3 |
 | OI-M4 | ⚪ | — | CCTV / continuous video missions. | out of scope until requested |
 | OI-M5 | 🔴 | P3 | Cloud STT providers (only if local Whisper insufficient). | defer |
 | OI-M6 | 🔴 | P3 | **Video frames → Image/OCR Readers** (slides/diagrams aligned with speech). | Architecture allows; not now |
@@ -146,6 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-M3 | **Live caption ingest** — chunk buffer → transcript/VTT. | _(pending commit)_ |
 | OI-M2 | **Speaker diarization** — capability + label-preserving enrich + P15 gap. | `3b41768` |
 | OI-F4 | **Post-decision feedback loops** — Recommendation→Outcome→Difference→Learning convention. | `39fbfcd` |
 | OI-F3 | **System Introspection** — aggregate self-analysis mission + report API. | `709bb4c` |

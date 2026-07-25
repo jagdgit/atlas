@@ -359,6 +359,12 @@ class DiarizationPluginConfig(BaseModel):
     enabled: bool = False
 
 
+class LiveCaptionsPluginConfig(BaseModel):
+    # Optional live caption chunk ingest (OI-M3). Default OFF. No livestream client —
+    # append chunks → finalize transcript/VTT (P15 gap when disabled).
+    enabled: bool = False
+
+
 class BrowserPluginConfig(BaseModel):
     # Headless browser automation (S20e). Degrades gracefully if Playwright/browser
     # binary are absent. Read-only: navigate + extract only, robots respected.
@@ -399,6 +405,7 @@ class PluginsConfig(BaseModel):
     ocr: OCRPluginConfig = OCRPluginConfig()
     speech: SpeechPluginConfig = SpeechPluginConfig()
     diarization: DiarizationPluginConfig = DiarizationPluginConfig()
+    live_captions: LiveCaptionsPluginConfig = LiveCaptionsPluginConfig()
     mail: MailPluginConfig = MailPluginConfig()
     browser: BrowserPluginConfig = BrowserPluginConfig()
 

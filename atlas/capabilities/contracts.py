@@ -43,6 +43,7 @@ CAP_BROWSER = "browser"
 CAP_RESEARCH = "research"
 CAP_SPEECH_TO_TEXT = "speech_to_text"
 CAP_SPEAKER_DIARIZATION = "speaker_diarization"
+CAP_LIVE_CAPTION_INGEST = "live_caption_ingest"
 # Stage 3B knowledge-OS capabilities (stubs until providers land; D3B.25).
 CAP_RETRIEVAL = "retrieval"
 CAP_SYNTHESIS = "synthesis"
@@ -226,6 +227,15 @@ class SpeakerDiarizationCapability(Protocol):
     """Optional speaker labels on transcript segments (OI-M2)."""
 
     def diarize(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class LiveCaptionIngestCapability(Protocol):
+    """Append live caption chunks → transcript materialization (OI-M3)."""
+
+    def open(self, *args: Any, **kwargs: Any) -> Any: ...
+    def append(self, *args: Any, **kwargs: Any) -> Any: ...
+    def finalize(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @runtime_checkable
@@ -442,6 +452,17 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         quality_notes=(
             "Default off (plugins.diarization.enabled). Label-preserving engine ships first; "
             "ML diarization is a later opt-in behind the same capability."
+        ),
+    ),
+    CAP_LIVE_CAPTION_INGEST: CapabilitySpec(
+        CAP_LIVE_CAPTION_INGEST,
+        LiveCaptionIngestCapability,
+        "Ingest live / streaming caption chunks into a transcript Asset.",
+        "Operators or live clients push chunks; Atlas materializes VTT/text without cloud STT.",
+        "OI-M3",
+        quality_notes=(
+            "Default off (plugins.live_captions.enabled). No livestream socket client — "
+            "chunk buffer + finalize only (P15 gap when disabled)."
         ),
     ),
     CAP_MAIL: CapabilitySpec(
