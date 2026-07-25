@@ -146,7 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-M5 | **Cloud STT seam** — pluggable cloud engine stub behind SpeechEngine. | _(pending commit)_ |
+| OI-M5 | **Cloud STT seam** — pluggable cloud engine stub behind SpeechEngine. | `a05c5c1` |
 | OI-M3 | **Live caption ingest** — chunk buffer → transcript/VTT. | `325caae` |
 | OI-M2 | **Speaker diarization** — capability + label-preserving enrich + P15 gap. | `3b41768` |
 | OI-F4 | **Post-decision feedback loops** — Recommendation→Outcome→Difference→Learning convention. | `39fbfcd` |
