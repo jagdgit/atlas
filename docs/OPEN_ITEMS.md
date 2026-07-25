@@ -21,8 +21,8 @@ These were introduced during Phase C and are the most likely to be picked up nex
 
 | ID | Status | Pri | Item | Introduced | Target |
 |----|--------|-----|------|-----------|--------|
-| OI-C1 | 🔴 | P2 | **Relocate `DerivedArtifactStore` + `ReaderRegistry` to neutral packages** (`atlas/artifacts/`, `atlas/readers/`) and re-export from `atlas/engineering/`. Today the Document Reader is **duck-typed** against the artifact cache to avoid coupling, but the store/registry still physically live under `atlas/engineering/`. Mechanical move. | C.2b | C.3–C.6 (before more non-code readers) |
-| OI-C2 | 🔴 | P2 | **Unify the Reader Registry** so non-code readers (Document, future chat/CAD/MATLAB) register there too. The current coverage matrix is code-capability-specific (`symbols`/`imports`/`call_graph`/…); needs a generic capability axis (e.g. `text`, `sections`, `tables`). Document Reader currently exposes its own `supported_extensions()` and is **not** in the registry. | C.2b | with OI-C1 |
+| OI-C1 | 🟢 | P2 | **Relocate `DerivedArtifactStore` + `ReaderRegistry`** to `atlas/artifacts/` + `atlas/readers/registry.py`; engineering re-exports kept. | C.2b | closed OI-C1 |
+| OI-C2 | 🟢 | P2 | **Unify the Reader Registry** — document/conversation registered with `text`/`sections`/`tables` axis (VERSION 2.0.0). | C.2b | closed OI-C2 |
 | OI-C3 | 🟢 | P2 | **Unified-pipeline idempotency on the non-embed path.** `ingest_text` short-circuits when status is already `chunked`/`embedded` (no re-chunk). | C.2c | closed EX/OI-C3 |
 | OI-C4 | 🟢 | P2 | **Back-fill existing documents to assets lazily.** `IngestionService.backfill_orphan_documents` + Owner Knowledge tick drain; `GET /v1/knowledge/orphans`, `POST /v1/knowledge/backfill-assets`, `atlas backfill-assets`. | C.2c | closed OI-C4 |
 | OI-C5 | 🟢 | P2 | **Wire `IngestionService` + `CandidateConsumer`.** Bridge CLI/`POST /v1/ingest`; scheduled `candidates_drain` + `candidates_prune`; live `EmbeddingIdentityResolver` on consolidator. | C.2c / C.3g | closed OI-C5 |

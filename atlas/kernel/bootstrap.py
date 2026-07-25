@@ -28,7 +28,7 @@ from atlas.execution.executor import ToolExecutor
 from atlas.code.parser import CodeParser
 from atlas.code.service import CodeService
 from atlas.engineering.architecture import ArchitectureGraphStore
-from atlas.engineering.artifacts import DerivedArtifactStore
+from atlas.artifacts import DerivedArtifactStore
 from atlas.engineering.design_review import DesignReviewer
 from atlas.engineering.findings import EngineeringFindingWriter
 from atlas.ingestion.acquire import AssetAcquirer
@@ -80,7 +80,7 @@ from atlas.workers.job_watcher import JobWatcher
 from atlas.workers.tech_security import TechSecurityWatcher
 from atlas.workers.self_improvement import SelfImprovementWatcher
 from atlas.engineering.ingest import RepoAcquirer
-from atlas.engineering.readers import ReaderRegistry
+from atlas.readers.registry import ReaderRegistry
 from atlas.intelligence.service import CodeStoreSink, IntelligenceService
 from atlas.models.learning import STORE_CODE
 from atlas.sandbox.backends import create_backend
@@ -838,7 +838,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # mining, with code-aware chunking into the knowledge base and a `code`-role LLM
     # explanation grounded on the parsed structure.
     # Reader Registry (Phase B · §B.4, BB10): who can read which extension + coverage matrix.
-    reader_registry = ReaderRegistry(logger=get_logger("atlas.engineering.readers"))
+    reader_registry = ReaderRegistry(logger=get_logger("atlas.readers.registry"))
     code_service = CodeService(
         CodeParser(max_file_bytes=cfg.code.max_file_bytes),
         knowledge=knowledge_service,
@@ -891,7 +891,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # re-parsing. Engineering findings writer promotes structural discoveries into
     # knowledge.findings (domain=code) with supersession — governed via the same sink.
     derived_artifacts = DerivedArtifactStore(
-        storage_manager, logger=get_logger("atlas.engineering.artifacts")
+        storage_manager, logger=get_logger("atlas.artifacts.store")
     )
     engineering_findings = EngineeringFindingWriter(
         finding_repo, logger=get_logger("atlas.engineering.findings")
