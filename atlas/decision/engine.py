@@ -51,6 +51,7 @@ class DecisionEngine:
         *,
         rules: DecisionRuleRegistry | None = None,
         policy: Any = None,
+        learning: Any = None,
         engineering: Any = None,
         research: Any = None,
         personal: Any = None,
@@ -66,6 +67,8 @@ class DecisionEngine:
         self._rules = rules or DecisionRuleRegistry()
         # Duck-typed PolicyService (``retrieval_influence``/``advice_influence``); None → no arbitration.
         self._policy = policy
+        # Duck-typed LearningService (``soft_bias_terms``); None → no Experience soft bias (OI-MP5).
+        self._learning = learning
         # Policy weights are **retrieval-tuned** (±POLICY_INFLUENCE_MAX ≈ 0.02 — a re-ranking nudge).
         # A *decision's* option scores live on a larger scale (a trading signal ~O(1)), so the engine
         # amplifies policy influence to **decision scale** before folding it in (DD5 — arbitration, not
@@ -230,8 +233,6 @@ class DecisionEngine:
         )
 
     def _influences(self, request: DecisionRequest) -> list[dict[str, Any]]:
-        if self._policy is None:
-            return []
         scopes: list[str] = []
         if request.mission_id:
             scopes.append(f"mission:{request.mission_id}")
@@ -245,20 +246,62 @@ class DecisionEngine:
             raw = str(d or "").strip()
             if raw:
                 scopes.append(raw if raw.startswith("domain:") else f"domain:{raw}")
-        try:
-            influences = (
-                self._policy.advice_influence(scopes=scopes)
-                if scopes
-                else self._policy.advice_influence()
-            )
-        except Exception as exc:  # noqa: BLE001 - policy is advisory; never block a decision
-            self._logger.warning("policy influence failed: %s", exc)
-            return []
+
+        influences: list[dict[str, Any]] = []
+        if self._policy is not None:
+            try:
+                if scopes:
+                    try:
+                        influences = list(
+                            self._policy.advice_influence(scopes=scopes) or []
+                        )
+                    except TypeError:
+                        # Hermetic fakes / older callables only accept a single scope=.
+                        influences = list(
+                            self._policy.advice_influence(scope=scopes[0]) or []
+                        )
+                else:
+                    influences = list(self._policy.advice_influence() or [])
+            except Exception as exc:  # noqa: BLE001 - policy is advisory; never block a decision
+                self._logger.warning("policy influence failed: %s", exc)
+                influences = []
+
+        # OI-MP5 — fold operator-enabled Experience soft-bias into the same arbitration path.
+        influences.extend(self._experience_influences(request))
         if self._influence_scale != 1.0:
             # Amplify retrieval-scale weights to decision scale (see __init__); signed + bounded.
             for inf in influences:
+                # Experience soft-bias is already decision-scaled; skip re-amplifying those.
+                if str(inf.get("id") or "").startswith("exp-bias:"):
+                    continue
                 inf["weight"] = float(inf.get("weight") or 0.0) * self._influence_scale
         return influences
+
+    def _experience_influences(self, request: DecisionRequest) -> list[dict[str, Any]]:
+        """Signed soft nudges from bias-enabled Experiences (OI-MP5 — missions teach missions)."""
+        if self._learning is None or not hasattr(self._learning, "soft_bias_terms"):
+            return []
+        try:
+            terms = list(self._learning.soft_bias_terms(limit=12) or [])
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("soft_bias_terms failed: %s", exc)
+            return []
+        out: list[dict[str, Any]] = []
+        for i, raw in enumerate(terms):
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            tokens = [t for t in text.lower().replace("-", " ").split() if len(t) > 2][:6]
+            if not tokens:
+                continue
+            out.append({
+                "id": f"exp-bias:{i}",
+                "rule": "prefer",
+                "subject": text[:80],
+                "terms": tokens,
+                "weight": 0.08,  # decision-scale nudge; smaller than strong policy
+            })
+        return out
 
     def _model_versions(self) -> dict[str, Any]:
         base = {"decision_engine": self.VERSION}

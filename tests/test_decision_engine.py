@@ -75,13 +75,15 @@ class _GapRule:
         raise CapabilityGap("market_data:NASDAQ", "no data source adapter configured")
 
 
-def _engine(rule=None, *, policy=None, narrator=None):
+def _engine(rule=None, *, policy=None, learning=None, narrator=None):
     reg = DecisionRuleRegistry()
     if rule is not None:
         reg.register(rule)
     repo = _FakeRepo()
     events = _FakeEvents()
-    engine = DecisionEngine(repo, rules=reg, policy=policy, narrator=narrator, events=events)
+    engine = DecisionEngine(
+        repo, rules=reg, policy=policy, learning=learning, narrator=narrator, events=events
+    )
     return engine, repo, events
 
 
@@ -177,6 +179,29 @@ def test_policy_influence_reorders_and_is_explained():
     assert d.action["key"] == "beta"
     assert d.policy_ids == ["P-1"]
     assert "P-1" in d.why
+
+
+def test_experience_soft_bias_nudges_decision():
+    """OI-MP5 — bias-enabled Experiences lift matching options (missions teach missions)."""
+
+    class _EqualRule:
+        mission_type = "demo"
+        VERSION = "1.0.0"
+
+        def score(self, request, context):
+            return [
+                ScoredOption(key="alpha", score=0.5, tags=("momentum",)),
+                ScoredOption(key="beta", score=0.5, tags=("index", "fund")),
+            ]
+
+    class _Learning:
+        def soft_bias_terms(self, *, limit=12):
+            return ["prefer index fund lessons"]
+
+    engine, _, _ = _engine(_EqualRule(), learning=_Learning())
+    d = engine.decide(_req())
+    assert d.action["key"] == "beta"
+    assert any(str(p).startswith("exp-bias:") for p in d.policy_ids)
 
 
 def test_narrator_used_and_falls_back_to_deterministic():

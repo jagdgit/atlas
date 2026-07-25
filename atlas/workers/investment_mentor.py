@@ -14,6 +14,23 @@ from atlas.trading.mentor import synthesize_mentor_lesson
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 
+def _experience_id_from_write(result: Any) -> str | None:
+    """Pull the new experience id from remember_experience / journal result."""
+    if not isinstance(result, dict):
+        return None
+    event = result.get("event") if isinstance(result.get("event"), dict) else {}
+    for key in ("ref_id", "id"):
+        val = event.get(key) if event else None
+        if val:
+            return str(val)
+    exp = result.get("experience")
+    if isinstance(exp, dict) and exp.get("id"):
+        return str(exp["id"])
+    if result.get("ref_id"):
+        return str(result["ref_id"])
+    return None
+
+
 class InvestmentMentorWorker(PersistentWorker):
     type = "investment_mentor"
     VERSION = 1
@@ -75,6 +92,7 @@ class InvestmentMentorWorker(PersistentWorker):
             )
 
         wrote = False
+        experience_id: str | None = None
         if not cfg.get("dry_run"):
             try:
                 if self._experience_os is not None:
@@ -101,16 +119,32 @@ class InvestmentMentorWorker(PersistentWorker):
                             state=state,
                             note=f"mentor write failed: {out.get('error') or out}",
                         )
+                    experience_id = _experience_id_from_write(out.get("result"))
                 elif self._learning is not None:
                     payload = lesson.experience_payload()
-                    self._learning.remember_experience(**payload)
+                    result = self._learning.remember_experience(**payload)
                     wrote = True
+                    experience_id = _experience_id_from_write(result)
             except Exception as exc:  # noqa: BLE001
                 self._logger.warning("remember_experience failed: %s", exc)
                 return TickResult(
                     state=state,
                     note=f"mentor write failed: {exc}",
                 )
+
+        # OI-MP5 — mentor lessons teach Decision Simulation / retrieval when soft-bias is on
+        # (default). Operator can set enable_soft_bias: false to keep advice-only journals.
+        if (
+            wrote
+            and experience_id
+            and cfg.get("enable_soft_bias", True)
+            and self._learning is not None
+            and hasattr(self._learning, "enable_bias")
+        ):
+            try:
+                self._learning.enable_bias(str(experience_id), enabled=True)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("enable_bias skipped: %s", exc)
 
         state["last_lesson_fp"] = fingerprint
         state["last_lesson_title"] = lesson.title

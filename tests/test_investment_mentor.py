@@ -89,6 +89,43 @@ def test_mentor_worker_writes_once():
     assert len(remembered) == 1
 
 
+def test_mentor_enables_soft_bias_by_default():
+    remembered: list[dict] = []
+    biased: list[str] = []
+
+    class _Learning:
+        def list_experiences(self, *, limit=40):
+            return [
+                {
+                    "id": "e1",
+                    "title": "Paper trade closed on X: profit +1",
+                    "tags": ["x", "paper_trading", "profit", "markets"],
+                    "lessons": "Lesson: reinforce",
+                }
+            ]
+
+        def remember_experience(self, **fields):
+            remembered.append(fields)
+            return {"event": {"id": "ev1", "ref_id": "exp-mentor-1"}, "applied": True}
+
+        def enable_bias(self, experience_id, *, enabled=True):
+            biased.append(str(experience_id))
+            return {"bias_enabled": enabled}
+
+    worker = InvestmentMentorWorker(learning=_Learning())
+    r = worker.do_tick(
+        TickContext(
+            worker_id="w",
+            mission_id="m",
+            config={"focus": "markets"},
+            config_version=1,
+            state={},
+        )
+    )
+    assert "wrote=True" in r.note
+    assert biased == ["exp-mentor-1"]
+
+
 def test_strategy_mentor_caution_lowers_buy():
     rule = StrategyDecisionRule()
     ctx = IntelligenceContext()

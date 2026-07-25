@@ -93,7 +93,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-MP2 | 🟢 | P1 | **Split paper trading** — `decision_simulation` is primary; `paper_trading` remains compat alias. | `OI-MI0` |
 | OI-MP3 | 🟢 | P1 | **Daily Learning Governance Report** — `GET /v1/governance/daily` + `learning_governance` mission. | MP3 |
 | OI-MP4 | 🔴 | P3 | **Engineering Mentor Mission**. | Philosophy |
-| OI-MP5 | 🟡 | P2 | **Missions teach missions** — Investment Mentor → Experience OS → Decision Simulation advice bias (MI.7). | Philosophy MP6 |
+| OI-MP5 | 🟢 | P2 | **Missions teach missions** — Investment Mentor journals → optional soft-bias (default on) → Decision Engine Experience nudge + Decision Simulation `advice_for` / strategy mentor bias (MI.7). | Philosophy MP6 | closed OI-MP5 |
 | OI-PA0 | 🟢 | P1 | **Atlas Platform Architecture** — SETTLED master (Programs→Missions→Workers; Memory/Planning/Policy/Capability/Scheduler gaps tracked below). | `docs/ATLAS_PLATFORM_ARCHITECTURE.md` |
 | OI-PA-PLAN | 🟢 | P2 | **Planning OS** — goal → gaps → compare → risk → decide (`GET /v1/planning/plan`). | PA.1 |
 | OI-PA-MEM | 🟢 | P2 | **Memory hierarchy** — working / session / long_term ↔ Knowledge / Experience (`GET /v1/memory/hierarchy`). | MEM.1 |
@@ -145,7 +145,8 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-UI0 | **Job UI live updates** — sequential poll + SSE refresh; `/ui` no-cache headers. | commit (OI-UI0) |
+| OI-MP5 | **Missions teach missions** — mentor soft-bias + Decision Engine Experience nudge. | (this commit) |
+| OI-UI0 | **Job UI live updates** — sequential poll + SSE refresh; `/ui` no-cache headers. | `efc7091` |
 | OI-RH0 | **Media Report Honesty** (acquire-stop UX: NOT_APPLICABLE, Research blocked, operator strategies). | RH.1–RH.4 / `tests/test_media_report_honesty.py` |
 | OI-M0 | **Media Reader Family plan** (M.1–M.7) — Asset-first media Readers, optional Whisper, provider-agnostic fetch, research wiring + e2e gate. | M.7 / `tests/test_media_acquisition_gate.py` |
 | OI-G1 | **`.gitignore` silently ignored `atlas/{documents,knowledge,models}` source packages** (unanchored runtime-data rules) — 25 core source files were untracked. Anchored the rules to the repo root; source now tracked. | commit `57deac9` (2026-07-19) |

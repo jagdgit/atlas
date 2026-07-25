@@ -980,6 +980,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         DecisionRepository(db_manager),
         rules=DecisionRuleRegistry(),
         policy=policy_service,
+        learning=learning_service,
         engineering=intelligence_service,
         research=research_service,
         personal=personal_service,

@@ -214,7 +214,7 @@ Missions never depend on which extractor produced a finding.
 | V6 | Knowledge graph | ✅ KG.1 (derived) |
 | V6.5 | World Models framework + first domain packs | ✅ WM.1 |
 | V7 | Context API + Planning OS in mission loops | ✅ MCA.1 + PA.1 |
-| V8 | Experience OS + Mentors → better decisions | ✅ EX.1 + MI.7 (OI-MP5 soft bias remains) |
+| V8 | Experience OS + Mentors → better decisions | ✅ EX.1 + MI.7 + OI-MP5 (soft bias) |
 
 ---
 
