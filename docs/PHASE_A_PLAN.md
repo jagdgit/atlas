@@ -250,8 +250,9 @@ DB migration where noted.
 - **Done — budget (B1):** `WorkerManager` enforces **`max_concurrent_tasks` only** via an
   in-memory per-mission concurrency gate (`_acquire`/`_release` under a lock). A tick whose mission
   is at its cap is skipped (`{"skipped": "budget"}`) and emits `WorkerThrottled`; the slot is
-  released in a `finally`. `llm_units_per_window` and host-resource caps deferred (extensible
-  JSONB); `deadline`/`importance` advisory.
+  released in a `finally`. **OI-A3:** also enforces `llm_units_per_window` (sliding window,
+  default 300s) and optional `ram_mb` (deny when host available RAM < reserve). Remaining host
+  keys (`cpu_percent`, `network_mb_per_hour`, `runtime`) stay deferred; `deadline`/`importance` advisory.
 - **Acceptance met:** higher-priority mission ticks are claimed first (deterministic with
   `id ASC`); a mission at its `max_concurrent_tasks` cap is throttled while a within-budget mission
   proceeds; the throttle is observable via the `WorkerThrottled` event. Unit tests:
@@ -408,10 +409,9 @@ model every future Mission relies on; Phase B then becomes *capability expansion
 ## 8. Ambiguities — status
 
 All Phase-A ambiguities are now **resolved** (A7, A8, A-new1–8, B1–B9; see §1 and §6). **No open
-items block implementation.** Two design questions are intentionally **deferred to later phases**
-(not Phase A): the LLM-units/host-resource budget dimensions (B1, Phase D when concurrency exists)
-and cron scheduling (A.3, later phase). Both have forward-compatible schemas so enabling them is
-additive.
+items block implementation.** OI-A1 (cron) and OI-A3 (`llm_units_per_window` / `ram_mb`) closed later
+on the same schemas. Remaining deferred host keys (`cpu_percent`, `network_mb_per_hour`, `runtime`)
+and multi-process durable budget counters stay additive later.
 
 ---
 
@@ -422,7 +422,7 @@ visible instead of becoming permanent.
 
 | Compromise (Phase A) | Reason | Removal plan |
 |---|---|---|
-| **Budget = `max_concurrent_tasks` only** | No concurrent-worker pressure yet; keep it deterministic | Extend JSONB to LLM/CPU/RAM/network/runtime in Phase D when missions run simultaneously |
+| **Budget = `max_concurrent_tasks` only** | ✅ Extended OI-A3 — also `llm_units_per_window` + `ram_mb` on MissionArbiter | Remaining: `cpu_percent` / `network_mb_per_hour` / `runtime`; multi-process durable counters |
 | **Cron not implemented** (interval/continuous only) | ✅ Closed OI-A1 — `kind`/`cron_expr` on `scheduler.schedules` (migration `0042`) | — |
 | **Domain templates are stubs** | Real behavior needs Engineering/Personal/Decision (Phases B/C/D) | Fill in per template as its phase lands (config schema already versioned) |
 | **`scheduler.schedules` used by workers only** | Migrating backup/ingestion now widens Phase A unnecessarily | Migrate remaining self-re-enqueue producers onto it in a later phase |

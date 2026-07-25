@@ -1,4 +1,4 @@
-"""Cross-mission arbiter (Phase D · §D.4, roadmap A7).
+"""Cross-mission arbiter (Phase D · §D.4, roadmap A7 / OI-A3).
 
 The Resource Manager (``manager.py``) answers *machine* questions — CPU/RAM/thermal/LLM caps for one
 task. The **arbiter** answers the orthogonal *cross-mission* question: when several missions compete for
@@ -7,7 +7,8 @@ the same worker slots, **who goes first, and who waits?** It weighs each mission
 * ``effective_priority`` — policy band + priority + criticality (the primary signal),
 * **deadline urgency** — a bounded boost that grows as a deadline nears (or is overdue),
 * **importance** — an advisory tiebreak, then ``mission_id`` for full determinism, and enforces
-* **hard per-mission budget caps** (``max_concurrent_tasks``) and an optional **global** concurrency cap.
+* **hard per-mission budget caps** (``max_concurrent_tasks``, ``llm_units_per_window``, optional
+  ``ram_mb``) and an optional **global** concurrency cap.
 
 Fairness (A7 — "deferred, not starved indefinitely"): every deferral ages a mission's score upward by a
 bounded amount, so a repeatedly-passed-over mission eventually wins a slot. Admission resets its aging.
@@ -19,12 +20,15 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 # importance is a free-text advisory field; these are the values we rank, unknown → neutral.
 _IMPORTANCE_RANK: dict[str, int] = {"critical": 3, "high": 2, "normal": 1, "low": 0}
+
+DEFAULT_LLM_WINDOW_SECONDS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,12 @@ class MissionDemand:
     importance: str | None = None
     max_concurrent_tasks: int | None = None  # hard per-mission cap; None = unlimited
     inflight: int = 0  # this mission's current in-flight count (for the pure `select`)
+    # OI-A3 resource caps (None = unlimited / not checked)
+    llm_units_per_window: int | None = None
+    llm_window_seconds: int = DEFAULT_LLM_WINDOW_SECONDS
+    estimated_llm_units: int = 1  # coarse: one worker tick ≈ 1 unit
+    ram_mb: int | None = None
+    host_available_ram_mb: int | None = None  # filled by WorkerManager from machine RM
 
     def importance_rank(self) -> int:
         return _IMPORTANCE_RANK.get((self.importance or "").strip().lower(), 0)
@@ -60,7 +70,7 @@ class ArbitrationVerdict:
 
 class MissionArbiter:
     name = "mission_arbiter"
-    VERSION = "1.0.0"
+    VERSION = "1.1.0"
 
     def __init__(
         self,
@@ -84,6 +94,8 @@ class MissionArbiter:
         self._inflight: dict[str, int] = {}
         self._total = 0
         self._deferrals: dict[str, int] = {}  # mission → consecutive deferrals (anti-starvation aging)
+        # OI-A3: per-mission sliding window of (unix_ts, units) admissions.
+        self._llm_ledger: dict[str, deque[tuple[float, int]]] = {}
 
     # --- scoring (deterministic) ----------------------------------------
     def score(self, demand: MissionDemand, *, now: datetime | None = None, deferrals: int | None = None) -> float:
@@ -153,6 +165,32 @@ class MissionArbiter:
                 return ArbitrationVerdict(
                     demand.mission_id, False, f"global capacity {self._total}/{self._global_max}", score
                 )
+            # OI-A3 — host RAM reserve (soft): deny when machine available < mission reserve.
+            ram_need = demand.ram_mb
+            host_ram = demand.host_available_ram_mb
+            if ram_need is not None and ram_need > 0 and host_ram is not None and host_ram < ram_need:
+                self._defer_locked(demand.mission_id)
+                return ArbitrationVerdict(
+                    demand.mission_id,
+                    False,
+                    f"mission ram_mb {host_ram}/{ram_need}",
+                    score,
+                )
+            # OI-A3 — LLM units sliding window.
+            llm_cap = demand.llm_units_per_window
+            units = max(0, int(demand.estimated_llm_units or 0))
+            if llm_cap is not None and llm_cap > 0 and units > 0:
+                window = max(1, int(demand.llm_window_seconds or DEFAULT_LLM_WINDOW_SECONDS))
+                used = self._llm_used_locked(demand.mission_id, now=now, window_seconds=window)
+                if used + units > llm_cap:
+                    self._defer_locked(demand.mission_id)
+                    return ArbitrationVerdict(
+                        demand.mission_id,
+                        False,
+                        f"mission llm_units_per_window {used}/{llm_cap}",
+                        score,
+                    )
+                self._llm_record_locked(demand.mission_id, now=now, units=units, window_seconds=window)
             self._inflight[demand.mission_id] = current + 1
             self._total += 1
             self._deferrals.pop(demand.mission_id, None)  # admitted → reset aging (fairness)
@@ -170,6 +208,26 @@ class MissionArbiter:
     def _defer_locked(self, mission_id: str) -> None:
         self._deferrals[mission_id] = self._deferrals.get(mission_id, 0) + 1
 
+    def _llm_used_locked(self, mission_id: str, *, now: datetime, window_seconds: int) -> int:
+        ledger = self._llm_ledger.get(mission_id)
+        if not ledger:
+            return 0
+        cutoff = now.timestamp() - window_seconds
+        while ledger and ledger[0][0] < cutoff:
+            ledger.popleft()
+        if not ledger:
+            self._llm_ledger.pop(mission_id, None)
+            return 0
+        return sum(u for _, u in ledger)
+
+    def _llm_record_locked(
+        self, mission_id: str, *, now: datetime, units: int, window_seconds: int
+    ) -> None:
+        ledger = self._llm_ledger.setdefault(mission_id, deque())
+        ledger.append((now.timestamp(), units))
+        # Opportunistic prune so the deque cannot grow without bound.
+        self._llm_used_locked(mission_id, now=now, window_seconds=window_seconds)
+
     # --- introspection --------------------------------------------------
     def inflight_for(self, mission_id: str) -> int:
         with self._lock:
@@ -179,13 +237,25 @@ class MissionArbiter:
         with self._lock:
             return self._deferrals.get(mission_id, 0)
 
+    def llm_units_used(self, mission_id: str, *, window_seconds: int = DEFAULT_LLM_WINDOW_SECONDS) -> int:
+        with self._lock:
+            return self._llm_used_locked(
+                mission_id, now=self._now(), window_seconds=max(1, int(window_seconds))
+            )
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            now = self._now()
+            llm_used = {
+                mid: self._llm_used_locked(mid, now=now, window_seconds=DEFAULT_LLM_WINDOW_SECONDS)
+                for mid in self._llm_ledger
+            }
             return {
                 "total_inflight": self._total,
                 "global_max": self._global_max,
                 "inflight": dict(self._inflight),
                 "deferrals": dict(self._deferrals),
+                "llm_units_in_window": llm_used,
             }
 
     def _now(self) -> datetime:
@@ -197,7 +267,12 @@ class MissionArbiter:
         return datetime.now(timezone.utc)
 
 
-def demand_from_mission(mission: Any) -> MissionDemand:
+def demand_from_mission(
+    mission: Any,
+    *,
+    host_available_ram_mb: int | None = None,
+    estimated_llm_units: int = 1,
+) -> MissionDemand:
     """Project a ``Mission`` (or any object exposing the arbitration fields) into a MissionDemand."""
     return MissionDemand(
         mission_id=str(getattr(mission, "id", "")),
@@ -205,4 +280,11 @@ def demand_from_mission(mission: Any) -> MissionDemand:
         deadline=getattr(mission, "deadline", None),
         importance=getattr(mission, "importance", None),
         max_concurrent_tasks=getattr(mission, "max_concurrent_tasks", None),
+        llm_units_per_window=getattr(mission, "llm_units_per_window", None),
+        llm_window_seconds=int(
+            getattr(mission, "llm_window_seconds", DEFAULT_LLM_WINDOW_SECONDS) or DEFAULT_LLM_WINDOW_SECONDS
+        ),
+        estimated_llm_units=max(0, int(estimated_llm_units)),
+        ram_mb=getattr(mission, "ram_mb", None),
+        host_available_ram_mb=host_available_ram_mb,
     )

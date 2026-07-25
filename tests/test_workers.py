@@ -186,7 +186,7 @@ class FakeConfigRepo:
 
 
 class FakeMissionRepo:
-    def __init__(self, budgets: dict[str, int] | None = None) -> None:
+    def __init__(self, budgets: dict[str, Any] | None = None) -> None:
         self.journal: list[dict[str, Any]] = []
         self.budgets = budgets or {}
 
@@ -197,10 +197,14 @@ class FakeMissionRepo:
         """Return a Mission carrying the configured budget (or None = unlimited)."""
         from atlas.models.mission import Mission
 
-        cap = self.budgets.get(str(mission_id))
-        if cap is None:
+        raw = self.budgets.get(str(mission_id))
+        if raw is None:
             return None
-        return Mission(id=str(mission_id), title="m", budget={"max_concurrent_tasks": cap})
+        if isinstance(raw, dict):
+            budget = dict(raw)
+        else:
+            budget = {"max_concurrent_tasks": int(raw)}
+        return Mission(id=str(mission_id), title="m", budget=budget)
 
 
 # a worker whose behaviour we can steer for failure/upgrade tests
@@ -436,3 +440,23 @@ def test_tick_proceeds_within_budget_and_releases_slot():
     out = m.worker_tick({"worker_id": w.id})
     assert out["ticked"] is True
     assert m._arbiter.inflight_for("mission-1") == 0  # slot released after the tick
+
+
+def test_tick_throttled_when_llm_units_window_exhausted():
+    """OI-A3: mission llm_units_per_window blocks further ticks in the window."""
+    repo = FakeWorkerRepo()
+    cps = FakeCheckpoints()
+    missions = FakeMissionRepo(
+        budgets={
+            "mission-1": {
+                "llm_units_per_window": 1,
+                "llm_window_seconds": 300,
+            }
+        }
+    )
+    m = WorkerManager(repo, cps, config_repo=FakeConfigRepo(), mission_repo=missions)
+    m.register_worker_type(HelloWatcher())
+    w = m.create_worker("mission-1", "hello_watcher", autostart=False)
+    assert m.worker_tick({"worker_id": w.id})["ticked"] is True
+    out = m.worker_tick({"worker_id": w.id})
+    assert out == {"skipped": "budget", "worker_id": w.id}

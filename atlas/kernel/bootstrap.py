@@ -536,6 +536,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         config_repo=config_repo,
         mission_repo=mission_repo,
         arbiter=mission_arbiter,
+        resources=resource_manager,  # OI-A3: host RAM snapshot for mission ram_mb caps
         events=events,
         clock=clock,
         logger=get_logger("atlas.workers"),

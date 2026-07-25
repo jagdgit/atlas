@@ -130,6 +130,26 @@ class Mission(Model):
         value = self.budget.get("max_concurrent_tasks")
         return int(value) if value is not None else None
 
+    @property
+    def llm_units_per_window(self) -> int | None:
+        """OI-A3: hard LLM cost-unit cap over ``llm_window_seconds``; ``None`` = unlimited."""
+        value = self.budget.get("llm_units_per_window")
+        return int(value) if value is not None else None
+
+    @property
+    def llm_window_seconds(self) -> int:
+        """Sliding window length for ``llm_units_per_window`` (default 300s)."""
+        value = self.budget.get("llm_window_seconds")
+        if value is None:
+            return 300
+        return max(1, int(value))
+
+    @property
+    def ram_mb(self) -> int | None:
+        """OI-A3: soft host RAM reserve (MB) required to admit a tick; ``None`` = uncapped."""
+        value = self.budget.get("ram_mb")
+        return int(value) if value is not None else None
+
 
 @dataclass(frozen=True, slots=True)
 class MissionJournalEntry(Model):

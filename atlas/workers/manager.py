@@ -67,6 +67,7 @@ class WorkerManager:
         config_repo: Any | None = None,
         mission_repo: Any | None = None,
         arbiter: MissionArbiter | None = None,
+        resources: Any | None = None,
         events: "EventDispatcher | None" = None,
         clock: Any | None = None,
         logger: logging.Logger | None = None,
@@ -76,14 +77,14 @@ class WorkerManager:
         self._schedules = schedule_service
         self._config_repo = config_repo
         self._missions = mission_repo
+        self._resources = resources  # OI-A3: optional machine RM for host RAM snapshot
         self._events = events
         self._clock = clock
         self._logger = logger or logging.getLogger("atlas.workers")
         self._types: dict[str, PersistentWorker] = {}
-        # Cross-mission admission (A7/§D.4): the arbiter weighs effective_priority + deadline urgency +
-        # importance and enforces hard per-mission (and optional global) concurrency caps, with
-        # anti-starvation aging. A default arbiter (no global cap) preserves Phase-A per-mission-cap
-        # behaviour when none is injected. In-memory (single-process); multi-process is tracked debt.
+        # Cross-mission admission (A7/§D.4 / OI-A3): the arbiter weighs effective_priority + deadline
+        # urgency + importance and enforces hard per-mission concurrency + llm_units_per_window /
+        # ram_mb caps (and optional global concurrency), with anti-starvation aging.
         self._arbiter = arbiter or MissionArbiter(clock=clock)
 
     # --- worker-type registry -------------------------------------------
@@ -331,14 +332,24 @@ class WorkerManager:
         A missing mission (or repo) yields an unconstrained demand, so non-mission/uncapped work is
         admitted exactly as before (back-compatible with the Phase-A per-mission-cap behaviour).
         """
+        host_ram: int | None = None
+        if self._resources is not None:
+            try:
+                from atlas.core.resources.monitor import read_snapshot
+
+                snap = read_snapshot(self._logger)
+                if snap.mem_available_kb is not None:
+                    host_ram = int(snap.mem_available_kb) // 1024
+            except Exception:  # noqa: BLE001 - host snapshot is advisory
+                host_ram = None
         if self._missions is not None:
             try:
                 mission = self._missions.get(mission_id)
             except Exception:  # noqa: BLE001 - arbitration lookup must not break a tick
                 mission = None
             if mission is not None:
-                return demand_from_mission(mission)
-        return MissionDemand(mission_id=str(mission_id))
+                return demand_from_mission(mission, host_available_ram_mb=host_ram)
+        return MissionDemand(mission_id=str(mission_id), host_available_ram_mb=host_ram)
 
     def _in_backoff(self, worker: Worker) -> bool:
         if worker.status != WORKER_RECOVERING or worker.next_retry_at is None:

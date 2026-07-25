@@ -124,13 +124,70 @@ def test_demand_from_mission_projects_arbitration_fields():
 
     m = Mission(
         id="m1", title="t", scheduling_policy="realtime", priority=10, criticality="high",
-        budget={"max_concurrent_tasks": 2}, importance="critical",
+        budget={
+            "max_concurrent_tasks": 2,
+            "llm_units_per_window": 5,
+            "llm_window_seconds": 60,
+            "ram_mb": 512,
+        },
+        importance="critical",
     )
-    demand = demand_from_mission(m)
+    demand = demand_from_mission(m, host_available_ram_mb=2048)
     assert demand.mission_id == "m1"
     assert demand.effective_priority == m.effective_priority
     assert demand.max_concurrent_tasks == 2
     assert demand.importance == "critical"
+    assert demand.llm_units_per_window == 5
+    assert demand.llm_window_seconds == 60
+    assert demand.ram_mb == 512
+    assert demand.host_available_ram_mb == 2048
+
+
+class _FixedClock:
+    def __init__(self, when: datetime) -> None:
+        self.when = when
+
+    def now(self) -> datetime:
+        return self.when
+
+
+def test_llm_units_per_window_throttles_then_ages_out():
+    """OI-A3: after consuming the window cap, further admits defer until entries age out."""
+    t0 = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
+    clock = _FixedClock(t0)
+    arb = MissionArbiter(clock=clock)
+    demand = MissionDemand(
+        mission_id="m1",
+        llm_units_per_window=2,
+        llm_window_seconds=60,
+        estimated_llm_units=1,
+    )
+    assert arb.try_admit(demand, now=t0).admitted is True
+    arb.release("m1")
+    assert arb.try_admit(demand, now=t0).admitted is True
+    arb.release("m1")
+    denied = arb.try_admit(demand, now=t0)
+    assert denied.admitted is False
+    assert "llm_units_per_window" in denied.reason
+    assert arb.llm_units_used("m1", window_seconds=60) == 2
+
+    # Age past the window → admits again.
+    later = t0 + timedelta(seconds=61)
+    clock.when = later
+    assert arb.try_admit(demand, now=later).admitted is True
+    arb.release("m1")
+
+
+def test_ram_mb_cap_defers_when_host_available_too_low():
+    arb = MissionArbiter()
+    demand = MissionDemand(
+        mission_id="m1", ram_mb=1024, host_available_ram_mb=256,
+    )
+    denied = arb.try_admit(demand)
+    assert denied.admitted is False and "ram_mb" in denied.reason
+    ok = MissionDemand(mission_id="m1", ram_mb=1024, host_available_ram_mb=2048)
+    assert arb.try_admit(ok).admitted is True
+    arb.release("m1")
 
 
 # --- live-DB integration through the WorkerManager -----------------------
