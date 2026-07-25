@@ -5,6 +5,7 @@ from __future__ import annotations
 from atlas.knowledge.consolidation import InMemoryFindingStore, KnowledgeLifecycleService
 from atlas.learning.experience_extraction import (
     ExperienceWriter,
+    build_conversation_experiences,
     build_repo_experiences,
 )
 
@@ -82,3 +83,39 @@ def test_same_repo_relearn_is_noop():
     again = writer.write(build_repo_experiences(payload, repo_uid="repoX"))
     assert again["noop"] == 2
     assert again["created"] == 0 and again["merged"] == 0
+
+
+def test_build_conversation_experiences_from_user_turns():
+    artifact = {
+        "asset_id": "a1",
+        "sections": [
+            {
+                "role": "user",
+                "text": "I spent 5 years on PostgreSQL and I use Celery in production.",
+            },
+            {
+                "role": "assistant",
+                "text": "You should also learn Redis.",  # not owner evidence
+            },
+            {"role": "user", "text": "I built services with FastAPI."},
+        ],
+    }
+    exps = build_conversation_experiences(artifact, asset_id="a1", source="conversation")
+    skills = {e["value"]["skill"] for e in exps}
+    assert "postgresql" in skills
+    assert "celery" in skills
+    assert "fastapi" in skills
+    assert "redis" not in skills  # assistant-only mention ignored
+    pg = next(e for e in exps if e["value"]["skill"] == "postgresql")
+    assert pg["value"].get("years") == 5
+    assert pg["value"]["context"] == "stated"
+    assert pg["provenance"]["source"] == "conversation"
+
+
+def test_conversation_experiences_ignore_bare_mentions_without_claim():
+    artifact = {
+        "sections": [
+            {"role": "user", "text": "What is PostgreSQL used for?"},
+        ],
+    }
+    assert build_conversation_experiences(artifact, asset_id="a2") == []

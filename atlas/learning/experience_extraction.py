@@ -7,6 +7,9 @@ experience records. Each is one *observation from one project*; the shared Knowl
 (C.3) then makes them cumulative (P13): the same skill/technology + context seen across many projects
 strengthens ONE experience (evidence-merge, rising confidence + maturity), never N rows.
 
+OI-C13 adds a parallel path for **conversation** Artifacts: chat-stated skills
+("I spent years on PostgreSQL") become experience observations (not only prose findings).
+
 Like the engineering extractor this owns no state and makes no decisions (P11): it reads the distilled
 artifact and returns experience dicts; the :class:`ExperienceWriter` routes them through the
 consolidator bound to an :class:`~atlas.repositories.experience_store.ExperienceStore`.
@@ -15,19 +18,58 @@ consolidator bound to an :class:`~atlas.repositories.experience_store.Experience
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from atlas.knowledge.domains import DOMAIN_EXPERIENCE
 
 # Bump when the experience *shape* changes, independent of the reader (BB8).
-EXPERIENCE_EXTRACTOR_VERSION = "1.0.0"
+EXPERIENCE_EXTRACTOR_VERSION = "1.1.0"
 
 CTX_LANGUAGE = "language"
 CTX_PATTERN = "pattern"
+CTX_STATED = "stated"  # owner-stated in conversation (OI-C13)
 
 _MAX_LANGUAGES = 6
 _MAX_FRAMEWORKS = 16
 _MAX_PATTERNS = 16
+_MAX_CONVERSATION_SKILLS = 24
+
+# Curated tech/skill lexicon for deterministic chat distillation (no LLM).
+_SKILL_TERMS = (
+    "postgresql", "postgres", "python", "typescript", "javascript", "golang", "rust",
+    "java", "kotlin", "swift", "celery", "redis", "rabbitmq", "kafka", "fastapi",
+    "django", "flask", "react", "vue", "angular", "nextjs", "nodejs", "docker",
+    "kubernetes", "terraform", "ansible", "aws", "gcp", "azure", "pytorch",
+    "tensorflow", "spark", "hadoop", "elasticsearch", "mongodb", "mysql", "sqlite",
+    "graphql", "grpc", "protobuf", "linux", "bash", "sql", "pandas", "numpy",
+    "scikit-learn", "sklearn", "huggingface", "langchain", "ollama", "whisper",
+)
+
+_SKILL_ALT = {
+    "postgres": "postgresql",
+    "nodejs": "node.js",
+    "nextjs": "next.js",
+    "sklearn": "scikit-learn",
+}
+
+# First-person claim verbs near a skill term → treat as stated experience.
+_CLAIM_VERBS = re.compile(
+    r"\b(?:i(?:'?m| am|'?ve| have)?|we(?:'ve| have)?)\s+"
+    r"(?:spent|worked|used|use|using|built|wrote|write|know|knew|learned|learn|"
+    r"shipped|ran|run|maintain|maintained|expert|skilled|proficient|familiar)\b",
+    re.IGNORECASE,
+)
+
+_SKILL_ALT_PATTERN = "|".join(
+    re.escape(s) for s in sorted(_SKILL_TERMS, key=len, reverse=True)
+)
+_YEARS_RE = re.compile(
+    rf"\b(\d+)\s*(?:\+\s*)?(?:years?|yrs?)\b.{{0,24}}?\b({_SKILL_ALT_PATTERN})\b"
+    rf"|\b({_SKILL_ALT_PATTERN})\b.{{0,24}}?\b(\d+)\s*(?:\+\s*)?(?:years?|yrs?)\b",
+    re.IGNORECASE,
+)
+_SKILL_FIND_RE = re.compile(rf"\b({_SKILL_ALT_PATTERN})\b", re.IGNORECASE)
 
 
 def build_repo_experiences(
@@ -107,6 +149,125 @@ def build_repo_experiences(
         )
 
     return experiences
+
+
+def build_conversation_experiences(
+    artifact: dict[str, Any],
+    *,
+    asset_id: str | None = None,
+    asset_version: int | None = None,
+    mission_id: str | None = None,
+    job_id: str | None = None,
+    source: str | None = None,
+) -> list[dict[str, Any]]:
+    """Distill owner-stated skill experiences from a Conversation Reader artifact (OI-C13).
+
+    Only **user**/human turns are scanned (assistant mentions are not owner evidence).
+    Deterministic lexicon + claim-verb / years patterns — no LLM.
+    """
+    sections = artifact.get("sections") or []
+    user_bits: list[str] = []
+    for sec in sections:
+        if not isinstance(sec, dict):
+            continue
+        role = str(sec.get("role") or "").strip().lower()
+        if role not in {"user", "human", "owner", "me", "operator"}:
+            continue
+        text = str(sec.get("text") or "").strip()
+        if text:
+            user_bits.append(text)
+    if not user_bits and artifact.get("text"):
+        for line in str(artifact.get("text") or "").splitlines():
+            low = line.lower()
+            if low.startswith(("user:", "human:", "owner:", "me:", "operator:")):
+                user_bits.append(line.split(":", 1)[-1].strip())
+
+    blob = "\n".join(user_bits)
+    if not blob.strip():
+        return []
+
+    src = str(asset_id or artifact.get("asset_id") or "conversation")
+    found: dict[str, dict[str, Any]] = {}
+
+    for m in _YEARS_RE.finditer(blob):
+        skill_raw = (m.group(2) or m.group(3) or "").strip()
+        years_raw = m.group(1) or m.group(4)
+        skill = _normalize_skill(skill_raw)
+        if not skill:
+            continue
+        years = int(years_raw) if years_raw else None
+        snippet = m.group(0)[:160]
+        found[skill] = {
+            "statement": (
+                f"Stated {years}+ years with {skill}"
+                if years
+                else f"Stated experience with {skill}"
+            ),
+            "score": 0.55 if years and years >= 2 else 0.5,
+            "snippet": snippet,
+            "years": years,
+        }
+
+    for m in _SKILL_FIND_RE.finditer(blob):
+        skill = _normalize_skill(m.group(1))
+        if not skill or skill in found:
+            continue
+        start, end = m.span()
+        window = blob[max(0, start - 80) : min(len(blob), end + 80)]
+        if not _CLAIM_VERBS.search(window):
+            continue
+        found[skill] = {
+            "statement": f"Stated experience with {skill}",
+            "score": 0.45,
+            "snippet": window.strip()[:160],
+            "years": None,
+        }
+
+    experiences: list[dict[str, Any]] = []
+    for skill, meta in list(found.items())[:_MAX_CONVERSATION_SKILLS]:
+        value: dict[str, Any] = {
+            "kind": "experience",
+            "skill": skill,
+            "context": CTX_STATED,
+        }
+        if meta.get("years") is not None:
+            value["years"] = meta["years"]
+        prov: dict[str, Any] = {
+            "source": source or "conversation",
+            "asset_id": asset_id or "",
+            "asset_version": asset_version,
+            "skill": skill,
+            "context": CTX_STATED,
+            "extractor_version": EXPERIENCE_EXTRACTOR_VERSION,
+            "knowledge_type": "experience",
+        }
+        if mission_id:
+            prov["mission_id"] = mission_id
+        if job_id:
+            prov["job_id"] = job_id
+        experiences.append({
+            "statement": meta["statement"],
+            "claim_type": "experience",
+            "domain": DOMAIN_EXPERIENCE,
+            "status": "active",
+            "confidence": "LOW",
+            "confidence_score": float(meta["score"]),
+            "value": value,
+            "supporting": [{
+                "source_id": src,
+                "evidence_level": 2,
+                "snippet": meta["snippet"],
+            }],
+            "provenance": prov,
+        })
+    return experiences
+
+
+def _normalize_skill(raw: str) -> str:
+    s = str(raw or "").strip().lower()
+    if not s:
+        return ""
+    return _SKILL_ALT.get(s, s)
 
 
 def _primary_language(languages: dict[str, Any]) -> str:

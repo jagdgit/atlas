@@ -45,6 +45,7 @@ class IngestResult:
     chunks: int
     deduped: bool
     candidates: int = 0     # prose knowledge candidates emitted (C.3g); 0 unless extract_findings
+    experiences: int = 0    # conversation→experience rows written (OI-C13)
     reason: str | None = None
 
     @property
@@ -61,6 +62,7 @@ class IngestResult:
             "chunks": self.chunks,
             "deduped": self.deduped,
             "candidates": self.candidates,
+            "experiences": self.experiences,
             "reason": self.reason,
         }
 
@@ -79,6 +81,7 @@ class IngestionService:
         extractor: "ProseKnowledgeExtractor | None" = None,
         candidates: "CandidateConsumer | None" = None,
         coverage: Any = None,
+        experiences: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._acq = acquirer
@@ -89,6 +92,8 @@ class IngestionService:
         self._candidates = candidates
         # C.4: when wired, record what was read into the coverage map (telemetry, never gates ingest).
         self._coverage = coverage
+        # OI-C13: ExperienceWriter for conversation→experience distillation.
+        self._experiences = experiences
         self._logger = logger or logging.getLogger("atlas.ingestion.service")
 
     def ingest_file(
@@ -321,6 +326,13 @@ class IngestionService:
             document_id=summary.get("document_id"), reader=rdr, source=source,
         ) if extract_findings else 0
 
+        # OI-C13: conversation Artifacts also distill owner-stated skill Experiences.
+        experiences = 0
+        if extract_findings and source == "conversation":
+            experiences = self._emit_conversation_experiences(
+                artifact, acquired=acquired, source=source,
+            )
+
         self._record_coverage(
             acquired, domain=domain, reader=rdr, source=source, status="done",
             findings_count=candidates, chunks_count=int(summary.get("chunks") or 0),
@@ -335,6 +347,7 @@ class IngestionService:
             chunks=int(summary.get("chunks") or 0),
             deduped=bool(summary.get("deduped")),
             candidates=candidates,
+            experiences=experiences,
         )
 
     def _emit_candidates(
@@ -365,6 +378,39 @@ class IngestionService:
             return 0
         self._candidates.emit_many(payloads)
         return len(payloads)
+
+    def _emit_conversation_experiences(
+        self,
+        artifact: dict[str, Any],
+        *,
+        acquired: "AcquiredAsset",
+        source: str = "conversation",
+    ) -> int:
+        """Write owner-stated skill Experiences from a chat Artifact (OI-C13)."""
+        if self._experiences is None or not hasattr(self._experiences, "write"):
+            return 0
+        try:
+            from atlas.learning.experience_extraction import build_conversation_experiences
+
+            payloads = build_conversation_experiences(
+                artifact,
+                asset_id=acquired.asset_id,
+                asset_version=acquired.asset_version,
+                source=source,
+            )
+            if not payloads:
+                return 0
+            out = self._experiences.write(payloads) or {}
+            return int(out.get("created", 0) or 0) + int(out.get("merged", 0) or 0) + int(
+                out.get("revised", 0) or 0
+            )
+        except Exception:  # noqa: BLE001 - experience distill is best-effort
+            self._logger.warning(
+                "conversation experience extract failed for %s",
+                acquired.asset_id,
+                exc_info=True,
+            )
+            return 0
 
     def _record_coverage(
         self,

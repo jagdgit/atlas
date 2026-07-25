@@ -33,7 +33,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
 | OI-C7 | 🟡 | P3 | **Migration-number placeholders.** Real numbers are assigned sequentially at build time. Through Phase C: `0028`–`0038` as listed; C.8/C.9 needed no migration. Post-C: `0039`=decision, `0040`=decision_approvals, `0041`=sim_trading. **Next free slot: `0042`.** Keep the PHASE_C table honest as slots are built. | C.2 | ongoing |
 | OI-C12 | 🔴 | P3 | **Personal/Owner SPA dashboard view.** C.8d ships the *data* — `GET /v1/personal/dashboard` (per-domain coverage + understanding + skills/timeline/professional) and live updates over the shared `/v1/events/stream` SSE feed — and a CLI (`atlas personal dashboard`), but no dedicated `/ui` panel. Add a console view rendering the coverage bars + profile with the P9 "why" and confirm/correct controls. | C.8d | Phase D / UI pass |
-| OI-C13 | 🔴 | P3 | **Conversation → experience extraction.** The Conversation Reader (C.8a) feeds chats through the pipeline as prose **candidates → findings**, but chats do not yet distill owner **experiences** (a `build_conversation_experiences` analog to `build_repo_experiences`). So skills currently derive from code repos; chat-stated skills ("I spent years on PostgreSQL") become findings, not corroborating experience evidence. | C.8a | Phase D |
+| OI-C13 | 🟢 | P3 | **Conversation → experience extraction.** `build_conversation_experiences` distills owner-stated skills from user turns; `IngestionService` writes them when `source=conversation` + `extract_findings` (Owner Knowledge). | C.8a | closed OI-C13 |
 
 ---
 
@@ -145,6 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-C13 | **Conversation → experience extraction** — `build_conversation_experiences` + ingest wire. | (this commit) |
 | OI-T1/T2/T3 | **Live-DB test hygiene** — session cleanup + `atlas-db test-clean`; `list_pending(source=)`. | `44dd079` |
 | OI-MP5 | **Missions teach missions** — mentor soft-bias + Decision Engine Experience nudge. | `9d22b66` |
 | OI-UI0 | **Job UI live updates** — sequential poll + SSE refresh; `/ui` no-cache headers. | `efc7091` |

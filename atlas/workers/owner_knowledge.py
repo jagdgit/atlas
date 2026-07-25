@@ -215,6 +215,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
             else:
                 totals["documents"] += 1
             totals["candidates"] += int(res.candidates or 0)
+            totals["experiences"] += int(getattr(res, "experiences", 0) or 0)
 
     def _reextract_stale(self, cfg: dict[str, Any], totals: dict[str, int]) -> int:
         """Force-re-read assets stale after a reader version bump (OI-C8 / A10)."""
@@ -255,6 +256,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
                     )
                     totals["reextracted"] += 1
                     totals["candidates"] += int(getattr(res, "candidates", 0) or 0)
+                    totals["experiences"] += int(getattr(res, "experiences", 0) or 0)
                     if source == "conversation":
                         totals["conversations"] += 1
                     else:

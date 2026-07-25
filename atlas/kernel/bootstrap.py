@@ -1025,6 +1025,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         extractor=ProseKnowledgeExtractor(),
         candidates=candidate_consumer,
         coverage=coverage_service,
+        experiences=experience_writer,
         logger=get_logger("atlas.ingestion.service"),
     )
     # Media Reader Family (M.3/M.4): metadata → transcript/demux → knowledge for local media.
