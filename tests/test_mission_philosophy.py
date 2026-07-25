@@ -47,6 +47,7 @@ def test_market_stub_templates_have_philosophy():
         "portfolio_ledger",
         "investment_mentor",
         "engineering_mentor",
+        "personal_mentor",
     ):
         phil = philosophy_for(name)
         assert set(phil["lifecycle"]) == set(LIFECYCLE_STAGES)

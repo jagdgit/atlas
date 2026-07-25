@@ -55,7 +55,9 @@ def test_program_service_describe_without_deps():
     assert view["label"] == program_label("market_intelligence")
     assert len(view["lifecycle"]) == 7
     personal = svc.describe("personal_intelligence")
-    assert personal["stub_count"] >= 1  # personal_mentor still planned
+    assert personal["stub_count"] == 0  # Personal Mentor shipped
+    eng = svc.describe("engineering_intelligence")
+    assert eng["stub_count"] == 0
 
 
 def test_program_service_describe_with_fake_templates():
@@ -117,7 +119,7 @@ def test_context_spike_uses_findings():
     assert any(i.get("kind") == "finding" for i in ctx.get("items") or [])
 
 
-def test_start_skips_personal_stubs_and_starts_compat():
+def test_start_skips_missing_templates_not_stubs():
     created: list[dict] = []
 
     class _Mission:
@@ -145,7 +147,7 @@ def test_start_skips_personal_stubs_and_starts_compat():
     result = svc.start("market_intelligence")
     assert len(result["started"]) == 1
     assert result["started"][0]["template"] == "decision_simulation"
-    # Market Program has no stubs; remaining enabled members lack templates here.
+    # All Programs are stub-free; remaining members skip for missing templates.
     assert not any(s.get("reason") == "stub" for s in result["skipped"])
     assert created[0]["labels"][0] == "program:market_intelligence"
     assert BUILTIN_PROGRAMS[0].id == "market_intelligence"
@@ -164,5 +166,7 @@ def test_start_skips_personal_stubs_and_starts_compat():
 
     pers = ProgramService(templates=_PersTemplates(), missions=_Missions())
     pres = pers.start("personal_intelligence")
-    assert any(s["reason"] == "stub" and s["template"] == "personal_mentor" for s in pres["skipped"])
+    assert not any(s.get("reason") == "stub" for s in pres["skipped"])
     assert any(s["template"] == "owner_knowledge" for s in pres["started"])
+    # personal_mentor is enabled but template not in this fake registry → skipped non-stub
+    assert any(s.get("template") == "personal_mentor" for s in pres["skipped"])

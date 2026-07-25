@@ -283,6 +283,27 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "engineering_mentor"),
     },
     {
+        "name": "personal_mentor",
+        "template_version": 1,
+        "description": (
+            "Personal Intelligence — weekly owner/career judgment lessons from "
+            "personal Experiences → Experience OS (advice_for + optional soft-bias)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Personal Mentor",
+            "focus": "personal",
+            "lookback": 40,
+            "force": False,
+            "seed_experiences": [],
+            "tick_interval_seconds": 604800,
+        },
+        "worker_specs": [{"type": "personal_mentor", "interval_seconds": 604800}],
+        "knowledge_domains": ["personal", "career", "experience"],
+        "success_criteria": with_philosophy({}, "personal_mentor"),
+    },
+    {
         "name": "learning_governance",
         "template_version": 1,
         "description": (

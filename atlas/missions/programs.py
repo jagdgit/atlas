@@ -201,7 +201,7 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
         title="Personal Intelligence",
         description=(
             "Owner archive → personal knowledge; career and life advisors. "
-            "Placeholder Program — members ship after Market proves the pattern."
+            "Observer + Career Advisor + Personal Mentor."
         ),
         members=(
             ProgramMember(
@@ -225,8 +225,8 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 template="personal_mentor",
                 kind="maintenance",
                 cadence="weekly",
-                status=MEMBER_STUB,
-                description="Planned",
+                status=MEMBER_ENABLED,
+                description="Weekly owner/career judgment → Experience OS",
             ),
         ),
         domain_adapters=("Personal archive readers",),
@@ -235,9 +235,9 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
             "learn": STAGE_ACTIVE,
             "decide": STAGE_PARTIAL,
             "record_why": STAGE_ACTIVE,
-            "evaluate": STAGE_WAITING,
-            "reflect": STAGE_WAITING,
-            "improve": STAGE_WAITING,
+            "evaluate": STAGE_PARTIAL,
+            "reflect": STAGE_PARTIAL,
+            "improve": STAGE_PARTIAL,
         },
     ),
 )

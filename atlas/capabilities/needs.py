@@ -56,6 +56,7 @@ MISSION_NEEDS: dict[str, tuple[str, ...]] = {
     "portfolio_ledger": (NEED_PORTFOLIO_LEDGER,),
     "investment_mentor": (NEED_LEARNING, NEED_EXPERIENCE_OS),
     "engineering_mentor": (NEED_LEARNING, NEED_EXPERIENCE_OS),
+    "personal_mentor": (NEED_LEARNING, NEED_EXPERIENCE_OS),
     "repository_learning": (NEED_KNOWLEDGE, NEED_LEARNING),
 }
 

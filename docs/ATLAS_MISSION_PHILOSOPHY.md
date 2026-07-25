@@ -223,6 +223,7 @@ long-term partner goal than more fact extractors.
 | `owner_knowledge` | learning | ✅ | Observe, Learn, Record | Evaluate / Reflect / Improve |
 | `repository_learning` | learning | ✅ | Observe, Learn, Record | Reflect / Improve (as judgment) |
 | `engineering_mentor` | maintenance | ✅ | Reflect, Record, Learn | Decide |
+| `personal_mentor` | maintenance | ✅ | Reflect, Record, Learn | Decide |
 | `research` | research | ❌ | Observe, Learn, Decide (what-next) | Reflect across runs |
 | `paper_trading` | simulation | ✅* | Observe→Decide→Evaluate | Reflect / Improve depth; live Observe (OI-D1) |
 | `technology_watch` | monitoring | ✅ | Observe, Decide (priority), Record | Learn→Improve loop |

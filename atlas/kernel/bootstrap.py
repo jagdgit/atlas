@@ -75,6 +75,7 @@ from atlas.workers.company_intelligence import CompanyIntelligenceWorker
 from atlas.workers.portfolio_ledger import PortfolioLedgerWorker
 from atlas.workers.investment_mentor import InvestmentMentorWorker
 from atlas.workers.engineering_mentor import EngineeringMentorWorker
+from atlas.workers.personal_mentor import PersonalMentorWorker
 from atlas.workers.learning_governance import LearningGovernanceWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
@@ -1533,6 +1534,14 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             experience_os=experience_os,
             events=events,
             logger=get_logger("atlas.workers.engineering_mentor"),
+        )
+    )
+    worker_manager.register_worker_type(
+        PersonalMentorWorker(
+            learning=learning_service,
+            experience_os=experience_os,
+            events=events,
+            logger=get_logger("atlas.workers.personal_mentor"),
         )
     )
     worker_manager.register_worker_type(
