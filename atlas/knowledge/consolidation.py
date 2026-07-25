@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol, Sequence
 from uuid import uuid4
 
+from atlas.knowledge.conflict import RESOLVE_ACTIONS, conflict_record, merge_conflict_quality
 from atlas.knowledge.lifecycle import (
     ACTIVE_STATUSES,
     STATUS_ACTIVE,
@@ -279,10 +280,25 @@ class KnowledgeLifecycleService:
                 return None
             if _is_newer(data, existing):
                 return None  # newer claim → let the machine revise/supersede (evolution)
-            contested = {**data, "transition": "split_contested", "status": STATUS_CONTESTED}
+            conflict = conflict_record(
+                kind="same_time",
+                signal="body_change_with_contradiction",
+                detail={
+                    "existing_id": str(existing.get("id") or ""),
+                    "incoming_observed_at": str(data.get("observed_at") or data.get("last_verified") or ""),
+                },
+            )
+            contested = {
+                **data,
+                "transition": "split_contested",
+                "status": STATUS_CONTESTED,
+                "quality": {**(data.get("quality") if isinstance(data.get("quality"), dict) else {}),
+                            "conflict": conflict},
+            }
             row = self._store.append_revision(existing, contested)
             row = dict(row)
-            self._record_lineage(row, EDGE_CONTRADICTED_BY, data)
+            self._record_lineage(row, EDGE_CONTRADICTED_BY, data, detail=conflict)
+            merge_conflict_quality(self._store, str(row.get("id") or ""), conflict)
             row["_transition"] = "split_contested"
             return row
 
@@ -292,6 +308,12 @@ class KnowledgeLifecycleService:
         if new_contra:
             merged_contra = existing_contra + new_contra
             merged_support = _union_sources(existing_support, incoming_support)
+            conflict = conflict_record(
+                kind="cross_source",
+                signal="new_contradicting_evidence",
+                peer_ids=[_source_id(c) for c in new_contra if _source_id(c)],
+                detail={"new_contradicting": len(new_contra)},
+            )
             row = self._store.update_evidence(
                 str(existing["id"]),
                 supporting=merged_support,
@@ -300,7 +322,8 @@ class KnowledgeLifecycleService:
                 last_verified=data.get("last_verified"),
             ) or existing
             row = dict(row)
-            self._record_lineage(row, EDGE_CONTRADICTED_BY, data)
+            self._record_lineage(row, EDGE_CONTRADICTED_BY, data, detail=conflict)
+            merge_conflict_quality(self._store, str(row.get("id") or existing["id"]), conflict)
             row["_transition"] = "contested"
             return row
 
@@ -473,6 +496,85 @@ class KnowledgeLifecycleService:
             return None
         status = STATUS_CONTESTED if row.get("contradicting") not in (None, [], {}) else STATUS_ACTIVE
         return self._store.set_status(finding_id, status)
+
+    def list_contested(
+        self, *, domain: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Contested head findings for the Conflict Resolver surface (OI-B3)."""
+        if hasattr(self._store, "list_contested"):
+            try:
+                return list(self._store.list_contested(domain=domain, limit=limit) or [])
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("list_contested store path failed: %s", exc)
+        heads = []
+        if hasattr(self._store, "list_active"):
+            heads = self._store.list_active(domain=domain, limit=max(limit * 3, 50))
+        elif hasattr(self._store, "list_active_heads"):
+            heads = self._store.list_active_heads(include_archive=False)
+        out: list[dict[str, Any]] = []
+        for row in heads or []:
+            if str(row.get("status") or "") != STATUS_CONTESTED:
+                continue
+            if domain and str(row.get("domain") or "") != domain:
+                continue
+            out.append(dict(row))
+            if len(out) >= limit:
+                break
+        return out
+
+    def resolve_conflict(
+        self,
+        finding_id: str,
+        *,
+        action: str,
+        note: str = "",
+        clear_contradicting: bool = False,
+        actor: str = "operator",
+    ) -> dict[str, Any]:
+        """Operator Conflict Resolver (OI-B3): hold / supersede / reactivate.
+
+        Does not invent truth — applies an explicit operator (or approved) choice onto the
+        existing finding row. ``supersede`` deprecates this contested head; ``reactivate``
+        optionally clears contradicting evidence; ``hold`` only records the decision.
+        """
+        action_n = str(action or "").strip().lower()
+        if action_n not in RESOLVE_ACTIONS:
+            raise ValueError(f"unknown resolve action: {action} (expected {sorted(RESOLVE_ACTIONS)})")
+        row = self._store.get(finding_id)
+        if row is None:
+            raise KeyError(finding_id)
+
+        resolution = {
+            "action": action_n,
+            "note": str(note or "")[:500],
+            "actor": actor,
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        quality = dict(row.get("quality") or {}) if isinstance(row.get("quality"), dict) else {}
+        conflict = dict(quality.get("conflict") or {}) if isinstance(quality.get("conflict"), dict) else {}
+        conflict["resolution"] = resolution
+        merge_conflict_quality(self._store, finding_id, conflict)
+
+        if action_n == "hold":
+            refreshed = self._store.get(finding_id) or row
+            return {"ok": True, "action": action_n, "finding": refreshed}
+
+        if action_n == "supersede":
+            updated = self.deprecate(finding_id)
+            return {"ok": True, "action": action_n, "finding": updated or self._store.get(finding_id)}
+
+        # reactivate
+        if clear_contradicting and hasattr(self._store, "update_evidence"):
+            supporting = list(row.get("supporting") or row.get("supporting_sources") or [])
+            updated = self._store.update_evidence(
+                finding_id,
+                supporting=supporting,
+                contradicting=[],
+                status=STATUS_ACTIVE,
+            )
+            return {"ok": True, "action": action_n, "finding": updated or self._store.get(finding_id)}
+        updated = self.reactivate(finding_id)
+        return {"ok": True, "action": action_n, "finding": updated or self._store.get(finding_id)}
 
     def invalidate_component(
         self,
@@ -905,6 +1007,28 @@ class InMemoryFindingStore:
             if prev is None or int(row["revision"]) > int(prev["revision"]):
                 by_canon[cid] = row
         return [dict(r) for r in by_canon.values()]
+
+    def list_active(
+        self, *, domain: str | None = None, limit: int = 50, include_archive: bool = False
+    ) -> list[dict[str, Any]]:
+        heads = self.list_active_heads(include_archive=include_archive)
+        out: list[dict[str, Any]] = []
+        for row in heads:
+            if domain and str(row.get("domain") or "") != domain:
+                continue
+            out.append(row)
+            if len(out) >= limit:
+                break
+        return out
+
+    def list_contested(
+        self, *, domain: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        return [
+            r
+            for r in self.list_active(domain=domain, limit=max(limit * 3, 50))
+            if str(r.get("status") or "") == STATUS_CONTESTED
+        ][:limit]
 
     def list_unverified(
         self,

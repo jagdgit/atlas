@@ -75,6 +75,7 @@ from atlas.api.schemas import (
     LearnRepositoryRequest,
     PersonalCorrectRequest,
     PersonalFactRequest,
+    KnowledgeResolveRequest,
     PolicyRuleRequest,
     RecommendRequest,
     PythonRunRequest,
@@ -810,6 +811,79 @@ def knowledge_graph(
         limit_nodes=limit_nodes,
         limit_edges=limit_edges,
     )
+
+
+@v1_router.get("/knowledge/contested", tags=["knowledge"])
+def knowledge_contested(
+    request: Request,
+    domain: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """Contested knowledge heads for the Conflict Resolver (OI-B3)."""
+    lifecycle = _knowledge_lifecycle(request)
+    rows = lifecycle.list_contested(domain=domain, limit=max(1, min(limit, 200)))
+    return {"findings": rows, "count": len(rows)}
+
+
+@v1_router.post("/knowledge/findings/{finding_id}/resolve", tags=["knowledge"])
+def knowledge_resolve(
+    finding_id: str, body: KnowledgeResolveRequest, request: Request
+) -> dict:
+    """Apply an operator conflict resolution (hold / supersede / reactivate)."""
+    lifecycle = _knowledge_lifecycle(request)
+    try:
+        return lifecycle.resolve_conflict(
+            finding_id,
+            action=body.action,
+            note=body.note or "",
+            clear_contradicting=bool(body.clear_contradicting),
+            actor=body.actor or "operator",
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="finding not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@v1_router.post("/knowledge/conflicts/decide", tags=["knowledge"])
+def knowledge_conflict_decide(request: Request, finding_id: str = "") -> dict:
+    """Ask the Decision Engine for a conflict-resolution recommendation (OI-B3)."""
+    finding_id = (finding_id or "").strip()
+    if not finding_id:
+        raise HTTPException(status_code=422, detail="finding_id required")
+    lifecycle = _knowledge_lifecycle(request)
+    store = getattr(lifecycle, "_store", None)
+    row = store.get(finding_id) if store is not None else None
+    if row is None:
+        raise HTTPException(status_code=404, detail="finding not found")
+    from atlas.decision.contracts import DecisionRequest
+    from atlas.knowledge.conflict import MISSION_TYPE_KNOWLEDGE_CONFLICT
+
+    engine = _app(request).container.resolve("decision")
+    decision = engine.decide(
+        DecisionRequest(
+            mission_id=None,
+            mission_type=MISSION_TYPE_KNOWLEDGE_CONFLICT,
+            context={"finding_id": finding_id, "finding": dict(row)},
+        )
+    )
+    if hasattr(decision, "to_dict"):
+        return decision.to_dict()
+    if hasattr(decision, "as_dict"):
+        return decision.as_dict()
+    return dict(decision) if isinstance(decision, dict) else {"decision": str(decision)}
+
+
+def _knowledge_lifecycle(request: Request):
+    container = _app(request).container
+    try:
+        return container.resolve("knowledge_lifecycle")
+    except Exception:
+        knowledge = container.resolve("knowledge")
+        lifecycle = getattr(knowledge, "_lifecycle", None)
+        if lifecycle is None:
+            raise HTTPException(status_code=503, detail="knowledge lifecycle unavailable")
+        return lifecycle
 
 
 @v1_router.get("/policy/rules", tags=["policy"])

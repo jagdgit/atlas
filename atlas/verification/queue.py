@@ -195,6 +195,15 @@ class KnowledgeVerificationService:
         # Contested when cross-source contradictions were attached (KV.8).
         contested = bool(contra_hits) or bool(claim.contradicting)
         if contested:
+            from atlas.knowledge.conflict import conflict_record, merge_conflict_quality
+
+            conflict = conflict_record(
+                kind="verification",
+                signal="cross_source_contradiction",
+                peer_ids=[str(getattr(h, "peer_id", "") or "") for h in (contra_hits or [])],
+                detail={"hits": len(contra_hits or [])},
+            )
+            merge_conflict_quality(self._store, finding_id, conflict)
             writeback["freshness"] = "stale"
 
         updated = None

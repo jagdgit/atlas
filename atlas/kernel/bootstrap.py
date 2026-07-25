@@ -1391,6 +1391,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         cfg.paths.data, logger=get_logger("atlas.improvement.board")
     )
     decision_engine.register_rule(SelfImprovementDecisionRule())
+    from atlas.knowledge.conflict import KnowledgeConflictDecisionRule
+
+    decision_engine.register_rule(KnowledgeConflictDecisionRule())
     approval_service.register_applier(SelfImprovementApplier(improvement_board))
     worker_manager.register_worker_type(
         SelfImprovementWatcher(
@@ -1445,6 +1448,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("task_handlers", handlers)
     container.register_instance("llm", llm_service)
     container.register_instance("knowledge", knowledge_service)
+    container.register_instance("knowledge_lifecycle", knowledge_lifecycle)
     container.register_instance("agent_run_repo", agent_run_repo)
     container.register_instance("agent", agent_service)
     container.register_instance("memory", memory_service)

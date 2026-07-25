@@ -423,6 +423,15 @@ class PersonalCorrectRequest(BaseModel):
     actor: str | None = None
 
 
+class KnowledgeResolveRequest(BaseModel):
+    """Operator Conflict Resolver action (OI-B3)."""
+
+    action: str = Field(pattern="^(hold|supersede|reactivate)$")
+    note: str = ""
+    clear_contradicting: bool = False
+    actor: str | None = None
+
+
 class PythonRunRequest(BaseModel):
     code: str = Field(min_length=1)
     timeout: float | None = Field(default=None, gt=0)

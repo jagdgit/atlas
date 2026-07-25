@@ -522,6 +522,23 @@ class FindingRepository(BaseRepository):
             return self.fetch_all(sql, (domain, limit))
         return self.fetch_all(sql, (limit,))
 
+    def list_contested(
+        self, *, domain: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Contested head findings for the Conflict Resolver (OI-B3)."""
+        domain_clause = "AND domain = %s" if domain else ""
+        sql = f"""
+            SELECT DISTINCT ON (canonical_id) *
+            FROM knowledge.findings
+            WHERE status = 'contested'
+              {domain_clause}
+            ORDER BY canonical_id, revision DESC
+            LIMIT %s
+        """
+        if domain:
+            return self.fetch_all(sql, (domain, limit))
+        return self.fetch_all(sql, (limit,))
+
     def understanding_by_domain(self) -> list[dict[str, Any]]:
         """Per-(domain, maturity, status) rollup over active head revisions (C.4, CC15).
 
