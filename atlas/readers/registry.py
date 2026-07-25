@@ -198,11 +198,77 @@ def default_document_readers() -> list[Reader]:
     ]
 
 
+def _stub_coverage() -> dict[str, bool]:
+    """All-false coverage — Atlas names the reader but extracts nothing (OI-B4)."""
+    return {c: False for c in ALL_CAPABILITIES}
+
+
+def default_domain_stub_readers() -> list[Reader]:
+    """Engineering-domain stub readers (OI-B4) — registered, no parsers yet.
+
+    Declares CAD / MATLAB / PLC / UML / PSpice so ``reader_for_extension`` and
+    ``can_produce`` answer honestly (*who handles this?* + *cannot extract yet*).
+    """
+    cov = _stub_coverage()
+    return [
+        Reader(
+            id="matlab",
+            name="MATLAB Reader",
+            version="0.1.0",
+            extensions=(".m", ".mat", ".mlx", ".slx", ".mdl"),
+            languages=("matlab",),
+            coverage=dict(cov),
+            priority=25,
+            config={"stub": True, "oi": "OI-B4"},
+        ),
+        Reader(
+            id="cad",
+            name="CAD Reader",
+            version="0.1.0",
+            extensions=(".dwg", ".dxf", ".step", ".stp", ".iges", ".igs"),
+            languages=("cad",),
+            coverage=dict(cov),
+            priority=25,
+            config={"stub": True, "oi": "OI-B4"},
+        ),
+        Reader(
+            id="plc",
+            name="PLC Reader",
+            version="0.1.0",
+            extensions=(".st", ".scl", ".l5x", ".awl"),
+            languages=("plc",),
+            coverage=dict(cov),
+            priority=25,
+            config={"stub": True, "oi": "OI-B4"},
+        ),
+        Reader(
+            id="uml",
+            name="UML Reader",
+            version="0.1.0",
+            extensions=(".uml", ".xmi", ".plantuml", ".puml"),
+            languages=("uml",),
+            coverage=dict(cov),
+            priority=25,
+            config={"stub": True, "oi": "OI-B4"},
+        ),
+        Reader(
+            id="pspice",
+            name="PSpice Reader",
+            version="0.1.0",
+            extensions=(".cir", ".sch", ".lib", ".net"),
+            languages=("pspice",),
+            coverage=dict(cov),
+            priority=25,
+            config={"stub": True, "oi": "OI-B4"},
+        ),
+    ]
+
+
 class ReaderRegistry:
     """Maps extensions/languages → reader and answers coverage questions honestly (BB10)."""
 
     name = "readers"
-    VERSION = "2.0.0"  # OI-C1/C2: neutral package + document/conversation registrations
+    VERSION = "2.1.0"  # OI-B4: additive CAD/MATLAB/PLC/UML/PSpice stubs
 
     def __init__(
         self,
@@ -217,6 +283,7 @@ class ReaderRegistry:
                 *default_readers(),
                 *default_media_readers(),
                 *default_document_readers(),
+                *default_domain_stub_readers(),
             ]
         for reader in readers:
             self.register(reader)

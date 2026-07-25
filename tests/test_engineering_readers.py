@@ -14,9 +14,11 @@ from atlas.engineering.readers import (
     CAP_CALL_GRAPH,
     CAP_EXPORTS,
     CAP_METADATA,
+    CAP_SYMBOLS,
     CAP_TRANSCRIPT,
     Reader,
     ReaderRegistry,
+    default_domain_stub_readers,
     default_media_readers,
     default_readers,
 )
@@ -32,7 +34,9 @@ def test_extension_routing_picks_the_right_reader():
     assert reg.reader_for_extension(".jsx").id == "jsts"
     assert reg.reader_for_extension("mjs").id == "jsts"  # normalizes missing dot
     assert reg.reader_for_extension(".go").id == "treesitter"
-    assert reg.reader_for_extension(".mat") is None  # honest: nobody reads .mat yet
+    assert reg.reader_for_extension(".mat").id == "matlab"  # OI-B4 stub
+    assert reg.reader_for_extension(".dwg").id == "cad"
+    assert reg.reader_for_extension(".plantuml").id == "uml"
 
 
 def test_reader_for_path_and_language():
@@ -41,6 +45,7 @@ def test_reader_for_path_and_language():
     assert reg.reader_for_language("python").id == "python"
     assert reg.reader_for_language("typescript").id == "jsts"
     assert reg.reader_for_language("cobol") is None
+    assert reg.reader_for_language("matlab").id == "matlab"
 
 
 def test_call_graph_supported_for_python_and_jsts():
@@ -55,8 +60,10 @@ def test_call_graph_supported_for_python_and_jsts():
     assert go["supported"] is False and go["reader"] == "treesitter"
     assert "call_graph" in go["reason"]
 
-    unknown = reg.can_produce(CAP_CALL_GRAPH, language="matlab")
-    assert unknown["supported"] is False and unknown["reader"] is None
+    # OI-B4: named stub exists but supports nothing yet.
+    matlab = reg.can_produce(CAP_CALL_GRAPH, language="matlab")
+    assert matlab["supported"] is False and matlab["reader"] == "matlab"
+    assert "does not support" in matlab["reason"]
 
 
 def test_supports_and_coverage_matrix():
@@ -67,6 +74,7 @@ def test_supports_and_coverage_matrix():
     assert matrix["python"][CAP_CALL_GRAPH] is True
     assert matrix["jsts"][CAP_CALL_GRAPH] is True
     assert matrix["treesitter"][CAP_CALL_GRAPH] is False
+    assert all(v is False for v in matrix["matlab"].values())
 
 
 def test_extension_map_and_metrics_and_health():
@@ -74,11 +82,14 @@ def test_extension_map_and_metrics_and_health():
     emap = reg.extension_map()
     assert emap[".py"] == "python" and emap[".ts"] == "jsts" and emap[".go"] == "treesitter"
     metrics = reg.metrics()
-    assert metrics["readers"] == 9  # 3 code + 4 media + document + conversation (OI-C2)
+    # 3 code + 4 media + document + conversation + 5 domain stubs (OI-B4)
+    assert metrics["readers"] == 14
     assert "python" in metrics["languages"] and "typescript" in metrics["languages"]
     assert "document" in metrics["languages"]
+    assert "matlab" in metrics["languages"] and "cad" in metrics["languages"]
     assert emap[".vtt"] == "transcript_file"
     assert emap[".pdf"] == "document"
+    assert emap[".mat"] == "matlab"
     assert reg.health_check().healthy is True
 
 
@@ -119,6 +130,21 @@ def test_default_media_readers_registered():
     for r in default_media_readers():
         assert r.version and r.extensions
         assert CAP_CALL_GRAPH not in r.coverage or r.coverage.get(CAP_CALL_GRAPH) is False
+
+
+def test_domain_stub_readers_oi_b4():
+    """OI-B4: CAD/MATLAB/PLC/UML/PSpice are named stubs with all-false coverage."""
+    stubs = default_domain_stub_readers()
+    assert {r.id for r in stubs} == {"matlab", "cad", "plc", "uml", "pspice"}
+    reg = ReaderRegistry()
+    assert reg.VERSION.startswith("2.1")
+    for r in stubs:
+        assert r.config.get("stub") is True
+        got = reg.get(r.id)
+        assert got is not None
+        assert all(not got.supports(c) for c in got.coverage)
+        prod = reg.can_produce(CAP_SYMBOLS, language=r.languages[0])
+        assert prod["supported"] is False and prod["reader"] == r.id
 
 
 # --- JS/TS end-to-end through the same pipeline ---------------------------

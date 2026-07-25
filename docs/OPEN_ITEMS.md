@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-C7 migration honesty + OI-D2 fair-share closed).
+> **Last updated:** 2026-07-25 (OI-B4 additive domain stub readers closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -134,7 +134,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 | OI-B1 | 🟢 | P2 | **JS/TS call-graph resolution.** Tree-sitter collects `call_expression` sites; graph resolves unique / same-file / `this`→`self` edges (OI-B1). Go/etc. remain symbols/imports only. | PHASE_B §BB5/BB10 | closed OI-B1 |
 | OI-B2 | 🟢 | P2 | **Partial / per-file re-ingest.** RepoWatcher Detect builds file blob manifests; Policy may choose `partial_ingest`; `learn_repository(paths=/drop_paths=)` merges re-parsed files into the prior artifact (same stores). Large/first/forced ticks stay full. | PHASE_B §B.6 | closed OI-B2 |
 | OI-B3 | 🟢 | P2 | **Knowledge Conflict Resolver.** Contested findings get `quality.conflict` why-records; `GET /v1/knowledge/contested` + `POST .../resolve` (hold/supersede/reactivate); DecisionRule `knowledge_conflict` recommends options. Still one Knowledge OS — no parallel conflict DB. | PHASE_B "not building" | closed OI-B3 |
-| OI-B4 | 🔴 | P3 | **Additive readers:** CAD / MATLAB / PLC / UML / PSpice, etc. Register in the (unified, OI-C2) Reader Registry with no changes elsewhere. | PHASE_B "not building" |
+| OI-B4 | 🟢 | P3 | **Additive readers:** CAD / MATLAB / PLC / UML / PSpice registered as all-false-coverage stubs in the unified Reader Registry (`default_domain_stub_readers`, VERSION 2.1.0). No parsers yet. | PHASE_B "not building" | closed OI-B4 |
 | OI-A1 | 🟢 | P3 | **Cron schedules.** `scheduler.schedules.kind` + `cron_expr` (migration `0042`); `ScheduleService.register_cron_schedule` / worker `cron_expr` / template `worker_specs.cron`. Interval + continuous unchanged. | PHASE_A §A (schedules) | closed OI-A1 |
 | OI-A2 | 🟢 | P3 | **Job-advance priority threading** through the scheduler. `plan_job` / `advance_job` stamp `Mission.effective_priority` when `job.mission_id` is set (same A7 formula as schedules). | PHASE_A | closed OI-A2 |
 | OI-A3 | 🟢 | P3 | **Resource caps:** `llm_units_per_window` (+ optional `llm_window_seconds`) and `ram_mb` host reserve enforced on the MissionArbiter / WorkerManager tick gate (OI-A3). Machine RM remains the global complement. | PHASE_A | closed OI-A3 |
@@ -146,6 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-B4 | **Additive domain stub readers** — CAD/MATLAB/PLC/UML/PSpice registry stubs. | _(pending commit)_ |
 | OI-D2 | **Fair-share arbitration** — soft recent-admit penalty; no preemption. | `7b7a349` |
 | OI-C7 | **Migration-number honesty** — registry through `0042`; next free `0043`. | `2dde699` |
 | OI-A3 | **Resource caps** — `llm_units_per_window` + `ram_mb` on MissionArbiter tick admit. | `86438ad` |

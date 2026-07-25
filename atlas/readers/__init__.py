@@ -81,6 +81,7 @@ from atlas.readers.registry import (
     Reader,
     ReaderRegistry,
     default_document_readers,
+    default_domain_stub_readers,
     default_media_readers,
     default_readers,
 )
@@ -142,4 +143,5 @@ __all__ = [
     "default_readers",
     "default_media_readers",
     "default_document_readers",
+    "default_domain_stub_readers",
 ]

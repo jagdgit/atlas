@@ -444,8 +444,9 @@ B.1 Asset-backed ingestion ─┬─> B.2 Findings + embeddings ─┐
   Knowledge Domains + Missions on this same pipeline (P5). Do not reopen.
 - **No non-Python call graph** yet (JS/TS = symbols/imports only; **declared** via the reader
   coverage matrix, BB10 — not silently empty).
-- **No CAD/MATLAB/PLC/UML/PSpice readers** yet (later, additive readers registered in the Reader
-  Registry).
+- **No CAD/MATLAB/PLC/UML/PSpice *parsers*** yet — OI-B4 registers them as additive Reader
+  Registry stubs (all-false coverage) so Atlas answers *"who handles `.mat`?"* honestly without
+  inventing extractors. Real parsers remain later (and OI-M7 for strategy-chain reuse).
 - **No partial / per-file re-ingest** yet — RepoWatcher does **full-repo** ingest; the
   Detect→Compare→Policy→Ingest **interface + change set are in place** (B.6) so partial ingest drops
   in later without reshaping the worker.
