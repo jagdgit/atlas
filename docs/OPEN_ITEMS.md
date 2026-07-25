@@ -146,7 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-B1 | **JS/TS call-graph resolution** — tree-sitter call sites + heuristic edges. | _(pending commit)_ |
+| OI-B1 | **JS/TS call-graph resolution** — tree-sitter call sites + heuristic edges. | `3fb8f3c` |
 | OI-PM0 | **Personal Mentor Mission** — owner/career weekly lessons; Programs stub-free. | `4742c4c` |
 | OI-MP4 | **Engineering Mentor Mission** — weekly judgment lessons → Experience OS. | `005b8c6` |
 | OI-C12 | **Personal/Owner SPA dashboard** — `/ui` Personal panel + coverage/confirm/infer/draft. | `6835729` |
