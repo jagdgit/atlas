@@ -115,6 +115,57 @@ class FileParse:
         }
 
 
+def file_parse_from_dict(data: dict[str, Any]) -> FileParse:
+    """Rehydrate a :class:`FileParse` from :meth:`FileParse.as_dict` (OI-B2 merge)."""
+    symbols = [
+        Symbol(
+            name=str(s.get("name") or ""),
+            kind=str(s.get("kind") or KIND_FUNCTION),
+            file=str(s.get("file") or data.get("path") or ""),
+            start_line=int(s.get("start_line") or 1),
+            end_line=int(s.get("end_line") or s.get("start_line") or 1),
+            lang=str(s.get("lang") or data.get("lang") or "unknown"),
+            signature=str(s.get("signature") or ""),
+            docstring=str(s.get("docstring") or ""),
+            parent=s.get("parent"),
+        )
+        for s in (data.get("symbols") or [])
+        if isinstance(s, dict)
+    ]
+    imports = [
+        ImportRef(
+            module=str(i.get("module") or ""),
+            file=str(i.get("file") or data.get("path") or ""),
+            line=int(i.get("line") or 1),
+            names=tuple(i.get("names") or ()),
+            resolved_file=i.get("resolved_file"),
+        )
+        for i in (data.get("imports") or [])
+        if isinstance(i, dict)
+    ]
+    calls = [
+        CallRef(
+            caller=str(c.get("caller") or ""),
+            callee=str(c.get("callee") or ""),
+            file=str(c.get("file") or data.get("path") or ""),
+            line=int(c.get("line") or 1),
+            resolved=c.get("resolved"),
+        )
+        for c in (data.get("calls") or [])
+        if isinstance(c, dict)
+    ]
+    return FileParse(
+        path=str(data.get("path") or ""),
+        lang=str(data.get("lang") or "unknown"),
+        outcome=str(data.get("outcome") or OUTCOME_OK),
+        symbols=symbols,
+        imports=imports,
+        calls=calls,
+        loc=int(data.get("loc") or 0),
+        reason=data.get("reason"),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RepoMap:
     root: str

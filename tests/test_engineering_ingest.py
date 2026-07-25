@@ -17,6 +17,8 @@ from atlas.engineering.ingest import (
     RepoAcquireError,
     RepoAcquirer,
     compute_tree_checksum,
+    diff_file_manifests,
+    file_blob_manifest,
 )
 from atlas.vcs.acquire import normalize_remote
 
@@ -122,6 +124,22 @@ def test_tree_checksum_rejects_non_directory(tmp_path):
     f.write_text("x")
     with pytest.raises(RepoAcquireError):
         compute_tree_checksum(f)
+
+
+def test_file_blob_manifest_and_diff(tmp_path):
+    _make_repo(tmp_path, {"a.py": "print(1)\n", "pkg/b.py": "x = 2\n"})
+    m1 = file_blob_manifest(tmp_path)
+    assert set(m1) == {"a.py", "pkg/b.py"}
+    m2 = dict(m1)
+    (tmp_path / "pkg" / "b.py").write_text("x = 3\n")
+    (tmp_path / "c.py").write_text("y = 1\n")
+    (tmp_path / "a.py").unlink()
+    m2 = file_blob_manifest(tmp_path)
+    diff = diff_file_manifests(m1, m2)
+    assert diff["added"] == ["c.py"]
+    assert diff["removed"] == ["a.py"]
+    assert diff["modified"] == ["pkg/b.py"]
+    assert set(diff["changed_files"]) == {"c.py", "pkg/b.py"}
 
 
 # --- normalize_remote ----------------------------------------------------

@@ -99,6 +99,45 @@ def compute_tree_checksum(root: str | Path) -> str:
     return h.hexdigest()
 
 
+def file_blob_manifest(root: str | Path) -> dict[str, str]:
+    """Map ``relpath → blob sha256`` for tracked files (OI-B2 Detect input)."""
+    root = Path(root)
+    if not root.is_dir():
+        raise RepoAcquireError(f"not a directory: {root}")
+    out: dict[str, str] = {}
+    for path in _iter_tracked_files(root):
+        rel = path.relative_to(root).as_posix()
+        try:
+            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+    return out
+
+
+def diff_file_manifests(
+    previous: dict[str, str] | None,
+    current: dict[str, str] | None,
+) -> dict[str, list[str]]:
+    """Compare two ``file_blob_manifest`` maps into added/removed/modified (+changed_files).
+
+    ``changed_files`` is ``added + modified`` — the set that must be re-parsed on a
+    partial ingest. Removed paths are dropped from a merged parse set separately.
+    """
+    prev = previous or {}
+    curr = current or {}
+    prev_keys = set(prev)
+    curr_keys = set(curr)
+    added = sorted(curr_keys - prev_keys)
+    removed = sorted(prev_keys - curr_keys)
+    modified = sorted(p for p in (prev_keys & curr_keys) if prev[p] != curr[p])
+    return {
+        "added": added,
+        "removed": removed,
+        "modified": modified,
+        "changed_files": sorted(set(added) | set(modified)),
+    }
+
+
 def _pack_tree(root: Path) -> bytes:
     """Deterministic ``.tar.gz`` of tracked files (sorted, zeroed mtime/uid/gid).
 

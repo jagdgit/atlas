@@ -188,6 +188,8 @@ class IntelligenceService:
         policy: str | None = None,
         apply: bool = True,
         embed: bool | None = None,
+        paths: list[str] | None = None,
+        drop_paths: list[str] | None = None,
     ) -> dict[str, Any]:
         """Acquire a repository (local path or remote URL) and promote its structure (governed).
 
@@ -196,6 +198,9 @@ class IntelligenceService:
         the learned row carries a stable ``repo_uid`` + ``asset_id/version`` provenance and a
         re-clone of the same repo re-uses its asset version. Without an acquirer it falls back
         to distilling a local ``root`` in place (pre-Phase-B behaviour).
+
+        OI-B2: ``paths`` / ``drop_paths`` re-parse only the file delta and merge into the prior
+        artifact's FileParse set (same Derived Artifact / graph / findings stores).
 
         Explicit user act ⇒ applied by default; still recorded in the ledger so it is
         explainable and reversible. Returns a structured outcome (never raises)."""
@@ -225,7 +230,12 @@ class IntelligenceService:
             # Reader → Artifact (BB11): reuse the cached artifact for an unchanged asset
             # version so a re-extraction never re-parses the repo.
             artifact = self._load_artifact(
-                distill_root, acquired, reader=reader, reader_version=reader_version
+                distill_root,
+                acquired,
+                reader=reader,
+                reader_version=reader_version,
+                paths=paths,
+                drop_paths=drop_paths,
             )
             payload = self._distill_from_artifact(artifact, distill_root)
 
@@ -385,14 +395,22 @@ class IntelligenceService:
         *,
         reader: str,
         reader_version: str,
+        paths: list[str] | None = None,
+        drop_paths: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Return the reader artifact, reusing the Derived Artifact Store when possible (BB11)."""
+        """Return the reader artifact, reusing the Derived Artifact Store when possible (BB11).
+
+        OI-B2: when ``paths`` / ``drop_paths`` are set, merge a re-parse of the delta into the
+        previous asset version's FileParse list (or the in-memory CodeService cache).
+        """
         asset_id = getattr(acquired, "asset_id", None)
         asset_version = getattr(acquired, "asset_version", None)
         can_cache = (
             self._artifacts is not None and asset_id and asset_version is not None
         )
-        if can_cache:
+        partial = bool(paths or drop_paths)
+
+        if can_cache and not partial:
             cached = self._artifacts.get(asset_id, asset_version, reader, reader_version)
             if cached is not None:
                 self._logger.info(
@@ -400,10 +418,40 @@ class IntelligenceService:
                     asset_id, asset_version, reader, reader_version,
                 )
                 return cached
+
+        prior_parses = None
+        if partial:
+            prior_art = None
+            if can_cache and int(asset_version or 0) > 1:
+                prior_art = self._artifacts.get(
+                    asset_id, int(asset_version) - 1, reader, reader_version
+                )
+            if prior_art is None and hasattr(self._code, "peek_cached_parses"):
+                prior_parses = self._code.peek_cached_parses(distill_root)
+            elif prior_art is not None and hasattr(self._code, "parses_from_artifact"):
+                prior_parses = self._code.parses_from_artifact(prior_art)
+            if not prior_parses:
+                # Cannot merge honestly without a baseline — fall back to full scan.
+                self._logger.info(
+                    "partial ingest requested but no prior parses — full re-parse"
+                )
+                partial = False
+                paths = None
+                drop_paths = None
+
         # Reached only on a Derived-Artifact-Store miss (new/unknown asset version), so we always
         # want a fresh parse — a re-ingest of the same local path must not be served a stale
         # in-memory parse (otherwise a changed repo would look unchanged, breaking re-ingest).
-        artifact = self._code.artifact(distill_root, refresh=True)
+        if partial:
+            artifact = self._code.artifact(
+                distill_root,
+                refresh=True,
+                paths=list(paths or []),
+                drop_paths=list(drop_paths or []),
+                prior_parses=prior_parses,
+            )
+        else:
+            artifact = self._code.artifact(distill_root, refresh=True)
         if can_cache:
             try:
                 self._artifacts.put(

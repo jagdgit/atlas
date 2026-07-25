@@ -15,6 +15,7 @@ from atlas.missions.templates.builtins import BUILTIN_TEMPLATES
 from atlas.workers.base import TickContext
 from atlas.workers.repo_watcher import (
     POLICY_FULL_INGEST,
+    POLICY_PARTIAL_INGEST,
     POLICY_SKIP,
     RepoWatcher,
     decide_policy,
@@ -63,6 +64,32 @@ def test_decide_policy():
     assert decide_policy({"changed": True}) == POLICY_FULL_INGEST
     assert decide_policy({"changed": False}) == POLICY_SKIP
     assert decide_policy({}) == POLICY_FULL_INGEST  # default: ingest when unknown
+    assert (
+        decide_policy({
+            "changed": True,
+            "has_baseline": True,
+            "changed_files": ["a.py"],
+            "removed_files": [],
+        })
+        == POLICY_PARTIAL_INGEST
+    )
+    assert (
+        decide_policy({
+            "changed": True,
+            "has_baseline": True,
+            "changed_files": [f"f{i}.py" for i in range(25)],
+            "removed_files": [],
+        })
+        == POLICY_FULL_INGEST
+    )
+    assert (
+        decide_policy({
+            "changed": True,
+            "has_baseline": False,
+            "changed_files": ["a.py"],
+        })
+        == POLICY_FULL_INGEST
+    )
 
 
 # --- tick behaviour ------------------------------------------------------
@@ -73,11 +100,15 @@ def test_first_tick_ingests_and_records_state(tmp_path):
     res = w.do_tick(_ctx(root))
     assert len(intel.calls) == 1
     assert intel.calls[0]["path"] == root
+    assert "paths" not in intel.calls[0] or intel.calls[0].get("paths") is None
     assert res.state["ingests"] == 1
     assert res.state["last_result"] == "ingested"
+    assert res.state["last_policy"] == POLICY_FULL_INGEST
     assert res.state["config_version"] == 1
-    assert "ingested svc" in res.note and "config v1 picked up" in res.note
+    assert "ingested svc" in res.note and "[full]" in res.note
+    assert "config v1 picked up" in res.note
     assert res.state["last_tree_checksum"]  # detected checksum stored for next Detect
+    assert res.state["last_file_manifest"]  # OI-B2 baseline for partial
 
 
 def test_unchanged_tree_is_cheap_noop(tmp_path):
@@ -93,7 +124,7 @@ def test_unchanged_tree_is_cheap_noop(tmp_path):
     assert second.state["ticks"] == first.state["ticks"] + 1
 
 
-def test_changed_tree_triggers_reingest(tmp_path):
+def test_changed_tree_triggers_partial_reingest(tmp_path):
     root = _repo(tmp_path)
     intel = FakeIntel([
         _ok(version=1),
@@ -106,7 +137,9 @@ def test_changed_tree_triggers_reingest(tmp_path):
     assert len(intel.calls) == 2
     assert second.state["ingests"] == 2
     assert second.state["last_change_set"]["changed"] is True
-    assert second.state["last_policy"] == POLICY_FULL_INGEST
+    assert second.state["last_policy"] == POLICY_PARTIAL_INGEST
+    assert intel.calls[1].get("paths") == ["b.py"]
+    assert "[partial]" in second.note
     assert "structural change" in second.note
 
 

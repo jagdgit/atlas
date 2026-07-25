@@ -15,6 +15,8 @@ from atlas.engineering.ingest import (
     RepoAcquireError,
     RepoAcquirer,
     compute_tree_checksum,
+    diff_file_manifests,
+    file_blob_manifest,
 )
 from atlas.engineering.mentor import MentorLesson, synthesize_engineering_lesson
 
@@ -23,6 +25,8 @@ __all__ = [
     "RepoAcquireError",
     "RepoAcquirer",
     "compute_tree_checksum",
+    "diff_file_manifests",
+    "file_blob_manifest",
     "MentorLesson",
     "synthesize_engineering_lesson",
 ]

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from atlas.code.graph import build_graph
 from atlas.code.languages import language_for, supported_languages
-from atlas.code.models import KIND_CLASS, FileParse
+from atlas.code.models import KIND_CLASS, FileParse, file_parse_from_dict
 from atlas.code.parser import CodeParser
 from atlas.code.patterns import mine_patterns
 from atlas.code.repomap import (
@@ -46,7 +46,7 @@ class CodeService:
     # Reader/artifact version (P2/BB8): bump on a material change to what the code reader
     # extracts (symbols/imports/graph). Stamped onto engineering findings + derived artifacts
     # so knowledge stays comparable across time and a reader upgrade is a visible version delta.
-    VERSION = "1.0.0"
+    VERSION = "1.1.0"
 
     def __init__(
         self,
@@ -151,7 +151,14 @@ class CodeService:
         }
 
     def artifact(
-        self, root: str, *, symbol_limit: int = 200, refresh: bool = False
+        self,
+        root: str,
+        *,
+        symbol_limit: int = 200,
+        refresh: bool = False,
+        paths: list[str] | None = None,
+        drop_paths: list[str] | None = None,
+        prior_parses: list[FileParse] | None = None,
     ) -> dict[str, Any]:
         """Reader → **Artifact** (BB11): parse the repo once into a cacheable derived product.
 
@@ -162,10 +169,15 @@ class CodeService:
         ``refresh`` drops the in-memory parse cache first, so a re-ingest of the *same local
         path* whose files changed on disk is re-parsed rather than served stale (the Derived
         Artifact Store is the authoritative cross-run cache, keyed by asset version).
+
+        OI-B2: optional ``paths`` / ``drop_paths`` + ``prior_parses`` re-parse only the delta
+        and merge into the previous FileParse set (same artifact/graph stores — no parallel).
         """
         if refresh:
             self._cache.pop(str(Path(root).resolve()), None)
-        parses, manifests = self._scan(root)
+        parses, manifests = self._scan(
+            root, paths=paths, drop_paths=drop_paths, prior_parses=prior_parses
+        )
         resolved = Path(root).resolve()
         repo_map = build_repo_map(resolved, parses, manifests)
         graph = build_graph(parses)
@@ -189,9 +201,10 @@ class CodeService:
             "patterns": [p.as_dict() for p in mine_patterns(repo_map, parses)],
             "symbols": symbols,
             "symbol_count": sum(len(fp.symbols) for fp in parses),
-            # Honest per-language reader attribution + coverage (BB10): which reader handled
-            # each language and what it can/can't extract (e.g. no JS/TS call graph — declared,
-            # not silently empty).
+            # Full FileParse list — enables OI-B2 partial merge on the next asset version.
+            "parses": [fp.as_dict() for fp in parses],
+            "partial": bool(paths or drop_paths),
+            "partial_paths": list(paths or []),
             "readers": self._reader_attribution(languages),
         }
 
@@ -238,13 +251,43 @@ class CodeService:
                 "explanation": text, "grounded": True}
 
     # --- internals ------------------------------------------------------
-    def _scan(self, root: str) -> tuple[list[FileParse], dict[str, str]]:
+    def _scan(
+        self,
+        root: str,
+        *,
+        paths: list[str] | None = None,
+        drop_paths: list[str] | None = None,
+        prior_parses: list[FileParse] | None = None,
+    ) -> tuple[list[FileParse], dict[str, str]]:
         resolved = Path(root).resolve()
         key = str(resolved)
-        if key in self._cache:
+        partial = paths is not None or drop_paths is not None
+        if not partial and key in self._cache:
             return self._cache[key]
         if not resolved.is_dir():
             raise NotADirectoryError(f"not a directory: {root}")
+
+        if partial and prior_parses:
+            by_path = {fp.path: fp for fp in prior_parses}
+            for rel in drop_paths or []:
+                by_path.pop(str(rel).replace("\\", "/"), None)
+            for rel in paths or []:
+                rel_n = str(rel).replace("\\", "/")
+                abs_path = resolved / rel_n
+                if not abs_path.is_file():
+                    by_path.pop(rel_n, None)
+                    continue
+                try:
+                    text = abs_path.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    self._logger.debug("skip unreadable %s: %s", rel_n, exc)
+                    continue
+                by_path[rel_n] = self._parser.parse_text(text, rel_n, language_for(rel_n))
+            parses = [by_path[k] for k in sorted(by_path)]
+            manifests = read_manifests(resolved)
+            # Do not poison the full-scan cache with a partial merge.
+            return parses, manifests
+
         parses: list[FileParse] = []
         for abs_path in iter_source_files(
             resolved, ignores=self._ignores, max_files=self._max_files
@@ -259,6 +302,26 @@ class CodeService:
         manifests = read_manifests(resolved)
         self._cache[key] = (parses, manifests)
         return parses, manifests
+
+    def peek_cached_parses(self, root: str) -> list[FileParse] | None:
+        """Return in-memory FileParse list for ``root`` if present (OI-B2 merge without assets)."""
+        key = str(Path(root).resolve())
+        hit = self._cache.get(key)
+        return list(hit[0]) if hit else None
+
+    def parses_from_artifact(self, artifact: dict[str, Any] | None) -> list[FileParse]:
+        """Rehydrate FileParse rows from a stored artifact dict."""
+        if not artifact:
+            return []
+        rows = artifact.get("parses") or []
+        out: list[FileParse] = []
+        for row in rows:
+            if isinstance(row, dict):
+                try:
+                    out.append(file_parse_from_dict(row))
+                except Exception:  # noqa: BLE001 - skip corrupt rows
+                    continue
+        return out
 
     def _ingest_code(
         self,
