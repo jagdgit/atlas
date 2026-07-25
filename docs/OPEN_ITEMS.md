@@ -145,7 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-C13 | **Conversation → experience extraction** — `build_conversation_experiences` + ingest wire. | (this commit) |
+| OI-C13 | **Conversation → experience extraction** — `build_conversation_experiences` + ingest wire. | `7f35a28` |
 | OI-T1/T2/T3 | **Live-DB test hygiene** — session cleanup + `atlas-db test-clean`; `list_pending(source=)`. | `44dd079` |
 | OI-MP5 | **Missions teach missions** — mentor soft-bias + Decision Engine Experience nudge. | `9d22b66` |
 | OI-UI0 | **Job UI live updates** — sequential poll + SSE refresh; `/ui` no-cache headers. | `efc7091` |
