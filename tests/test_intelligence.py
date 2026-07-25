@@ -438,10 +438,15 @@ def test_learn_repository_skips_coverage_without_asset():
 class _FakeExperienceWriter:
     def __init__(self):
         self.batches = []
+        self.retractions = []
 
     def write(self, experiences):
         self.batches.append(list(experiences))
         return {"created": len(experiences), "revised": 0, "merged": 0, "noop": 0, "ids": []}
+
+    def retract_source(self, source_id):
+        self.retractions.append(str(source_id))
+        return {"retracted": 1, "updated": 1, "archived": 0, "ids": []}
 
 
 def test_learn_repository_dual_extracts_and_consolidates_experiences():
@@ -471,6 +476,30 @@ def test_learn_repository_dual_extracts_and_consolidates_experiences():
     for e in exp_writer.batches[0]:
         assert e["domain"] == "experience"
         assert e["provenance"]["source"] == "repo"
+
+
+def test_revert_peels_experience_source():
+    """OI-C10: CodeStoreSink.revert peels the repo_uid from experiences (does not wipe skills)."""
+    code_repos = {
+        "/repos/api": _repo_fixture("api", ["FastAPI"], {"python": 10}, [])
+    }
+    code = FakeCodeService(code_repos)
+    intel_repo = FakeIntelRepo()
+    learning = LearningService(FakeLearningRepo(), LearningConfig(auto_apply=False))
+    exp_writer = _FakeExperienceWriter()
+    learning.register_sink(
+        "code", CodeStoreSink(intel_repo, experiences=exp_writer)
+    )
+    svc = IntelligenceService(code, intel_repo, learning, IntelligenceConfig())
+
+    out = svc.learn_repository("/repos/api")
+    assert out["outcome"] == "ok"
+    event_id = out["event"]["id"]
+    repo_uid = out["repository"]["repo_uid"]
+    assert repo_uid
+
+    learning.revert(event_id)
+    assert exp_writer.retractions == [repo_uid]
 
 
 # --- engineering findings read side (B.7) ---------------------------------

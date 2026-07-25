@@ -307,6 +307,45 @@ def derive_maturity(
     return MATURITY_CANDIDATE
 
 
+def belief_from_support(
+    supporting: Any,
+    *,
+    established_min_sources: int = ESTABLISHED_MIN_SOURCES,
+    verified_min_sources: int = VERIFIED_MIN_SOURCES,
+) -> dict[str, Any]:
+    """Absolute confidence/maturity from the *remaining* supporting set (OI-C10 peel).
+
+    Unlike :func:`merge_confidence` (monotonic on add), this recomputes from leftovers so
+    retracting a project's source can honestly downgrade corroboration.
+    """
+    count = independent_source_count(supporting)
+    if count <= 0:
+        return {
+            "corroboration_count": 0,
+            "confidence": "UNVERIFIED",
+            "confidence_score": 0.0,
+            "maturity": MATURITY_CANDIDATE,
+        }
+    confidence = merge_confidence(
+        existing="UNVERIFIED", incoming="UNVERIFIED", source_count=count
+    )
+    confidence_score = merge_confidence_score(
+        existing=0.0, incoming=0.0, source_count=count
+    )
+    maturity = derive_maturity(
+        supporting_count=count,
+        confidence=confidence,
+        established_min_sources=established_min_sources,
+        verified_min_sources=verified_min_sources,
+    )
+    return {
+        "corroboration_count": count,
+        "confidence": confidence,
+        "confidence_score": confidence_score,
+        "maturity": maturity,
+    }
+
+
 def apply_freshness(data: dict[str, Any], *, now: datetime | None = None) -> str:
     """Compute freshness for a finding dict using type-aware policy."""
     contradicted = bool(data.get("contradicting_sources") or data.get("contradicting"))

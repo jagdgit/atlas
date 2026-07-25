@@ -417,8 +417,9 @@
 >   multi-source finding (incoming supporting ⊆ existing, body unchanged) spawned a spurious revision
 >   that discarded accumulated evidence — `_accumulate` now returns an explicit no-op.
 > - **Deviations / leftovers:** dependency-package experiences are deferred (only language/framework/
->   pattern signal today — `OI-C10`); experience revert-retraction is intentionally omitted (cumulative,
->   `OI-C10`). Migration landed as the next sequential slot `0037` (the plan's re-penciled number held).
+>   pattern signal today — `OI-C10`); experience revert-retraction later closed as OI-C10
+>   (`ExperienceWriter.retract_source` peels the project's source; P13 cumulative rows remain when
+>   other projects still evidence). Migration landed as the next sequential slot `0037`.
 
 - **Dual extraction (P12/P11):** one read of an asset feeds **two** extractors — engineering
   findings (existing) **and** an **experience** extractor that emits owner-experience records

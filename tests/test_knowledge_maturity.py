@@ -14,6 +14,7 @@ from atlas.knowledge.lifecycle import (
     MATURITY_CANDIDATE,
     MATURITY_ESTABLISHED,
     MATURITY_VERIFIED,
+    belief_from_support,
     derive_maturity,
     independent_source_count,
 )
@@ -43,6 +44,22 @@ def test_independent_source_count_dedups_by_source_id():
     assert independent_source_count(supporting) == 4
     assert independent_source_count([]) == 0
     assert independent_source_count(None) == 0
+
+
+def test_belief_from_support_absolute_from_leftovers():
+    """OI-C10 peel: belief is recomputed from remaining supporters (not monotonic merge)."""
+    empty = belief_from_support([])
+    assert empty["corroboration_count"] == 0
+    assert empty["maturity"] == MATURITY_CANDIDATE
+
+    one = belief_from_support([{"source_id": "a"}])
+    assert one["corroboration_count"] == 1
+    assert one["maturity"] == MATURITY_CANDIDATE
+
+    two = belief_from_support([{"source_id": "a"}, {"source_id": "b"}])
+    assert two["corroboration_count"] == 2
+    assert two["maturity"] == MATURITY_VERIFIED
+    assert two["confidence"] == "MEDIUM"
 
 
 # --- live DB -------------------------------------------------------------

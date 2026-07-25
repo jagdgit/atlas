@@ -76,9 +76,10 @@ class CodeStoreSink:
     single governed, reversible ledger event — reverting archives both (B.2/BB9).
 
     Dual extraction (C.6): the same run also consolidates the owner's **experiences** into
-    ``learning.experiences`` via the :class:`ExperienceWriter`. Unlike findings these are NOT archived
-    on revert — experiences are cross-project cumulative knowledge (P13), so retiring one learn must
-    not un-corroborate a skill that other projects also evidence."""
+    ``learning.experiences`` via the :class:`ExperienceWriter`. On revert, that project's
+    supporting source is **peeled** from shared experiences (OI-C10) so other projects'
+    corroboration remains (P13) — we do not archive the whole skill row.
+    """
 
     def __init__(
         self,
@@ -125,11 +126,20 @@ class CodeStoreSink:
 
     def revert(self, ref_id: str) -> None:
         self._repo.set_repository_status(ref_id, "reverted")
-        if self._findings is not None:
-            rec = self._repo.get_repository(ref_id)
-            repo_uid = getattr(rec, "repo_uid", None)
-            if repo_uid:
-                self._findings.archive_for_repo(str(repo_uid))
+        rec = self._repo.get_repository(ref_id)
+        repo_uid = getattr(rec, "repo_uid", None) if rec is not None else None
+        if self._findings is not None and repo_uid:
+            self._findings.archive_for_repo(str(repo_uid))
+        # OI-C10 — peel this project's evidence from cross-project experiences.
+        if (
+            self._experiences is not None
+            and repo_uid
+            and hasattr(self._experiences, "retract_source")
+        ):
+            try:
+                self._experiences.retract_source(str(repo_uid))
+            except Exception:  # noqa: BLE001 - peel must not block findings archive
+                pass
 
 
 class IntelligenceService:

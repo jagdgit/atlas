@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-B3 Knowledge Conflict Resolver closed).
+> **Last updated:** 2026-07-25 (OI-C10 experience evidence-retraction closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -27,7 +27,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C4 | 🟢 | P2 | **Back-fill existing documents to assets lazily.** `IngestionService.backfill_orphan_documents` + Owner Knowledge tick drain; `GET /v1/knowledge/orphans`, `POST /v1/knowledge/backfill-assets`, `atlas backfill-assets`. | C.2c | closed OI-C4 |
 | OI-C5 | 🟢 | P2 | **Wire `IngestionService` + `CandidateConsumer`.** Bridge CLI/`POST /v1/ingest`; scheduled `candidates_drain` + `candidates_prune`; live `EmbeddingIdentityResolver` on consolidator. | C.2c / C.3g | closed OI-C5 |
 | OI-C8 | 🟢 | P2 | **Scheduled *reader-version* re-extraction (A10).** Owner Knowledge ticks call `mark_stale_for_reextraction` + `IngestionService.reingest_asset(force=True)`. | C.4c | closed OI-C8 |
-| OI-C10 | 🟡 | P3 | **Richer experience signal + revert-retraction.** Dependency-package signal from manifests ✅ (`build_repo_experiences` / OI-C10). Revert still does **not** retract a project's contribution to a cross-project experience (evidence-retraction deferred). | C.6c/C.6d | partial |
+| OI-C10 | 🟢 | P3 | **Richer experience signal + revert-retraction.** Dependency-package signal from manifests ✅. Revert peels that project's ``source_id`` from shared experiences (`ExperienceWriter.retract_source` + `CodeStoreSink.revert`); archives when no supporters remain. | C.6c/C.6d | closed OI-C10 |
 | OI-C11 | 🟢 | P2 | **Personal auto-inference: proficiency + timeline years + heuristic professional.** Skills get graded `proficiency`; stated `years` feed timeline tenure; role/publication heuristics from Experience text. Full CV / Research-finding professional auto-inference still deferred. | C.7b | closed OI-C11 |
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
@@ -146,6 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-C10 | **Experience evidence-retraction on revert** — peel repo_uid from shared experiences; archive if alone. | _(pending commit)_ |
 | OI-B3 | **Knowledge Conflict Resolver** — conflict quality + list/resolve API + DE rule. | `3602eab` |
 | OI-B2 | **Partial / per-file re-ingest** — file Detect + `paths=` merge into prior artifact. | `a5975aa` |
 | OI-B1 | **JS/TS call-graph resolution** — tree-sitter call sites + heuristic edges. | `3fb8f3c` |

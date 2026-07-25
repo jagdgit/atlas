@@ -136,3 +136,50 @@ def test_build_repo_experiences_includes_dependency_packages():
     assert not any("pytest" in s.lower() and "dependencies" in s for s in stmts)
     celery = next(e for e in exps if e["value"]["skill"] == "celery")
     assert celery["value"]["context"] == "dependency"
+
+
+def test_retract_source_peels_one_project_keeps_other():
+    """OI-C10: reverting project A peels its support; project B's evidence remains."""
+    life = KnowledgeLifecycleService(InMemoryFindingStore())
+    writer = ExperienceWriter(life._store, lifecycle=life)  # type: ignore[attr-defined]
+
+    writer.write(build_repo_experiences(
+        _repo("projA", frameworks=["Celery"]), repo_uid="repoA",
+    ))
+    writer.write(build_repo_experiences(
+        _repo("projB", frameworks=["Celery"]), repo_uid="repoB",
+    ))
+    store = life._store  # type: ignore[attr-defined]
+    celery = next(
+        r for r in store.rows.values()
+        if r.get("value", {}).get("skill") == "Celery" and r["status"] == "active"
+    )
+    assert len(celery["supporting"]) == 2
+
+    out = writer.retract_source("repoA")
+    assert out["retracted"] >= 1 and out["updated"] >= 1 and out["archived"] == 0
+
+    celery = store.rows[celery["id"]]
+    assert celery["status"] == "active"
+    assert len(celery["supporting"]) == 1
+    assert celery["supporting"][0]["source_id"] == "repoB"
+    assert celery["maturity"] == "candidate"
+
+
+def test_retract_source_archives_when_no_supporters_remain():
+    """OI-C10: peeling the last independent source archives the experience row."""
+    life = KnowledgeLifecycleService(InMemoryFindingStore())
+    writer = ExperienceWriter(life._store, lifecycle=life)  # type: ignore[attr-defined]
+
+    writer.write(build_repo_experiences(
+        _repo("solo", frameworks=["Redis"]), repo_uid="repoSolo",
+    ))
+    store = life._store  # type: ignore[attr-defined]
+    redis = next(
+        r for r in store.rows.values()
+        if r.get("value", {}).get("skill") == "Redis" and r["status"] == "active"
+    )
+
+    out = writer.retract_source("repoSolo")
+    assert out["archived"] >= 1
+    assert store.rows[redis["id"]]["status"] == "archived"

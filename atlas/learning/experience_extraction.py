@@ -347,9 +347,9 @@ class ExperienceWriter:
     """Consolidate extracted experiences into ``learning.experiences`` (single write path, CC3/CC6).
 
     Mirrors :class:`~atlas.engineering.findings.EngineeringFindingWriter` but binds the consolidator to
-    an :class:`~atlas.repositories.experience_store.ExperienceStore`. There is **no** batch archival:
-    experiences are cross-project cumulative knowledge (P13), so a later repo does not retire an earlier
-    project's contribution — reverting a single learn must not un-corroborate a skill.
+    an :class:`~atlas.repositories.experience_store.ExperienceStore`. Experiences are cross-project
+    cumulative knowledge (P13): reverting a learn **peels** that project's supporting source
+    (OI-C10) rather than deleting the shared skill row other projects still evidence.
     """
 
     def __init__(
@@ -393,3 +393,78 @@ class ExperienceWriter:
             "created": created, "revised": revised, "merged": merged,
             "noop": noop, "ids": ids,
         }
+
+    def retract_source(self, source_id: str) -> dict[str, Any]:
+        """Peel one project's ``source_id`` from all experiences (OI-C10).
+
+        Recomputes confidence/maturity from remaining supporters. Archives the row when
+        no independent sources remain. Does not invent subtractive merge math beyond
+        :func:`~atlas.knowledge.lifecycle.belief_from_support`.
+        """
+        sid = str(source_id or "").strip()
+        if not sid:
+            return {"retracted": 0, "updated": 0, "archived": 0, "ids": []}
+
+        rows = self._list_active()
+        retracted = updated = archived = 0
+        ids: list[str] = []
+        from atlas.knowledge.lifecycle import belief_from_support
+
+        for row in rows:
+            supporting = list(row.get("supporting") or row.get("supporting_sources") or [])
+            kept = [
+                e for e in supporting
+                if self._entry_source_id(e) != sid
+            ]
+            if len(kept) == len(supporting):
+                continue
+            fid = str(row.get("id") or "")
+            if not fid:
+                continue
+            retracted += 1
+            ids.append(fid)
+            if not kept:
+                if hasattr(self._store, "set_status"):
+                    self._store.set_status(fid, "archived")
+                archived += 1
+                continue
+            belief = belief_from_support(kept)
+            if hasattr(self._store, "update_evidence"):
+                self._store.update_evidence(
+                    fid,
+                    supporting=kept,
+                    confidence=belief["confidence"],
+                    confidence_score=belief["confidence_score"],
+                    maturity=belief["maturity"],
+                )
+            updated += 1
+        self._logger.info(
+            "experience retract source=%s: peeled=%d updated=%d archived=%d",
+            sid, retracted, updated, archived,
+        )
+        return {
+            "retracted": retracted,
+            "updated": updated,
+            "archived": archived,
+            "ids": ids,
+        }
+
+    def _list_active(self) -> list[dict[str, Any]]:
+        if hasattr(self._store, "list_active"):
+            try:
+                return list(self._store.list_active(limit=5000) or [])
+            except TypeError:
+                return list(self._store.list_active() or [])
+        rows = getattr(self._store, "rows", None)
+        if isinstance(rows, dict):
+            return [
+                dict(r) for r in rows.values()
+                if str(r.get("status") or "") in {"active", "contested"}
+            ]
+        return []
+
+    @staticmethod
+    def _entry_source_id(entry: Any) -> str:
+        if isinstance(entry, dict):
+            return str(entry.get("source_id") or entry.get("source") or "")
+        return str(entry or "")
