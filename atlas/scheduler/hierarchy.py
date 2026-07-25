@@ -50,9 +50,17 @@ _CADENCE_MAP: list[tuple[re.Pattern[str], int]] = [
 
 
 def cadence_to_seconds(cadence: str | None, *, default: int = PROGRAM_DEFAULT_INTERVAL) -> int:
-    """Map a Program/Mission cadence label to a tick interval in seconds."""
+    """Map a Program/Mission cadence label to a tick interval in seconds.
+
+    Five-field crontab strings are *not* converted here — use
+    :func:`~atlas.scheduler.cron.is_cron_expr` / ``resolve_interval`` for cron (OI-A1).
+    """
     text = (cadence or "").strip()
     if not text:
+        return default
+    from atlas.scheduler.cron import is_cron_expr
+
+    if is_cron_expr(text):
         return default
     # bare integer
     if text.isdigit():
@@ -92,8 +100,11 @@ class SchedulerHierarchyService:
         worker_type: str | None = None,
         cadence: str | None = None,
         worker_interval: int | None = None,
+        cron_expr: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve effective interval with cascade explanation."""
+        """Resolve effective interval (or cron) with cascade explanation."""
+        from atlas.scheduler.cron import is_cron_expr, validate_cron
+
         layers: list[dict[str, Any]] = []
         program_interval = PROGRAM_DEFAULT_INTERVAL
         program_id = _resolve_program_id(program_id)
@@ -111,6 +122,7 @@ class SchedulerHierarchyService:
                 )
 
         mission_interval: int | None = None
+        mission_cron: str | None = None
         member_cadence = cadence
         if program_id and template:
             prog = get_program(program_id)
@@ -123,22 +135,49 @@ class SchedulerHierarchyService:
                         member_cadence = member_cadence or m.cadence
                         break
         if member_cadence:
-            mission_interval = cadence_to_seconds(member_cadence)
-            layers.append(
-                {
-                    "layer": "mission",
-                    "template": template,
-                    "cadence": member_cadence,
-                    "interval_seconds": mission_interval,
-                }
-            )
+            if is_cron_expr(member_cadence):
+                mission_cron = validate_cron(member_cadence)
+                layers.append(
+                    {
+                        "layer": "mission",
+                        "template": template,
+                        "cadence": member_cadence,
+                        "kind": "cron",
+                        "cron_expr": mission_cron,
+                    }
+                )
+            else:
+                mission_interval = cadence_to_seconds(member_cadence)
+                layers.append(
+                    {
+                        "layer": "mission",
+                        "template": template,
+                        "cadence": member_cadence,
+                        "interval_seconds": mission_interval,
+                    }
+                )
 
         tpl_worker_interval = worker_interval
-        if tpl_worker_interval is None and template:
+        tpl_worker_cron = cron_expr
+        if tpl_worker_cron is None and template:
+            tpl_worker_cron = self._template_worker_cron(
+                template, worker_type=worker_type
+            )
+        if tpl_worker_interval is None and template and tpl_worker_cron is None:
             tpl_worker_interval = self._template_worker_interval(
                 template, worker_type=worker_type
             )
-        if tpl_worker_interval is not None:
+        if tpl_worker_cron is not None:
+            layers.append(
+                {
+                    "layer": "worker",
+                    "worker_type": worker_type or template,
+                    "kind": "cron",
+                    "cron_expr": tpl_worker_cron,
+                    "note": "template worker_specs",
+                }
+            )
+        elif tpl_worker_interval is not None:
             layers.append(
                 {
                     "layer": "worker",
@@ -151,22 +190,40 @@ class SchedulerHierarchyService:
         # Most specific wins: worker > mission > program
         effective = program_interval
         source = "program"
-        if mission_interval is not None:
+        kind = "interval"
+        resolved_cron: str | None = None
+        if mission_cron is not None:
+            kind = "cron"
+            resolved_cron = mission_cron
+            source = "mission"
+            effective = program_interval  # sentinel display only
+        elif mission_interval is not None:
             effective = mission_interval
             source = "mission"
-        if tpl_worker_interval is not None:
+        if tpl_worker_cron is not None:
+            kind = "cron"
+            resolved_cron = tpl_worker_cron
+            source = "worker"
+            effective = int(tpl_worker_interval) if tpl_worker_interval else program_interval
+        elif tpl_worker_interval is not None:
+            kind = "interval"
+            resolved_cron = None
             effective = int(tpl_worker_interval)
             source = "worker"
 
-        return {
+        out: dict[str, Any] = {
             "interval_seconds": effective,
             "source": source,
             "layers": layers,
             "program_id": program_id,
             "template": template,
             "worker_type": worker_type,
+            "kind": kind,
             "version": self.VERSION,
         }
+        if resolved_cron:
+            out["cron_expr"] = resolved_cron
+        return out
 
     def view(self, program_id: str | None = None) -> dict[str, Any]:
         """Full hierarchy tree for one Program or all Programs."""
@@ -245,9 +302,45 @@ class SchedulerHierarchyService:
                     continue
                 if worker_type and spec.get("type") != worker_type:
                     continue
+                if spec.get("cron") or spec.get("cron_expr"):
+                    continue  # cron handled separately
                 iv = spec.get("interval_seconds")
                 if iv is not None:
                     return int(iv)
+            break
+        return None
+
+    def _template_worker_cron(
+        self, template_name: str, *, worker_type: str | None = None
+    ) -> str | None:
+        if self._templates is None:
+            return None
+        try:
+            rows = self._templates.list_templates()
+        except Exception:  # noqa: BLE001
+            return None
+        from atlas.scheduler.cron import validate_cron
+
+        for t in rows or []:
+            name = getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None)
+            if name != template_name:
+                continue
+            specs = getattr(t, "worker_specs", None)
+            if specs is None and isinstance(t, dict):
+                specs = t.get("worker_specs")
+            if not specs and hasattr(t, "to_dict"):
+                specs = (t.to_dict() or {}).get("worker_specs")
+            for spec in specs or []:
+                if not isinstance(spec, dict):
+                    continue
+                if worker_type and spec.get("type") != worker_type:
+                    continue
+                cron = spec.get("cron") or spec.get("cron_expr")
+                if cron:
+                    try:
+                        return validate_cron(str(cron))
+                    except Exception:  # noqa: BLE001
+                        return str(cron).strip()
             break
         return None
 

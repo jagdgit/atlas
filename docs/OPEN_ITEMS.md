@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-C10 experience evidence-retraction closed).
+> **Last updated:** 2026-07-25 (OI-A1 cron schedules closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -31,7 +31,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C11 | 🟢 | P2 | **Personal auto-inference: proficiency + timeline years + heuristic professional.** Skills get graded `proficiency`; stated `years` feed timeline tenure; role/publication heuristics from Experience text. Full CV / Research-finding professional auto-inference still deferred. | C.7b | closed OI-C11 |
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
-| OI-C7 | 🟡 | P3 | **Migration-number placeholders.** Real numbers are assigned sequentially at build time. Through Phase C: `0028`–`0038` as listed; C.8/C.9 needed no migration. Post-C: `0039`=decision, `0040`=decision_approvals, `0041`=sim_trading. **Next free slot: `0042`.** Keep the PHASE_C table honest as slots are built. | C.2 | ongoing |
+| OI-C7 | 🟡 | P3 | **Migration-number placeholders.** Real numbers are assigned sequentially at build time. Through Phase C: `0028`–`0038` as listed; C.8/C.9 needed no migration. Post-C: `0039`=decision, `0040`=decision_approvals, `0041`=sim_trading, `0042`=schedule_cron. **Next free slot: `0043`.** Keep the PHASE_C table honest as slots are built. | C.2 | ongoing |
 | OI-C12 | 🟢 | P3 | **Personal/Owner SPA dashboard view.** Console `/ui` Personal panel: coverage bars, skills/timeline/professional/identity with P9 "why", Confirm/Reject for inferred facts, Infer + draft-resume actions over `/v1/personal/*`. | C.8d | closed OI-C12 |
 | OI-C13 | 🟢 | P3 | **Conversation → experience extraction.** `build_conversation_experiences` distills owner-stated skills from user turns; `IngestionService` writes them when `source=conversation` + `extract_findings` (Owner Knowledge). | C.8a | closed OI-C13 |
 
@@ -135,7 +135,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 | OI-B2 | 🟢 | P2 | **Partial / per-file re-ingest.** RepoWatcher Detect builds file blob manifests; Policy may choose `partial_ingest`; `learn_repository(paths=/drop_paths=)` merges re-parsed files into the prior artifact (same stores). Large/first/forced ticks stay full. | PHASE_B §B.6 | closed OI-B2 |
 | OI-B3 | 🟢 | P2 | **Knowledge Conflict Resolver.** Contested findings get `quality.conflict` why-records; `GET /v1/knowledge/contested` + `POST .../resolve` (hold/supersede/reactivate); DecisionRule `knowledge_conflict` recommends options. Still one Knowledge OS — no parallel conflict DB. | PHASE_B "not building" | closed OI-B3 |
 | OI-B4 | 🔴 | P3 | **Additive readers:** CAD / MATLAB / PLC / UML / PSpice, etc. Register in the (unified, OI-C2) Reader Registry with no changes elsewhere. | PHASE_B "not building" |
-| OI-A1 | 🔴 | P3 | **Cron schedules.** Only `interval` / `continuous` are built; cron is documented, not implemented. | PHASE_A §A (schedules) |
+| OI-A1 | 🟢 | P3 | **Cron schedules.** `scheduler.schedules.kind` + `cron_expr` (migration `0042`); `ScheduleService.register_cron_schedule` / worker `cron_expr` / template `worker_specs.cron`. Interval + continuous unchanged. | PHASE_A §A (schedules) | closed OI-A1 |
 | OI-A2 | 🔴 | P3 | **Job-advance priority threading** through the scheduler. | PHASE_A |
 | OI-A3 | 🔴 | P3 | **Resource caps:** `llm_units_per_window` and host-resource caps in the Resource Manager. | PHASE_A |
 | OI-X1 | ⚪ | — | **Remote access + hot/warm/cold storage tiering.** Hardware-gated; single-disk for now. | ROADMAP / PHASE_B |
@@ -146,6 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-A1 | **Cron schedules** — 5-field crontab on `scheduler.schedules` + claim advance. | _(pending commit)_ |
 | OI-C10 | **Experience evidence-retraction on revert** — peel repo_uid from shared experiences; archive if alone. | `2393b65` |
 | OI-B3 | **Knowledge Conflict Resolver** — conflict quality + list/resolve API + DE rule. | `3602eab` |
 | OI-B2 | **Partial / per-file re-ingest** — file Detect + `paths=` merge into prior artifact. | `a5975aa` |

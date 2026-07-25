@@ -102,6 +102,7 @@ class WorkerManager:
         worker_type: str,
         *,
         interval_seconds: int = 60,
+        cron_expr: str | None = None,
         metadata: dict[str, Any] | None = None,
         autostart: bool = True,
     ) -> Worker:
@@ -115,14 +116,26 @@ class WorkerManager:
             metadata=metadata,
         )
         if autostart and self._schedules is not None:
-            schedule = self._schedules.register_schedule(
-                "worker_tick",
-                interval_seconds,
-                payload={"worker_id": worker.id},
-                mission_id=mission_id,
-                worker_id=worker.id,
-                first_run_delay=0.0,
-            )
+            if cron_expr:
+                schedule = self._schedules.register_schedule(
+                    "worker_tick",
+                    interval_seconds=max(1, int(interval_seconds or 60)),
+                    payload={"worker_id": worker.id},
+                    mission_id=mission_id,
+                    worker_id=worker.id,
+                    first_run_delay=0.0,
+                    kind="cron",
+                    cron_expr=cron_expr,
+                )
+            else:
+                schedule = self._schedules.register_schedule(
+                    "worker_tick",
+                    interval_seconds,
+                    payload={"worker_id": worker.id},
+                    mission_id=mission_id,
+                    worker_id=worker.id,
+                    first_run_delay=0.0,
+                )
             self._repo.set_schedule(worker.id, schedule.id)
             worker = self._repo.get(worker.id) or worker
         self._journal(

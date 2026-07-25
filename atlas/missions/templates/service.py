@@ -129,10 +129,12 @@ class TemplateService:
 
         workers = []
         for spec in tmpl.worker_specs:
+            cron = spec.get("cron") or spec.get("cron_expr")
             worker = self._workers.create_worker(
                 mission.id,
                 spec["type"],
                 interval_seconds=int(spec.get("interval_seconds", 60)),
+                cron_expr=str(cron) if cron else None,
                 autostart=autostart,
             )
             workers.append(worker)

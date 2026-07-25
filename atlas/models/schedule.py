@@ -1,8 +1,9 @@
-"""Schedule-domain model (Phase A · PHASE_A_PLAN §A.3).
+"""Schedule-domain model (Phase A · PHASE_A_PLAN §A.3 / OI-A1).
 
-A ``Schedule`` is a durable recurrence rule: "run ``task_type`` with ``payload`` every
-``interval_seconds``". Maps a ``scheduler.schedules`` row (ADR-0036). The next fire time
-(``next_run_at``) is persisted so recurrence survives a crash + reboot (P1/P4).
+A ``Schedule`` is a durable recurrence rule. Interval schedules fire every
+``interval_seconds``; cron schedules fire on a 5-field crontab (``cron_expr``).
+Maps a ``scheduler.schedules`` row (ADR-0036). The next fire time (``next_run_at``)
+is persisted so recurrence survives a crash + reboot (P1/P4).
 """
 
 from __future__ import annotations
@@ -12,6 +13,9 @@ from datetime import datetime
 from typing import Any
 
 from atlas.models.base import Model
+
+KIND_INTERVAL = "interval"
+KIND_CRON = "cron"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,5 +29,7 @@ class Schedule(Model):
     enabled: bool = True
     mission_id: str | None = None
     worker_id: str | None = None
+    kind: str = KIND_INTERVAL
+    cron_expr: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

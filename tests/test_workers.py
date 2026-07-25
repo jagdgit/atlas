@@ -148,11 +148,18 @@ class FakeWorkerRepo:
 class FakeSchedules:
     def __init__(self) -> None:
         self.enabled: dict[str, bool] = {}
+        self.created: list[dict[str, Any]] = []
 
-    def register_schedule(self, task_type, interval_seconds, *, payload=None,
-                          mission_id=None, worker_id=None, first_run_delay=0.0):
+    def register_schedule(self, task_type, interval_seconds=60, *, payload=None,
+                          mission_id=None, worker_id=None, first_run_delay=0.0,
+                          kind="interval", cron_expr=None, enabled=True):
         sid = str(uuid4())
         self.enabled[sid] = True
+        self.created.append({
+            "id": sid, "task_type": task_type, "interval_seconds": interval_seconds,
+            "kind": kind, "cron_expr": cron_expr, "mission_id": mission_id,
+            "worker_id": worker_id,
+        })
         return type("S", (), {"id": sid})()
 
     def enable(self, sid):
@@ -236,6 +243,15 @@ def test_create_worker_registers_schedule_and_journals(mgr):
     assert w.schedule_id is not None
     assert scheds.enabled[w.schedule_id] is True
     assert any(e["action"] == "worker_created" for e in missions.journal)
+
+
+def test_create_worker_with_cron_expr(mgr):
+    m, _, _, scheds, _, _ = mgr
+    w = m.create_worker("mission-1", "hello_watcher", cron_expr="0 9 * * 1-5")
+    assert w.schedule_id is not None
+    created = next(c for c in scheds.created if c["id"] == w.schedule_id)
+    assert created["kind"] == "cron"
+    assert created["cron_expr"] == "0 9 * * 1-5"
 
 
 def test_create_unknown_type_raises(mgr):

@@ -142,7 +142,8 @@ DB migration where noted.
   `SchedulerService`. A schedule row: `task_type, payload, interval_seconds, next_run_at,
   enabled, mission_id, worker_id`. A lightweight scheduler tick (`schedule_tick`, itself a
   durable task) enqueues due schedules and advances `next_run_at`. **Continuous** = tiny
-  interval; **interval** = N seconds; **cron** deferred (documented, not built).
+  interval; **interval** = N seconds; **cron** = 5-field crontab (`kind`/`cron_expr`, OI-A1 /
+  migration `0042`).
 - **Why:** workers (A.4), backups, and ingestion all currently re-enqueue themselves ad hoc;
   this centralizes recurrence so it is durable, inspectable, and pausable per mission.
 - **Migration** `0023_schedules.sql` — `scheduler.schedules`.
@@ -421,7 +422,7 @@ visible instead of becoming permanent.
 | Compromise (Phase A) | Reason | Removal plan |
 |---|---|---|
 | **Budget = `max_concurrent_tasks` only** | No concurrent-worker pressure yet; keep it deterministic | Extend JSONB to LLM/CPU/RAM/network/runtime in Phase D when missions run simultaneously |
-| **Cron not implemented** (interval/continuous only) | Interval covers every Phase-A/D need | Add cron parsing to `scheduler.schedules` in a later phase |
+| **Cron not implemented** (interval/continuous only) | ✅ Closed OI-A1 — `kind`/`cron_expr` on `scheduler.schedules` (migration `0042`) | — |
 | **Domain templates are stubs** | Real behavior needs Engineering/Personal/Decision (Phases B/C/D) | Fill in per template as its phase lands (config schema already versioned) |
 | **`scheduler.schedules` used by workers only** | Migrating backup/ingestion now widens Phase A unnecessarily | Migrate remaining self-re-enqueue producers onto it in a later phase |
 | **No config `v2→v3` transform tool** | Rarely needed early; old configs are immutable | Ship an opt-in migration tool when a schema first needs a breaking change |

@@ -56,13 +56,15 @@ class ScheduleService:
     def register_schedule(
         self,
         task_type: str,
-        interval_seconds: int,
+        interval_seconds: int = 60,
         *,
         payload: dict[str, Any] | None = None,
         mission_id: str | None = None,
         worker_id: str | None = None,
         enabled: bool = True,
         first_run_delay: float = 0.0,
+        kind: str = "interval",
+        cron_expr: str | None = None,
     ) -> Schedule:
         schedule = self._repo.create(
             task_type=task_type,
@@ -72,12 +74,44 @@ class ScheduleService:
             worker_id=worker_id,
             enabled=enabled,
             first_run_delay=first_run_delay,
+            kind=kind,
+            cron_expr=cron_expr,
         )
-        self._logger.info(
-            "registered schedule %s (%s every %ds)",
-            schedule.id, task_type, interval_seconds,
-        )
+        if schedule.kind == "cron":
+            self._logger.info(
+                "registered schedule %s (%s cron %s)",
+                schedule.id, task_type, schedule.cron_expr,
+            )
+        else:
+            self._logger.info(
+                "registered schedule %s (%s every %ds)",
+                schedule.id, task_type, interval_seconds,
+            )
         return schedule
+
+    def register_cron_schedule(
+        self,
+        task_type: str,
+        cron_expr: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        mission_id: str | None = None,
+        worker_id: str | None = None,
+        enabled: bool = True,
+        first_run_delay: float = 0.0,
+    ) -> Schedule:
+        """Register a 5-field crontab schedule (OI-A1)."""
+        return self.register_schedule(
+            task_type,
+            interval_seconds=60,
+            payload=payload,
+            mission_id=mission_id,
+            worker_id=worker_id,
+            enabled=enabled,
+            first_run_delay=first_run_delay,
+            kind="cron",
+            cron_expr=cron_expr,
+        )
 
     def get(self, schedule_id: UUID | str) -> Schedule | None:
         return self._repo.get(schedule_id)
@@ -95,6 +129,11 @@ class ScheduleService:
 
     def set_interval(self, schedule_id: UUID | str, interval_seconds: int) -> bool:
         return self._repo.set_interval(schedule_id, interval_seconds)
+
+    def set_cron(self, schedule_id: UUID | str, cron_expr: str) -> bool:
+        if hasattr(self._repo, "set_cron"):
+            return self._repo.set_cron(schedule_id, cron_expr)
+        return False
 
     def disable_for_mission(self, mission_id: UUID | str) -> int:
         return self._repo.disable_for_mission(mission_id)

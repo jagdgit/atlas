@@ -28,8 +28,9 @@ class FakeScheduleRepo:
         self.raise_on_claim = False
 
     def create(
-        self, *, task_type, interval_seconds, payload=None, mission_id=None,
-        worker_id=None, enabled=True, first_run_delay=0.0,
+        self, *, task_type, interval_seconds=60, payload=None, mission_id=None,
+        worker_id=None, enabled=True, first_run_delay=0.0, kind="interval",
+        cron_expr=None,
     ) -> Schedule:
         sid = str(uuid4())
         row = {
@@ -42,6 +43,8 @@ class FakeScheduleRepo:
             "enabled": enabled,
             "mission_id": mission_id,
             "worker_id": worker_id,
+            "kind": kind,
+            "cron_expr": cron_expr,
         }
         self.rows[sid] = row
         return Schedule.from_row(row)
@@ -64,8 +67,15 @@ class FakeScheduleRepo:
         if self.raise_on_claim:
             raise RuntimeError("db down")
         due = [r for r in self.rows.values() if r["enabled"]]
+        now = datetime.now(timezone.utc)
         for r in due:
-            r["last_run_at"] = datetime.now(timezone.utc)
+            r["last_run_at"] = now
+            if r.get("kind") == "cron" and r.get("cron_expr"):
+                from atlas.scheduler.cron import next_run_after
+                r["next_run_at"] = next_run_after(r["cron_expr"], after=now)
+            else:
+                from datetime import timedelta
+                r["next_run_at"] = now + timedelta(seconds=int(r["interval_seconds"]))
         return [Schedule.from_row(r) for r in due[:limit]]
 
     def set_enabled(self, sid, enabled) -> bool:
@@ -80,6 +90,18 @@ class FakeScheduleRepo:
         if not row:
             return False
         row["interval_seconds"] = interval_seconds
+        row["kind"] = "interval"
+        row["cron_expr"] = None
+        return True
+
+    def set_cron(self, sid, cron_expr) -> bool:
+        row = self.rows.get(str(sid))
+        if not row:
+            return False
+        from atlas.scheduler.cron import next_run_after, validate_cron
+        row["kind"] = "cron"
+        row["cron_expr"] = validate_cron(cron_expr)
+        row["next_run_at"] = next_run_after(row["cron_expr"])
         return True
 
     def disable_for_mission(self, mission_id) -> int:
@@ -260,6 +282,33 @@ def test_set_interval_and_delete(svc):
     assert srepo.get(s.id).interval_seconds == 120
     assert service.delete(s.id)
     assert srepo.get(s.id) is None
+
+
+def test_register_cron_schedule(svc):
+    service, srepo, _ = svc
+    s = service.register_cron_schedule("worker_tick", "0 * * * *", mission_id="m1")
+    assert s.kind == "cron"
+    assert s.cron_expr == "0 * * * *"
+    assert srepo.get(s.id).kind == "cron"
+
+
+def test_tick_advances_cron_to_next_slot(svc):
+    service, srepo, trepo = svc
+    s = service.register_cron_schedule("job", "*/5 * * * *")
+    before = srepo.rows[s.id]["next_run_at"]
+    out = service.tick()
+    assert out["fired"] == 1
+    after = srepo.rows[s.id]["next_run_at"]
+    assert after > before
+    assert _non_ticks(trepo)[0]["task_type"] == "job"
+
+
+def test_set_cron(svc):
+    service, srepo, _ = svc
+    s = service.register_schedule("a", 60)
+    assert service.set_cron(s.id, "30 9 * * 1-5")
+    row = srepo.get(s.id)
+    assert row.kind == "cron" and row.cron_expr == "30 9 * * 1-5"
 
 
 def test_health_degraded_without_tick(svc):

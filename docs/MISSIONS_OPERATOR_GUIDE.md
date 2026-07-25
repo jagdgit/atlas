@@ -100,7 +100,7 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Capability gaps (OI-F5 / P15)** — `GET /v1/capabilities/gaps` (or `atlas capability-gaps`): catalog missing + mission need gaps + unhealthy providers + Decision Engine backlog (`GET /v1/decision/gaps`).
 
-**Scheduler hierarchy (SCHED.1)** — Program → Mission → Worker cadence. `GET /v1/scheduler/hierarchy?program_id=market` (alias for `market_intelligence`). Resolve interval: `POST /v1/scheduler/resolve` `{program_id, template}` (worker_specs > mission cadence > program default 300s).
+**Scheduler hierarchy (SCHED.1)** — Program → Mission → Worker cadence. `GET /v1/scheduler/hierarchy?program_id=market` (alias for `market_intelligence`). Resolve interval: `POST /v1/scheduler/resolve` `{program_id, template}` (worker_specs > mission cadence > program default 300s). **Cron (OI-A1):** template `worker_specs` may set `"cron": "0 9 * * 1-5"` instead of (or beside) `interval_seconds`; `create_worker(cron_expr=…)` and `ScheduleService.register_cron_schedule` store `kind=cron` on `scheduler.schedules` and advance `next_run_at` from the crontab.
 
 **Daily Learning Governance (OI-MP3)** — Layer 2: `GET /v1/governance/daily`. Mission template `learning_governance` journals a daily snapshot (concepts, lessons, conflicts, capability gaps). Not a per-video Learning Report.
 
