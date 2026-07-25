@@ -145,7 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-T1/T2/T3 | **Live-DB test hygiene** — session cleanup + `atlas-db test-clean`; `list_pending(source=)`. | (this commit) |
+| OI-T1/T2/T3 | **Live-DB test hygiene** — session cleanup + `atlas-db test-clean`; `list_pending(source=)`. | `44dd079` |
 | OI-MP5 | **Missions teach missions** — mentor soft-bias + Decision Engine Experience nudge. | `9d22b66` |
 | OI-UI0 | **Job UI live updates** — sequential poll + SSE refresh; `/ui` no-cache headers. | `efc7091` |
 | OI-RH0 | **Media Report Honesty** (acquire-stop UX: NOT_APPLICABLE, Research blocked, operator strategies). | RH.1–RH.4 / `tests/test_media_report_honesty.py` |
