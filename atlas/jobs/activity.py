@@ -2,7 +2,7 @@
 
 Stage 3, Step 2. A tiny, dependency-light recorder that turns what a job is *doing*
 into a stream of human-readable progress events, so a running job is observable live
-in the Web Console (poll-based today; SSE later if 2s polling feels laggy).
+in the Web Console (poll + SSE ``job.activity`` — OI-UI0).
 
 Each event is durable (appended to the job workspace's ``activity.jsonl``) **and**
 emitted on the event bus (``job.activity``). The recorder is deliberately reusable and

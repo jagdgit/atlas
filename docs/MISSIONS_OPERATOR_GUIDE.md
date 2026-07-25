@@ -341,6 +341,8 @@ Creates a mission + generic config; **no worker yet**. Don’t expect ticks unti
 
 ## 4. Practical how-to (current console)
 
+**Jobs live view (OI-UI0):** the Jobs panel refreshes from poll + SSE (`job.activity` / blocked / finalized). After a deploy, a normal reload is enough — `/ui` assets are served with `Cache-Control: no-cache`.
+
 ### Instantiate with config (UI)
 
 1. Open **Missions**.

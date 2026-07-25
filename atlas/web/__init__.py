@@ -35,10 +35,20 @@ def mount_ui(app: "FastAPI", config: "AtlasConfig") -> bool:
         return False
 
     from fastapi.responses import RedirectResponse
-    from fastapi.staticfiles import StaticFiles
+    from starlette.staticfiles import StaticFiles
+
+    class NoCacheStaticFiles(StaticFiles):
+        """OI-UI0 — force revalidation so operators need not hard-refresh after deploys."""
+
+        async def get_response(self, path, scope):  # type: ignore[no-untyped-def]
+            response = await super().get_response(path, scope)
+            if getattr(response, "status_code", None) == 200:
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+            return response
 
     # html=True serves index.html at the mount root (/ui/) and resolves relative assets.
-    app.mount("/ui", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
+    app.mount("/ui", NoCacheStaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
 
     @app.get("/", include_in_schema=False)
     def _root() -> RedirectResponse:  # pragma: no cover - trivial redirect

@@ -124,6 +124,7 @@ function switchView(view) {
   const extra = $("#sidebar-extra");
   extra.innerHTML = "";
   stopJobPoll();
+  if (view !== "jobs") stopJobStream();
   if (view !== "missions") stopMissionPoll();
   if (view !== "overview") { stopOpsPoll(); stopOpsStream(); }
   if (view !== "engineering") stopEngStream();
@@ -132,7 +133,7 @@ function switchView(view) {
   else if (view === "programs") loadPrograms();
   else if (view === "missions") loadMissions();
   else if (view === "engineering") loadEngineering();
-  else if (view === "jobs") loadJobs();
+  else if (view === "jobs") { loadJobs(); startJobStream(); }
   else if (view === "system") loadSystem();
 }
 
@@ -752,6 +753,54 @@ function stopJobPoll() {
   // Bump generation so any in-flight tick abandons its render.
   state.jobPollGen = (state.jobPollGen || 0) + 1;
   state.jobPollFailures = 0;
+}
+
+// Push refresh for the open job (OI-UI0). Poll remains a fallback when SSE is quiet.
+const JOB_SSE_EVENTS = /event:\s*(job\.activity|job\.step_blocked|job\.finalized)/;
+
+function startJobStream() {
+  stopJobStream();
+  const ctrl = new AbortController();
+  state.jobStream = ctrl;
+  fetch("/v1/events/stream", {
+    headers: { "Authorization": `Bearer ${state.key}` },
+    signal: ctrl.signal,
+  }).then(async (res) => {
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (!JOB_SSE_EVENTS.test(frame)) continue;
+        if (state.view !== "jobs") continue;
+        try { await loadJobs(); } catch (_) { /* list refresh best-effort */ }
+        if (state.jobId) {
+          try {
+            const d = await api(`/v1/jobs/${state.jobId}`);
+            if (state.view === "jobs" && state.jobId) {
+              renderJobDetail(d);
+              if (jobIsActive(d.job)) startJobPoll(state.jobId);
+              else stopJobPoll();
+            }
+          } catch (_) { /* detail refresh best-effort */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted on view switch */ });
+}
+
+function stopJobStream() {
+  if (state.jobStream) {
+    try { state.jobStream.abort(); } catch (_) {}
+    state.jobStream = null;
+  }
 }
 
 /* ---------- programs (MI.1) ---------- */

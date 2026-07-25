@@ -41,9 +41,17 @@ def test_ui_assets_served():
     js = client.get("/ui/app.js")
     assert js.status_code == 200
     assert "/v1/chat" in js.text  # the SPA talks to the real API
+    assert "no-cache" in (js.headers.get("cache-control") or "").lower()
     css = client.get("/ui/styles.css")
     assert css.status_code == 200
     assert "--accent" in css.text
+    assert "no-cache" in (css.headers.get("cache-control") or "").lower()
+
+
+def test_ui_index_cache_headers():
+    resp = _client().get("/ui/")
+    assert resp.status_code == 200
+    assert "no-cache" in (resp.headers.get("cache-control") or "").lower()
 
 
 def test_root_redirects_to_ui():

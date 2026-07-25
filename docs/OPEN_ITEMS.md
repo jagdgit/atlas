@@ -31,7 +31,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C11 | 🔴 | P2 | **Personal auto-inference: professional facts + skill proficiency + timeline dates.** C.7 auto-infers `skill` facts (from consolidated experiences), an `identity` summary, and a coarse `timeline` (repo first-learned). **Professional** facts (publications/patents/roles) have no reliable structured source yet, so they're operator-authored via `add_fact`/API for now — auto-inference (e.g. from Research findings / a CV asset) is deferred. Skill *proficiency* is a maturity→confidence-label mapping, not a graded level; timeline entries lack real role dates (pending User-Archive dating). | C.7b | C.8 (User Archive) |
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
-| OI-C7 | 🟡 | P3 | **Migration-number placeholders.** The `PHASE_C_PLAN.md` data-model table lists planning placeholders. Real numbers are assigned sequentially at build time — `0028`=document↔asset, `0029`=asset groups, C.3 `0030`–`0034`, `0035`=knowledge_coverage, `0036`=policy, `0037`=experience_consolidation, `0038`=personal. **C.8 added no migration** (template + config schema are code-seeded), so the next real migration is `0039`. Keep the table honest as slots are built. | C.2 | ongoing |
+| OI-C7 | 🟡 | P3 | **Migration-number placeholders.** Real numbers are assigned sequentially at build time. Through Phase C: `0028`–`0038` as listed; C.8/C.9 needed no migration. Post-C: `0039`=decision, `0040`=decision_approvals, `0041`=sim_trading. **Next free slot: `0042`.** Keep the PHASE_C table honest as slots are built. | C.2 | ongoing |
 | OI-C12 | 🔴 | P3 | **Personal/Owner SPA dashboard view.** C.8d ships the *data* — `GET /v1/personal/dashboard` (per-domain coverage + understanding + skills/timeline/professional) and live updates over the shared `/v1/events/stream` SSE feed — and a CLI (`atlas personal dashboard`), but no dedicated `/ui` panel. Add a console view rendering the coverage bars + profile with the P9 "why" and confirm/correct controls. | C.8d | Phase D / UI pass |
 | OI-C13 | 🔴 | P3 | **Conversation → experience extraction.** The Conversation Reader (C.8a) feeds chats through the pipeline as prose **candidates → findings**, but chats do not yet distill owner **experiences** (a `build_conversation_experiences` analog to `build_repo_experiences`). So skills currently derive from code repos; chat-stated skills ("I spent years on PostgreSQL") become findings, not corroborating experience evidence. | C.8a | Phase D |
 
@@ -104,7 +104,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-PA-MCA | 🟢 | P1 | **Mission Context API** — Knowledge + Graph + World Models + Experience; Decision Simulation cites. | MCA.1 |
 | OI-BA0 | 🟢 | P2 | **Browser → Asset** — BA.1b + BA.v2 (opt-in yt-dlp) done. BA.v2+ later. | `MEDIA_BROWSER_ACQUISITION_PLAN.md` · `atlas/ingestion/youtube_media_obtain.py` |
 | OI-M1 | 🟢 | P1 | Official YouTube captions API — executable when `plugins.youtube.api_key` set (download may still need OAuth). | `atlas/transcripts/official_captions.py` |
-| OI-UI0 | 🟡 | P1 | **Job UI live updates** — poll race fixed; hard-refresh for `app.js`. | `atlas/web/static/app.js` |
+| OI-UI0 | 🟢 | P1 | **Job UI live updates** — sequential poll (no race) + SSE `job.activity`/`job.step_blocked`/`job.finalized` refresh; static `/ui` assets served with `Cache-Control: no-cache` so deploys do not require a hard-refresh. | `atlas/web/` · `app.js` | closed OI-UI0 |
 | OI-M2 | 🔴 | P3 | Speaker diarization on transcripts. | defer |
 | OI-M3 | 🔴 | P3 | Streaming / live caption ingest. | defer |
 | OI-M4 | ⚪ | — | CCTV / continuous video missions. | out of scope until requested |
@@ -145,6 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-UI0 | **Job UI live updates** — sequential poll + SSE refresh; `/ui` no-cache headers. | commit (OI-UI0) |
 | OI-RH0 | **Media Report Honesty** (acquire-stop UX: NOT_APPLICABLE, Research blocked, operator strategies). | RH.1–RH.4 / `tests/test_media_report_honesty.py` |
 | OI-M0 | **Media Reader Family plan** (M.1–M.7) — Asset-first media Readers, optional Whisper, provider-agnostic fetch, research wiring + e2e gate. | M.7 / `tests/test_media_acquisition_gate.py` |
 | OI-G1 | **`.gitignore` silently ignored `atlas/{documents,knowledge,models}` source packages** (unanchored runtime-data rules) — 25 core source files were untracked. Anchored the rules to the repo root; source now tracked. | commit `57deac9` (2026-07-19) |

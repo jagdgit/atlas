@@ -486,8 +486,8 @@
 > **Delivered** as C.8a–e (commits `c349a0c`, `6110c3e`, `1ad19af`, `8dc79fe`, `612f348`). The
 > Owner Knowledge Mission is a **built-in template + a persistent worker**, and its archive roots
 > ride the existing **versioned mission-config** store — both code-seeded — so **no migration `0039`
-> was required** (RepoWatcher/B.6 set the same precedent; slot `0039` stays free for the next real
-> schema). Details:
+> was required** (RepoWatcher/B.6 set the same precedent; at C.8 close slot `0039` was free — later
+> consumed by decision / approvals / sim_trading as `0039`–`0041`; **next free: `0042`**). Details:
 > - **C.8a — Conversation Reader** (`atlas/readers/conversation.py`, reader `conversation@1.0.0`):
 >   turns chat/Cursor `.json`/`.jsonl` exports into a cached transcript Artifact (BB11) with
 >   per-message sections; tolerant parsing (role from role/type/sender/author, text from
@@ -585,7 +585,7 @@ Learning ledger, mission/config/schedule/worker). New objects created `AUTHORIZA
 | `0036_policy` ✅ | `policy` schema — `policy.rules` (scope/subject/rule/strength/enabled/provenance/created_by, `prefer|avoid|trust|distrust`) + append-only `policy.events` before/after journal. *(Shipped as C.5a at slot `0036`; governance is a dedicated journal, not the learning ledger.)* |
 | `0037_experience_consolidation` ✅ | Extend `learning.experiences` with the consolidator's lifecycle machinery (`identity_key`, `canonical_id`+`revision`, `evidence`/`contradicting`, `confidence`/`confidence_score`, `corroboration_count`, `maturity`, `superseded_by`) + widened status CHECK. *(Shipped as C.6a at slot `0037`; consumed via the `ExperienceStore` adapter over the shared consolidator, not a new store.)* |
 | `0038_personal` ✅ | `personal` schema — `personal.facts` (single store keyed on `(category, key, subject)` for `identity/skill/timeline/professional`, with `value`+provenance+`confidence`+`state ∈ inferred/verified/rejected`) + append-only `personal.events` before/after journal. *(Shipped as C.7a at slot `0038`; governed like the Policy store, upsert never downgrades operator decisions.)* |
-| ~~`0034_owner_mission`~~ ✅ *(no migration)* | Owner Knowledge Mission (C.8): shipped as a **code-seeded** built-in template + the strict `owner_knowledge` config schema (archive roots ride the existing versioned mission-config store) + the `OwnerKnowledgeWorker`. **No new schema needed** — RepoWatcher/B.6 precedent; slot `0039` stays free for the next real migration. |
+| ~~`0034_owner_mission`~~ ✅ *(no migration)* | Owner Knowledge Mission (C.8): shipped as a **code-seeded** built-in template + the strict `owner_knowledge` config schema (archive roots ride the existing versioned mission-config store) + the `OwnerKnowledgeWorker`. **No new schema needed** — RepoWatcher/B.6 precedent; at C.8 close slot `0039` was free (later `0039`–`0041` consumed post-C; next free `0042`). |
 | `0035_asset_relationships` | `asset.groups` (id, name, kind) + `asset.membership`, and/or pairwise `asset.related` (asset_a, asset_b, relation) — tie a project's repo/doc/PDF/chat together (CC14). |
 | `0036_knowledge_candidates` | `knowledge.candidates` — transient reader observations (statement, claim_type, identity_key, embedding, evidence_ref, ts); Consolidator input, pruned after consolidation (CC11). |
 | `0037_knowledge_lineage` | `knowledge.lineage` — evidence-graph edges `{finding_id, revision, edge_type (created_by/supported_by/revised_by/superseded_by/contradicted_by), evidence_ref, ts}` (CC12). |
@@ -654,6 +654,8 @@ doc**, exactly as Phases A/B did.
 > coverage-driven reader-version re-extraction (updates-not-duplicates, reader-vs-source delta); and
 > policy influence that is reversible.
 >
-> **🟢 PHASE C COMPLETE** (C.1–C.9). No migration was needed for C.8/C.9, so the next real migration
-> is `0039`. Leftovers tracked in `docs/OPEN_ITEMS.md` (`OI-C1`–`OI-C13`, none blocking). Full suite
-> green save the pre-existing `test_event_lifecycle` env flake (`OI-T2`). **Next: Phase D.**
+> **🟢 PHASE C COMPLETE** (C.1–C.9). No migration was needed for C.8/C.9 at close (slot `0039` was
+> free then). Post-C migrations: `0039` decision, `0040` decision_approvals, `0041` sim_trading —
+> **next free: `0042`** (see OI-C7). Leftovers tracked in `docs/OPEN_ITEMS.md` (`OI-C1`–`OI-C13`,
+> none blocking). Full suite green save the pre-existing `test_event_lifecycle` env flake (`OI-T2`).
+> **Next: Phase D.**
