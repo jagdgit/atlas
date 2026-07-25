@@ -1061,6 +1061,21 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         speech_client,
         logger=get_logger("atlas.readers.speech_to_text"),
     )
+    from atlas.diarization.engine import DiarizationClient, LabelPreservingEngine
+    from atlas.readers.speaker_diarization import SpeakerDiarizationReader
+
+    dia_cfg = getattr(cfg.plugins, "diarization", None)
+    diarization_client = DiarizationClient(
+        LabelPreservingEngine(),
+        enabled=bool(getattr(dia_cfg, "enabled", False)),
+        logger=get_logger("atlas.diarization"),
+    )
+    speaker_diarization_reader = SpeakerDiarizationReader(
+        asset_store,
+        derived_artifacts,
+        diarization_client,
+        logger=get_logger("atlas.readers.speaker_diarization"),
+    )
     from atlas.ingestion.youtube_media_obtain import YoutubeMediaObtain
 
     yt_max = int(
@@ -1095,6 +1110,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         transcript_reader=transcript_file_reader,
         demux_reader=audio_demux_reader,
         speech_reader=speech_to_text_reader,
+        diarization_reader=speaker_diarization_reader,
         source_fetcher=source_fetcher,
         events=events,
         logger=get_logger("atlas.ingestion.media"),

@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from atlas.ingestion.media_events import (
     EVENT_MEDIA_METADATA_ACQUIRED,
     EVENT_MEDIA_READ_FAILED,
+    EVENT_SPEAKER_DIARIZATION_GAP,
     EVENT_SPEECH_TO_TEXT_GAP,
     EVENT_TRANSCRIPT_ACQUIRED,
     emit_media_event,
@@ -57,6 +58,7 @@ class MediaIngestor:
         transcript_reader: "TranscriptFileReader | None" = None,
         demux_reader: "AudioDemuxReader | None" = None,
         speech_reader: "SpeechToTextReader | None" = None,
+        diarization_reader: Any | None = None,
         source_fetcher: "SourceFetcher | None" = None,
         events: Any | None = None,
         logger: logging.Logger | None = None,
@@ -67,6 +69,7 @@ class MediaIngestor:
         self._transcript = transcript_reader
         self._demux = demux_reader
         self._speech = speech_reader
+        self._diarization = diarization_reader
         self._fetcher = source_fetcher
         self._events = events
         self._logger = logger or logging.getLogger("atlas.ingestion.media")
@@ -154,6 +157,7 @@ class MediaIngestor:
             "metadata": None,
             "demux": None,
             "speech": None,
+            "diarization": None,
             "ingest": None,
             "text": "",
         }
@@ -256,6 +260,7 @@ class MediaIngestor:
             "metadata": None,
             "demux": None,
             "speech": None,
+            "diarization": None,
             "ingest": None,
             "text": "",
             "outcome": "ok",
@@ -341,6 +346,43 @@ class MediaIngestor:
             text = (speech.get("text") or "").strip()
             if speech.get("outcome") == STT_OK and text:
                 out["text"] = text
+                if self._diarization is not None:
+                    try:
+                        dia = self._diarization.enrich(
+                            speech,
+                            asset_id=str(acquired.asset_id),
+                            asset_version=int(acquired.asset_version or 1),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        self._logger.debug("diarization enrich skipped: %s", exc)
+                        dia = {
+                            "outcome": "error",
+                            "capability_gap": "speaker_diarization",
+                            "reason": str(exc),
+                        }
+                    out["diarization"] = dia
+                    if dia.get("outcome") == "ok":
+                        speech = {
+                            **speech,
+                            "segments": dia.get("segments") or speech.get("segments"),
+                            "speakers": dia.get("speakers") or [],
+                            "diarization_model": dia.get("model"),
+                        }
+                        out["speech"] = speech
+                    elif dia.get("capability_gap"):
+                        emit_media_event(
+                            self._events,
+                            EVENT_SPEAKER_DIARIZATION_GAP,
+                            {
+                                "asset_id": acquired.asset_id,
+                                "source_id": source_id,
+                                "source_url": source_url,
+                                "outcome": dia.get("outcome"),
+                                "reason": dia.get("reason"),
+                                "capability_gap": dia.get("capability_gap")
+                                or "speaker_diarization",
+                            },
+                        )
                 emit_media_event(
                     self._events,
                     EVENT_TRANSCRIPT_ACQUIRED,
@@ -351,6 +393,7 @@ class MediaIngestor:
                         "strategy": "speech_to_text",
                         "model": speech.get("model"),
                         "char_count": len(text),
+                        "speakers": (speech.get("speakers") or []),
                     },
                 )
                 if to_knowledge:
@@ -371,6 +414,8 @@ class MediaIngestor:
                             "model": speech.get("model"),
                             "strategy": "speech_to_text",
                             "evidence_level": speech.get("evidence_level", 1),
+                            "speakers": speech.get("speakers") or [],
+                            "segments": speech.get("segments") or [],
                         },
                     )
                 return out

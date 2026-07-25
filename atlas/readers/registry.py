@@ -153,6 +153,19 @@ def default_media_readers() -> list[Reader]:
             coverage={CAP_TRANSCRIPT: True, CAP_TEXT: True, CAP_METADATA: False, CAP_AUDIO: False},
             priority=20,
         ),
+        Reader(
+            id="speaker_diarization",
+            name="Speaker Diarization Reader",
+            version="1.0.0",
+            extensions=(
+                ".vtt", ".srt", ".txt",
+                ".mp3", ".wav", ".m4a",
+                ".mp4", ".mkv", ".webm",
+            ),
+            languages=("media", "transcript"),
+            coverage={CAP_TRANSCRIPT: True, CAP_TEXT: True, CAP_METADATA: False, CAP_AUDIO: False},
+            priority=15,
+        ),
     ]
 
 
@@ -268,7 +281,7 @@ class ReaderRegistry:
     """Maps extensions/languages → reader and answers coverage questions honestly (BB10)."""
 
     name = "readers"
-    VERSION = "2.1.0"  # OI-B4: additive CAD/MATLAB/PLC/UML/PSpice stubs
+    VERSION = "2.2.0"  # OI-M2: speaker_diarization reader
 
     def __init__(
         self,

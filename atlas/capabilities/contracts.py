@@ -42,6 +42,7 @@ CAP_MAIL = "mail"
 CAP_BROWSER = "browser"
 CAP_RESEARCH = "research"
 CAP_SPEECH_TO_TEXT = "speech_to_text"
+CAP_SPEAKER_DIARIZATION = "speaker_diarization"
 # Stage 3B knowledge-OS capabilities (stubs until providers land; D3B.25).
 CAP_RETRIEVAL = "retrieval"
 CAP_SYNTHESIS = "synthesis"
@@ -218,6 +219,13 @@ class SpeechToTextCapability(Protocol):
     """Optional local speech-to-text (Media Reader Family · M.5 / MD5)."""
 
     def transcribe(self, path: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class SpeakerDiarizationCapability(Protocol):
+    """Optional speaker labels on transcript segments (OI-M2)."""
+
+    def diarize(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @runtime_checkable
@@ -422,6 +430,19 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "M.5",
         cost_class=COST_EXPENSIVE,
         quality_notes="Default off (plugins.speech.enabled). Evidence L1; model stamped on artifact.",
+    ),
+    CAP_SPEAKER_DIARIZATION: CapabilitySpec(
+        CAP_SPEAKER_DIARIZATION,
+        SpeakerDiarizationCapability,
+        "Assign speaker labels on transcript segments (diarization).",
+        "Multi-speaker media keeps who-said-what; optional — gap when off/missing (P15).",
+        "OI-M2",
+        cost_class=COST_EXPENSIVE,
+        dependencies=(CAP_SPEECH_TO_TEXT,),
+        quality_notes=(
+            "Default off (plugins.diarization.enabled). Label-preserving engine ships first; "
+            "ML diarization is a later opt-in behind the same capability."
+        ),
     ),
     CAP_MAIL: CapabilitySpec(
         CAP_MAIL,

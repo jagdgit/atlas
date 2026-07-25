@@ -262,6 +262,7 @@ plugins:
     - atlas.plugins.sql_plugin
     - atlas.plugins.ocr_plugin
     - atlas.plugins.speech_plugin
+    - atlas.plugins.diarization_plugin
     - atlas.plugins.mail_plugin
     - atlas.plugins.browser_plugin
   filesystem:
@@ -310,6 +311,8 @@ plugins:
     language: ""            # empty => auto-detect
     binary: whisper         # openai-whisper CLI on PATH
     timeout: 0              # 0 = no timeout; wait for Whisper to finish
+  diarization:              # OI-M2: optional speaker labels on transcripts; default OFF
+    enabled: false          # label-preserving when on; ML diarization later
   mail:                     # S20d: read-only IMAP mailbox (degrades if unconfigured)
     host: ""                # IMAP host; empty => capability reports "unavailable"
     port: 993

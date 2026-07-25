@@ -353,6 +353,12 @@ class SpeechPluginConfig(BaseModel):
     timeout: float = 0.0  # 0 = no wall-clock limit (long videos on CPU)
 
 
+class DiarizationPluginConfig(BaseModel):
+    # Optional speaker diarization (OI-M2). Default OFF. Label-preserving engine ships
+    # first; ML diarization remains a later opt-in behind the same capability (P15).
+    enabled: bool = False
+
+
 class BrowserPluginConfig(BaseModel):
     # Headless browser automation (S20e). Degrades gracefully if Playwright/browser
     # binary are absent. Read-only: navigate + extract only, robots respected.
@@ -392,6 +398,7 @@ class PluginsConfig(BaseModel):
     sql: SQLPluginConfig = SQLPluginConfig()
     ocr: OCRPluginConfig = OCRPluginConfig()
     speech: SpeechPluginConfig = SpeechPluginConfig()
+    diarization: DiarizationPluginConfig = DiarizationPluginConfig()
     mail: MailPluginConfig = MailPluginConfig()
     browser: BrowserPluginConfig = BrowserPluginConfig()
 

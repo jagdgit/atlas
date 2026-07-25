@@ -624,7 +624,21 @@ def _format_hms(seconds: float) -> str:
 
 
 def _default_speaker_from_payloads(payloads: list[dict[str, Any]]) -> str | None:
-    """Prefer a known person entity as default claim speaker when diarization is absent."""
+    """Prefer diarized segment speakers, else a known person entity when diarization is absent."""
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for seg in payload.get("segments") or []:
+            if isinstance(seg, dict):
+                sp = str(seg.get("speaker") or "").strip()
+                if sp:
+                    return sp
+        speakers = payload.get("speakers")
+        if isinstance(speakers, list) and speakers:
+            sp = str(speakers[0] or "").strip()
+            if sp:
+                return sp
+    # Prefer a known person entity as default claim speaker when diarization is absent.
     for p in payloads:
         if str(p.get("claim_type") or "") != "entity":
             continue

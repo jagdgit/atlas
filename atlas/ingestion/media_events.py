@@ -18,6 +18,7 @@ class _Emitter(Protocol):
 EVENT_MEDIA_METADATA_ACQUIRED = "MediaMetadataAcquired"
 EVENT_TRANSCRIPT_ACQUIRED = "TranscriptAcquired"
 EVENT_SPEECH_TO_TEXT_GAP = "SpeechToTextGap"
+EVENT_SPEAKER_DIARIZATION_GAP = "SpeakerDiarizationGap"
 EVENT_MEDIA_READ_FAILED = "MediaReadFailed"
 
 MEDIA_EVENT_SOURCE = "media"
