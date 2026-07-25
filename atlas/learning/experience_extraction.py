@@ -24,15 +24,17 @@ from typing import Any
 from atlas.knowledge.domains import DOMAIN_EXPERIENCE
 
 # Bump when the experience *shape* changes, independent of the reader (BB8).
-EXPERIENCE_EXTRACTOR_VERSION = "1.1.0"
+EXPERIENCE_EXTRACTOR_VERSION = "1.2.0"
 
 CTX_LANGUAGE = "language"
 CTX_PATTERN = "pattern"
 CTX_STATED = "stated"  # owner-stated in conversation (OI-C13)
+CTX_DEPENDENCY = "dependency"  # declared production deps (OI-C10)
 
 _MAX_LANGUAGES = 6
 _MAX_FRAMEWORKS = 16
 _MAX_PATTERNS = 16
+_MAX_DEPENDENCIES = 24
 _MAX_CONVERSATION_SKILLS = 24
 
 # Curated tech/skill lexicon for deterministic chat distillation (no LLM).
@@ -148,6 +150,22 @@ def build_repo_experiences(
             make(f"Applies the {pname} pattern", pname, CTX_PATTERN, score=0.4)
         )
 
+    # OI-C10 — declared package deps (requirements / pyproject / package.json) as soft signal.
+    deps = distilled.get("dependencies", {}) or {}
+    dep_names: list[str] = []
+    if isinstance(deps, dict):
+        for group in deps.values():
+            if isinstance(group, (list, tuple, set)):
+                dep_names.extend(str(d) for d in group)
+            elif group:
+                dep_names.append(str(group))
+    elif isinstance(deps, (list, tuple)):
+        dep_names.extend(str(d) for d in deps)
+    for dep in _filter_deps(dep_names)[:_MAX_DEPENDENCIES]:
+        experiences.append(
+            make(f"Uses {dep} in production dependencies", dep, CTX_DEPENDENCY, score=0.35)
+        )
+
     return experiences
 
 
@@ -261,6 +279,31 @@ def build_conversation_experiences(
             "provenance": prov,
         })
     return experiences
+
+
+_SKIP_DEPS = {
+    "python", "pip", "setuptools", "wheel", "pytest", "pytest-cov", "coverage",
+    "mypy", "ruff", "black", "flake8", "isort", "tox", "hatchling", "poetry",
+    "typing-extensions", "types-requests", "pre-commit", "uv",
+}
+
+
+def _filter_deps(names: list[str]) -> list[str]:
+    """Normalize package names and drop tooling/meta noise."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in names:
+        # strip version pins: "celery[redis]>=5" → celery
+        base = str(raw or "").strip().split(";")[0].strip()
+        for sep in ("[", "==", ">=", "<=", "~=", "!=", ">", "<", "@"):
+            if sep in base:
+                base = base.split(sep, 1)[0]
+        base = base.strip().strip("\"'").lower()
+        if not base or base in _SKIP_DEPS or base in seen:
+            continue
+        seen.add(base)
+        out.append(base)
+    return out
 
 
 def _normalize_skill(raw: str) -> str:

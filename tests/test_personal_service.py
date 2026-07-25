@@ -48,14 +48,18 @@ class _FakeIntelligence:
         ]
 
 
-def _exp(skill, context, *, maturity="verified", corr=2, sources=None):
+def _exp(skill, context, *, maturity="verified", corr=2, sources=None, years=None):
+    value = {"kind": "experience", "skill": skill, "context": context}
+    if years is not None:
+        value["years"] = years
     return {
         "id": str(uuid.uuid4()),
         "canonical_id": f"XP-{uuid.uuid4().hex[:8]}",
-        "value": {"kind": "experience", "skill": skill, "context": context},
+        "value": value,
         "maturity": maturity,
         "corroboration_count": corr,
         "supporting": [{"source_id": s} for s in (sources or ["repoA", "repoB"])],
+        "statement": f"Works with {skill}",
     }
 
 
@@ -70,6 +74,7 @@ def test_infer_skills_creates_inferred_facts_with_provenance(db):
     svc = _svc(db, experiences=_FakeExperiences([_exp(skill, "python", maturity="established", corr=3)]))
     result = svc.infer()
     assert result["skills"] >= 1
+    assert "professional" in result
 
     fact = svc._repo.get_by_natural("skill", skill, "python")  # type: ignore[attr-defined]
     assert fact is not None
@@ -77,8 +82,39 @@ def test_infer_skills_creates_inferred_facts_with_provenance(db):
     assert fact["confidence"] == "HIGH"  # established → HIGH
     assert fact["source"] == "experience"
     assert fact["provenance"]["sources"] == ["repoA", "repoB"]
+    assert fact["value"]["proficiency"] == "expert"  # established + corr>=3
     # An inference event was journaled.
     assert any(e["action"] == "inferred" for e in svc.list_events(fact_id=fact["id"]))
+
+
+def test_infer_proficiency_and_timeline_from_years(db):
+    skill = f"pg-{uuid.uuid4().hex[:8]}"
+    svc = _svc(
+        db,
+        experiences=_FakeExperiences([
+            _exp(skill, "stated", maturity="candidate", corr=1, years=5),
+        ]),
+    )
+    out = svc.infer()
+    assert out["skills"] >= 1
+    fact = svc._repo.get_by_natural("skill", skill, "stated")  # type: ignore[attr-defined]
+    assert fact["value"]["proficiency"] == "expert"
+    assert fact["value"]["years"] == 5
+    tl = svc._repo.get_by_natural("timeline", f"skill:{skill}", "stated")  # type: ignore[attr-defined]
+    assert tl is not None
+    assert tl["value"]["years"] == 5
+
+
+def test_infer_professional_roles_from_experience_text(db):
+    skill = f"role-{uuid.uuid4().hex[:8]}"
+    row = _exp(skill, "stated", maturity="verified", corr=1)
+    row["statement"] = "I was a Staff Engineer at Acme Corp building platforms."
+    row["supporting"] = [{"source_id": "chat1", "snippet": row["statement"]}]
+    svc = _svc(db, experiences=_FakeExperiences([row]))
+    out = svc.infer()
+    assert out["professional"] >= 1
+    profs = svc.list_facts(category="professional")
+    assert any("Staff Engineer" in (f.get("statement") or "") for f in profs)
 
 
 def test_confirm_promotes_to_verified_and_journals(db):

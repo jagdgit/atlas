@@ -13,6 +13,7 @@ resume/LinkedIn/portfolio managers DRAFT from it — this service never scans co
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from atlas.services.base import HealthStatus
@@ -24,10 +25,49 @@ _MATURITY_CONFIDENCE = {
     "candidate": ("LOW", 0.4),
 }
 
+# OI-C11 — graded proficiency (not just maturity→confidence).
+_PROFICIENCY_ORDER = ("beginner", "intermediate", "advanced", "expert")
+
+_ROLE_RE = re.compile(
+    r"\b(?:i(?:'?m| am|'?ve| have)?|we)\s+"
+    r"(?:was|were|worked\s+as|served\s+as)\s+"
+    r"(?:an?\s+)?"
+    r"(?P<title>[A-Za-z][A-Za-z0-9 /&-]{2,48}?)"
+    r"\s+at\s+(?P<org>[A-Za-z0-9][\w .,&-]{1,60}?)(?=\s+(?:building|working|doing|where|,|\.|$))",
+    re.IGNORECASE,
+)
+_ROLE_LOOSE_RE = re.compile(
+    r"\b(?:i(?:'?m| am|'?ve| have)?)\s+(?:was|were)\s+(?:an?\s+)?"
+    r"(?P<title>[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,5})"
+    r"(?:\s+at\s+(?P<org>[A-Z][\w.&-]{1,40}(?:\s+[A-Z][\w.&-]{0,40}){0,4}))?",
+    re.IGNORECASE,
+)
+_PUB_RE = re.compile(
+    r"\b(?:published|publication|paper|patent|thesis|dissertation)\b.{0,80}",
+    re.IGNORECASE,
+)
+
+
+def _proficiency(
+    *,
+    maturity: str,
+    years: int | None,
+    corroboration: int,
+) -> str:
+    """Map maturity / stated years / corroboration → graded proficiency (OI-C11)."""
+    y = int(years) if years is not None else None
+    if (y is not None and y >= 5) or (maturity == "established" and corroboration >= 3):
+        return "expert"
+    if (y is not None and y >= 3) or maturity == "established":
+        return "advanced"
+    if (y is not None and y >= 1) or maturity == "verified" or corroboration >= 2:
+        return "intermediate"
+    return "beginner"
+
 
 class PersonalService:
     name = "personal"
-    VERSION = "1.0.0"
+    VERSION = "1.1.0"
 
     def __init__(
         self,
@@ -57,7 +97,13 @@ class PersonalService:
         skills = self._infer_skills(actor=actor)
         identity = self._infer_identity(actor=actor)
         timeline = self._infer_timeline(actor=actor)
-        result = {"skills": skills, "identity": identity, "timeline": timeline}
+        professional = self._infer_professional(actor=actor)
+        result = {
+            "skills": skills,
+            "identity": identity,
+            "timeline": timeline,
+            "professional": professional,
+        }
         self._logger.info("personal inference: %s", result)
         return result
 
@@ -80,30 +126,63 @@ class PersonalService:
             context = str(value.get("context") or "").strip()
             corroboration = int(exp.get("corroboration_count") or 0)
             maturity = str(exp.get("maturity") or "candidate")
+            years = value.get("years")
+            try:
+                years_i = int(years) if years is not None else None
+            except (TypeError, ValueError):
+                years_i = None
             conf, score = _MATURITY_CONFIDENCE.get(maturity, ("LOW", 0.4))
+            level = _proficiency(
+                maturity=maturity, years=years_i, corroboration=corroboration
+            )
             sources = [
                 s.get("source_id") for s in (exp.get("supporting") or [])
                 if isinstance(s, dict) and s.get("source_id")
             ]
             ctx = f" ({context})" if context else ""
             projects = f", corroborated by {corroboration} project(s)" if corroboration else ""
+            yrs = f", ~{years_i}y" if years_i is not None else ""
             self._upsert_fact(
                 "skill", skill.lower(),
                 subject=context.lower(),
-                statement=f"Skilled in {skill}{ctx}{projects}.",
+                statement=f"Skilled in {skill}{ctx}{projects}{yrs} [{level}].",
                 value={
-                    "skill": skill, "context": context,
-                    "corroboration_count": corroboration, "maturity": maturity,
+                    "skill": skill,
+                    "context": context,
+                    "corroboration_count": corroboration,
+                    "maturity": maturity,
+                    "proficiency": level,
+                    "years": years_i,
                 },
                 confidence=conf, confidence_score=score, source="experience",
                 provenance={
                     "experience_id": exp.get("id"),
                     "canonical_id": exp.get("canonical_id"),
                     "maturity": maturity,
+                    "proficiency": level,
                     "sources": sources,
                 },
                 actor=actor,
             )
+            # OI-C11 — timeline dates from stated years on skills.
+            if years_i is not None and years_i > 0:
+                self._upsert_fact(
+                    "timeline", f"skill:{skill.lower()}",
+                    subject=context.lower(),
+                    statement=f"~{years_i} years with {skill}{ctx}.",
+                    value={
+                        "skill": skill,
+                        "years": years_i,
+                        "context": context,
+                        "kind": "skill_tenure",
+                    },
+                    confidence=conf, confidence_score=score, source="experience",
+                    provenance={
+                        "experience_id": exp.get("id"),
+                        "years": years_i,
+                    },
+                    actor=actor,
+                )
             count += 1
         return count
 
@@ -159,6 +238,72 @@ class PersonalService:
                 actor=actor,
             )
             count += 1
+        return count
+
+    def _infer_professional(self, *, actor: str) -> int:
+        """Heuristic professional facts from Experience statements/snippets (OI-C11).
+
+        Roles / publications distilled from owner-stated experience text. Full CV / Research
+        finding auto-inference remains deferred when those structured sources appear.
+        """
+        if self._experiences is None:
+            return 0
+        try:
+            experiences = self._experiences.list_active(limit=1000)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("professional inference could not read experiences: %s", exc)
+            return 0
+        count = 0
+        seen: set[str] = set()
+        for exp in experiences:
+            texts: list[str] = []
+            stmt = str(exp.get("statement") or "").strip()
+            if stmt:
+                texts.append(stmt)
+            for s in exp.get("supporting") or []:
+                if isinstance(s, dict) and s.get("snippet"):
+                    texts.append(str(s["snippet"]))
+            blob = "\n".join(texts)
+            if not blob:
+                continue
+            for matcher in (_ROLE_RE, _ROLE_LOOSE_RE):
+                for m in matcher.finditer(blob):
+                    title = (m.group("title") or "").strip(" .,")
+                    org = (m.groupdict().get("org") or "").strip(" .,")
+                    if len(title) < 3:
+                        continue
+                    key = f"role:{(title + '@' + org).lower()}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    where = f" at {org}" if org else ""
+                    self._upsert_fact(
+                        "professional", key,
+                        statement=f"Role: {title}{where}.",
+                        value={"kind": "role", "title": title, "org": org or None},
+                        confidence="LOW", confidence_score=0.45, source="experience",
+                        provenance={
+                            "experience_id": exp.get("id"),
+                            "snippet": m.group(0)[:160],
+                        },
+                        actor=actor,
+                    )
+                    count += 1
+            for m in _PUB_RE.finditer(blob):
+                snippet = m.group(0).strip()[:160]
+                key = f"pub:{snippet.lower()[:48]}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                self._upsert_fact(
+                    "professional", key,
+                    statement=f"Publication/patent signal: {snippet}",
+                    value={"kind": "publication", "snippet": snippet},
+                    confidence="LOW", confidence_score=0.4, source="experience",
+                    provenance={"experience_id": exp.get("id")},
+                    actor=actor,
+                )
+                count += 1
         return count
 
     def _upsert_fact(self, category: str, key: str, **kwargs: Any) -> dict[str, Any]:

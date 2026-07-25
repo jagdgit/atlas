@@ -699,7 +699,7 @@ class _FakePersonal:
         return row
 
     def infer(self):
-        return {"skills": 1, "identity": 0, "timeline": 0}
+        return {"skills": 1, "identity": 0, "timeline": 0, "professional": 0}
 
     def confirm(self, fact_id):
         if fact_id not in self._facts:

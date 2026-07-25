@@ -119,3 +119,20 @@ def test_conversation_experiences_ignore_bare_mentions_without_claim():
         ],
     }
     assert build_conversation_experiences(artifact, asset_id="a2") == []
+
+
+def test_build_repo_experiences_includes_dependency_packages():
+    exps = build_repo_experiences(
+        {
+            "name": "svc",
+            "languages": {"Python": 10},
+            "dependencies": {"pip": ["celery>=5.3", "pytest", "redis"]},
+        },
+        repo_uid="repo-deps",
+    )
+    stmts = {e["statement"] for e in exps}
+    assert any("celery" in s and "dependencies" in s for s in stmts)
+    assert any("redis" in s and "dependencies" in s for s in stmts)
+    assert not any("pytest" in s.lower() and "dependencies" in s for s in stmts)
+    celery = next(e for e in exps if e["value"]["skill"] == "celery")
+    assert celery["value"]["context"] == "dependency"
