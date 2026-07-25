@@ -212,6 +212,8 @@ class PaperTradingWorker(PersistentWorker):
         mentor_advice = ""
         mission_ctx_summary = ""
         mission_ctx_citations: list[str] = []
+        fact_findings: list[dict[str, Any]] = []
+        predicted_findings: list[dict[str, Any]] = []
         if self._mission_context is not None:
             try:
                 gathered = self._mission_context.gather(
@@ -223,9 +225,24 @@ class PaperTradingWorker(PersistentWorker):
                 mission_ctx_citations = list(gathered.get("citations") or [])[:8]
                 # Prefer Experience block from shared API when present.
                 for it in gathered.get("items") or []:
-                    if str(it.get("item_kind") or it.get("kind")) == "experience_advice":
+                    kind = str(it.get("item_kind") or it.get("kind") or "")
+                    if kind == "experience_advice":
                         mentor_advice = str(it.get("advice") or "")[:500]
-                        break
+                    elif kind == "finding":
+                        row = {
+                            "id": it.get("id"),
+                            "statement": it.get("statement"),
+                            "truth_kind": it.get("truth_kind"),
+                            "claim_type": it.get("claim_type"),
+                            "status": it.get("status"),
+                            "freshness": it.get("freshness"),
+                            "valid_from": it.get("valid_from"),
+                            "valid_until": it.get("valid_until"),
+                        }
+                        if str(it.get("truth_kind") or "") == "predicted":
+                            predicted_findings.append(row)
+                        else:
+                            fact_findings.append(row)
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("mission_context gather skipped: %s", exc)
         if not mentor_advice and self._learning is not None:
@@ -259,6 +276,9 @@ class PaperTradingWorker(PersistentWorker):
                 "mentor_advice": mentor_advice,
                 "mission_context_summary": mission_ctx_summary,
                 "mission_context_citations": mission_ctx_citations,
+                # OI-F2 — keep forecasts out of the operative-fact bucket.
+                "fact_findings": fact_findings[:8],
+                "predicted_findings": predicted_findings[:8],
             },
         )
         decision = self._engine.decide(request)

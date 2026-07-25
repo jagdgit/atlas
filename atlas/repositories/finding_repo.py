@@ -39,6 +39,8 @@ class FindingRepository(BaseRepository):
         mission_id: str | None = None,
         job_id: str | None = None,
         maturity: str = "candidate",
+        valid_from: str | None = None,
+        valid_until: str | None = None,
     ) -> dict[str, Any]:
         cid = canonical_id or self.next_canonical_id()
         # P12 provenance columns: who *discovered* this finding (never ownership). Fall back to the
@@ -67,6 +69,8 @@ class FindingRepository(BaseRepository):
             mission_id,
             job_id,
             maturity,
+            valid_from,
+            valid_until,
         )
         if finding_id:
             return self.fetch_one(
@@ -75,12 +79,14 @@ class FindingRepository(BaseRepository):
                     id, canonical_id, revision, statement, value, claim_type,
                     confidence, confidence_score, status, freshness, quality,
                     supporting, contradicting, provenance, domain, last_verified,
-                    supersedes, identity_key, mission_id, job_id, maturity
+                    supersedes, identity_key, mission_id, job_id, maturity,
+                    valid_from, valid_until
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s,
+                    %s, %s
                 )
                 RETURNING *
                 """,
@@ -92,12 +98,14 @@ class FindingRepository(BaseRepository):
                 canonical_id, revision, statement, value, claim_type,
                 confidence, confidence_score, status, freshness, quality,
                 supporting, contradicting, provenance, domain, last_verified,
-                supersedes, identity_key, mission_id, job_id, maturity
+                supersedes, identity_key, mission_id, job_id, maturity,
+                valid_from, valid_until
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s,
+                %s, %s
             )
             RETURNING *
             """,
@@ -191,6 +199,8 @@ class FindingRepository(BaseRepository):
             identity_key=list(finding_identity_key(data)),
             mission_id=rev_mission_id,
             job_id=rev_job_id,
+            valid_from=data.get("valid_from", previous.get("valid_from")),
+            valid_until=data.get("valid_until", previous.get("valid_until")),
         )
         self.set_status(str(previous["id"]), "superseded", superseded_by=str(new["id"]))
         return new

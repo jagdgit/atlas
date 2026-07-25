@@ -9,6 +9,17 @@ from atlas.knowledge.conflict import (
 from atlas.knowledge.consolidation import KnowledgeLifecycleService
 from atlas.knowledge.lifecycle import freshness_label
 from atlas.knowledge.service import KnowledgeService, SearchResult
+from atlas.knowledge.temporal import (
+    TRUTH_CURRENT,
+    TRUTH_HISTORICAL,
+    TRUTH_PREDICTED,
+    annotate_finding_item,
+    is_operative_fact,
+    partition_by_truth,
+    stamp_prediction,
+    stamp_validity,
+    truth_kind,
+)
 
 __all__ = [
     "Chunk",
@@ -20,5 +31,14 @@ __all__ = [
     "RankedContext",
     "RankedHit",
     "SearchResult",
+    "TRUTH_CURRENT",
+    "TRUTH_HISTORICAL",
+    "TRUTH_PREDICTED",
+    "annotate_finding_item",
     "freshness_label",
+    "is_operative_fact",
+    "partition_by_truth",
+    "stamp_prediction",
+    "stamp_validity",
+    "truth_kind",
 ]

@@ -727,6 +727,8 @@ class KnowledgeLifecycleService:
             finding_id=None,  # always new UUID for durable create
             identity_key=list(finding_identity_key(data)),
             maturity=maturity,
+            valid_from=data.get("valid_from"),
+            valid_until=data.get("valid_until"),
         )
 
     def _supersede(self, existing: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
@@ -800,6 +802,8 @@ class InMemoryFindingStore:
             "superseded_by": kwargs.get("superseded_by"),
             "identity_key": kwargs.get("identity_key"),
             "maturity": kwargs.get("maturity", "candidate"),
+            "valid_from": kwargs.get("valid_from"),
+            "valid_until": kwargs.get("valid_until"),
             "created_at": _utcnow_iso(),
             "updated_at": _utcnow_iso(),
         }
@@ -867,6 +871,8 @@ class InMemoryFindingStore:
             identity_key=list(finding_identity_key(data))
             if data.get("statement")
             else previous.get("identity_key"),
+            valid_from=data.get("valid_from", previous.get("valid_from")),
+            valid_until=data.get("valid_until", previous.get("valid_until")),
         )
         self.set_status(previous["id"], STATUS_SUPERSEDED, superseded_by=new["id"])
         return new

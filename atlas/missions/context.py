@@ -9,12 +9,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from atlas.knowledge.temporal import annotate_finding_item
+
 
 class MissionContextService:
     """Gather structured context for a topic across OS layers."""
 
     name = "mission_context"
-    VERSION = "mca.1"
+    VERSION = "mca.1.1"
 
     def __init__(
         self,
@@ -136,6 +138,7 @@ class MissionContextService:
                                 "domain": f.get("domain"),
                                 "trust": trust,
                                 "status": f.get("status"),
+                                **annotate_finding_item(f),
                             }
                         )
                         found = True

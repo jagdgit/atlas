@@ -36,7 +36,7 @@ def test_gather_includes_world_and_experience():
         learning=_Learning(),
     )
     out = svc.gather("NSE settlement", program_id="market", limit=12)
-    assert out["version"] == "mca.1"
+    assert out["version"] == "mca.1.1"
     assert "world_models" in out["sources"] or any(
         i.get("item_kind") == "world_fact" for i in out["items"]
     )
