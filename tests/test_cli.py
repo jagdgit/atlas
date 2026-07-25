@@ -338,7 +338,7 @@ class _FakePersonalCli:
                                "state": "inferred", "statement": "Skilled in Celery"}}
 
     def infer(self):
-        return {"skills": 1, "identity": 0, "timeline": 0}
+        return {"skills": 1, "identity": 0, "timeline": 0, "professional": 0}
 
     def profile(self, *, include_inferred=True):
         return {"identity": [], "skills": list(self._facts.values()),
