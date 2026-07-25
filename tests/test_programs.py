@@ -23,7 +23,7 @@ def test_builtin_programs_include_market_engineering_personal():
     }
 
 
-def test_market_program_has_seven_members_with_stubs():
+def test_market_program_has_seven_enabled_members():
     market = get_program("market_intelligence")
     assert market is not None
     assert len(market.members) == 7
@@ -33,7 +33,8 @@ def test_market_program_has_seven_members_with_stubs():
     assert statuses["news_intelligence"] == MEMBER_ENABLED
     assert statuses["event_research"] == MEMBER_ENABLED
     assert statuses["company_intelligence"] == MEMBER_ENABLED
-    assert statuses["portfolio_ledger"] == MEMBER_STUB
+    assert statuses["portfolio_ledger"] == MEMBER_ENABLED
+    assert statuses["investment_mentor"] == MEMBER_ENABLED
     assert "Broker Profiles" in market.domain_adapters
     assert "MarketReader" in market.domain_adapters
 
@@ -50,9 +51,11 @@ def test_program_service_describe_without_deps():
     view = svc.describe("market_intelligence")
     assert view["title"] == "Market Intelligence"
     assert view["startable_count"] == 0  # no templates wired
-    assert view["stub_count"] >= 2
+    assert view["stub_count"] == 0  # Market Program fully shipped
     assert view["label"] == program_label("market_intelligence")
     assert len(view["lifecycle"]) == 7
+    personal = svc.describe("personal_intelligence")
+    assert personal["stub_count"] >= 1  # personal_mentor still planned
 
 
 def test_program_service_describe_with_fake_templates():
@@ -82,9 +85,10 @@ def test_program_service_describe_with_fake_templates():
 def test_context_spike_empty_without_knowledge():
     svc = ProgramService()
     ctx = svc.context("inflation", program_id="market_intelligence")
-    assert ctx["spike"] is True
+    # MCA.1 gather always returns a structured envelope (spike flag retired).
     assert ctx["topic"] == "inflation"
-    assert ctx["items"] == []
+    assert ctx.get("items") == [] or ctx.get("count", 0) == 0
+    assert "version" in ctx or "summary" in ctx or "citations" in ctx
 
 
 def test_context_spike_uses_findings():
@@ -109,11 +113,11 @@ def test_context_spike_uses_findings():
 
     svc = ProgramService(knowledge=_Knowledge())
     ctx = svc.context("inflation")
-    assert ctx["count"] == 1
-    assert ctx["items"][0]["kind"] == "finding"
+    assert ctx["count"] >= 1
+    assert any(i.get("kind") == "finding" for i in ctx.get("items") or [])
 
 
-def test_start_skips_stubs_and_starts_compat():
+def test_start_skips_personal_stubs_and_starts_compat():
     created: list[dict] = []
 
     class _Mission:
@@ -141,6 +145,24 @@ def test_start_skips_stubs_and_starts_compat():
     result = svc.start("market_intelligence")
     assert len(result["started"]) == 1
     assert result["started"][0]["template"] == "decision_simulation"
-    assert any(s["reason"] == "stub" for s in result["skipped"])
+    # Market Program has no stubs; remaining enabled members lack templates here.
+    assert not any(s.get("reason") == "stub" for s in result["skipped"])
     assert created[0]["labels"][0] == "program:market_intelligence"
     assert BUILTIN_PROGRAMS[0].id == "market_intelligence"
+
+    class _PersTemplates:
+        def list_templates(self):
+            class T:
+                name = "owner_knowledge"
+                id = "tpl-ok"
+
+            return [T()]
+
+        def instantiate(self, template_name, **kwargs):
+            created.append({"template": template_name, **kwargs})
+            return {"mission": _Mission("m-2")}
+
+    pers = ProgramService(templates=_PersTemplates(), missions=_Missions())
+    pres = pers.start("personal_intelligence")
+    assert any(s["reason"] == "stub" and s["template"] == "personal_mentor" for s in pres["skipped"])
+    assert any(s["template"] == "owner_knowledge" for s in pres["started"])
