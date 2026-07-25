@@ -1190,7 +1190,9 @@ existing abstractions. Tracked as `OI-F*` in `docs/OPEN_ITEMS.md`.
   *what do I know? what am I uncertain about? which readers fail most? which missions cost most? which
   policies block decisions? what should I improve next?* Overlaps the Phase-D **Self-Improvement
   Watcher** (D.10) and the **capability-gap self-report** (P15/§5.10); the *generalized* introspection
-  mission is **deferred** until those exist to aggregate.
+  mission is **deferred** until those exist to aggregate. **Closed (OI-F3):** `IntrospectionService`
+  + `system_introspection` mission aggregate those signals into a report/journal; D.10 remains the
+  eval remediation gate.
 - **F4 — Standardized post-decision feedback loops.** Make `Recommendation → Outcome → Difference →
   Learning` a **standard cycle across all missions** (not just Paper Trading's learning loop, D.6). The
   architecture already supports it (decisions + experiences + consolidator); **deferred** to a
