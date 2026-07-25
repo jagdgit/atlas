@@ -16,10 +16,13 @@ from atlas.engineering.ingest import (
     RepoAcquirer,
     compute_tree_checksum,
 )
+from atlas.engineering.mentor import MentorLesson, synthesize_engineering_lesson
 
 __all__ = [
     "AcquiredRepo",
     "RepoAcquireError",
     "RepoAcquirer",
     "compute_tree_checksum",
+    "MentorLesson",
+    "synthesize_engineering_lesson",
 ]

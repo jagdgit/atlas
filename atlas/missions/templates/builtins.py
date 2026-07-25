@@ -260,6 +260,29 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "investment_mentor"),
     },
     {
+        "name": "engineering_mentor",
+        "template_version": 1,
+        "description": (
+            "Engineering Intelligence (OI-MP4) — weekly engineering-judgment lessons "
+            "from repository / architecture Experiences → Experience OS "
+            "(advice_for + optional soft-bias)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Engineering Mentor",
+            "roadmap": "OI-MP4",
+            "focus": "engineering",
+            "lookback": 40,
+            "force": False,
+            "seed_experiences": [],
+            "tick_interval_seconds": 604800,
+        },
+        "worker_specs": [{"type": "engineering_mentor", "interval_seconds": 604800}],
+        "knowledge_domains": ["engineering", "architecture", "experience"],
+        "success_criteria": with_philosophy({}, "engineering_mentor"),
+    },
+    {
         "name": "learning_governance",
         "template_version": 1,
         "description": (

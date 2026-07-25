@@ -157,7 +157,7 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
         title="Engineering Intelligence",
         description=(
             "Learn from repositories and design artifacts; advise on architecture. "
-            "Placeholder Program — members ship after Market proves the pattern."
+            "Repository Observer + Technology Watch + Engineering Mentor (OI-MP4)."
         ),
         members=(
             ProgramMember(
@@ -181,8 +181,8 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 template="engineering_mentor",
                 kind="maintenance",
                 cadence="weekly",
-                status=MEMBER_STUB,
-                description="Planned (OI-MP4)",
+                status=MEMBER_ENABLED,
+                description="Weekly engineering judgment → Experience OS (OI-MP4)",
             ),
         ),
         domain_adapters=("Repo readers", "Architecture graph"),
@@ -192,8 +192,8 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
             "decide": STAGE_PARTIAL,
             "record_why": STAGE_ACTIVE,
             "evaluate": STAGE_PARTIAL,
-            "reflect": STAGE_WAITING,
-            "improve": STAGE_WAITING,
+            "reflect": STAGE_PARTIAL,
+            "improve": STAGE_PARTIAL,
         },
     ),
     ProgramDefinition(

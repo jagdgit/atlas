@@ -75,6 +75,8 @@ def test_program_service_describe_with_fake_templates():
     eng = svc.describe("engineering_intelligence")
     repo = next(m for m in eng["members"] if m["template"] == "repository_learning")
     assert repo["can_start"] is True
+    mentor = next(m for m in eng["members"] if m["template"] == "engineering_mentor")
+    assert mentor["status"] == MEMBER_ENABLED
 
 
 def test_context_spike_empty_without_knowledge():

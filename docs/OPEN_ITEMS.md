@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-25 (OI-C12 Personal SPA dashboard closed).
+> **Last updated:** 2026-07-25 (OI-MP4 Engineering Mentor closed).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -92,7 +92,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-MI0 | 🟢 | P1 | **Market Intelligence Program** — MI→KG→MCA + platform PA gaps ✅. **Next:** governance / ops polish. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
 | OI-MP2 | 🟢 | P1 | **Split paper trading** — `decision_simulation` is primary; `paper_trading` remains compat alias. | `OI-MI0` |
 | OI-MP3 | 🟢 | P1 | **Daily Learning Governance Report** — `GET /v1/governance/daily` + `learning_governance` mission. | MP3 |
-| OI-MP4 | 🔴 | P3 | **Engineering Mentor Mission**. | Philosophy |
+| OI-MP4 | 🟢 | P3 | **Engineering Mentor Mission** — weekly engineering-judgment lessons from repo/architecture Experiences → Experience OS (`engineering_mentor` template + worker; soft-bias default). | Philosophy | closed OI-MP4 |
 | OI-MP5 | 🟢 | P2 | **Missions teach missions** — Investment Mentor journals → optional soft-bias (default on) → Decision Engine Experience nudge + Decision Simulation `advice_for` / strategy mentor bias (MI.7). | Philosophy MP6 | closed OI-MP5 |
 | OI-PA0 | 🟢 | P1 | **Atlas Platform Architecture** — SETTLED master (Programs→Missions→Workers; Memory/Planning/Policy/Capability/Scheduler gaps tracked below). | `docs/ATLAS_PLATFORM_ARCHITECTURE.md` |
 | OI-PA-PLAN | 🟢 | P2 | **Planning OS** — goal → gaps → compare → risk → decide (`GET /v1/planning/plan`). | PA.1 |
@@ -145,6 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-MP4 | **Engineering Mentor Mission** — weekly judgment lessons → Experience OS. | _(pending commit)_ |
 | OI-C12 | **Personal/Owner SPA dashboard** — `/ui` Personal panel + coverage/confirm/infer/draft. | `6835729` |
 | OI-D1 | **Live market-data feed** — Yahoo + Polygon/AV live clients; NSE/BSE skeletons. | `df2d71b` |
 | OI-C11 | **Personal proficiency + timeline years + heuristic professional.** | `869ec44` |

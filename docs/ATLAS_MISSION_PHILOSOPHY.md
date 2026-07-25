@@ -201,7 +201,7 @@ Repository → Architecture → Patterns → Design Decisions
 
 Answers *why* code was written, not only *what*.
 
-### Engineering Mentor Mission (OI-MP4)
+### Engineering Mentor Mission (OI-MP4) ✅
 Periodically answers:
 
 - What patterns improved over six months?
@@ -209,7 +209,10 @@ Periodically answers:
 - Where has Atlas accumulated the most technical debt?
 - Which architectural decisions proved successful?
 
-This is learning **engineering judgment** — closer to the long-term partner goal than more fact extractors.
+Implemented as the `engineering_mentor` mission template (weekly worker) — synthesizes
+engineering Experiences into Experience OS Lessons with optional soft-bias (same path as
+Investment Mentor / OI-MP5). This is learning **engineering judgment** — closer to the
+long-term partner goal than more fact extractors.
 
 ---
 
@@ -219,6 +222,7 @@ This is learning **engineering judgment** — closer to the long-term partner go
 |----------|------|--------------|----------------------------------|---------|
 | `owner_knowledge` | learning | ✅ | Observe, Learn, Record | Evaluate / Reflect / Improve |
 | `repository_learning` | learning | ✅ | Observe, Learn, Record | Reflect / Improve (as judgment) |
+| `engineering_mentor` | maintenance | ✅ | Reflect, Record, Learn | Decide |
 | `research` | research | ❌ | Observe, Learn, Decide (what-next) | Reflect across runs |
 | `paper_trading` | simulation | ✅* | Observe→Decide→Evaluate | Reflect / Improve depth; live Observe (OI-D1) |
 | `technology_watch` | monitoring | ✅ | Observe, Decide (priority), Record | Learn→Improve loop |
@@ -255,7 +259,7 @@ Code source of truth for this table: `atlas/missions/philosophy.py`.
 3. **OI-D1** — Live market observation for simulation missions  
 4. **OI-MP2** — Split paper trading into three templates when Watch + Research feeds exist  
 5. **OI-F4 / OI-MP5** — Cross-mission Recommendation→Lesson convention  
-6. **OI-MP4** — Engineering Mentor mission (after Engineering Intelligence depth)  
+6. **OI-MP4** — ✅ Engineering Mentor mission  
 7. **OI-KE0 V5** — Claim verification queue (Layer 2 for media knowledge)
 
 ---
