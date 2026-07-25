@@ -146,7 +146,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
-| OI-A2 | **Job-advance priority threading** — plan/advance tasks inherit mission effective_priority. | _(pending commit)_ |
+| OI-A2 | **Job-advance priority threading** — plan/advance tasks inherit mission effective_priority. | `a68daf5` |
 | OI-A1 | **Cron schedules** — 5-field crontab on `scheduler.schedules` + claim advance. | `7facc54` |
 | OI-C10 | **Experience evidence-retraction on revert** — peel repo_uid from shared experiences; archive if alone. | `2393b65` |
 | OI-B3 | **Knowledge Conflict Resolver** — conflict quality + list/resolve API + DE rule. | `3602eab` |
