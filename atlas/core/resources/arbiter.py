@@ -1,4 +1,4 @@
-"""Cross-mission arbiter (Phase D · §D.4, roadmap A7 / OI-A3).
+"""Cross-mission arbiter (Phase D · §D.4, roadmap A7 / OI-A3 / OI-D2).
 
 The Resource Manager (``manager.py``) answers *machine* questions — CPU/RAM/thermal/LLM caps for one
 task. The **arbiter** answers the orthogonal *cross-mission* question: when several missions compete for
@@ -6,7 +6,10 @@ the same worker slots, **who goes first, and who waits?** It weighs each mission
 
 * ``effective_priority`` — policy band + priority + criticality (the primary signal),
 * **deadline urgency** — a bounded boost that grows as a deadline nears (or is overdue),
-* **importance** — an advisory tiebreak, then ``mission_id`` for full determinism, and enforces
+* **importance** — an advisory tiebreak, then ``mission_id`` for full determinism,
+* **fair-share soft penalty** (OI-D2) — recent admits in a sliding window gently lower score so a
+  hogging mission yields under contention (not preemption — running ticks are never interrupted),
+  and enforces
 * **hard per-mission budget caps** (``max_concurrent_tasks``, ``llm_units_per_window``, optional
   ``ram_mb``) and an optional **global** concurrency cap.
 
@@ -70,7 +73,7 @@ class ArbitrationVerdict:
 
 class MissionArbiter:
     name = "mission_arbiter"
-    VERSION = "1.1.0"
+    VERSION = "1.2.0"
 
     def __init__(
         self,
@@ -80,6 +83,9 @@ class MissionArbiter:
         deadline_boost_max: float = 15.0,
         starvation_boost_per_defer: float = 2.0,
         starvation_boost_max: float = 40.0,
+        fair_share_window_seconds: float = 300.0,
+        fair_share_penalty_per_admit: float = 1.0,
+        fair_share_penalty_max: float = 20.0,
         clock: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -88,21 +94,40 @@ class MissionArbiter:
         self._deadline_boost_max = max(0.0, float(deadline_boost_max))
         self._starve_per = max(0.0, float(starvation_boost_per_defer))
         self._starve_max = max(0.0, float(starvation_boost_max))
+        self._fair_window = max(1.0, float(fair_share_window_seconds))
+        self._fair_per = max(0.0, float(fair_share_penalty_per_admit))
+        self._fair_max = max(0.0, float(fair_share_penalty_max))
         self._clock = clock
         self._logger = logger or logging.getLogger("atlas.arbiter")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._inflight: dict[str, int] = {}
         self._total = 0
         self._deferrals: dict[str, int] = {}  # mission → consecutive deferrals (anti-starvation aging)
         # OI-A3: per-mission sliding window of (unix_ts, units) admissions.
         self._llm_ledger: dict[str, deque[tuple[float, int]]] = {}
+        # OI-D2: per-mission sliding window of admit timestamps (fair-share usage).
+        self._admit_ledger: dict[str, deque[float]] = {}
 
     # --- scoring (deterministic) ----------------------------------------
     def score(self, demand: MissionDemand, *, now: datetime | None = None, deferrals: int | None = None) -> float:
-        """effective_priority + bounded deadline urgency + bounded starvation aging."""
+        """priority + deadline urgency + starvation aging − fair-share usage penalty."""
+        now = now or self._now()
         defers = self._deferrals.get(demand.mission_id, 0) if deferrals is None else deferrals
         aging = min(self._starve_max, defers * self._starve_per)
-        return float(demand.effective_priority) + self._deadline_boost(demand.deadline, now) + aging
+        return (
+            float(demand.effective_priority)
+            + self._deadline_boost(demand.deadline, now)
+            + aging
+            - self._fair_share_penalty(demand.mission_id, now)
+        )
+
+    def _fair_share_penalty(self, mission_id: str, now: datetime) -> float:
+        """Bounded soft penalty for recent admits (OI-D2). Zero when fair-share is disabled."""
+        if self._fair_per <= 0 or self._fair_max <= 0:
+            return 0.0
+        with self._lock:
+            admits = self._admits_in_window_locked(mission_id, now)
+        return min(self._fair_max, admits * self._fair_per)
 
     def _deadline_boost(self, deadline: datetime | None, now: datetime | None) -> float:
         if deadline is None:
@@ -194,6 +219,7 @@ class MissionArbiter:
             self._inflight[demand.mission_id] = current + 1
             self._total += 1
             self._deferrals.pop(demand.mission_id, None)  # admitted → reset aging (fairness)
+            self._record_admit_locked(demand.mission_id, now)  # OI-D2 fair-share usage
             return ArbitrationVerdict(demand.mission_id, True, "admitted", score)
 
     def release(self, mission_id: str) -> None:
@@ -228,6 +254,25 @@ class MissionArbiter:
         # Opportunistic prune so the deque cannot grow without bound.
         self._llm_used_locked(mission_id, now=now, window_seconds=window_seconds)
 
+    def _admits_in_window_locked(self, mission_id: str, now: datetime) -> int:
+        ledger = self._admit_ledger.get(mission_id)
+        if not ledger:
+            return 0
+        cutoff = now.timestamp() - self._fair_window
+        while ledger and ledger[0] < cutoff:
+            ledger.popleft()
+        if not ledger:
+            self._admit_ledger.pop(mission_id, None)
+            return 0
+        return len(ledger)
+
+    def _record_admit_locked(self, mission_id: str, now: datetime) -> None:
+        if self._fair_per <= 0 or self._fair_max <= 0:
+            return
+        ledger = self._admit_ledger.setdefault(mission_id, deque())
+        ledger.append(now.timestamp())
+        self._admits_in_window_locked(mission_id, now)
+
     # --- introspection --------------------------------------------------
     def inflight_for(self, mission_id: str) -> int:
         with self._lock:
@@ -236,6 +281,10 @@ class MissionArbiter:
     def deferrals_for(self, mission_id: str) -> int:
         with self._lock:
             return self._deferrals.get(mission_id, 0)
+
+    def recent_admits(self, mission_id: str) -> int:
+        with self._lock:
+            return self._admits_in_window_locked(mission_id, self._now())
 
     def llm_units_used(self, mission_id: str, *, window_seconds: int = DEFAULT_LLM_WINDOW_SECONDS) -> int:
         with self._lock:
@@ -250,12 +299,17 @@ class MissionArbiter:
                 mid: self._llm_used_locked(mid, now=now, window_seconds=DEFAULT_LLM_WINDOW_SECONDS)
                 for mid in self._llm_ledger
             }
+            admits = {
+                mid: self._admits_in_window_locked(mid, now) for mid in self._admit_ledger
+            }
             return {
                 "total_inflight": self._total,
                 "global_max": self._global_max,
                 "inflight": dict(self._inflight),
                 "deferrals": dict(self._deferrals),
                 "llm_units_in_window": llm_used,
+                "admits_in_fair_share_window": admits,
+                "fair_share_window_seconds": self._fair_window,
             }
 
     def _now(self) -> datetime:

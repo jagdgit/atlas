@@ -190,6 +190,35 @@ def test_ram_mb_cap_defers_when_host_available_too_low():
     arb.release("m1")
 
 
+def test_fair_share_soft_penalty_prefers_underused_mission():
+    """OI-D2: recent admits lower score so an idle peer ranks ahead under equal priority."""
+    arb = MissionArbiter(
+        fair_share_window_seconds=300,
+        fair_share_penalty_per_admit=2.0,
+        fair_share_penalty_max=20.0,
+    )
+    hog = _d("hog", prio=40)
+    light = _d("light", prio=40)
+    for _ in range(12):
+        assert arb.try_admit(hog).admitted is True
+        arb.release("hog")
+    assert arb.recent_admits("hog") == 12
+    assert arb.score(hog) < arb.score(light)
+    ranked = arb.rank([hog, light])
+    assert [d.mission_id for d in ranked] == ["light", "hog"]
+
+
+def test_fair_share_disabled_when_penalty_zero():
+    arb = MissionArbiter(fair_share_penalty_per_admit=0.0)
+    hog = _d("hog", prio=40)
+    for _ in range(10):
+        arb.try_admit(hog)
+        arb.release("hog")
+    # No soft penalty → equal priority stays mission_id ordered
+    ranked = arb.rank([_d("bbb", prio=40), _d("aaa", prio=40)])
+    assert [d.mission_id for d in ranked] == ["aaa", "bbb"]
+
+
 # --- live-DB integration through the WorkerManager -----------------------
 
 @pytest.fixture(scope="module")

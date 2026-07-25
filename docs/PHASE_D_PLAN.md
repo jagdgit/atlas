@@ -61,7 +61,8 @@
   framework (short-task + checkpoint, supervised by the Worker Manager); a `kill -9` mid-run resumes
   from the last checkpoint, and the Scheduler's self-re-enqueue keeps them running across reboots.
 - **A7 resource arbitration.** Cross-mission contention resolves by **weighted effective priority +
-  hard budget caps** (no preemption yet); deadline urgency and importance act as boosts/tiebreaks.
+  hard budget caps + soft fair-share usage penalty** (OI-D2); deadline urgency and importance act as
+  boosts/tiebreaks. **No preemption** of running ticks (release-on-finish only).
 - **P15 (new) — capability-gap honesty.** When the engine cannot choose an action because a needed
   capability/reader/data-source/rule is **absent**, it emits a **`capability_gap` recommendation**
   (naming exactly what is missing), journaled + notified to the operator — never a fabricated action.
@@ -322,8 +323,8 @@ are incremental follow-ons.
 ## 6. Open items / deferrals (seed `OI-D*`)
 - **OI-D1** Live market-data feed (real provider) as a swappable `MarketDataReader` (DD6 defers to
   fixtures first).
-- **OI-D2** RM arbitration refinements beyond weighted-priority + hard cap (preemption, fair-share) —
-  A7 says refine empirically.
+- **OI-D2** ✅ soft fair-share usage penalty on MissionArbiter; preemption of running ticks remains
+  out of scope (A7 — refine empirically only if multi-process contention demands it).
 - **OI-D3** Phase D complete (D.1–D.11 ✅). Applied watchers + e2e gate landed.
 - **OI-D4** Real-world side-effecting appliers (e.g. actually posting a job application draft) stay
   behind the approval gate and are **out of scope** until explicitly requested (P14).
