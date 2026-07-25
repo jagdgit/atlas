@@ -239,7 +239,8 @@ intelligence:
   recommend_top_k: 5
 
 # Market Intelligence feeds (MI.3 / OI-D1). Default is hermetic asset replay.
-# Opt in to Yahoo with yahoo_enabled: true. Polygon/AlphaVantage need env keys.
+# Opt in to Yahoo with yahoo_enabled: true. Polygon / Alpha Vantage are live when
+# their env keys are set. NSE/BSE remain ToS-gated skeletons.
 market:
   default_provider: asset_replay
   yahoo_enabled: false

@@ -193,8 +193,237 @@ class YahooFinanceAdapter:
         return bars
 
 
+class AlphaVantageAdapter:
+    """Live daily OHLCV via Alpha Vantage when ``ATLAS_ALPHAVANTAGE_API_KEY`` is set."""
+
+    name = "alphavantage"
+    QUERY_URL = "https://www.alphavantage.co/query"
+
+    def __init__(
+        self,
+        *,
+        api_key_env: str = "ATLAS_ALPHAVANTAGE_API_KEY",
+        enabled: bool = True,
+        timeout: float = 25.0,
+        opener: Any | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._api_key_env = api_key_env
+        self._enabled = enabled
+        self._timeout = float(timeout)
+        self._opener = opener
+        self._logger = logger or logging.getLogger("atlas.trading.adapters.alphavantage")
+
+    def fetch_bars(
+        self, symbol: str, *, limit: int = 100, **kwargs: Any
+    ) -> list[Bar]:
+        sym = (symbol or "").strip()
+        if not sym:
+            return []
+        if not self._enabled:
+            raise CapabilityGap(
+                "market_data:alphavantage",
+                "alphavantage provider disabled in config",
+            )
+        key = (os.environ.get(self._api_key_env) or "").strip()
+        if not key:
+            raise CapabilityGap(
+                "market_data:alphavantage",
+                f"set {self._api_key_env} to enable live Alpha Vantage feeds (OI-D1)",
+            )
+        params = {
+            "function": "TIME_SERIES_DAILY",
+            "symbol": sym,
+            "outputsize": "compact",
+            "apikey": key,
+        }
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{self.QUERY_URL}?{qs}"
+        try:
+            payload = self._fetch_json(url)
+        except CapabilityGap:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise CapabilityGap(
+                "market_data:alphavantage",
+                f"fetch failed for {sym}: {exc}",
+            ) from exc
+        if isinstance(payload, dict) and payload.get("Note"):
+            raise CapabilityGap(
+                "market_data:alphavantage",
+                f"Alpha Vantage rate limit / note: {payload.get('Note')}",
+            )
+        if isinstance(payload, dict) and payload.get("Error Message"):
+            raise CapabilityGap(
+                "market_data:alphavantage",
+                str(payload.get("Error Message")),
+            )
+        bars = self._parse_daily(payload)
+        if limit > 0:
+            bars = bars[-limit:]
+        return bars
+
+    def _fetch_json(self, url: str) -> dict[str, Any]:
+        if self._opener is not None:
+            data = self._opener(url)
+            return data if isinstance(data, dict) else json.loads(data)
+        import httpx
+
+        with httpx.Client(
+            timeout=self._timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "AtlasMarketReader/1.0"},
+        ) as client:
+            resp = client.get(url)
+            if resp.status_code >= 400:
+                raise CapabilityGap(
+                    "market_data:alphavantage",
+                    f"HTTP {resp.status_code} from Alpha Vantage",
+                )
+            return resp.json()
+
+    @staticmethod
+    def _parse_daily(payload: dict[str, Any]) -> list[Bar]:
+        series = payload.get("Time Series (Daily)") or {}
+        if not isinstance(series, dict) or not series:
+            return []
+        # API returns newest-first keyed by YYYY-MM-DD; emit oldest→newest.
+        bars: list[Bar] = []
+        for day in sorted(series.keys()):
+            row = series.get(day) or {}
+            try:
+                o = float(row.get("1. open"))
+                h = float(row.get("2. high"))
+                low = float(row.get("3. low"))
+                c = float(row.get("4. close"))
+                vol = float(row.get("5. volume") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            bars.append(
+                {"t": day, "open": o, "high": h, "low": low, "close": c, "volume": vol}
+            )
+        return bars
+
+
+class PolygonAdapter:
+    """Live daily aggregates via Polygon.io when ``ATLAS_POLYGON_API_KEY`` is set."""
+
+    name = "polygon"
+    AGGS_URL = (
+        "https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start}/{end}"
+    )
+
+    def __init__(
+        self,
+        *,
+        api_key_env: str = "ATLAS_POLYGON_API_KEY",
+        enabled: bool = True,
+        timeout: float = 25.0,
+        lookback_days: int = 90,
+        opener: Any | None = None,
+        clock: Any | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._api_key_env = api_key_env
+        self._enabled = enabled
+        self._timeout = float(timeout)
+        self._lookback_days = max(5, int(lookback_days))
+        self._opener = opener
+        self._clock = clock  # injectable date for tests: callable() -> date
+        self._logger = logger or logging.getLogger("atlas.trading.adapters.polygon")
+
+    def fetch_bars(
+        self, symbol: str, *, limit: int = 100, **kwargs: Any
+    ) -> list[Bar]:
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return []
+        if not self._enabled:
+            raise CapabilityGap(
+                "market_data:polygon",
+                "polygon provider disabled in config",
+            )
+        key = (os.environ.get(self._api_key_env) or "").strip()
+        if not key:
+            raise CapabilityGap(
+                "market_data:polygon",
+                f"set {self._api_key_env} to enable live Polygon feeds (OI-D1)",
+            )
+        end, start = self._window()
+        url = self.AGGS_URL.format(symbol=sym, start=start, end=end)
+        url = f"{url}?adjusted=true&sort=asc&limit=50000&apiKey={key}"
+        try:
+            payload = self._fetch_json(url)
+        except CapabilityGap:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise CapabilityGap(
+                "market_data:polygon",
+                f"fetch failed for {sym}: {exc}",
+            ) from exc
+        status = str(payload.get("status") or "").lower()
+        if status and status not in {"ok", "delayed"}:
+            raise CapabilityGap(
+                "market_data:polygon",
+                f"Polygon status={payload.get('status')!r} for {sym}",
+            )
+        bars = self._parse_aggs(payload)
+        if limit > 0:
+            bars = bars[-limit:]
+        return bars
+
+    def _window(self) -> tuple[str, str]:
+        from datetime import date, timedelta
+
+        today = self._clock() if self._clock is not None else date.today()
+        start = today - timedelta(days=self._lookback_days)
+        return today.isoformat(), start.isoformat()
+
+    def _fetch_json(self, url: str) -> dict[str, Any]:
+        if self._opener is not None:
+            data = self._opener(url)
+            return data if isinstance(data, dict) else json.loads(data)
+        import httpx
+
+        with httpx.Client(
+            timeout=self._timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "AtlasMarketReader/1.0"},
+        ) as client:
+            resp = client.get(url)
+            if resp.status_code >= 400:
+                raise CapabilityGap(
+                    "market_data:polygon",
+                    f"HTTP {resp.status_code} from Polygon",
+                )
+            return resp.json()
+
+    @staticmethod
+    def _parse_aggs(payload: dict[str, Any]) -> list[Bar]:
+        rows = payload.get("results") or []
+        bars: list[Bar] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                c = float(row["c"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            bars.append(
+                {
+                    "t": row.get("t"),
+                    "open": float(row["o"]) if row.get("o") is not None else c,
+                    "high": float(row["h"]) if row.get("h") is not None else c,
+                    "low": float(row["l"]) if row.get("l") is not None else c,
+                    "close": c,
+                    "volume": float(row.get("v") or 0.0),
+                }
+            )
+        return bars
+
+
 class KeyedProviderAdapter:
-    """Placeholder for Polygon / Alpha Vantage / NSE — requires API key env."""
+    """Placeholder for NSE / BSE — requires API key + exchange ToS path (OI-D1)."""
 
     def __init__(
         self,
@@ -223,7 +452,7 @@ class KeyedProviderAdapter:
                 f"market_data:{self.name}",
                 f"set {self._api_key_env} to enable live {self.name} feeds (OI-D1)",
             )
-        # Keys present but live client not wired yet — still honest.
+        # Keys present but exchange ToS / live client not wired yet — still honest.
         raise CapabilityGap(
             f"market_data:{self.name}",
             f"{self.name} adapter skeleton — key detected; live client lands with exchange ToS path",

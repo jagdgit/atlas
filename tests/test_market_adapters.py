@@ -85,10 +85,96 @@ def test_yahoo_opener_parses_chart():
 
 
 def test_keyed_provider_missing_key():
-    adapter = KeyedProviderAdapter("polygon", api_key_env="ATLAS_TEST_NO_KEY_XYZ")
+    adapter = KeyedProviderAdapter("nse", api_key_env="ATLAS_TEST_NO_KEY_XYZ")
     with pytest.raises(CapabilityGap) as exc:
-        adapter.fetch_bars("AAPL")
+        adapter.fetch_bars("RELIANCE")
     assert "ATLAS_TEST_NO_KEY_XYZ" in exc.value.detail
+
+
+def test_alphavantage_parses_daily(monkeypatch):
+    from atlas.trading.adapters import AlphaVantageAdapter
+
+    monkeypatch.setenv("ATLAS_AV_TEST_KEY", "demo")
+    payload = {
+        "Time Series (Daily)": {
+            "2024-01-02": {
+                "1. open": "10",
+                "2. high": "11",
+                "3. low": "9",
+                "4. close": "10.5",
+                "5. volume": "100",
+            },
+            "2024-01-03": {
+                "1. open": "10.5",
+                "2. high": "12",
+                "3. low": "10",
+                "4. close": "11.5",
+                "5. volume": "200",
+            },
+        }
+    }
+    adapter = AlphaVantageAdapter(
+        api_key_env="ATLAS_AV_TEST_KEY", opener=lambda url: payload
+    )
+    bars = adapter.fetch_bars("IBM", limit=10)
+    assert len(bars) == 2
+    assert bars[0]["t"] == "2024-01-02"
+    assert bars[-1]["close"] == 11.5
+
+
+def test_alphavantage_missing_key():
+    from atlas.trading.adapters import AlphaVantageAdapter
+
+    adapter = AlphaVantageAdapter(api_key_env="ATLAS_AV_MISSING_XYZ")
+    with pytest.raises(CapabilityGap) as exc:
+        adapter.fetch_bars("IBM")
+    assert "ATLAS_AV_MISSING_XYZ" in exc.value.detail
+
+
+def test_polygon_parses_aggs(monkeypatch):
+    from datetime import date
+
+    from atlas.trading.adapters import PolygonAdapter
+
+    monkeypatch.setenv("ATLAS_POLY_TEST_KEY", "demo")
+    payload = {
+        "status": "OK",
+        "results": [
+            {"t": 1, "o": 10, "h": 11, "l": 9, "c": 10.5, "v": 100},
+            {"t": 2, "o": 10.5, "h": 12, "l": 10, "c": 11.5, "v": 200},
+        ],
+    }
+    adapter = PolygonAdapter(
+        api_key_env="ATLAS_POLY_TEST_KEY",
+        opener=lambda url: payload,
+        clock=lambda: date(2024, 3, 1),
+    )
+    bars = adapter.fetch_bars("AAPL")
+    assert len(bars) == 2
+    assert bars[-1]["close"] == 11.5
+
+
+def test_market_reader_routes_to_alphavantage(monkeypatch):
+    monkeypatch.setenv("ATLAS_AV_ROUTE_KEY", "demo")
+    payload = {
+        "Time Series (Daily)": {
+            "2024-06-01": {
+                "1. open": "1",
+                "2. high": "2",
+                "3. low": "1",
+                "4. close": "1.5",
+                "5. volume": "10",
+            }
+        }
+    }
+    svc = MarketReaderService(
+        default_provider="alphavantage",
+        alphavantage_api_key_env="ATLAS_AV_ROUTE_KEY",
+        alphavantage_opener=lambda url: payload,
+    )
+    out = svc.bars_for("IBM", provider="alphavantage")
+    assert out["provider"] == "alphavantage"
+    assert out["count"] == 1
 
 
 def test_market_reader_service_asset_replay():

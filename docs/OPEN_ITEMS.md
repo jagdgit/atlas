@@ -43,7 +43,7 @@ Scope cuts recorded at plan time; remaining rows are post-Phase-D deferrals / fo
 
 | ID | Status | Pri | Item | Notes |
 |----|--------|-----|------|-------|
-| OI-D1 | 🟡 | P2 | **Live market-data feed** — MarketReader adapters shipped (asset_replay default; Yahoo opt-in; Polygon/AV/NSE/BSE skeletons + CapabilityGap). Full live clients when keys/ToS allow. | MI.3 · `atlas/trading/adapters.py` |
+| OI-D1 | 🟢 | P2 | **Live market-data feed** — `asset_replay` default; Yahoo opt-in; **Alpha Vantage + Polygon live** when env keys set; NSE/BSE remain ToS-gated skeletons + CapabilityGap. | MI.3 · `atlas/trading/adapters.py` | closed OI-D1 |
 | OI-D2 | 🔴 | P3 | **RM arbitration beyond weighted-priority + hard cap** (preemption, fair-share). | A7 — refine empirically. |
 | OI-D3 | 🟢 | P2 | **Phase D complete** (D.1–D.11 ✅), including applied watchers + e2e gate. | PHASE_D §3 |
 | OI-D4 | ⚪ | — | **Real-world side-effecting appliers** (e.g. actually submitting a draft) stay behind the P14 approval gate — out of scope until explicitly requested. | PHASE_D DD3/P14 |
@@ -145,6 +145,7 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-D1 | **Live market-data feed** — Yahoo + Polygon/AV live clients; NSE/BSE skeletons. | (this commit) |
 | OI-C11 | **Personal proficiency + timeline years + heuristic professional.** | `869ec44` |
 | OI-C13 | **Conversation → experience extraction** — `build_conversation_experiences` + ingest wire. | `7f35a28` |
 | OI-T1/T2/T3 | **Live-DB test hygiene** — session cleanup + `atlas-db test-clean`; `list_pending(source=)`. | `44dd079` |

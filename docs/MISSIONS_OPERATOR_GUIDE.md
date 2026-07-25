@@ -129,7 +129,7 @@ Start Program instantiates all seven Market members when templates are seeded.
 |------------|---------------|-------|
 | Atlas API / console login | For you to operate Atlas | Normal |
 | **Broker trading login** | **Never** | Forbidden (P10) — no real orders |
-| **Market-data provider API key** | Optional | Yahoo: `market.yahoo_enabled: true` (no key). Polygon/AV: set env from `market.*_api_key_env`. Still **no broker trading login** |
+| **Market-data provider API key** | Optional | Yahoo: `market.yahoo_enabled: true` (no key). Polygon/AV: set env from `market.*_api_key_env` (live when key present). NSE/BSE still ToS skeletons. Still **no broker trading login** |
 
 When live data arrives, expect a **data vendor API key** (quotes/candles), not a brokerage password.
 
@@ -246,7 +246,7 @@ Workers survive reboot via checkpoints. Archiving a mission does **not** delete 
 **Market data today**
 
 - Kind: `market_data` in the Asset Store (JSON or CSV OHLCV).
-- **Fixture / sample / replay only** — not a live exchange feed (`OI-D1` still open).
+- **Default fixture / sample / replay** — live Yahoo (opt-in) or Polygon/Alpha Vantage when env keys are set (`OI-D1` ✅). NSE/BSE still ToS-gated.
 - Easiest path: Missions UI → **Register sample market data** → merge into config → Instantiate.
 - Or Job / Chat NL: `start paper trading with 10000 on DEMO` (setup wizard intents).
 - Or API: `POST /v1/assets` with `generate_sample: true` or real `content`/`bars`.
@@ -437,7 +437,7 @@ So: it can learn *trading behaviour* from simulated fills on historical/sample s
 | Virtual cash & positions | ✅ sim portfolio | — |
 | Buy/sell on signals + journal “why” | ✅ Decision Engine + strategy rule | Richer reasons (news/screener context) |
 | Learn from outcomes | ✅ experience loop on sells | Cross-mission feedback polish (`OI-F4`) |
-| Live prices | ❌ fixture/replay only | **`OI-D1`**: live `MarketDataReader` (provider API — *market data* API key, not broker trading login) |
+| Live prices | ✅ asset_replay + Yahoo opt-in + Polygon/AV when keys set | NSE/BSE ToS path still skeleton |
 | Screener / site review | ❌ not a trading reader | New reader or scheduled Job that scrapes/fetches screener pages → assets/knowledge |
 | News Jobs into the loop | ⚠️ Jobs can research news **separately** | Wire news/knowledge into paper-trading decision context each tick |
 | Commissions / TDS / withdrawal | ❌ simple fill accounting | Extend sim portfolio ledger (fees, tax, cash withdrawals) |
@@ -464,7 +464,7 @@ Live (or fixture) bars → Reader → indicators / knowledge (news, screener)
         → Journal + experience learning
 ```
 
-What remains is mostly **plugging live data + richer inputs + ledger rules** into that spine — tracked first by **`OI-D1` (live market-data feed)**, then screener/news integration and fee/tax accounting as follow-ons.
+What remains is mostly **richer inputs + ledger rules** into that spine — live tape is available via Yahoo/Polygon/AV (`OI-D1` ✅); screener/news integration and fee/tax accounting are follow-ons.
 
 ### Suggested mental model for you as operator (until live lands)
 
@@ -482,7 +482,7 @@ What remains is mostly **plugging live data + richer inputs + ledger rules** int
 - [ ] Instantiate and watch **Journal** + portfolio behaviour  
 - [ ] Steer with JSON live inputs (`block_symbol`), not prose  
 - [ ] Use Jobs for news/research; don’t expect worker input to be a chat box  
-- [ ] Remember: **no live tape yet** (`OI-D1`); **no real money ever** (P10)
+- [ ] Remember: live tape is opt-in (`OI-D1` ✅ Yahoo/Polygon/AV); **no real money ever** (P10)
 
 ---
 

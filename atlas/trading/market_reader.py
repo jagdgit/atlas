@@ -10,8 +10,10 @@ from typing import Any
 
 from atlas.decision.rules import CapabilityGap
 from atlas.trading.adapters import (
+    AlphaVantageAdapter,
     AssetReplayAdapter,
     KeyedProviderAdapter,
+    PolygonAdapter,
     YahooFinanceAdapter,
     pct_move,
 )
@@ -21,7 +23,7 @@ class MarketReaderService:
     """Facade over Market feed adapters (Market Program)."""
 
     name = "market_reader"
-    VERSION = "mi.3"
+    VERSION = "mi.3.1"
 
     def __init__(
         self,
@@ -33,6 +35,8 @@ class MarketReaderService:
         polygon_api_key_env: str = "ATLAS_POLYGON_API_KEY",
         alphavantage_api_key_env: str = "ATLAS_ALPHAVANTAGE_API_KEY",
         yahoo_opener: Any | None = None,
+        polygon_opener: Any | None = None,
+        alphavantage_opener: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._default = (default_provider or "asset_replay").strip().lower()
@@ -45,13 +49,17 @@ class MarketReaderService:
         self._adapters["yahoo"] = YahooFinanceAdapter(
             enabled=yahoo_enabled, opener=yahoo_opener, logger=self._logger
         )
-        self._adapters["polygon"] = KeyedProviderAdapter(
-            "polygon", api_key_env=polygon_api_key_env, logger=self._logger
+        self._adapters["polygon"] = PolygonAdapter(
+            api_key_env=polygon_api_key_env,
+            opener=polygon_opener,
+            logger=self._logger,
         )
-        self._adapters["alphavantage"] = KeyedProviderAdapter(
-            "alphavantage", api_key_env=alphavantage_api_key_env, logger=self._logger
+        self._adapters["alphavantage"] = AlphaVantageAdapter(
+            api_key_env=alphavantage_api_key_env,
+            opener=alphavantage_opener,
+            logger=self._logger,
         )
-        # Aliases for planned Indian-exchange adapters (same skeleton until ToS path).
+        # Indian-exchange adapters stay skeletons until exchange ToS path (OI-D1).
         self._adapters["nse"] = KeyedProviderAdapter(
             "nse", api_key_env="ATLAS_NSE_API_KEY", logger=self._logger
         )
