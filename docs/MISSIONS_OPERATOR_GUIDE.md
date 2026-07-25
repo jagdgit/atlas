@@ -135,16 +135,17 @@ When live data arrives, expect a **data vendor API key** (quotes/candles), not a
 
 ### Does the mission learn from the web (screener, news sites)?
 
-**Not as part of the paper-trading tick today.**
+**Live prices yes; screener/news not yet inside the tick.**
 
 | Path | Today |
 |------|-------|
-| Replay OHLCV → indicators → virtual buy/sell → experience on sells | ✅ |
+| Replay OHLCV → indicators → virtual buy/sell → experience on sells | ✅ `feed_mode: asset_replay` |
+| Live MarketReader bars → same decision path, gated by market hours | ✅ `feed_mode: live` + `market_session` |
 | Screener websites (e.g. Screener.in) inside the tick | ❌ not built |
 | News / web research | ✅ as **separate Jobs/Chat** (`research`, `media.learn`) — **not auto-wired** into each trading decision |
 | Verifying claims from videos/news into trusted knowledge | 📋 [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md) |
 
-So: start paper trading for **decision practice on sample/historical bars**. Use separate Jobs to learn from YouTube/news. Verification plan makes that knowledge trustworthy for later mission context.
+So: use **replay** for hermetic practice, or **live** + session hours for a closer-to-real sim. Use separate Jobs for YouTube/news. Verification plan makes that knowledge trustworthy for later mission context.
 
 ### How do I verify claims after media.learn?
 
@@ -236,21 +237,40 @@ Workers survive reboot via checkpoints. Archiving a mission does **not** delete 
 | Key | Meaning | Default idea |
 |-----|---------|--------------|
 | `starting_cash` | Virtual cash | `100000` |
-| `instruments` | `[{ "symbol", "asset" }]` — `asset` = Asset Store name of a `market_data` feed | `[]` (idle until set) |
+| `instruments` | `[{ "symbol", "asset" }]` — `asset` = Asset Store name (replay); live needs `symbol` only | `[]` (idle until set) |
 | `strategy` | SMA/RSI params | `sma_fast/slow`, `rsi_period`, … |
-| `bars_per_tick` | How many bars per tick | `1` |
+| `bars_per_tick` | How many bars per tick (replay) | `1` |
 | `tick_interval_seconds` | Schedule | `300` |
 | `max_position_qty` / `max_exposure_pct` | Risk caps (`0` = unbounded) | `0` |
 | `drawdown_alert_pct` | Notify on drawdown (`0` = off) | `0` |
+| `feed_mode` | `asset_replay` (DEMO/fixtures) or `live` (MarketReader / Yahoo) | `asset_replay` |
+| `live_provider` | When live: `yahoo` / `polygon` / `alphavantage` | `yahoo` |
+| `market_session` | `always_open`, `nse_equity`, `bse_equity`, `us_equity` | `always_open` |
+| `respect_market_hours` | If true, buy/sell only while session is open (still marks prices when closed) | `true` |
 
 **Market data today**
 
-- Kind: `market_data` in the Asset Store (JSON or CSV OHLCV).
-- **Default fixture / sample / replay** — live Yahoo (opt-in) or Polygon/Alpha Vantage when env keys are set (`OI-D1` ✅). NSE/BSE still ToS-gated.
-- Easiest path: Missions UI → **Register sample market data** → merge into config → Instantiate.
+- Kind: `market_data` in the Asset Store (JSON or CSV OHLCV) for **`feed_mode: asset_replay`**.
+- **Live tape:** set `feed_mode: live`, `live_provider: yahoo`, and enable `market.yahoo_enabled: true` in config (you already can in `config/local.yaml`). Use Yahoo symbols (e.g. `AAPL`, `RELIANCE.NS`).
+- **Session hours:** for NSE-like sim use `market_session: nse_equity` (09:15–15:30 Asia/Kolkata, Mon–Fri). For US names use `us_equity`. Holidays are not modeled yet.
+- Easiest path (replay): Missions UI → **Register sample market data** → merge into config → Instantiate.
 - Or Job / Chat NL: `start paper trading with 10000 on DEMO` (setup wizard intents).
 - Or API: `POST /v1/assets` with `generate_sample: true` or real `content`/`bars`.
 
+**Example live config (simulation fills only — P10)**
+
+```json
+{
+  "starting_cash": 10000,
+  "feed_mode": "live",
+  "live_provider": "yahoo",
+  "market_session": "nse_equity",
+  "respect_market_hours": true,
+  "instruments": [{"symbol": "RELIANCE.NS"}],
+  "strategy": {"sma_fast": 10, "sma_slow": 30, "rsi_period": 14},
+  "tick_interval_seconds": 300
+}
+```
 **Live JSON inputs (while running)**
 
 ```json
@@ -420,16 +440,14 @@ Code touchpoints (for maintainers): `atlas/web/static/{app.js,index.html,styles.
 
 That combination is exactly: **live MarketDataReader + research/news Jobs + paper-trading Mission + richer portfolio accounting**. It does **not** require giving Atlas a brokerage login to place real orders.
 
-### How Atlas “learns about markets” *today* (without live feed)
+### How Atlas “learns about markets” *today*
 
 Today it learns from:
 
-- **Replay / fixture OHLCV** you register (or sample bars),
+- **Replay / fixture OHLCV** you register (or sample bars) via `feed_mode: asset_replay`,
+- **Live MarketReader bars** when `feed_mode: live` (Yahoo opt-in / Polygon/AV when keys set), with buy/sell gated by `market_session`,
 - **Decisions + outcomes** written as experiences when simulated sells realize,
-- Optional separate **Jobs/Chat** research (web/scholar) that enrich *knowledge* — but those are **not yet wired as a continuous input into the paper-trading tick**.
-
-So: it can learn *trading behaviour* from simulated fills on historical/sample series, and it can learn *facts* from research Jobs — but it does **not** yet watch the live tape or screener continuously.
-
+- Optional separate **Jobs/Chat** research (web/scholar) that enrich *knowledge* — still not a continuous news/screener loop into every tick.
 ### What already exists vs what is still needed
 
 | Piece of your vision | Today | Still needed |
@@ -437,7 +455,7 @@ So: it can learn *trading behaviour* from simulated fills on historical/sample s
 | Virtual cash & positions | ✅ sim portfolio | — |
 | Buy/sell on signals + journal “why” | ✅ Decision Engine + strategy rule | Richer reasons (news/screener context) |
 | Learn from outcomes | ✅ experience loop on sells | Cross-mission feedback polish (`OI-F4`) |
-| Live prices | ✅ asset_replay + Yahoo opt-in + Polygon/AV when keys set | NSE/BSE ToS path still skeleton |
+| Live prices | ✅ `feed_mode: live` + Yahoo/Polygon/AV; session hours gate | NSE/BSE native adapters still ToS skeleton; holidays not modeled |
 | Screener / site review | ❌ not a trading reader | New reader or scheduled Job that scrapes/fetches screener pages → assets/knowledge |
 | News Jobs into the loop | ⚠️ Jobs can research news **separately** | Wire news/knowledge into paper-trading decision context each tick |
 | Commissions / TDS / withdrawal | ❌ simple fill accounting | Extend sim portfolio ledger (fees, tax, cash withdrawals) |

@@ -89,7 +89,7 @@ def _engine(policy=None) -> DecisionEngine:
     return DecisionEngine(_FakeDecisionRepo(), rules=reg, policy=policy)
 
 
-def _worker(feeds, *, engine=None, events=None, portfolio=None):
+def _worker(feeds, *, engine=None, events=None, portfolio=None, live_market=None, clock=None):
     assets = _FakeAssets(feeds)
     reader = _FakeReader(assets, feeds)
     return PaperTradingWorker(
@@ -98,6 +98,8 @@ def _worker(feeds, *, engine=None, events=None, portfolio=None):
         decision_engine=engine or _engine(),
         portfolio=portfolio or PortfolioService(InMemorySimRepo()),
         events=events,
+        live_market=live_market,
+        clock=clock,
     )
 
 
@@ -194,3 +196,103 @@ def test_drawdown_alert_emitted():
     worker.do_tick(_ctx(cfg))
     drawdowns = [p for (t, p) in events.emitted if t == "PaperTradingDrawdown"]
     assert drawdowns and drawdowns[0]["drawdown_pct"] >= 5.0
+
+
+class _FakeLiveMarket:
+    """Returns a fixed bar series for any symbol (hermetic stand-in for MarketReader)."""
+
+    def __init__(self, bars: list[dict[str, Any]], *, gap: bool = False) -> None:
+        self._bars = bars
+        self._gap = gap
+        self.calls: list[tuple[str, dict]] = []
+
+    def bars_for(self, symbol, *, provider=None, asset=None, limit=100):
+        from atlas.decision.rules import CapabilityGap
+
+        self.calls.append((symbol, {"provider": provider, "limit": limit}))
+        if self._gap:
+            raise CapabilityGap("market_data:yahoo", "disabled in test")
+        return {"provider": provider or "yahoo", "symbol": symbol, "bars": self._bars, "count": len(self._bars)}
+
+
+def test_live_feed_decides_once_per_bar_and_never_done():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    events = _FakeEvents()
+    live = _FakeLiveMarket(_bars(_UPDOWN))
+    # NSE midday weekday → session open
+    clock = lambda: datetime(2024, 1, 10, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    cfg = {
+        "instruments": [{"symbol": "RELIANCE.NS"}],
+        "starting_cash": 100000.0,
+        "strategy": {"sma_fast": 3, "sma_slow": 5, "rsi_period": 5},
+        "feed_mode": "live",
+        "live_provider": "yahoo",
+        "market_session": "nse_equity",
+        "respect_market_hours": True,
+    }
+    worker = _worker({}, events=events, live_market=live, clock=clock)
+    r1 = worker.do_tick(_ctx(cfg))
+    assert r1.done is False
+    assert r1.state["feed_mode"] == "live"
+    assert r1.state["session"]["open"] is True
+    assert live.calls and live.calls[0][0] == "RELIANCE.NS"
+    assert "RELIANCE.NS" in (r1.state.get("last_bar_keys") or {})
+
+    fills_1 = [p for (t, p) in events.emitted if t == "PaperTradingFill"]
+    # Second tick on the same latest bar → mark only, no extra decide/fill storm.
+    events.emitted.clear()
+    r2 = worker.do_tick(_ctx(cfg, state=r1.state))
+    assert r2.done is False
+    fills_2 = [p for (t, p) in events.emitted if t == "PaperTradingFill"]
+    assert fills_2 == []
+    assert "same bar" in r2.note or "mark_only" in r2.note
+    # At least the first tick ran a decision path (hold or fill).
+    assert r1.state["ticks"] == 1
+    assert fills_1 or "hold" in r1.note or "buy" in r1.note or "sell" in r1.note
+
+
+def test_live_session_closed_marks_but_does_not_trade():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    events = _FakeEvents()
+    live = _FakeLiveMarket(_bars(_UPDOWN))
+    # Saturday IST
+    clock = lambda: datetime(2024, 1, 13, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    cfg = {
+        "instruments": [{"symbol": "RELIANCE.NS"}],
+        "starting_cash": 100000.0,
+        "strategy": {"sma_fast": 3, "sma_slow": 5, "rsi_period": 5},
+        "feed_mode": "live",
+        "market_session": "nse_equity",
+        "respect_market_hours": True,
+    }
+    worker = _worker({}, events=events, live_market=live, clock=clock)
+    result = worker.do_tick(_ctx(cfg))
+    assert result.state["session"]["open"] is False
+    assert result.state["session"]["reason"] == "weekend"
+    fills = [p for (t, p) in events.emitted if t == "PaperTradingFill"]
+    assert fills == []
+    assert "session_closed" in result.note or "closed" in result.note
+    assert result.state["equity"] == 100000.0  # marked but no position yet
+
+
+def test_live_capability_gap_when_provider_unavailable():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    live = _FakeLiveMarket(_bars(_UPDOWN), gap=True)
+    clock = lambda: datetime(2024, 1, 10, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    cfg = {
+        "instruments": [{"symbol": "AAPL"}],
+        "starting_cash": 10000.0,
+        "feed_mode": "live",
+        "market_session": "always_open",
+        "respect_market_hours": True,
+    }
+    worker = _worker({}, live_market=live, clock=clock)
+    result = worker.do_tick(_ctx(cfg))
+    assert "gap" in result.note
+    assert result.done is False

@@ -1336,6 +1336,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             mission_context=mission_context_service,
             policy_engine=policy_engine,
             events=events,
+            live_market=market_reader_service,
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )

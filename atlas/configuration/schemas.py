@@ -138,7 +138,14 @@ class PaperTradingConfig(BaseModel):
 
     ``extra='forbid'`` (a real strict schema, unlike the ``generic`` stub it replaces). Instruments +
     strategy params + risk constraints + replay cadence are all versioned (an edit is a new version —
-    B6, and the worker picks it up on the next tick). NO real money, NO real broker (P10)."""
+    B6, and the worker picks it up on the next tick). NO real money, NO real broker (P10).
+
+    ``feed_mode``:
+      - ``asset_replay`` — OHLCV from Asset Store ``market_data`` (default; hermetic DEMO path).
+      - ``live`` — bars via MarketReader (Yahoo when ``market.yahoo_enabled``, else keyed providers).
+    ``market_session`` + ``respect_market_hours`` gate buys/sells to regular equity hours
+    (``nse_equity`` / ``us_equity`` / ``always_open``; see ``atlas.trading.sessions``).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -154,6 +161,12 @@ class PaperTradingConfig(BaseModel):
     broker_profile: str = ""
     # OI-F1: soft-bias Decision Engine from decisive paper-trade outcomes (profit/loss).
     enable_decision_soft_bias: bool = True
+    # Live tape vs Asset Store replay (simulation fills either way — P10).
+    feed_mode: str = Field(default="asset_replay", pattern="^(asset_replay|live)$")
+    live_provider: str = "yahoo"
+    live_bars_limit: int = Field(default=100, ge=5, le=5000)
+    market_session: str = "always_open"
+    respect_market_hours: bool = True
 
 
 class ResearchWatcherConfig(BaseModel):

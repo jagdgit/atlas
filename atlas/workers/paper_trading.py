@@ -1,33 +1,28 @@
 """PaperTradingWorker — the Paper-Trading Mission's persistent worker (Phase D · §D.6, flagship e2e).
 
-The applied mission that ties D-Core together. Each tick replays the next bar of every configured
-instrument's OHLCV feed and, per symbol, drives the ONE decision path:
+The applied mission that ties D-Core together. Each tick drives the ONE decision path:
 
-    Asset → MarketDataReader → bars → indicators → DecisionEngine.decide → apply → journal → notify
+    bars → indicators → DecisionEngine.decide → apply → journal → notify
 
-- **read** the feed (an Asset) through the stateless :class:`~atlas.readers.market_data.MarketDataReader`
-  (P8/P11);
-- **compute** deterministic indicator signals (ephemeral decision context, not knowledge);
-- **decide** via the shared :class:`~atlas.decision.engine.DecisionEngine` + the registered
-  :class:`~atlas.trading.strategy.StrategyDecisionRule` (policy-influenced, constraint-bounded, P9);
-- **apply** a recommended buy/sell to the *virtual* portfolio (simulation → flows freely, DD3, P10);
-- **learn** — a realized sell's outcome is remembered as an Experience so strategy confidence grows
-  over time (C.6/P13);
-- **notify** on notable events (a fill, a drawdown breach) via the event bus.
+Feed sources (config ``feed_mode``):
+- **asset_replay** (default) — Asset Store ``market_data`` via :class:`~atlas.readers.market_data.MarketDataReader`
+- **live** — :class:`~atlas.trading.market_reader.MarketReaderService` (Yahoo / keyed providers)
 
-It owns no knowledge (P11): it drives stateless translators + the engine and journals what it did (P9).
-Bounded + checkpointed: state carries a per-symbol bar cursor so the loop resumes exactly where it
-left off after a reboot, and completes when every feed is exhausted.
+Buys/sells respect ``market_session`` when ``respect_market_hours`` is true (NSE/US regular hours).
+Simulation fills only — no real broker (P10).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Callable
 
 from atlas.decision.contracts import ACTION_RECOMMEND, DecisionRequest
+from atlas.decision.rules import CapabilityGap
 from atlas.trading.broker_profiles import compute_fees, get_broker_profile
 from atlas.trading.indicators import compute_indicators
+from atlas.trading.sessions import session_status
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 MISSION_TYPE_PAPER_TRADING = "paper_trading"
@@ -51,6 +46,8 @@ class PaperTradingWorker(PersistentWorker):
         mission_context: Any = None,
         policy_engine: Any = None,
         events: Any = None,
+        live_market: Any = None,
+        clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._assets = assets
@@ -62,6 +59,8 @@ class PaperTradingWorker(PersistentWorker):
         self._mission_context = mission_context
         self._policy_engine = policy_engine
         self._events = events
+        self._live_market = live_market
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._logger = logger or logging.getLogger("atlas.workers.paper_trading")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -75,7 +74,8 @@ class PaperTradingWorker(PersistentWorker):
                 note=(
                     "idle: no instruments in config — register sample market_data "
                     "(Missions UI) and set instruments=[{symbol, asset}], or use "
-                    "Chat/Job: start paper trading with 10000 on DEMO"
+                    "Chat/Job: start paper trading with 10000 on DEMO; "
+                    "for live tape set feed_mode=live and instruments=[{symbol}]"
                 ),
             )
 
@@ -100,12 +100,36 @@ class PaperTradingWorker(PersistentWorker):
         portfolio_id = portfolio["id"]
         state["portfolio_id"] = str(portfolio_id)
 
+        feed_mode = str(cfg.get("feed_mode") or "asset_replay").strip().lower()
+        if feed_mode not in ("asset_replay", "live"):
+            feed_mode = "asset_replay"
+
+        respect_hours = bool(cfg.get("respect_market_hours", True))
+        session_id = str(cfg.get("market_session") or "always_open").strip() or "always_open"
+        sess = session_status(session_id, clock=self._clock)
+        session_open = True if not respect_hours else sess.open
+        state["session"] = {
+            "id": sess.session_id,
+            "open": session_open,
+            "reason": sess.reason if respect_hours else "hours_ignored",
+            "local_now": sess.local_now,
+        }
+
         cursors: dict[str, int] = dict(state.get("cursors") or {})
+        last_bar_keys: dict[str, str] = dict(state.get("last_bar_keys") or {})
         bars_per_tick = max(1, int(cfg.get("bars_per_tick", 1)))
         strategy = cfg.get("strategy") or {}
         allowed = [str(i.get("symbol")) for i in instruments if i.get("symbol")]
 
-        totals = {"decisions": 0, "buys": 0, "sells": 0, "holds": 0, "gaps": 0, "errors": 0}
+        totals = {
+            "decisions": 0,
+            "buys": 0,
+            "sells": 0,
+            "holds": 0,
+            "gaps": 0,
+            "errors": 0,
+            "session_skips": 0,
+        }
         marks: dict[str, float] = {}
         exhausted = 0
         last_actions: list[str] = []
@@ -116,21 +140,78 @@ class PaperTradingWorker(PersistentWorker):
             if not symbol:
                 continue
             try:
-                bars = self._load_bars(asset_name)
+                if feed_mode == "live":
+                    bars = self._load_live_bars(symbol, cfg)
+                else:
+                    bars = self._load_bars(asset_name)
+            except CapabilityGap as exc:
+                totals["gaps"] += 1
+                last_actions.append(f"{symbol}: gap ({exc.capability})")
+                continue
             except Exception as exc:  # noqa: BLE001 - a bad feed must not stop the others
                 totals["errors"] += 1
                 self._logger.warning("feed load failed for %s (%s): %s", symbol, asset_name, exc)
                 last_actions.append(f"{symbol}: feed_error")
                 continue
             if not bars:
-                exhausted += 1
-                last_actions.append(f"{symbol}: empty_feed")
+                if feed_mode == "live":
+                    last_actions.append(f"{symbol}: empty_live_feed")
+                else:
+                    exhausted += 1
+                    last_actions.append(f"{symbol}: empty_feed")
                 continue
 
+            if feed_mode == "live":
+                cursor = len(bars) - 1
+                price = float(bars[cursor]["close"])
+                marks[symbol] = price
+                bar_key = str(bars[cursor].get("t") if bars[cursor].get("t") is not None else cursor)
+                if not session_open:
+                    totals["session_skips"] += 1
+                    last_actions.append(
+                        f"{symbol}: session_closed ({sess.reason}) mark @ {price:.2f}"
+                    )
+                    continue
+                if last_bar_keys.get(symbol) == bar_key:
+                    last_actions.append(f"{symbol}: mark_only @ {price:.2f} (same bar)")
+                    continue
+                action = self._decide_bar(
+                    symbol=symbol,
+                    bars=bars,
+                    cursor=cursor,
+                    cfg=cfg,
+                    strategy=strategy,
+                    allowed=allowed,
+                    blocked=sorted(blocked),
+                    portfolio_id=portfolio_id,
+                    mission_id=ctx.mission_id,
+                    config_version=ctx.config_version,
+                    totals=totals,
+                    marks=marks,
+                    state=state,
+                )
+                last_bar_keys[symbol] = bar_key
+                if action:
+                    last_actions.append(action)
+                bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
+                self._check_drawdown(state, bar_snapshot, cfg, ctx.mission_id)
+                continue
+
+            # --- asset_replay path ---
             cursor = int(cursors.get(symbol, 0))
             if cursor >= len(bars):
                 exhausted += 1
                 last_actions.append(f"{symbol}: feed_exhausted ({len(bars)} bars)")
+                continue
+
+            if not session_open:
+                # Still advance marks from the next bar so equity reflects the feed, but no trades.
+                price = float(bars[min(cursor, len(bars) - 1)]["close"])
+                marks[symbol] = price
+                totals["session_skips"] += 1
+                last_actions.append(
+                    f"{symbol}: session_closed ({sess.reason}) mark @ {price:.2f}"
+                )
                 continue
 
             processed = 0
@@ -148,6 +229,7 @@ class PaperTradingWorker(PersistentWorker):
                     config_version=ctx.config_version,
                     totals=totals,
                     marks=marks,
+                    state=state,
                 )
                 if action:
                     last_actions.append(action)
@@ -162,24 +244,41 @@ class PaperTradingWorker(PersistentWorker):
                 exhausted += 1
 
         state["cursors"] = cursors
+        state["last_bar_keys"] = last_bar_keys
         state["ticks"] = int(state.get("ticks", 0)) + 1
+        state["feed_mode"] = feed_mode
 
         snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
         state["equity"] = snapshot["equity"]
 
-        done = exhausted >= len(instruments) and exhausted > 0
+        # Live tape never "exhausts"; replay completes when every feed is spent.
+        done = (
+            False
+            if feed_mode == "live"
+            else (exhausted >= len(instruments) and exhausted > 0)
+        )
         action_bit = ""
         if last_actions:
             # Keep journal readable: last few actions only.
             action_bit = " | " + "; ".join(last_actions[-4:])
+        session_bit = ""
+        if respect_hours and not session_open:
+            session_bit = f" | market {sess.session_id} closed ({sess.reason})"
+        elif respect_hours and sess.session_id != "always_open":
+            session_bit = f" | market {sess.session_id} open"
         note = (
-            f"{config_note}tick: {totals['decisions']} decision(s) "
+            f"{config_note}tick [{feed_mode}]: {totals['decisions']} decision(s) "
             f"(+{totals['buys']} buy, +{totals['sells']} sell, {totals['holds']} hold"
             + (f", {totals['gaps']} gap" if totals["gaps"] else "")
             + (f", {totals['errors']} error" if totals["errors"] else "")
+            + (
+                f", {totals['session_skips']} session_skip"
+                if totals["session_skips"]
+                else ""
+            )
             + f"); equity {snapshot['equity']:.2f} "
             f"(P&L {snapshot['realized_pnl'] + snapshot['unrealized_pnl']:+.2f})"
-            f"{action_bit}"
+            f"{session_bit}{action_bit}"
             + (" | DONE: all feeds exhausted (fixture replay complete)" if done else "")
         ).strip()
         return TickResult(state=state, done=done, note=note)
@@ -200,6 +299,7 @@ class PaperTradingWorker(PersistentWorker):
         config_version: int | None,
         totals: dict[str, int],
         marks: dict[str, float],
+        state: dict[str, Any],
     ) -> str | None:
         closes = [float(b["close"]) for b in bars[: cursor + 1]]
         indicators = compute_indicators(closes, strategy)
@@ -493,6 +593,7 @@ class PaperTradingWorker(PersistentWorker):
         if threshold <= 0 or peak <= 0:
             return
         drawdown = (peak - equity) / peak * 100.0
+        state["last_drawdown_pct"] = round(drawdown, 2)
         if drawdown >= threshold and not state.get("drawdown_alerted"):
             state["drawdown_alerted"] = True
             self._emit("PaperTradingDrawdown", {
@@ -511,6 +612,17 @@ class PaperTradingWorker(PersistentWorker):
         if artifact.get("outcome") != "ok":
             raise RuntimeError(f"feed unreadable: {artifact.get('reason', 'unknown')}")
         return list(artifact.get("bars") or [])
+
+    def _load_live_bars(self, symbol: str, cfg: dict[str, Any]) -> list[dict[str, Any]]:
+        if self._live_market is None:
+            raise CapabilityGap(
+                "market_reader",
+                "live feed_mode requires MarketReaderService (wire live_market= on worker)",
+            )
+        provider = str(cfg.get("live_provider") or "yahoo").strip() or "yahoo"
+        limit = max(5, int(cfg.get("live_bars_limit", 100)))
+        out = self._live_market.bars_for(symbol, provider=provider, limit=limit)
+        return list(out.get("bars") or [])
 
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         if self._events is None:
