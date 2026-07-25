@@ -109,8 +109,18 @@ class PlanningService:
             return []
         notes: list[dict[str, Any]] = []
         goal_l = goal.lower()
+        scopes: list[str] = []
+        if program_id:
+            # Program ids may be aliases (market → market_intelligence); accept both.
+            scopes.append(f"domain:{program_id}")
+            if program_id in ("market", "market_intelligence"):
+                scopes.extend(["domain:markets", "domain:market"])
         try:
-            influences = self._policy.retrieval_influence() or []
+            influences = (
+                self._policy.retrieval_influence(scopes=scopes)
+                if scopes
+                else self._policy.retrieval_influence()
+            ) or []
             for inf in influences[:8]:
                 if not isinstance(inf, dict):
                     continue
@@ -124,6 +134,7 @@ class PlanningService:
                         "kind": "soft",
                         "subject": inf.get("subject"),
                         "rule": inf.get("rule"),
+                        "scope": inf.get("scope"),
                         "weight": inf.get("weight"),
                         "detail": "policy influence (not a hard block)",
                     }

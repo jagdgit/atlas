@@ -837,6 +837,7 @@ def policy_evaluate(request: Request, body: dict | None = None) -> dict:
         action=payload.get("action") if isinstance(payload.get("action"), dict) else payload,
         context=payload.get("context") if isinstance(payload.get("context"), dict) else {},
         scope=payload.get("scope"),
+        scopes=payload.get("scopes") if isinstance(payload.get("scopes"), list) else None,
     )
 
 
@@ -862,6 +863,18 @@ def policy_enable_rule(rule_id: str, request: Request, enabled: bool = True) -> 
     policy = _app(request).container.resolve("policy")
     try:
         return policy.set_enabled(rule_id, enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="policy rule not found")
+
+
+@v1_router.delete("/policy/rules/{rule_id}", tags=["policy"])
+def policy_delete_rule(
+    rule_id: str, request: Request, actor: str | None = None
+) -> dict:
+    """Hard-delete a policy rule (OI-C9). Prefer disable+revert for reversible edits."""
+    policy = _app(request).container.resolve("policy")
+    try:
+        return {"deleted": policy.delete_rule(rule_id, actor=actor)}
     except KeyError:
         raise HTTPException(status_code=404, detail="policy rule not found")
 
@@ -1747,6 +1760,8 @@ def search(body: SearchRequest, request: Request) -> SearchResponse:
         tiers=body.tiers,
         role=body.role,
         mode=body.mode,
+        policy_scope=body.policy_scope,
+        mission_id=body.mission_id,
     )
     return SearchResponse(
         results=[

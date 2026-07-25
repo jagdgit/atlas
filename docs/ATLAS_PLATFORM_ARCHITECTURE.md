@@ -142,7 +142,7 @@ Separate from reasoning:
 
 Reuse across Programs (engineering: “never auto-push”; personal: “never send mail”). Build on existing Policy store; elevate to **Policy Engine** with hard/soft constraint evaluation (`OI-PA-POLICY`).
 
-**Shipped (PA.2):** `PolicyEngine.evaluate` — soft (`prefer`/`avoid`/`trust`/`distrust`) + hard (`forbid`, `limit` with provenance caps). `POST /v1/policy/evaluate`. Decision Simulation refuses fills that hard-violate.
+**Shipped (PA.2):** `PolicyEngine.evaluate` — soft (`prefer`/`avoid`/`trust`/`distrust`) + hard (`forbid`, `limit` with provenance caps). `POST /v1/policy/evaluate`. Decision Simulation refuses fills that hard-violate. **OI-C9:** retrieval/advice/decision surfaces admit `domain:*` and `mission:*` scoped rules alongside `global`; `DELETE /v1/policy/rules/{id}` for hard removal.
 
 ### 4.6 Capability Registry (invert dependencies)
 

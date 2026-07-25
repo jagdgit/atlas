@@ -60,12 +60,14 @@ class PolicyEngine:
         action: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
         scope: str | None = None,
+        scopes: list[str] | None = None,
     ) -> dict[str, Any]:
         """Return a :class:`PolicyVerdict` as a dict.
 
         ``action`` examples: ``{kind: buy, symbol: RELIANCE.NS, quantity: 10}``.
         ``context`` may include ``equity``, ``position_qty``, ``exposure_pct``,
-        ``drawdown_pct``, ``text`` (free-form goal string).
+        ``drawdown_pct``, ``text`` (free-form goal string), ``domain`` / ``domains``
+        (OI-C9 — admit matching scoped rules alongside ``global``).
         """
         action = action or {}
         context = context or {}
@@ -81,7 +83,22 @@ class PolicyEngine:
             ]
         ).lower()
 
-        rules = self._load_rules(scope=scope)
+        extra_scopes = list(scopes or [])
+        domain = context.get("domain") or context.get("knowledge_domain")
+        if domain:
+            extra_scopes.append(f"domain:{domain}")
+        for d in context.get("domains") or []:
+            raw = str(d or "").strip()
+            if raw:
+                extra_scopes.append(raw if raw.startswith("domain:") else f"domain:{raw}")
+        mission_id = context.get("mission_id")
+        if mission_id:
+            extra_scopes.append(f"mission:{mission_id}")
+        mission_type = context.get("mission_type")
+        if mission_type:
+            extra_scopes.append(f"mission_type:{mission_type}")
+
+        rules = self._load_rules(scope=scope, scopes=extra_scopes)
         hard_violations: list[dict[str, Any]] = []
         soft_notes: list[dict[str, Any]] = []
         matched: list[str] = []
@@ -136,13 +153,21 @@ class PolicyEngine:
             matched_rules=matched[:20],
         ).as_dict()
 
-    def _load_rules(self, *, scope: str | None) -> list[dict[str, Any]]:
+    def _load_rules(
+        self, *, scope: str | None = None, scopes: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         try:
             rows = self._policy.list_rules(enabled=True, limit=500) or []
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("list_rules failed: %s", exc)
             return []
-        allowed_scopes = {"global"} if scope is None else {"global", scope}
+        allowed_scopes: set[str] = {"global"}
+        if scope:
+            allowed_scopes.add(str(scope))
+        for s in scopes or []:
+            raw = str(s or "").strip()
+            if raw:
+                allowed_scopes.add(raw)
         return [r for r in rows if str(r.get("scope") or "global") in allowed_scopes]
 
 

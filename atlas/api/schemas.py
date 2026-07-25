@@ -108,6 +108,9 @@ class SearchRequest(BaseModel):
     tiers: list[str] | None = None
     role: str = Field(default="chat", min_length=1)
     mode: str = Field(default="hybrid", pattern="^(hybrid|dense|lexical)$")
+    # OI-C9 — admit mission/domain-scoped policy rules during re-rank
+    policy_scope: str | None = None
+    mission_id: str | None = None
 
 
 class SearchResultOut(BaseModel):

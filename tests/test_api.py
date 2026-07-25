@@ -658,6 +658,11 @@ class _FakePolicy:
         self._rules[rule_id]["enabled"] = enabled
         return self._rules[rule_id]
 
+    def delete_rule(self, rule_id, *, actor=None):
+        if rule_id not in self._rules:
+            raise KeyError(rule_id)
+        return self._rules.pop(rule_id)
+
     def list_events(self, *, rule_id=None, limit=100):
         return [{"id": "E-1", "rule_id": rule_id, "action": "created",
                  "before": None, "after": None, "created_at": "2026-07-19T00:00:00+00:00"}]
@@ -1302,6 +1307,26 @@ def test_policy_create_rejects_bad_rule_kind():
 
 def test_policy_enable_missing_rule_404():
     resp = _client().post("/v1/policy/rules/nope/enable?enabled=false", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_policy_delete_rule():
+    client = _client()
+    created = client.post(
+        "/v1/policy/rules",
+        headers=AUTH,
+        json={"subject": "temp-delete-me", "rule": "avoid", "strength": 0.5},
+    )
+    assert created.status_code == 200
+    rule_id = created.json()["id"]
+    deleted = client.delete(f"/v1/policy/rules/{rule_id}", headers=AUTH)
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"]["subject"] == "temp-delete-me"
+    assert client.get(f"/v1/policy/rules/{rule_id}", headers=AUTH).status_code == 404
+
+
+def test_policy_delete_missing_rule_404():
+    resp = _client().delete("/v1/policy/rules/nope", headers=AUTH)
     assert resp.status_code == 404
 
 

@@ -241,6 +241,9 @@ class PaperTradingWorker(PersistentWorker):
             config_version=config_version,
             context={
                 "symbol": symbol,
+                "domain": "markets",
+                "domains": ["markets"],
+                "mission_type": MISSION_TYPE_PAPER_TRADING,
                 "price": price,
                 "indicators": indicators,
                 "position_qty": held,

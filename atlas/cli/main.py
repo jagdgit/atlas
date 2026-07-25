@@ -308,8 +308,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_policy.add_argument(
         "action",
-        choices=["set", "list", "show", "enable", "disable", "revert", "events"],
-        help="set <subject>|list|show <id>|enable <id>|disable <id>|revert <event_id>|events [id]",
+        choices=["set", "list", "show", "enable", "disable", "delete", "revert", "events"],
+        help="set <subject>|list|show <id>|enable <id>|disable <id>|delete <id>|revert <event_id>|events [id]",
     )
     p_policy.add_argument("target", nargs="?", help="subject (set) | rule/event id")
     p_policy.add_argument(
@@ -1461,6 +1461,18 @@ def cmd_policy(args: argparse.Namespace, app: "Application | None" = None) -> in
             print("policy rule not found")
             return 1
         print(f"{r['id']}  enabled={r['enabled']}")
+        return 0
+
+    if action == "delete":
+        if not args.target:
+            print("usage: atlas policy delete <rule_id>")
+            return 2
+        try:
+            r = policy.delete_rule(args.target)
+        except KeyError:
+            print("policy rule not found")
+            return 1
+        print(f"deleted {r.get('id')}  {r.get('rule')} '{r.get('subject')}'")
         return 0
 
     if action == "revert":

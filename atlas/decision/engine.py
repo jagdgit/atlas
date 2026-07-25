@@ -232,9 +232,25 @@ class DecisionEngine:
     def _influences(self, request: DecisionRequest) -> list[dict[str, Any]]:
         if self._policy is None:
             return []
-        scope = f"mission:{request.mission_id}" if request.mission_id else None
+        scopes: list[str] = []
+        if request.mission_id:
+            scopes.append(f"mission:{request.mission_id}")
+        if request.mission_type:
+            scopes.append(f"mission_type:{request.mission_type}")
+        ctx = request.context if isinstance(request.context, dict) else {}
+        domain = ctx.get("domain") or ctx.get("knowledge_domain")
+        if domain:
+            scopes.append(f"domain:{domain}")
+        for d in ctx.get("domains") or []:
+            raw = str(d or "").strip()
+            if raw:
+                scopes.append(raw if raw.startswith("domain:") else f"domain:{raw}")
         try:
-            influences = self._policy.advice_influence(scope=scope)
+            influences = (
+                self._policy.advice_influence(scopes=scopes)
+                if scopes
+                else self._policy.advice_influence()
+            )
         except Exception as exc:  # noqa: BLE001 - policy is advisory; never block a decision
             self._logger.warning("policy influence failed: %s", exc)
             return []

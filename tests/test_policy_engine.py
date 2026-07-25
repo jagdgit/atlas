@@ -74,3 +74,28 @@ def test_limit_exposure():
         context={"exposure_pct": 25.0, "text": "equity"},
     )
     assert out["allowed"] is False
+
+
+def test_domain_scoped_forbid_only_when_domain_present():
+    """OI-C9 — domain-scoped hard rules stay out of unrelated evaluate calls."""
+    engine = PolicyEngine(
+        _FakePolicy(
+            [
+                {
+                    "id": "r4",
+                    "rule": "forbid",
+                    "subject": "TSLA",
+                    "scope": "domain:markets",
+                    "strength": 1.0,
+                    "enabled": True,
+                }
+            ]
+        )
+    )
+    open_out = engine.evaluate(action={"kind": "buy", "symbol": "TSLA", "quantity": 1})
+    assert open_out["allowed"] is True
+    scoped = engine.evaluate(
+        action={"kind": "buy", "symbol": "TSLA", "quantity": 1},
+        context={"domain": "markets"},
+    )
+    assert scoped["allowed"] is False

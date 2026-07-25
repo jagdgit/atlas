@@ -57,6 +57,21 @@ def test_influence_excludes_disabled_and_scopes():
     assert scoped == {"a", "c"}  # global always + the requested scope
 
 
+def test_influence_multi_scopes_union():
+    """OI-C9 — domain + mission scopes combine; unrelated scopes stay out."""
+    svc = PolicyService(_FakeRepo([
+        _rule("global-hit", "prefer"),
+        _rule("markets-hit", "prefer", scope="domain:markets"),
+        _rule("mission-hit", "prefer", scope="mission:abc"),
+        _rule("other-hit", "prefer", scope="domain:other"),
+    ]))
+    subjects = {
+        i["subject"]
+        for i in svc.retrieval_influence(scopes=["domain:markets", "mission:abc"])
+    }
+    assert subjects == {"global-hit", "markets-hit", "mission-hit"}
+
+
 # --- live DB: journaling + revert ---------------------------------------
 @pytest.fixture(scope="module")
 def db():

@@ -88,7 +88,7 @@ Start Program instantiates all seven Market members when templates are seeded.
 
 **Planning OS (PA.1)** — `GET /v1/planning/plan?goal=Should+I+buy+RELIANCE.NS` (or POST JSON). Returns gaps, alternatives, risks, recommended next steps, and a non-side-effecting decision (simulate / gather / hold). Never broker login (P10).
 
-**Policy Engine (PA.2)** — soft prefer/avoid plus hard `forbid` / `limit` (provenance caps). Evaluate: `POST /v1/policy/evaluate` with `{action, context}`. Decision Simulation blocks hard violations before sim fills.
+**Policy Engine (PA.2)** — soft prefer/avoid plus hard `forbid` / `limit` (provenance caps). Evaluate: `POST /v1/policy/evaluate` with `{action, context}` (optional `scope` / `scopes`). Decision Simulation blocks hard violations before sim fills. Scoped rules (`domain:<x>`, `mission:<id>`) apply on retrieval and advice when the caller threads those scopes (OI-C9); remove a rule with `DELETE /v1/policy/rules/{id}` or `atlas policy delete`.
 
 **Memory OS (MEM.1)** — explicit hierarchy: working → session → long_term (then Knowledge / Experience as separate OS). `GET /v1/memory/hierarchy`, `POST /v1/memory/os/remember` `{content, layer}`, `POST /v1/memory/promote` `{memory_id, to_layer}`.
 

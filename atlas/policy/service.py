@@ -142,16 +142,27 @@ class PolicyService:
         return self._repo.list_events(rule_id=rule_id, limit=limit)
 
     # --- influence (consumed by retrieval + advice) ---------------------
-    def retrieval_influence(self, *, scope: str | None = None) -> list[dict[str, Any]]:
+    def retrieval_influence(
+        self,
+        *,
+        scope: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Signed, bounded influence for enabled rules — the re-ranker/advice input.
 
         Each entry: ``{id, rule, subject, scope, terms, weight}`` where ``weight`` is
         ``sign(rule) * strength * influence_max`` (positive boosts, negative deprioritizes). Rules
-        scoped ``global`` always apply; a caller ``scope`` additionally admits rules with that exact
-        scope. When no ``scope`` is requested, only ``global`` rules apply (mission/domain-scoped
-        rules never leak into unrelated retrieval).
+        scoped ``global`` always apply; caller ``scope`` / ``scopes`` additionally admit those exact
+        scopes (e.g. ``domain:markets``, ``mission:<uuid>``). When no scope is requested, only
+        ``global`` rules apply (mission/domain-scoped rules never leak into unrelated retrieval).
         """
-        allowed = {"global"} if scope is None else {"global", scope}
+        allowed: set[str] = {"global"}
+        if scope:
+            allowed.add(str(scope))
+        for s in scopes or []:
+            raw = str(s or "").strip()
+            if raw:
+                allowed.add(raw)
         out: list[dict[str, Any]] = []
         for r in self._repo.list(enabled=True, limit=500):
             if r["scope"] not in allowed:

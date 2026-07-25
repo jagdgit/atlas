@@ -265,6 +265,8 @@ class KnowledgeService:
         k: int | None = None,
         mode: str | None = None,
         soft_bias_terms: list[str] | None = None,
+        policy_scope: str | None = None,
+        mission_id: str | None = None,
     ) -> RankedContext:
         """Global Access Layer entrypoint (D3B.6 / A3B.24).
 
@@ -274,6 +276,9 @@ class KnowledgeService:
         ``soft_bias_terms`` is optional and should only come from experiences that
         were applied *and* explicitly bias-enabled (D3B.12 / A3B.18). When omitted,
         terms are loaded from the wired LearningService (if any).
+
+        ``policy_scope`` / ``mission_id`` (OI-C9) thread mission/domain-scoped policy
+        rules into re-ranking alongside ``global`` (never leaks unscoped).
         """
         del filters, as_of  # reserved for 3B.3 temporal/lifecycle filters
         limit = int(k if k is not None else 5)
@@ -291,7 +296,12 @@ class KnowledgeService:
         bias_terms = soft_bias_terms
         if bias_terms is None:
             bias_terms = self._soft_bias_terms()
-        policy_rules = self._policy_rules(role)
+        policy_rules = self._policy_rules(
+            role,
+            domains=search_domains,
+            policy_scope=policy_scope,
+            mission_id=mission_id,
+        )
 
         with timer("knowledge.retrieve"):
             candidate_n = max(limit * self._candidate_multiplier, limit)
@@ -401,11 +411,31 @@ class KnowledgeService:
             self._logger.debug("soft_bias_terms failed", exc_info=True)
             return []
 
-    def _policy_rules(self, role: str) -> list[dict[str, Any]]:
+    def _policy_rules(
+        self,
+        role: str,
+        *,
+        domains: list[str] | None = None,
+        policy_scope: str | None = None,
+        mission_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        del role  # reserved for role-specific policy profiles
         policy = getattr(self, "_policy", None)
         if policy is None or not hasattr(policy, "retrieval_influence"):
             return []
+        scopes: list[str] = []
+        if policy_scope:
+            scopes.append(str(policy_scope))
+        if mission_id:
+            scopes.append(f"mission:{mission_id}")
+        for d in domains or []:
+            raw = str(d or "").strip()
+            if not raw:
+                continue
+            scopes.append(raw if raw.startswith("domain:") else f"domain:{raw}")
         try:
+            if scopes:
+                return list(policy.retrieval_influence(scopes=scopes) or [])
             return list(policy.retrieval_influence() or [])
         except Exception:  # noqa: BLE001 — policy must never break retrieve
             self._logger.debug("policy influence failed", exc_info=True)
