@@ -14,9 +14,15 @@ For the autonomous investment learner (Universe → Rank → Simulate → Learn)
 
 ---
 
-### Learner dashboard
+### Program dashboards
 
-Sidebar **Learner** — interactive Market / India learner view (plan, watchlist, checklist, missions). Prefer this over digging journals.
+| Sidebar | What you see |
+|---------|----------------|
+| **Market** | Watchlist, today's sim plan, checklist, books + mission links |
+| **Personal** | Coverage, **Needs confirmation** (Confirm/Reject), tabbed skills/timeline/… |
+| **Engineering** | Repo summary chips + ingest + graph/findings |
+
+Hard-refresh the browser after updates. Market watchlist is persisted to disk and recovered from M0 worker checkpoints.
 
 ```http
 GET /v1/learner/status
@@ -372,6 +378,21 @@ Workers survive reboot via checkpoints. Archiving a mission does **not** delete 
 **Purpose:** Permanent mission — read User Archive roots into global knowledge + personal profile.  
 **Config:** `archive_roots`, `build_profile`, `embed`, `policy`, `tick_interval_seconds`.  
 **How to use:** Configure archive roots; leave running.
+
+**Programs UI (preferred):** In **Programs → Personal** or **Engineering**, use **Program chat** / **Share path**. One share registers the root on Owner Knowledge and processes it now:
+
+- Resume / docs → Personal only (same job); **CV text is parsed into inferred facts** (name, education, roles, skills) for Confirm/Reject
+- Past-work repos (`code`) → `learn_repository` **once** → Engineering findings **and** Personal experiences
+
+Do not also call Engineering ingest for the same path — that would duplicate the job.
+
+**Career / LinkedIn (suggestions only — P10/P14):**
+- Personal → **Career** tab: LinkedIn improvement tips + best open jobs for your profile
+- Atlas **never** edits LinkedIn and **never** applies to jobs — you copy tips / apply yourself
+- Share a LinkedIn profile export path for better tips; share a jobs JSON export (or configure `job_postings` assets) for ranking
+- API: `POST /v1/personal/learn-cv`, `POST /v1/personal/linkedin/suggestions`, `GET|POST /v1/personal/jobs`
+
+API: `POST /v1/programs/{personal_intelligence|engineering_intelligence}/share` with `{"path":"/host/path"}`, or `POST .../chat` with a message like `share /host/path/resume.pdf`.
 
 ---
 

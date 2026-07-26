@@ -358,6 +358,7 @@ class ProgramService:
         world_models: Any | None = None,
         knowledge_graph: Any | None = None,
         mission_context: Any | None = None,
+        materials: Any | None = None,
     ) -> None:
         self._missions = missions
         self._templates = templates
@@ -365,6 +366,7 @@ class ProgramService:
         self._world_models = world_models
         self._knowledge_graph = knowledge_graph
         self._mission_context = mission_context
+        self._materials = materials
 
     def list(self) -> list[dict[str, Any]]:
         return [self.describe(p.id) for p in BUILTIN_PROGRAMS]
@@ -574,6 +576,40 @@ class ProgramService:
             world_models=self._world_models,
             knowledge_graph=self._knowledge_graph,
         ).gather(topic, program_id=program_id, limit=limit)
+
+    def share_materials(
+        self,
+        program_id: str,
+        path: str,
+        *,
+        kind: str | None = None,
+        domain: str = "personal",
+        process_now: bool = True,
+    ) -> dict[str, Any]:
+        """Share resume / past work once — Personal + Engineering consume the same job."""
+        if self._materials is None:
+            raise RuntimeError("program materials service not wired")
+        return self._materials.share(
+            path,
+            program_id=program_id,
+            kind=kind,
+            domain=domain,
+            process_now=process_now,
+        )
+
+    def chat(
+        self,
+        program_id: str,
+        message: str,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Program-scoped chat (share paths + operator guidance)."""
+        if self._materials is None:
+            raise RuntimeError("program materials service not wired")
+        return self._materials.chat(
+            program_id, message, session_id=session_id
+        )
 
     def _template_maps(self) -> tuple[dict[str, str], dict[str, str]]:
         name_to_id: dict[str, str] = {}

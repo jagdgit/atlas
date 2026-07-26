@@ -56,7 +56,12 @@ async function api(path, { method = "GET", body } = {}) {
   let data = null;
   try { data = await res.json(); } catch (_) { /* no body */ }
   if (!res.ok) {
-    const detail = (data && (data.detail || data.error)) || `HTTP ${res.status}`;
+    let detail = (data && (data.detail || data.error)) || `HTTP ${res.status}`;
+    if (typeof detail !== "string") detail = JSON.stringify(detail);
+    // FastAPI returns bare "Not Found" when a route isn't loaded (stale atlas serve).
+    if (res.status === 404 && detail === "Not Found") {
+      detail = "API route missing — restart `atlas serve` and hard-refresh /ui";
+    }
     throw new Error(detail);
   }
   return data;
@@ -260,21 +265,49 @@ async function sendMessage(text) {
 }
 
 /* ---------- personal / owner dashboard (OI-C12) ---------- */
+let personalTab = "skills";
+let personalCache = null;
+
 async function loadPersonal() {
   try {
     const d = await api("/v1/personal/dashboard?include_inferred=true");
+    personalCache = d;
     renderPersonalDashboard(d);
   } catch (err) { toast(err.message); }
 }
 
+function personalIsNoiseDomain(name) {
+  const d = String(name || "").toLowerCase();
+  return d.startsWith("probe-") || d === "research" && false;
+}
+
+function personalIsNoiseFact(f) {
+  const stmt = String(f.statement || f.key || "").trim();
+  if (!stmt || stmt.toLowerCase() === "original") return true;
+  if (/^skill-[a-f0-9]{8,}$/i.test(stmt)) return true;
+  // Hash-suffixed celery/docker noise without a clean label
+  if (/^(skilled in )?(celery|docker|redis|scala|rust|airflow|pg|role)-[a-f0-9]{6,}/i.test(stmt)
+      && !/\b(FastAPI|python|typescript|Kafka)\b/i.test(stmt)) {
+    return stmt.length > 40 || /-[a-f0-9]{6,}/i.test(stmt);
+  }
+  return false;
+}
+
+function personalUsefulFacts(facts) {
+  return (facts || []).filter((f) => !personalIsNoiseFact(f));
+}
+
 function renderPersonalDashboard(d) {
   const covBox = $("#personal-coverage");
+  const review = $("#personal-review");
   const body = $("#personal-body");
   if (!covBox || !body) return;
   covBox.innerHTML = "";
+  if (review) review.innerHTML = "";
   body.innerHTML = "";
 
-  const domains = (d.coverage && d.coverage.domains) || [];
+  const domains = ((d.coverage && d.coverage.domains) || [])
+    .filter((row) => !personalIsNoiseDomain(row.domain));
   const overall = (d.coverage && d.coverage.overall) || {};
   covBox.append(el("div", { class: "panel-head" },
     el("h3", { class: "section-h", text: "Knowledge coverage" }),
@@ -287,24 +320,189 @@ function renderPersonalDashboard(d) {
       text: "No coverage rows yet — Owner Knowledge ticks fill this." }));
   } else {
     const list = el("div", { class: "cov-list" });
-    for (const row of domains) {
+    // Prefer core domains first
+    const order = ["personal", "code", "markets", "external", "skills"];
+    const sorted = [...domains].sort((a, b) => {
+      const ia = order.indexOf(String(a.domain || "").toLowerCase());
+      const ib = order.indexOf(String(b.domain || "").toLowerCase());
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+    for (const row of sorted.slice(0, 8)) {
       list.append(covBar(row.domain, row.coverage_pct, row.understanding_pct));
+    }
+    if (sorted.length > 8) {
+      list.append(el("div", { class: "muted small", text: `+${sorted.length - 8} more domains hidden` }));
     }
     covBox.append(list);
   }
 
-  const counts = d.counts || {};
-  body.append(el("div", { class: "status-cards", style: "padding-top:8px" },
-    opsCard("skills", counts.skills || (d.skills || []).length),
-    opsCard("timeline", counts.timeline || (d.timeline || []).length),
-    opsCard("professional", counts.professional || (d.professional || []).length),
-    opsCard("identity", (d.identity || []).length),
-  ));
+  const allFacts = []
+    .concat(d.skills || [])
+    .concat(d.timeline || [])
+    .concat(d.professional || [])
+    .concat(d.identity || []);
+  const needs = personalUsefulFacts(allFacts).filter((f) => f.state === "inferred");
+  if (review) {
+    review.append(el("h3", { class: "section-h",
+      text: `Needs your confirmation (${needs.length})` }));
+    if (!needs.length) {
+      review.append(el("div", { class: "muted", style: "padding:4px 22px 12px",
+        text: "Nothing waiting — run Infer to propose facts, or they are already verified." }));
+    } else {
+      for (const f of needs.slice(0, 40)) {
+        review.append(personalFactCard(f, { why: true, highlight: true }));
+      }
+      if (needs.length > 40) {
+        review.append(el("div", { class: "muted small", style: "padding:8px 22px",
+          text: `Showing 40 of ${needs.length} — confirm/reject to clear the queue.` }));
+      }
+    }
+  }
 
-  body.append(personalFactSection("Skills", d.skills || [], { why: true }));
-  body.append(personalFactSection("Timeline", d.timeline || [], { why: true }));
-  body.append(personalFactSection("Professional", d.professional || [], { why: true }));
-  body.append(personalFactSection("Identity", d.identity || [], { why: true }));
+  const counts = d.counts || {};
+  const chips = el("div", { class: "status-cards", style: "padding:10px 22px 4px" },
+    opsCard("skills", personalUsefulFacts(d.skills || []).length),
+    opsCard("timeline", personalUsefulFacts(d.timeline || []).length),
+    opsCard("professional", personalUsefulFacts(d.professional || []).length),
+    opsCard("identity", personalUsefulFacts(d.identity || []).length),
+    opsCard("to confirm", needs.length),
+  );
+  body.append(chips);
+  renderPersonalTabBody(body, d, personalTab);
+}
+
+function renderPersonalTabBody(body, d, tab) {
+  // Remove prior tab section (keep chips / draft)
+  body.querySelectorAll(".personal-section, .personal-more, .career-panel").forEach((n) => n.remove());
+  if (tab === "career") {
+    body.append(renderCareerPanel(d.career || {}));
+    return;
+  }
+  const map = {
+    skills: d.skills || [],
+    timeline: d.timeline || [],
+    professional: d.professional || [],
+    identity: d.identity || [],
+  };
+  const title = tab.charAt(0).toUpperCase() + tab.slice(1);
+  const useful = personalUsefulFacts(map[tab] || []);
+  // Prefer inferred first within tab, then verified
+  useful.sort((a, b) => {
+    const wa = a.state === "inferred" ? 0 : a.state === "verified" ? 1 : 2;
+    const wb = b.state === "inferred" ? 0 : b.state === "verified" ? 1 : 2;
+    return wa - wb;
+  });
+  const show = useful.slice(0, 50);
+  body.append(personalFactSection(`${title}`, show, { why: true, total: useful.length }));
+  if (useful.length > 50) {
+    body.append(el("div", { class: "personal-more muted small",
+      text: `Showing 50 of ${useful.length} cleaned facts (noisy hash labels hidden).` }));
+  }
+}
+
+function renderCareerPanel(career) {
+  const wrap = el("div", { class: "career-panel personal-section" });
+  wrap.append(el("h3", { class: "section-h", text: "Career (suggestions only)" }));
+  wrap.append(el("p", { class: "muted small", style: "padding:0 22px 8px;margin:0",
+    text: "Atlas never edits LinkedIn or applies to jobs. You copy tips / apply yourself. Confirm CV facts first for better matches." }));
+
+  const li = career.linkedin || {};
+  const liBox = el("div", { class: "career-block" });
+  liBox.append(el("h4", { class: "section-h", text: "LinkedIn improvements" }));
+  liBox.append(el("div", { class: "muted small", style: "padding:0 22px 6px",
+    text: li.note || "Suggestions only — Atlas will not write to LinkedIn." }));
+  const tips = li.suggestions || [];
+  if (!tips.length) {
+    liBox.append(el("div", { class: "muted", style: "padding:4px 22px",
+      text: li.error || "No suggestions yet — share resume + LinkedIn export path." }));
+  } else {
+    for (const t of tips.slice(0, 12)) {
+      const row = el("div", { class: "career-tip" });
+      row.append(el("span", { class: "badge " + (t.priority === "high" ? "warn" : "ok"),
+        text: `${t.priority || "tip"} · ${t.area || ""}` }));
+      row.append(el("div", { text: t.action || "" }));
+      if (t.why) row.append(el("div", { class: "muted small", text: t.why }));
+      liBox.append(row);
+    }
+  }
+  if (li.draft_about) {
+    liBox.append(el("div", { class: "muted small", style: "padding:8px 22px 0", text: "Draft About (paste yourself):" }));
+    liBox.append(el("pre", { class: "career-draft", text: li.draft_about }));
+  }
+  const liRow = el("div", { class: "program-context-row", style: "padding:8px 22px" });
+  const liPath = el("input", { placeholder: "LinkedIn export path or leave blank for profile-only tips", style: "flex:1" });
+  const liBtn = el("button", {
+    onclick: async () => {
+      liBtn.disabled = true;
+      try {
+        const body = { include_inferred: true };
+        const p = (liPath.value || "").trim();
+        if (p.startsWith("http")) body.linkedin_url = p;
+        else if (p) body.linkedin_path = p;
+        const out = await api("/v1/personal/linkedin/suggestions", { method: "POST", body });
+        if (personalCache) personalCache.career = { ...(personalCache.career || {}), linkedin: out };
+        setPersonalTab("career");
+        toast("LinkedIn suggestions refreshed");
+      } catch (err) { toast(err.message); }
+      finally { liBtn.disabled = false; }
+    },
+  }, "Refresh tips");
+  liRow.append(liPath, liBtn);
+  liBox.append(liRow);
+  wrap.append(liBox);
+
+  const jobs = (career.jobs || {}).jobs || [];
+  const jobsBox = el("div", { class: "career-block" });
+  jobsBox.append(el("h4", { class: "section-h", text: "Best open jobs for your profile" }));
+  jobsBox.append(el("div", { class: "muted small", style: "padding:0 22px 6px",
+    text: (career.jobs && career.jobs.note) || "Recommend-only — you apply yourself." }));
+  if (!jobs.length) {
+    jobsBox.append(el("div", { class: "muted", style: "padding:4px 22px",
+      text: "No ranked jobs yet. Add a job_postings asset or share a jobs JSON export path below." }));
+  } else {
+    for (const j of jobs) {
+      const row = el("div", { class: "career-job" });
+      const title = [j.title, j.company].filter(Boolean).join(" · ");
+      row.append(el("strong", { text: title || "(untitled)" }));
+      const meta = [j.location, j.score != null ? `score ${j.score}` : null].filter(Boolean).join(" · ");
+      if (meta) row.append(el("div", { class: "muted small", text: meta }));
+      if (j.why) row.append(el("div", { class: "muted small", text: String(j.why).slice(0, 220) }));
+      if (j.url) row.append(el("a", { href: j.url, target: "_blank", rel: "noopener", class: "link", text: "open listing" }));
+      jobsBox.append(row);
+    }
+  }
+  const feedRow = el("div", { class: "program-context-row", style: "padding:8px 22px" });
+  const feedPath = el("input", { placeholder: "Optional jobs JSON export path", style: "flex:1" });
+  const feedBtn = el("button", {
+    onclick: async () => {
+      feedBtn.disabled = true;
+      try {
+        const body = { limit: 10, include_inferred_skills: true };
+        const p = (feedPath.value || "").trim();
+        if (p) body.feed_path = p;
+        const out = await api("/v1/personal/jobs", { method: "POST", body });
+        if (personalCache) personalCache.career = { ...(personalCache.career || {}), jobs: out };
+        setPersonalTab("career");
+        toast((out.jobs || []).length ? `${out.jobs.length} job(s) ranked` : "No matches");
+      } catch (err) { toast(err.message); }
+      finally { feedBtn.disabled = false; }
+    },
+  }, "Rank jobs");
+  feedRow.append(feedPath, feedBtn);
+  jobsBox.append(feedRow);
+  wrap.append(jobsBox);
+  return wrap;
+}
+
+function setPersonalTab(tab) {
+  personalTab = tab;
+  document.querySelectorAll(".personal-tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+  if (personalCache) {
+    const body = $("#personal-body");
+    if (body) renderPersonalTabBody(body, personalCache, tab);
+  }
 }
 
 function covBar(domain, covPct, undPct) {
@@ -313,7 +511,6 @@ function covBar(domain, covPct, undPct) {
   const row = el("div", { class: "cov-row" });
   row.append(el("div", { class: "cov-label", text: domain }));
   const track = el("div", { class: "cov-track" });
-  // Dual bars: coverage (accent) + understanding (muted) — width via background-size
   track.append(el("div", { class: "cov-fill cov",
     style: `background-size:${c}% 100%`, title: `coverage ${c}%` }));
   track.append(el("div", { class: "cov-fill und",
@@ -325,7 +522,8 @@ function covBar(domain, covPct, undPct) {
 
 function personalFactSection(title, facts, opts) {
   const wrap = el("div", { class: "personal-section" });
-  wrap.append(el("h3", { class: "section-h", text: `${title} (${facts.length})` }));
+  const total = (opts && opts.total != null) ? opts.total : facts.length;
+  wrap.append(el("h3", { class: "section-h", text: `${title} (${total})` }));
   if (!facts.length) {
     wrap.append(el("div", { class: "muted", style: "padding:4px 22px 12px", text: "None yet." }));
     return wrap;
@@ -337,7 +535,9 @@ function personalFactSection(title, facts, opts) {
 }
 
 function personalFactCard(f, opts) {
-  const card = el("div", { class: "personal-fact" });
+  const card = el("div", {
+    class: "personal-fact" + ((opts && opts.highlight && f.state === "inferred") ? " needs-confirm" : ""),
+  });
   const head = el("div", { class: "personal-fact-head" });
   head.append(el("span", {
     class: "badge " + (f.state === "verified" ? "ok" : f.state === "rejected" ? "fail" : "warn"),
@@ -363,11 +563,11 @@ function personalFactCard(f, opts) {
   if (f.state === "inferred") {
     const actions = el("div", { class: "personal-actions" });
     actions.append(el("button", {
-      class: "link", type: "button",
+      class: "btn-confirm", type: "button",
       onclick: () => personalConfirm(f.id),
     }, "Confirm"));
     actions.append(el("button", {
-      class: "link", type: "button",
+      class: "btn-reject", type: "button",
       onclick: () => personalReject(f.id),
     }, "Reject"));
     card.append(actions);
@@ -405,11 +605,29 @@ async function personalDraft() {
     const out = await api("/v1/personal/draft?kind=resume&include_inferred=false");
     const body = $("#personal-body");
     if (!body) return;
-    const pre = el("pre", { class: "personal-draft", text: out.markdown || "(empty — confirm skills first)" });
-    const existing = body.querySelector(".personal-draft");
-    if (existing) existing.replaceWith(pre);
-    else body.prepend(pre);
-    toast("Resume draft (verified facts only)");
+    let pre = body.querySelector(".personal-draft-md");
+    if (!pre) {
+      pre = el("pre", { class: "personal-draft-md career-draft" });
+      body.prepend(pre);
+    }
+    pre.textContent = out.markdown || JSON.stringify(out, null, 2);
+    toast("Resume draft ready (verified facts)");
+  } catch (err) { toast(err.message); }
+}
+
+async function personalDraftLinkedIn() {
+  try {
+    const out = await api("/v1/personal/draft?kind=linkedin&include_inferred=true");
+    const body = $("#personal-body");
+    if (!body) return;
+    let pre = body.querySelector(".personal-draft-md");
+    if (!pre) {
+      pre = el("pre", { class: "personal-draft-md career-draft" });
+      body.prepend(pre);
+    }
+    pre.textContent = out.markdown || JSON.stringify(out, null, 2);
+    setPersonalTab("career");
+    toast("LinkedIn draft ready — paste yourself; Atlas will not post");
   } catch (err) { toast(err.message); }
 }
 
@@ -418,9 +636,34 @@ async function loadEngineering() {
   startEngStream();
   try {
     const data = await api("/v1/engineering/repositories?limit=100");
-    renderRepoList(data.repositories || []);
+    const repos = data.repositories || [];
+    renderEngSummary(repos);
+    renderRepoList(repos);
     if (state.repoId) showRepoDetail(state.repoId);
   } catch (err) { toast(err.message); }
+}
+
+function renderEngSummary(repos) {
+  const box = $("#eng-summary");
+  if (!box) return;
+  box.innerHTML = "";
+  const langs = new Set();
+  for (const r of repos) {
+    Object.keys(r.languages || {}).forEach((l) => langs.add(l));
+  }
+  box.append(el("div", { class: "learner-chip ok" },
+    el("span", { class: "lbl", text: "Repositories" }),
+    el("span", { class: "val", text: String(repos.length) }),
+  ));
+  box.append(el("div", { class: "learner-chip" },
+    el("span", { class: "lbl", text: "Languages seen" }),
+    el("span", { class: "val", text: String(langs.size) }),
+  ));
+  box.append(el("div", { class: "learner-chip" },
+    el("span", { class: "lbl", text: "Tip" }),
+    el("span", { class: "val", style: "font-size:13px;font-weight:500",
+      text: repos.length ? "Select a repo → graph & findings" : "Ingest a path/URL to begin" }),
+  ));
 }
 
 function renderRepoList(repos) {
@@ -1079,6 +1322,9 @@ function renderProgramDetail(p) {
   ctx.append(ctxResults);
   box.append(ctx);
 
+  // Program chat — share resume / past work once (Personal + Engineering).
+  box.append(renderProgramChat(p));
+
   box.append(el("h3", { class: "section-h", text: "Program members" }));
   for (const m of (p.members || [])) {
     const card = el("div", { class: "program-member" });
@@ -1136,6 +1382,102 @@ function renderProgramContextResults(box, data) {
     box.append(el("div", { class: "program-context-item",
       text: `[${item.kind}] ${String(line).slice(0, 200)}` }));
   }
+}
+
+function renderProgramChat(p) {
+  if (!state.programChat) state.programChat = {};
+  if (!state.programChat[p.id]) {
+    state.programChat[p.id] = { sessionId: null, messages: [] };
+  }
+  const chatState = state.programChat[p.id];
+  const wrap = el("div", { class: "program-chat" });
+  wrap.append(el("h3", { class: "section-h", text: "Program chat" }));
+  wrap.append(el("p", { class: "muted small",
+    text: "Share materials once — resume/docs for Personal; past-work repos feed Personal and Engineering together (no double upload)." }));
+
+  const transcript = el("div", { class: "program-chat-transcript" });
+  const paint = () => {
+    transcript.innerHTML = "";
+    if (!chatState.messages.length) {
+      transcript.append(el("div", { class: "muted small",
+        text: "Try: share /path/to/resume.pdf · learn from /path/to/my-project" }));
+      return;
+    }
+    for (const m of chatState.messages) {
+      transcript.append(el("div", { class: "program-chat-msg " + m.role },
+        el("div", { class: "role", text: m.role === "user" ? "you" : "atlas" }),
+        el("div", { class: "bubble", text: m.answer || m.text || "" }),
+      ));
+    }
+    transcript.scrollTop = transcript.scrollHeight;
+  };
+  paint();
+  wrap.append(transcript);
+
+  const shareRow = el("div", { class: "program-context-row" });
+  const pathInput = el("input", {
+    placeholder: "Host path — resume.pdf or past-work repo",
+    style: "flex:1",
+  });
+  const shareBtn = el("button", {
+    onclick: async () => {
+      const path = (pathInput.value || "").trim();
+      if (!path) return;
+      shareBtn.disabled = true;
+      try {
+        const data = await api(`/v1/programs/${p.id}/share`, {
+          method: "POST",
+          body: { path, process_now: true },
+        });
+        const feeds = (data.feeds || []).join(", ");
+        chatState.messages.push({
+          role: "assistant",
+          answer: `Shared ${data.path} as ${data.kind} → ${feeds}. ${data.note || ""}`,
+        });
+        pathInput.value = "";
+        paint();
+        toast("Shared once for Personal" + (data.kind === "code" ? " + Engineering" : ""));
+      } catch (err) { toast(err.message); }
+      finally { shareBtn.disabled = false; }
+    },
+  }, "Share path");
+  shareRow.append(pathInput, shareBtn);
+  wrap.append(shareRow);
+
+  const row = el("div", { class: "program-context-row" });
+  const input = el("input", {
+    placeholder: "Message — e.g. share /data/me/resume.pdf",
+    style: "flex:1",
+  });
+  const send = async () => {
+    const text = (input.value || "").trim();
+    if (!text) return;
+    input.value = "";
+    chatState.messages.push({ role: "user", answer: text });
+    paint();
+    sendBtn.disabled = true;
+    try {
+      const resp = await api(`/v1/programs/${p.id}/chat`, {
+        method: "POST",
+        body: { message: text, session_id: chatState.sessionId },
+      });
+      if (resp.session_id) chatState.sessionId = resp.session_id;
+      chatState.messages.push({ role: "assistant", answer: resp.answer || "" });
+      paint();
+    } catch (err) {
+      chatState.messages.push({ role: "assistant", answer: "⚠ " + err.message });
+      paint();
+    } finally {
+      sendBtn.disabled = false;
+    }
+  };
+  const sendBtn = el("button", { onclick: send }, "Send");
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  row.append(input, sendBtn);
+  wrap.append(row);
+  return wrap;
 }
 
 /* ---------- learner dashboard ---------- */
@@ -2003,6 +2345,10 @@ function init() {
   $("#personal-refresh")?.addEventListener("click", loadPersonal);
   $("#personal-infer")?.addEventListener("click", personalInfer);
   $("#personal-draft")?.addEventListener("click", personalDraft);
+  $("#personal-draft-li")?.addEventListener("click", personalDraftLinkedIn);
+  document.querySelectorAll(".personal-tab").forEach((btn) => {
+    btn.addEventListener("click", () => setPersonalTab(btn.dataset.tab || "skills"));
+  });
   $("#eng-refresh").addEventListener("click", loadEngineering);
   $("#eng-form").addEventListener("submit", (e) => {
     e.preventDefault();

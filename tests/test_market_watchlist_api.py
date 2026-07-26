@@ -1,26 +1,24 @@
-"""Market watchlist API for Learner dashboard."""
+"""Market watchlist store + dashboard recovery (disk persistence)."""
 
 from __future__ import annotations
 
 from atlas.investment import watchlists as wl
-from atlas.api.routes import market_watchlist
 
 
 def setup_function() -> None:
-    wl.clear()
+    wl.clear(disk=False)
 
 
 def teardown_function() -> None:
-    wl.clear()
+    wl.clear(disk=False)
 
 
-def test_market_watchlist_empty():
-    out = market_watchlist()
-    assert out["count"] == 0
-    assert "No watchlist" in (out.get("note") or "")
+def test_latest_empty():
+    wl.clear(disk=True)
+    assert wl.latest() is None
 
 
-def test_market_watchlist_ranked():
+def test_publish_and_latest():
     wl.publish(
         index="NIFTY50",
         watchlist=[{"symbol": "TCS.NS", "name": "TCS"}],
@@ -29,8 +27,22 @@ def test_market_watchlist_ranked():
             {"symbol": "INFY.NS", "name": "Infosys", "rank": 2},
         ],
     )
-    out = market_watchlist(limit=1)
-    assert out["count"] == 2
-    assert out["index"] == "NIFTY50"
-    assert len(out["ranked"]) == 1
-    assert out["ranked"][0]["symbol"] == "TCS.NS"
+    snap = wl.latest()
+    assert snap is not None
+    assert snap["index"] == "NIFTY50"
+    assert snap["ranked"][0]["symbol"] == "TCS.NS"
+    assert len(snap["ranked"]) == 2
+
+
+def test_watchlist_survives_memory_clear(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATLAS_WATCHLIST_DIR", str(tmp_path))
+    wl.clear(disk=True)
+    wl.publish(
+        index="NIFTY50",
+        watchlist=[{"symbol": "RELIANCE.NS"}],
+        ranked=[{"symbol": "RELIANCE.NS", "rank": 1}],
+    )
+    wl.clear(disk=False)  # wipe memory only
+    snap = wl.latest("market_intelligence")
+    assert snap is not None
+    assert snap["ranked"][0]["symbol"] == "RELIANCE.NS"

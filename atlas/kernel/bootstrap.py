@@ -129,6 +129,7 @@ from atlas.repositories.worker_repo import WorkerRepository
 from atlas.workers import HelloWatcher, RepoWatcher, WorkerManager
 from atlas.repositories.template_repo import TemplateRepository
 from atlas.missions.templates import TemplateService
+from atlas.missions.materials import ProgramMaterialsService
 from atlas.missions.programs import ProgramService
 from atlas.world_models import default_world_model_registry
 from atlas.knowledge.graph import KnowledgeGraphService
@@ -1050,6 +1051,19 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         experiences=experience_writer,
         logger=get_logger("atlas.ingestion.service"),
     )
+    # Program chat / share materials (resume + past work once → Personal + Engineering).
+    program_materials = ProgramMaterialsService(
+        missions=mission_service,
+        templates=template_service,
+        configuration=configuration_service,
+        intelligence=intelligence_service,
+        ingestion=ingestion_bridge,
+        personal=personal_service,
+        workers=worker_manager,
+        conversation=conversation_service,
+        logger=get_logger("atlas.missions.materials"),
+    )
+    program_service._materials = program_materials  # noqa: SLF001
     # Media Reader Family (M.3/M.4): metadata → transcript/demux → knowledge for local media.
     media_metadata_reader = MediaMetadataReader(
         asset_store, derived_artifacts, logger=get_logger("atlas.readers.media_metadata")
@@ -1525,6 +1539,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("backup", backup_manager)
     container.register_instance("storage", storage_manager)
     container.register_instance("assets", asset_store)
+    container.register_instance("job_postings_reader", job_postings_reader)
     container.register_instance("recovery", recovery_manager)
     container.register_instance("checkpoints", checkpoint_store)
     container.register_instance("missions", mission_service)

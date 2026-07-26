@@ -193,6 +193,8 @@ class InvestmentUniverseWorker(PersistentWorker):
         state["provider"] = provider or ""
         state["screener_merged"] = int(screener_meta.get("merged_count") or 0)
         state["daily_plan_summary"] = daily_plan.get("summary")
+        state["ranked"] = ranked
+        state["watchlist"] = watch
         state["top_reasons"] = [
             {"symbol": r["symbol"], "reason": r.get("reason", ""), "score": r.get("score")}
             for r in ranked[:5]

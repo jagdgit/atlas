@@ -36,6 +36,8 @@ from atlas.api.schemas import (
     InvokeToolResponse,
     InstantiateMissionRequest,
     PlanProgramRequest,
+    ProgramChatRequest,
+    ProgramShareRequest,
     CreateVirtualPortfolioRequest,
     WithdrawPortfolioRequest,
     ScreenerSnapshotRequest,
@@ -47,6 +49,9 @@ from atlas.api.schemas import (
     ApprovalActionRequest,
     CreateMissionRequest,
     MissionActionRequest,
+    PersonalLearnCvRequest,
+    LinkedInCoachRequest,
+    BestJobsRequest,
     RegisterAssetRequest,
     UpdateMissionConfigRequest,
     WorkerActionRequest,
@@ -1145,23 +1150,125 @@ def personal_dashboard(request: Request, include_inferred: bool = True) -> dict:
     assembled owner profile (C.7). Live updates ride the shared SSE feed at /v1/events/stream.
     """
     container = _app(request).container
-    profile = container.resolve("personal").profile(include_inferred=include_inferred)
+    personal = container.resolve("personal")
+    profile = personal.profile(include_inferred=include_inferred)
     try:
         coverage = container.resolve("coverage").summary()
     except Exception:  # noqa: BLE001 - dashboard degrades gracefully without coverage
         coverage = {}
+    career: dict = {}
+    try:
+        career["linkedin"] = personal.linkedin_suggestions(include_inferred=include_inferred)
+    except Exception as exc:  # noqa: BLE001
+        career["linkedin"] = {"error": str(exc), "can_write_linkedin": False}
+    try:
+        assets = None
+        reader = None
+        engine = None
+        try:
+            assets = container.resolve("assets")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            reader = container.resolve("job_postings_reader")
+        except Exception:  # noqa: BLE001
+            try:
+                reader = container.resolve("readers")
+            except Exception:  # noqa: BLE001
+                reader = None
+        try:
+            engine = container.resolve("decision")
+        except Exception:  # noqa: BLE001
+            pass
+        career["jobs"] = personal.best_jobs(
+            assets=assets,
+            postings_reader=reader if hasattr(reader, "read") else None,
+            decision_engine=engine,
+            limit=8,
+            include_inferred_skills=include_inferred,
+        )
+    except Exception as exc:  # noqa: BLE001
+        career["jobs"] = {"jobs": [], "error": str(exc), "can_apply": False}
     return {
         "coverage": coverage,
         "identity": profile.get("identity", []),
         "skills": profile.get("skills", []),
         "timeline": profile.get("timeline", []),
         "professional": profile.get("professional", []),
+        "career": career,
         "counts": {
             "skills": len(profile.get("skills", [])),
             "timeline": len(profile.get("timeline", [])),
             "professional": len(profile.get("professional", [])),
         },
     }
+
+
+@v1_router.post("/personal/learn-cv", tags=["personal"])
+def personal_learn_cv(body: PersonalLearnCvRequest, request: Request) -> dict:
+    """Parse a CV on the Atlas host into inferred Personal facts (Confirm/Reject next)."""
+    personal = _app(request).container.resolve("personal")
+    try:
+        return personal.learn_from_cv_path(body.path, actor=body.actor or "operator")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@v1_router.post("/personal/linkedin/suggestions", tags=["personal"])
+def personal_linkedin_suggestions(body: LinkedInCoachRequest, request: Request) -> dict:
+    """LinkedIn profile improvement suggestions — Atlas never writes to LinkedIn (P10)."""
+    personal = _app(request).container.resolve("personal")
+    try:
+        return personal.linkedin_suggestions(
+            linkedin_text=body.linkedin_text,
+            linkedin_path=body.linkedin_path,
+            linkedin_url=body.linkedin_url,
+            include_inferred=body.include_inferred,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@v1_router.get("/personal/jobs", tags=["personal"])
+@v1_router.post("/personal/jobs", tags=["personal"])
+def personal_best_jobs(
+    request: Request,
+    body: BestJobsRequest | None = None,
+    limit: int = 10,
+    include_inferred_skills: bool = True,
+    feed_path: str | None = None,
+) -> dict:
+    """Best open jobs for the Personal profile (recommend-only; never apply)."""
+    container = _app(request).container
+    personal = container.resolve("personal")
+    payload = body or BestJobsRequest(
+        limit=limit,
+        include_inferred_skills=include_inferred_skills,
+        feed_path=feed_path,
+    )
+    assets = None
+    reader = None
+    engine = None
+    try:
+        assets = container.resolve("assets")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        reader = container.resolve("job_postings_reader")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        engine = container.resolve("decision")
+    except Exception:  # noqa: BLE001
+        pass
+    return personal.best_jobs(
+        assets=assets,
+        postings_reader=reader,
+        decision_engine=engine,
+        feed_path=payload.feed_path,
+        limit=payload.limit,
+        include_inferred_skills=payload.include_inferred_skills,
+    )
 
 
 @v1_router.get("/personal/draft", tags=["personal"])
@@ -1694,6 +1801,46 @@ def program_context(
         return _programs(request).context(q, program_id=program_id, limit=limit)
 
 
+@v1_router.post("/programs/{program_id}/share", tags=["programs"])
+def program_share(
+    program_id: str, body: ProgramShareRequest, request: Request
+) -> dict:
+    """Share resume / past work once — Personal + Engineering both consume it."""
+    try:
+        return _programs(request).share_materials(
+            program_id,
+            body.path,
+            kind=body.kind,
+            domain=body.domain,
+            process_now=body.process_now,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@v1_router.post("/programs/{program_id}/chat", tags=["programs"])
+def program_chat(
+    program_id: str, body: ProgramChatRequest, request: Request
+) -> dict:
+    """Program-scoped chat — share host paths or get operator guidance."""
+    try:
+        return _programs(request).chat(
+            program_id, body.message, session_id=body.session_id
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @v1_router.get("/context", tags=["programs"])
 def mission_context(request: Request, q: str = "", limit: int = 12) -> dict:
     """Mission Context API — everything relevant to ``q`` (MCA.1)."""
@@ -1744,18 +1891,73 @@ def daily_investment_plan(
 
 
 @v1_router.get("/market/watchlist", tags=["programs"])
-def market_watchlist(program_id: str = "market_intelligence", limit: int = 20) -> dict:
-    """Latest M0 ranked watchlist snapshot (operator dashboard)."""
+def market_watchlist(
+    request: Request,
+    program_id: str = "market_intelligence",
+    limit: int = 20,
+) -> dict:
+    """Latest M0 ranked watchlist snapshot (operator dashboard).
+
+    Memory → disk → active ``investment_universe`` worker checkpoint.
+    """
     from atlas.investment import watchlists as wl
 
     snap = wl.latest(program_id)
+    source = "memory_or_disk" if snap else None
+
+    if not snap:
+        # Recover from M0 worker checkpoints (system.checkpoints)
+        try:
+            cps = _app(request).container.resolve("checkpoints")
+            workers = _workers(request)
+            for w in workers.list_workers(status="running") or []:
+                wtype = getattr(w, "type", None) or (w.get("type") if isinstance(w, dict) else None)
+                if str(wtype) != "investment_universe":
+                    continue
+                wid = getattr(w, "id", None) or (w.get("id") if isinstance(w, dict) else None)
+                mid = getattr(w, "mission_id", None) or (
+                    w.get("mission_id") if isinstance(w, dict) else None
+                )
+                st = cps.load("worker", str(wid)) or {}
+                if not isinstance(st, dict):
+                    continue
+                ranked = list(st.get("ranked") or [])
+                if not ranked and st.get("watchlist_symbols"):
+                    ranked = [
+                        {"symbol": s, "rank": i + 1}
+                        for i, s in enumerate(st["watchlist_symbols"])
+                    ]
+                if not ranked:
+                    continue
+                snap = wl.publish(
+                    program_id=str(st.get("program_id") or program_id),
+                    index=str(st.get("index") or "NIFTY50"),
+                    watchlist=list(st.get("watchlist") or ranked),
+                    ranked=ranked,
+                    mission_id=str(mid) if mid else None,
+                    mode="auto",
+                    extra={
+                        "phase": st.get("phase"),
+                        "confidence": st.get("confidence"),
+                        "recovered_from": "worker_checkpoint",
+                        "daily_plan_summary": st.get("daily_plan_summary"),
+                    },
+                )
+                source = "worker_checkpoint"
+                break
+        except Exception:  # noqa: BLE001
+            snap = snap
+
     if not snap:
         return {
             "program_id": program_id,
             "watchlist": [],
             "ranked": [],
             "count": 0,
-            "note": "No watchlist yet — start Market Intelligence / India learner (M0).",
+            "note": (
+                "No watchlist yet — open Investment Universe and wait for a tick, "
+                "or chat: start India learner now."
+            ),
             "version": "il.2",
         }
     ranked = list(snap.get("ranked") or snap.get("watchlist") or [])
@@ -1769,6 +1971,7 @@ def market_watchlist(program_id: str = "market_intelligence", limit: int = 20) -
         "ranked": ranked[:lim],
         "watchlist": list(snap.get("watchlist") or [])[:lim],
         "count": len(ranked),
+        "source": source or "store",
         "version": "il.2",
     }
 

@@ -423,6 +423,33 @@ class PersonalCorrectRequest(BaseModel):
     actor: str | None = None
 
 
+class PersonalLearnCvRequest(BaseModel):
+    """Parse a host-path CV into inferred Personal facts."""
+
+    path: str = Field(min_length=1)
+    actor: str | None = None
+
+
+class LinkedInCoachRequest(BaseModel):
+    """LinkedIn improvement suggestions only — Atlas never writes to LinkedIn (P10)."""
+
+    linkedin_path: str | None = None
+    linkedin_text: str | None = None
+    linkedin_url: str | None = None
+    include_inferred: bool = True
+
+
+class BestJobsRequest(BaseModel):
+    """Rank open jobs for the Personal profile (recommend-only; never apply)."""
+
+    feed_path: str | None = Field(
+        default=None,
+        description="Optional JSON job feed export (e.g. LinkedIn search export)",
+    )
+    limit: int = Field(default=10, ge=1, le=50)
+    include_inferred_skills: bool = True
+
+
 class KnowledgeResolveRequest(BaseModel):
     """Operator Conflict Resolver action (OI-B3)."""
 
@@ -597,6 +624,25 @@ class PlanProgramRequest(BaseModel):
     mode: str = "auto"
     broker_profile: str = "zerodha"
     objective: str | None = None
+
+
+class ProgramShareRequest(BaseModel):
+    """Share resume / past-work once — Personal + Engineering consume the same job."""
+
+    path: str = Field(min_length=1, description="Host filesystem path Atlas can read")
+    kind: str | None = Field(
+        default=None,
+        description="code | document | conversation — inferred from path when omitted",
+    )
+    domain: str = "personal"
+    process_now: bool = True
+
+
+class ProgramChatRequest(BaseModel):
+    """Program-scoped chat (share materials + operator guidance)."""
+
+    message: str = Field(min_length=1)
+    session_id: str | None = None
 
 
 class CreateVirtualPortfolioRequest(BaseModel):

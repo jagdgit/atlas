@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlas Console</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./styles.css?v=dash6" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
@@ -26,9 +26,9 @@
       <nav class="nav">
         <button class="nav-btn active" data-view="overview">Overview</button>
         <button class="nav-btn" data-view="chat">Chat</button>
+        <button class="nav-btn" data-view="learner">Market</button>
         <button class="nav-btn" data-view="personal">Personal</button>
         <button class="nav-btn" data-view="programs">Programs</button>
-        <button class="nav-btn" data-view="learner">Learner</button>
         <button class="nav-btn" data-view="missions">Missions</button>
         <button class="nav-btn" data-view="engineering">Engineering</button>
         <button class="nav-btn" data-view="jobs">Jobs</button>
@@ -70,13 +70,22 @@
           <div class="panel-actions">
             <button id="personal-infer" class="link" type="button">infer</button>
             <button id="personal-draft" class="link" type="button">draft resume</button>
+            <button id="personal-draft-li" class="link" type="button">draft linkedin</button>
             <button id="personal-refresh" class="link" type="button">refresh</button>
           </div>
         </div>
         <p class="muted" style="padding:0 22px 8px;margin:0">
-          Owner profile from Experience + Engineering — confirm or reject inferred facts (P9).
+          Owner profile — confirm or reject inferred facts (P9). Scroll the panels; use tabs to focus.
         </p>
         <div id="personal-coverage" class="personal-coverage"></div>
+        <div id="personal-review" class="personal-review"></div>
+        <div class="personal-tabs" id="personal-tabs" role="tablist">
+          <button type="button" class="personal-tab active" data-tab="skills">Skills</button>
+          <button type="button" class="personal-tab" data-tab="timeline">Timeline</button>
+          <button type="button" class="personal-tab" data-tab="professional">Professional</button>
+          <button type="button" class="personal-tab" data-tab="identity">Identity</button>
+          <button type="button" class="personal-tab" data-tab="career">Career</button>
+        </div>
         <div id="personal-body" class="personal-body"></div>
       </section>
 
@@ -99,7 +108,7 @@
       <!-- Learner dashboard (India equity / Market Intelligence) -->
       <section id="view-learner" class="view hidden">
         <div class="panel-head">
-          <h2>Learner</h2>
+          <h2>Market</h2>
           <div class="panel-actions">
             <label class="muted small learner-auto">
               <input type="checkbox" id="learner-auto" checked /> auto-refresh
@@ -108,9 +117,8 @@
           </div>
         </div>
         <p class="muted learner-intro">
-          Interactive view of the India / Market learner — what Atlas ranked, what it would
-          size today (simulation only), checklist, and sim book. Prefer this over digging
-          through mission journals.
+          Market Intelligence dashboard — ranked watchlist, today's sim plan, checklist, and books.
+          If the watchlist is empty, wait for an Investment Universe tick (or refresh after one).
         </p>
         <div id="learner-summary" class="learner-summary"></div>
         <div class="learner-grid">
@@ -167,6 +175,10 @@
           <h2>Engineering</h2>
           <button id="eng-refresh" class="link">refresh</button>
         </div>
+        <p class="muted" style="padding:0 22px 8px;margin:0">
+          Engineering Intelligence — repositories, architecture graphs, and findings.
+        </p>
+        <div id="eng-summary" class="eng-summary"></div>
         <form id="eng-form" class="job-form">
           <input id="eng-source" placeholder="Repository path or git URL to ingest, e.g. /data/atlas or https://github.com/…" />
           <label class="eng-embed"><input id="eng-embed" type="checkbox" /> embed code</label>
@@ -207,6 +219,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=c12"></script>
+  <script src="./app.js?v=dash6"></script>
 </body>
 </html>

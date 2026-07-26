@@ -451,6 +451,118 @@ class PersonalService:
         out["kind"] = kind
         return out
 
+    def learn_from_cv_text(
+        self,
+        text: str,
+        *,
+        source_path: str | None = None,
+        actor: str = "atlas",
+    ) -> dict[str, Any]:
+        """Parse resume/CV text into inferred personal facts (Confirm/Reject on dashboard)."""
+        from atlas.personal.cv_extract import extract_cv_facts
+
+        proposals = extract_cv_facts(text, source_path=source_path)
+        written = 0
+        by_cat: dict[str, int] = {}
+        for prop in proposals:
+            cat = str(prop["category"])
+            self._upsert_fact(
+                cat,
+                prop["key"],
+                subject=prop.get("subject") or "",
+                statement=prop.get("statement") or "",
+                value=prop.get("value"),
+                confidence=prop.get("confidence") or "MEDIUM",
+                confidence_score=float(prop.get("confidence_score") or 0.6),
+                source=prop.get("source") or "cv",
+                provenance=prop.get("provenance"),
+                actor=actor,
+            )
+            written += 1
+            by_cat[cat] = by_cat.get(cat, 0) + 1
+        return {
+            "ok": True,
+            "facts": written,
+            "by_category": by_cat,
+            "source_path": source_path,
+            "note": (
+                "CV facts are *inferred* — open Personal and Confirm/Reject. "
+                "Atlas does not post to LinkedIn."
+            ),
+        }
+
+    def learn_from_cv_path(self, path: str, *, actor: str = "atlas") -> dict[str, Any]:
+        """Extract text from a CV file on disk and learn facts."""
+        from pathlib import Path
+
+        from atlas.ingestion.extractors import extract
+
+        p = Path(path).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"path not found: {p}")
+        text = extract(p)
+        if not text:
+            return {
+                "ok": False,
+                "facts": 0,
+                "reason": (
+                    "no extractable text (scanned PDF needs OCR, or empty file)"
+                ),
+                "source_path": str(p.resolve()),
+            }
+        return self.learn_from_cv_text(text, source_path=str(p.resolve()), actor=actor)
+
+    def linkedin_suggestions(
+        self,
+        *,
+        linkedin_text: str | None = None,
+        linkedin_path: str | None = None,
+        linkedin_url: str | None = None,
+        include_inferred: bool = True,
+    ) -> dict[str, Any]:
+        """Profile improvement tips for LinkedIn — suggestions only, never writes."""
+        from atlas.personal.linkedin_coach import linkedin_suggestions as _coach
+
+        text = linkedin_text
+        if not text and linkedin_path:
+            from pathlib import Path
+
+            from atlas.ingestion.extractors import extract
+
+            p = Path(linkedin_path).expanduser()
+            if not p.is_file():
+                raise FileNotFoundError(f"path not found: {p}")
+            text = extract(p) or p.read_text(encoding="utf-8", errors="replace")
+        profile = self.profile(include_inferred=include_inferred)
+        return _coach(
+            profile,
+            linkedin_text=text,
+            linkedin_url=linkedin_url,
+        )
+
+    def best_jobs(
+        self,
+        *,
+        assets: Any | None = None,
+        postings_reader: Any | None = None,
+        decision_engine: Any | None = None,
+        feed_path: str | None = None,
+        limit: int = 10,
+        include_inferred_skills: bool = True,
+    ) -> dict[str, Any]:
+        """Best open jobs for this profile (recommend-only; never apply)."""
+        from atlas.career.jobs_panel import best_jobs_for_profile
+
+        return best_jobs_for_profile(
+            personal=self,
+            assets=assets,
+            postings_reader=postings_reader,
+            decision_engine=decision_engine,
+            feed_path=feed_path,
+            limit=limit,
+            include_inferred_skills=include_inferred_skills,
+        )
+
     @staticmethod
     def _presentable(fact: dict[str, Any], include_inferred: bool) -> bool:
         if fact["state"] == "rejected":

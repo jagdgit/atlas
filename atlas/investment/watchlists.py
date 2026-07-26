@@ -1,7 +1,8 @@
 """Shared watchlist store (IL.2 / IL.4) — M0 publishes; M1–M5 consume when config is empty.
 
 In-process registry keyed by Program id (default ``market_intelligence``).
-Survives worker ticks within a process; reboot rebuilds on next M0 tick.
+Also persists JSON under ``data/market/watchlists/`` so Learner / Decision
+Simulation survive process restarts until the next M0 tick.
 
 IL.4 contract: if operator pins ``symbols`` / ``tickers`` / ``instruments`` /
 ``companies`` / ``headlines``, those win; otherwise pull from the ranked snapshot.
@@ -9,14 +10,66 @@ IL.4 contract: if operator pins ``symbols`` / ``tickers`` / ``instruments`` /
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 _LOCK = threading.RLock()
 _STORE: dict[str, dict[str, Any]] = {}
+_LOG = logging.getLogger("atlas.investment.watchlists")
 
 DEFAULT_PROGRAM = "market_intelligence"
+
+
+def _safe_id(program_id: str) -> str:
+    raw = (program_id or DEFAULT_PROGRAM).strip() or DEFAULT_PROGRAM
+    return re.sub(r"[^a-zA-Z0-9._-]+", "_", raw)[:80]
+
+
+def persist_dir() -> Path:
+    env = (os.environ.get("ATLAS_WATCHLIST_DIR") or "").strip()
+    if env:
+        return Path(env)
+    data = (os.environ.get("ATLAS_DATA_DIR") or "").strip()
+    if data:
+        return Path(data) / "market" / "watchlists"
+    return Path("data") / "market" / "watchlists"
+
+
+def _persist_path(program_id: str) -> Path:
+    return persist_dir() / f"{_safe_id(program_id)}.json"
+
+
+def _write_disk(program_id: str, payload: dict[str, Any]) -> None:
+    try:
+        path = _persist_path(program_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, default=str), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("watchlist persist skipped: %s", exc)
+
+
+def _read_disk(program_id: str) -> dict[str, Any] | None:
+    try:
+        path = _persist_path(program_id)
+        if not path.is_file():
+            if program_id != "default":
+                alt = _persist_path("default")
+                path = alt if alt.is_file() else path
+            if not path.is_file():
+                return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("watchlist load skipped: %s", exc)
+        return None
 
 
 def publish(
@@ -43,21 +96,47 @@ def publish(
     with _LOCK:
         _STORE[program_id] = payload
         _STORE["default"] = payload
+    _write_disk(program_id, payload)
+    if program_id != "default":
+        _write_disk("default", payload)
     return dict(payload)
 
 
 def latest(program_id: str = DEFAULT_PROGRAM) -> dict[str, Any] | None:
+    """Return latest snapshot — memory first, then durable disk."""
     with _LOCK:
         row = _STORE.get(program_id) or _STORE.get("default")
-        return dict(row) if row else None
+        if row:
+            return dict(row)
+    disk = _read_disk(program_id)
+    if disk is None and program_id != "default":
+        disk = _read_disk("default")
+    if disk:
+        with _LOCK:
+            _STORE[program_id] = disk
+            _STORE.setdefault("default", disk)
+        return dict(disk)
+    return None
 
 
-def clear(program_id: str | None = None) -> None:
+def clear(program_id: str | None = None, *, disk: bool = False) -> None:
     with _LOCK:
         if program_id is None:
             _STORE.clear()
         else:
             _STORE.pop(program_id, None)
+    if not disk:
+        return
+    try:
+        if program_id is None:
+            d = persist_dir()
+            if d.is_dir():
+                for p in d.glob("*.json"):
+                    p.unlink(missing_ok=True)
+        else:
+            _persist_path(program_id).unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("watchlist disk clear skipped: %s", exc)
 
 
 def instruments_for(
