@@ -108,11 +108,13 @@ class RecoveryManager:
         if self._storage is None:
             return {"ok": True, "detail": "storage not available", "data": {}}
         report = self._storage.integrity_check()
+        skipped = report.get("skipped_large") or []
         ok = not report["missing"] and not report["corrupt"]
         detail = (
             f"{report['ok']}/{report['checked']} files verified"
             + (f", {len(report['missing'])} missing" if report["missing"] else "")
             + (f", {len(report['corrupt'])} corrupt" if report["corrupt"] else "")
+            + (f", {len(skipped)} large skipped" if skipped else "")
         )
         return {"ok": ok, "detail": detail, "data": report}
 

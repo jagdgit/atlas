@@ -6,6 +6,7 @@ from atlas.core.resources.admission import (
     WorkEstimate,
 )
 from atlas.core.resources.manager import AdmissionDecision, PoolRecommendation, ResourceManager
+from atlas.core.resources.memory_watchdog import RuntimeMemoryWatchdog, process_rss_mb
 from atlas.core.resources.mission_queue import (
     MissionQueueService,
     QUEUE_READY,
@@ -43,11 +44,13 @@ __all__ = [
     "ResourceManager",
     "ResourcePlanner",
     "ResourceProfile",
+    "RuntimeMemoryWatchdog",
     "SystemSnapshot",
     "WorkEstimate",
     "WorkResourceProfile",
     "get_profile",
     "normalize_service_class",
+    "process_rss_mb",
     "read_snapshot",
     "service_class_rank",
 ]

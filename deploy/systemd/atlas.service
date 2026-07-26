@@ -1,36 +1,50 @@
 [Unit]
 # Atlas — personal AI Operating System (Sprint 9, ADR-0053).
-# Runs the API server, which on startup boots the full kernel: scheduler workers,
-# health monitor, ingestion, memory-prune, and scheduled backups. One service is
-# enough for a single self-hosted node.
+# One unit runs `atlas serve`, which boots the full kernel (scheduler, workers,
+# health, ingestion, backups). Prefer this over a bare terminal so:
+#   - reboot → Atlas comes back
+#   - crash / OOM → systemd restarts it
+#   - operator can stop / start / restart cleanly
 Description=Atlas AI Operating System
 After=network-online.target postgresql.service
 Wants=network-online.target
-# Ollama runs on the host; start it before Atlas if managed by systemd:
+# Uncomment if Ollama is a systemd unit on this host:
 # After=network-online.target postgresql.service ollama.service
 
 [Service]
 Type=simple
-User=atlas
-Group=atlas
+User=jagd
+Group=jagd
 WorkingDirectory=/data/atlas
 
-# Secrets + host-specific overrides (ATLAS_DB_PASSWORD, ATLAS_API_KEYS, ...).
-EnvironmentFile=/etc/atlas/atlas.env
+# Secrets + overrides (do not commit). Install copies/links this from the repo .env.
+EnvironmentFile=-/etc/atlas/atlas.env
+Environment=PATH=/data/atlas/.venv/bin:/home/jagd/.local/bin:/usr/local/bin:/usr/bin:/bin
 
-# uv resolves the locked environment; adjust the path to your uv install.
-ExecStart=/usr/bin/env uv run atlas serve
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
+# Use the project venv binary (no interactive uv needed at boot).
+ExecStart=/data/atlas/.venv/bin/atlas serve
 
-# --- hardening ---
+# Always come back after crash, OOM kill, or unclean exit.
+# Use `systemctl stop atlas` when you intentionally want it down.
+Restart=always
+RestartSec=8
+TimeoutStopSec=45
+KillMode=mixed
+
+# Cap process memory so Atlas cannot eat the whole 16 GiB desktop.
+# MemoryMax = hard kill; avoid a low MemoryHigh that thrash-swaps during boot recovery.
+MemoryMax=8G
+OOMPolicy=stop
+OOMScoreAdjust=200
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+# --- hardening (relaxed enough for local data + home uv cache paths) ---
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
-# Atlas writes runtime data + backups here; grant write access.
-ReadWritePaths=/data/atlas_data
+ProtectHome=read-only
+ReadWritePaths=/data/atlas /data/atlas_data /home/jagd/.cache
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

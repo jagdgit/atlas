@@ -722,6 +722,15 @@ class ScreenerSnapshotRequest(BaseModel):
     symbols: dict[str, dict[str, Any]] | list[dict[str, Any]] = Field(default_factory=dict)
 
 
+class InvestmentResearchStartRequest(BaseModel):
+    """IRA.2b — on-demand Minimum Viable Research (or deepen)."""
+
+    mode: str = Field(default="mvr", description="mvr | deep")
+    force: bool = False
+    program_id: str = "market_intelligence"
+    trigger: str = "on_demand"
+
+
 class FilingsSnapshotRequest(BaseModel):
     """IL.5+ — operator filing refs (no scrape; ToS-compliant source assumed)."""
 
@@ -730,6 +739,69 @@ class FilingsSnapshotRequest(BaseModel):
     note: str = ""
     # Map symbol → [filing…] / {filings:[…]} or list of {symbol, filings|title…}
     symbols: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
+
+
+class ResearchOperatorSnapshotRequest(BaseModel):
+    """IRA F1 — operator research snapshot (ladder layer 1). Incremental refresh only."""
+
+    program_id: str = "market_intelligence"
+    as_of: str | None = None
+    note: str = ""
+    evidence_confidence: str = Field(
+        default="verified",
+        description="verified | estimated — propagates into valuation confidence",
+    )
+    auto_refresh: bool = True
+    # Numeric / optional fields (never invent — omit unknowns)
+    pe: float | None = None
+    roe: float | None = None
+    roic: float | None = None
+    debt_to_equity: float | None = None
+    fcf: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    revenue_cagr: float | None = None
+    earnings_cagr: float | None = None
+    price: float | None = None
+    shares: float | None = None
+    capex: float | None = None
+    fcf_growth: float | None = None
+    discount_rate: float | None = None
+    promoter_holding: float | None = None
+    sector: str | None = None
+
+
+class ResearchFilingRefsRequest(BaseModel):
+    """IRA.24 — operator filing refs (ladder layer 3). Titles/URLs only — no scrape."""
+
+    program_id: str = "market_intelligence"
+    as_of: str | None = None
+    note: str = ""
+    auto_refresh: bool = True
+    filings: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ResearchCriticalFlagRequest(BaseModel):
+    """IRA.26b — critical evidence that can invalidate thesis / MoS path."""
+
+    program_id: str = "market_intelligence"
+    text: str = Field(..., min_length=3)
+    kind: str = Field(
+        default="thesis_invalidating",
+        description="thesis_invalidating | valuation_irrelevant | governance | covenant | fraud",
+    )
+    affects: list[str] | None = None
+
+
+class ResearchManagementPackRequest(BaseModel):
+    """IRA F3 — management / capital-allocation checklist answers (operator)."""
+
+    program_id: str = "market_intelligence"
+    operator_note: str = ""
+    evidence_level: str = Field(default="F", description="A–G; operator notes typically F")
+    auto_refresh: bool = True
+    # {checklist_id: answer_text} or list of {id, answer, status?}
+    answers: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
 
 
 class ScreenerComputeRequest(BaseModel):

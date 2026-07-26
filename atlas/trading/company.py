@@ -199,11 +199,69 @@ class OfficialFilingAdapter:
         )
 
 
+class FundamentalsAdapter:
+    """IRA.18 — ToS-compliant live fundamentals seam (ratios / profile).
+
+    Never scrapes. Without ``ATLAS_FUNDAMENTALS_API_KEY`` (or configured env) raises
+    CapabilityGap. With key present, still gap until a licensed client is wired —
+    operators can POST screener/quality snapshots meanwhile.
+    """
+
+    name = "fundamentals"
+
+    def __init__(
+        self,
+        *,
+        api_key_env: str = "ATLAS_FUNDAMENTALS_API_KEY",
+        enabled: bool = True,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._api_key_env = api_key_env
+        self._enabled = enabled
+        self._logger = logger or logging.getLogger("atlas.trading.company.fundamentals")
+
+    def status(self) -> dict[str, Any]:
+        key_set = bool((os.environ.get(self._api_key_env) or "").strip())
+        return {
+            "name": self.name,
+            "enabled": self._enabled,
+            "api_key_env": self._api_key_env,
+            "api_key_set": key_set,
+            "live_client": False,
+            "hint": (
+                f"Set {self._api_key_env} for a licensed fundamentals client when available; "
+                "until then use quality_seed / screener snapshot / hermetic hints."
+                if not key_set
+                else f"{self._api_key_env} set — live client not wired yet (CapabilityGap)."
+            ),
+        }
+
+    def fetch_company(self, symbol: str, **kwargs: Any) -> CompanyProfile:
+        if not self._enabled:
+            raise CapabilityGap(
+                f"company_data:{self.name}",
+                "fundamentals provider disabled",
+            )
+        key = (os.environ.get(self._api_key_env) or "").strip()
+        if not key:
+            raise CapabilityGap(
+                f"company_data:{self.name}",
+                f"set {self._api_key_env} for ToS-compliant fundamentals (IRA.18); "
+                f"or POST /v1/market/screener-snapshot with operator ratios",
+            )
+        # Key present — client not implemented (honest gap, never invent ratios).
+        raise CapabilityGap(
+            f"company_data:{self.name}",
+            "fundamentals adapter skeleton — API key present; licensed client awaits. "
+            "Use hermetic quality_seed / operator screener snapshot until then.",
+        )
+
+
 class CompanyDataService:
     """Facade over company/filing adapters (Market Program)."""
 
     name = "company_data"
-    VERSION = "mi.5.il5"
+    VERSION = "mi.5.ira18"
 
     def __init__(
         self,
@@ -216,6 +274,7 @@ class CompanyDataService:
         self._adapters: dict[str, Any] = {
             "config_seed": ConfigSeedCompanyAdapter(logger=self._logger),
             "filings_seed": ConfigSeedCompanyAdapter(logger=self._logger),
+            "fundamentals": FundamentalsAdapter(logger=self._logger),
             "sec": OfficialFilingAdapter(
                 "sec", api_key_env="ATLAS_SEC_API_KEY", logger=self._logger
             ),
@@ -230,10 +289,17 @@ class CompanyDataService:
         self._adapters["filings_seed"].name = "filings_seed"
 
     def list_providers(self) -> list[dict[str, Any]]:
-        return [
-            {"name": name, "default": name == self._default}
-            for name in sorted(self._adapters)
-        ]
+        out: list[dict[str, Any]] = []
+        for name in sorted(self._adapters):
+            row: dict[str, Any] = {"name": name, "default": name == self._default}
+            adapter = self._adapters[name]
+            if hasattr(adapter, "status") and callable(adapter.status):
+                try:
+                    row["status"] = adapter.status()
+                except Exception:  # noqa: BLE001
+                    pass
+            out.append(row)
+        return out
 
     def load_config_profiles(
         self, profiles: list[dict[str, Any]] | dict[str, dict[str, Any]]

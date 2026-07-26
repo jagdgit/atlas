@@ -301,6 +301,8 @@ Expected tick ≪ actual → **Slow**. Long READY/WAITING with no progress → *
 | Mission wait-time aging | **IR-M2** |
 | Confidence-aware research attention | **IR-M3** |
 | Power / deeper thermals | **IR-RO9** |
+| **Runtime Memory Enforcement (Layer 2 budgets + watchdog + cooperative pause)** | **IR-RO11** |
+| systemd MemoryMax / Restart (Layer 3 backstop only) | deploy unit — not a substitute for IR-RO11 |
 
 ---
 
@@ -314,6 +316,7 @@ Expected tick ≪ actual → **Slow**. Long READY/WAITING with no progress → *
 - Replacing Planning OS with the Resource Scheduler  
 - New top-level OS box  
 - Coupling Resource OS to Market-only concepts (solar-plant test)
+- Treating systemd OOM/restart as normal Resource OS memory policy (Layer 3 only)
 
 ---
 
@@ -324,6 +327,8 @@ Review conclusion: design set is **stable enough to stop redesigning and impleme
 Kept: one queue, service classes, Planner vs Resource OS boundary, Host Guard = protection only.  
 Refined before code: scheduler internal split, Admission Contracts, deadlines, Disk IO vs Storage Growth, queue owners, Holding Reservation, IR-RO6 after IR-RO5.  
 Unchanged: conservative defaults (`MAX_CONCURRENT_TICKS=2`).
+
+**Addendum (2026-07-26, post OOM):** Layer 1 admission alone cannot bound in-tick RSS growth. Locked **IR-RO11** — Runtime Memory Enforcement (budgets, watchdog, cooperative checkpoint/pause). Process-class isolation remains a later follow-on.
 
 ---
 

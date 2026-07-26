@@ -80,6 +80,7 @@ class WorkerManager:
         host_guard: Any | None = None,
         reservations: Any | None = None,
         work_admission: Any | None = None,
+        memory_watchdog: Any | None = None,
         events: "EventDispatcher | None" = None,
         clock: Any | None = None,
         logger: logging.Logger | None = None,
@@ -94,6 +95,7 @@ class WorkerManager:
         self._host_guard = host_guard  # slow-but-reliable host admission
         self._reservations = reservations  # IR-RO7 leases
         self._work_admission = work_admission  # IR-RO10 should-run-now
+        self._memory_watchdog = memory_watchdog  # IR-RO11 runtime memory
         self._events = events
         self._clock = clock
         self._logger = logger or logging.getLogger("atlas.workers")
@@ -547,6 +549,20 @@ class WorkerManager:
                 except Exception:  # noqa: BLE001
                     self._logger.debug("mid-tick checkpoint save failed", exc_info=True)
 
+            mem_session = None
+            memory_check = None
+            if self._memory_watchdog is not None and hasattr(self._memory_watchdog, "begin_tick"):
+                try:
+                    budget = int(getattr(demand, "ram_mb", None) or self._default_tick_ram_mb)
+                    mem_session = self._memory_watchdog.begin_tick(
+                        worker_id=worker.id,
+                        worker_type=worker.type,
+                        budget_mb=budget,
+                    )
+                    memory_check = mem_session.check
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("memory watchdog begin_tick failed", exc_info=True)
+
             ctx = TickContext(
                 worker_id=worker.id,
                 mission_id=worker.mission_id,
@@ -555,6 +571,7 @@ class WorkerManager:
                 state=state,
                 inputs=inputs,
                 save_checkpoint=_mid_save,
+                memory_check=memory_check,
             )
             started = time.monotonic()
             try:
@@ -563,7 +580,9 @@ class WorkerManager:
                 self._record_tick_timing(worker, (time.monotonic() - started) * 1000.0)
                 return self._on_failure(worker, exc)
             self._record_tick_timing(worker, (time.monotonic() - started) * 1000.0)
-            return self._on_success(worker, impl, result, config_version)
+            return self._on_success(
+                worker, impl, result, config_version, mem_session=mem_session
+            )
         finally:
             self._arbiter.release(worker.mission_id)
             if self._reservations is not None:
@@ -574,7 +593,15 @@ class WorkerManager:
 
     # --- tick outcome handling ------------------------------------------
 
-    def _on_success(self, worker, impl, result, config_version) -> dict[str, Any]:
+    def _on_success(
+        self,
+        worker,
+        impl,
+        result,
+        config_version,
+        *,
+        mem_session: Any | None = None,
+    ) -> dict[str, Any]:
         self._checkpoints.save(_CHECKPOINT_OWNER, worker.id, result.state)
         self._repo.record_success(worker.id, config_version=config_version)
         if getattr(impl, "journal_ticks", False) and result.note:
@@ -588,7 +615,45 @@ class WorkerManager:
                 {"worker_id": worker.id},
             )
             self._emit("WorkerDone", worker, note=result.note)
-        return {"worker_id": worker.id, "ticked": True, "done": result.done}
+            return {"worker_id": worker.id, "ticked": True, "done": True}
+
+        # IR-RO11: cooperative memory pause — durable queue; Host Guard resumes.
+        state = result.state if isinstance(result.state, dict) else {}
+        mem_action = state.get("memory_action")
+        if not mem_action and mem_session is not None:
+            last = getattr(mem_session, "last_verdict", None)
+            if last is not None and not getattr(last, "ok", True):
+                mem_action = getattr(last, "action", None)
+        if mem_action == "pause_worker":
+            reason = str(
+                state.get("memory_reason")
+                or "IR-RO11 memory budget / host pressure"
+            )
+            try:
+                meta = dict(worker.metadata or {})
+                meta["queued_for_capacity"] = True
+                meta["queue_reason"] = reason
+                self._repo.update_metadata(worker.id, meta)
+            except Exception:  # noqa: BLE001
+                pass
+            self.pause(worker.id, reason=f"memory_watchdog: {reason}")
+            self._emit("WorkerMemoryPaused", worker, reason=reason, action=mem_action)
+            return {
+                "worker_id": worker.id,
+                "ticked": True,
+                "done": False,
+                "memory_action": mem_action,
+                "reason": reason,
+            }
+        if mem_action == "yield_tick":
+            return {
+                "worker_id": worker.id,
+                "ticked": True,
+                "done": False,
+                "memory_action": mem_action,
+                "reason": state.get("memory_reason"),
+            }
+        return {"worker_id": worker.id, "ticked": True, "done": False}
 
     def _on_failure(self, worker, exc: Exception) -> dict[str, Any]:
         error = f"{type(exc).__name__}: {exc}"

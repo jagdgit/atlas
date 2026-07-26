@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlas Console</title>
-  <link rel="stylesheet" href="./styles.css?v=dash19" />
+  <link rel="stylesheet" href="./styles.css?v=dash31" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
@@ -135,13 +135,125 @@
             <div class="panel-actions">
               <button id="learner-email-preview" class="link" type="button">Preview morning</button>
               <button id="learner-email-preview-evening" class="link" type="button">Preview evening</button>
+              <button id="learner-email-preview-weekly" class="link" type="button">Preview weekly</button>
               <button id="learner-email-send" class="btn" type="button">Send morning</button>
               <button id="learner-email-send-evening" class="btn" type="button">Send evening</button>
+              <button id="learner-email-send-weekly" class="btn" type="button">Send weekly</button>
             </div>
           </div>
           <div id="learner-email-status" class="learner-email-status muted small">Checking email config…</div>
           <div id="learner-email-meta" class="learner-email-meta muted small"></div>
           <pre id="learner-email-preview-body" class="learner-email-body" hidden></pre>
+        </div>
+
+        <div class="learner-panel learner-research-panel">
+          <div class="panel-head">
+            <h3 class="section-h">Investing research (IRA)</h3>
+            <div class="panel-actions">
+              <input id="learner-research-symbol" type="text" placeholder="e.g. MTARTECH.NS" />
+              <button id="learner-research-go" class="btn" type="button">Research</button>
+            </div>
+          </div>
+          <p class="muted small learner-research-blurb">
+            On-demand research shows thesis, valuation/MoS, risks, and explicit gaps —
+            coverage ≠ confidence. Hermetic/hint seeds only (not live NSE filings).
+            Learner paper buys require MVR + thesis (auto-runs MVR when gated).
+          </p>
+          <div id="learner-research-status" class="muted small">Ready — enter a symbol and click Research.</div>
+          <details class="learner-research-snapshot" id="learner-research-snapshot">
+            <summary>Operator evidence snapshot (F1)</summary>
+            <p class="muted small">
+              Paste verified or estimated figures — no scrape. Atlas refreshes only impacted
+              sections (cash flow / valuation / MoS / thesis), not the whole dossier.
+            </p>
+            <div class="learner-snapshot-grid">
+              <label>PE <input id="snap-pe" type="number" step="any" placeholder="e.g. 28" /></label>
+              <label>FCF <input id="snap-fcf" type="number" step="any" placeholder="trailing" /></label>
+              <label>Price <input id="snap-price" type="number" step="any" /></label>
+              <label>Shares <input id="snap-shares" type="number" step="any" /></label>
+              <label>ROE <input id="snap-roe" type="number" step="any" placeholder="0.18" /></label>
+              <label>ROIC <input id="snap-roic" type="number" step="any" /></label>
+              <label>D/E <input id="snap-de" type="number" step="any" /></label>
+              <label>Rev CAGR <input id="snap-rev-cagr" type="number" step="any" /></label>
+            </div>
+            <div class="learner-snapshot-row">
+              <label>Confidence
+                <select id="snap-confidence">
+                  <option value="verified">Verified</option>
+                  <option value="estimated">Estimated</option>
+                </select>
+              </label>
+              <label class="learner-snapshot-note">Note
+                <input id="snap-note" type="text" placeholder="e.g. AR FY25 summary" />
+              </label>
+              <button id="learner-research-snapshot-go" class="btn" type="button">Apply snapshot</button>
+            </div>
+            <div class="learner-snapshot-row learner-filings-row">
+              <label class="learner-snapshot-note">Filing title
+                <input id="snap-filing-title" type="text" placeholder="Annual Report FY25" />
+              </label>
+              <label>Kind
+                <select id="snap-filing-kind">
+                  <option value="annual">Annual (A)</option>
+                  <option value="quarterly">Quarterly (B)</option>
+                  <option value="presentation">Presentation (C)</option>
+                  <option value="call">Conference call (D)</option>
+                  <option value="news">News (E)</option>
+                </select>
+              </label>
+              <label class="learner-snapshot-note">URL (optional)
+                <input id="snap-filing-url" type="text" placeholder="https://…" />
+              </label>
+              <button id="learner-research-filings-go" class="btn" type="button">Attach filing</button>
+            </div>
+            <div class="learner-snapshot-row">
+              <label class="learner-snapshot-note">Critical flag
+                <input id="snap-critical-text" type="text" placeholder="e.g. Debt covenant breached" />
+              </label>
+              <label>Kind
+                <select id="snap-critical-kind">
+                  <option value="thesis_invalidating">Thesis invalidating</option>
+                  <option value="valuation_irrelevant">Valuation irrelevant</option>
+                  <option value="governance">Governance</option>
+                  <option value="covenant">Covenant</option>
+                  <option value="fraud">Fraud</option>
+                </select>
+              </label>
+              <button id="learner-research-critical-go" class="btn" type="button">Raise flag</button>
+            </div>
+            <div class="learner-mgmt-pack">
+              <p class="muted small">Management pack (F3) — operator judgments; never invents capital-allocation history.</p>
+              <div class="learner-snapshot-grid">
+                <label class="learner-snapshot-note">Capital allocation
+                  <input id="mgmt-capital_allocation" type="text" placeholder="ROIC vs reinvestment…" />
+                </label>
+                <label class="learner-snapshot-note">Dilution
+                  <input id="mgmt-dilution" type="text" placeholder="Equity issuance pattern…" />
+                </label>
+                <label class="learner-snapshot-note">Related-party
+                  <input id="mgmt-related_party" type="text" placeholder="Material RPT?" />
+                </label>
+                <label class="learner-snapshot-note">Governance red flags
+                  <input id="mgmt-governance_red_flags" type="text" placeholder="Auditor / SEBI…" />
+                </label>
+                <label class="learner-snapshot-note">ROIC trend
+                  <input id="mgmt-roic_trend" type="text" placeholder="stable / rising / eroding" />
+                </label>
+                <label class="learner-snapshot-note">Promoter skin
+                  <input id="mgmt-promoter_skin" type="text" placeholder="holding trend…" />
+                </label>
+              </div>
+              <div class="learner-snapshot-row">
+                <label class="learner-snapshot-note">Note
+                  <input id="mgmt-note" type="text" placeholder="AR FY25 chairman letter" />
+                </label>
+                <button id="learner-research-mgmt-go" class="btn" type="button">Apply management pack</button>
+              </div>
+            </div>
+          </details>
+          <div id="learner-research-detail" class="learner-body learner-research-detail" aria-live="polite"></div>
+          <div class="muted small learner-research-recent-label">Recently researched</div>
+          <div id="learner-research-body" class="learner-body"></div>
         </div>
 
         <div class="learner-grid">
@@ -283,6 +395,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=dash19"></script>
+  <script src="./app.js?v=dash31"></script>
 </body>
 </html>

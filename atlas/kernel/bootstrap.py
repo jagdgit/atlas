@@ -652,6 +652,15 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         tick_ram_mb=int(getattr(cfg.resources, "tick_ram_mb", 512) or 512),
         logger=get_logger("atlas.host_guard"),
     )
+    from atlas.core.resources.memory_watchdog import RuntimeMemoryWatchdog
+
+    memory_watchdog = RuntimeMemoryWatchdog(
+        host_ram_reserve_mb=int(getattr(cfg.resources, "host_ram_reserve_mb", 2048) or 2048),
+        process_rss_soft_mb=int(getattr(cfg.resources, "process_rss_soft_mb", 6144) or 6144),
+        soft_ratio=float(getattr(cfg.resources, "memory_soft_ratio", 0.85) or 0.85),
+        logger=get_logger("atlas.resources.memory_watchdog"),
+    )
+    worker_manager._memory_watchdog = memory_watchdog  # noqa: SLF001 — IR-RO11
     from atlas.core.resources.mission_queue import MissionQueueService
     from atlas.core.resources.reservations import ReservationManager
     from atlas.core.resources.storage_pressure import StoragePressureService
@@ -1522,6 +1531,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         portfolio_service, logger=get_logger("atlas.trading.ledger")
     )
 
+    # IRA Phase A — Investing Research Agent (Market Program).
+    from atlas.investment.research import InvestmentResearchService
+
+    investment_research = InvestmentResearchService(
+        data_dir=str(cfg.paths.data),
+        company_data=company_data_service,
+        market_reader=market_reader_service,
+        logger=get_logger("atlas.investment.research"),
+    )
+    if hasattr(investor_mailer, "bind_research"):
+        investor_mailer.bind_research(investment_research)
+
     # Learning Governance Report (OI-MP3 / Layer 2) — after portfolio exists.
     governance_service = GovernanceReportService(
         knowledge=knowledge_service,
@@ -1545,6 +1566,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             events=events,
             live_market=market_reader_service,
             investor_mailer=investor_mailer,
+            investment_research=investment_research,
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )
@@ -1565,12 +1587,30 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             market_reader=market_reader_service,
             policy_engine=policy_engine,
             experience_os=experience_os,
+            investment_research=investment_research,
             logger=get_logger("atlas.workers.investment_universe"),
         )
     )
     from atlas.workers.government_intelligence import GovernmentIntelligenceWorker
     from atlas.workers.investor_reports import InvestorReportsWorker
+    from atlas.workers.research_freshness import ResearchFreshnessWorker
 
+    worker_manager.register_worker_type(
+        ResearchFreshnessWorker(
+            research=investment_research,
+            logger=get_logger("atlas.workers.research_freshness"),
+        )
+    )
+    from atlas.workers.thesis_outcome import ThesisOutcomeWorker
+
+    worker_manager.register_worker_type(
+        ThesisOutcomeWorker(
+            research=investment_research,
+            experience_os=experience_os,
+            mailer=investor_mailer,
+            logger=get_logger("atlas.workers.thesis_outcome"),
+        )
+    )
     worker_manager.register_worker_type(
         GovernmentIntelligenceWorker(
             data_dir=str(cfg.paths.data),
@@ -1720,6 +1760,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("notifier", notifier)
     container.register_instance("email_sender", email_sender)
     container.register_instance("investor_mailer", investor_mailer)
+    container.register_instance("investment_research", investment_research)
     container.register_instance("health_repo", health_repo)
     container.register_instance("task_repo", task_repo)
     container.register_instance("task_handlers", handlers)
@@ -1743,6 +1784,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("scheduler_hierarchy", scheduler_hierarchy)
     container.register_instance("workers", worker_manager)
     container.register_instance("host_guard", host_guard)
+    container.register_instance("memory_watchdog", memory_watchdog)
     container.register_instance("resource_planner", resource_planner)
     container.register_instance("mission_queue", mission_queue)
     container.register_instance("resource_scheduler", resource_scheduler)

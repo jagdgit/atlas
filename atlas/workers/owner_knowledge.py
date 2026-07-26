@@ -44,9 +44,18 @@ _DEFAULT_EXTENSIONS = {
 }
 
 
+class _MemoryBudgetSignal(Exception):
+    """Cooperative IR-RO11 yield/pause — not a worker failure."""
+
+    def __init__(self, verdict: Any) -> None:
+        self.verdict = verdict
+        super().__init__(getattr(verdict, "reason", "memory_budget") or "memory_budget")
+
+
+
 class OwnerKnowledgeWorker(PersistentWorker):
     type = "owner_knowledge"
-    VERSION = 3
+    VERSION = 4
     journal_ticks = True  # journal meaningful ticks (ingests); pure no-ops return empty notes
 
     def __init__(
@@ -115,68 +124,115 @@ class OwnerKnowledgeWorker(PersistentWorker):
                 state["roots"] = dict(root_state)
             ctx.checkpoint_now(state)
 
+        def _memory_gate(*, force: bool = False) -> None:
+            """IR-RO11: stop the tick before RSS grows into OOM territory."""
+            verdict = ctx.check_memory()
+            if verdict is None or getattr(verdict, "ok", True):
+                return
+            import gc
+
+            gc.collect()
+            # Force re-check after release; if still over, yield/pause.
+            verdict2 = ctx.check_memory(force=True) or verdict
+            if getattr(verdict2, "ok", False):
+                return
+            raise _MemoryBudgetSignal(verdict2)
+
         if roots:
             names = ", ".join(
                 Path(str(r.get("path") or "")).name or "?" for r in roots if r.get("path")
             )
             _flush_phase("starting", f"Preparing tick for {names}")
 
-        for root in roots:
-            path = str(root.get("path") or "").strip()
-            if not path:
-                continue
-            kind = str(root.get("kind") or KIND_DOCUMENT)
-            domain = str(root.get("domain") or "personal")
-            entry = dict(root_state.get(path) or {})
-            if force:
-                entry.pop("files_done", None)
-                entry.pop("checksum", None)
-                entry.pop("complete", None)
-
-            # Fully completed + unchanged root → cheap skip (reboot-safe).
-            if not force and entry.get("complete") and entry.get("checksum"):
-                sig = self._signature(path, kind=kind, extensions=root.get("extensions"))
-                if sig and sig == entry.get("checksum"):
-                    totals["skipped"] += 1
+        try:
+            for root in roots:
+                path = str(root.get("path") or "").strip()
+                if not path:
                     continue
-
-            try:
-                root_state[path] = entry
-                complete = self._process_root(
-                    path, kind, domain, cfg, ctx.mission_id, totals,
-                    override_ext=root.get("extensions"),
-                    entry=entry,
-                    flush=_flush_phase,
-                )
-                changed_any = True
-                if complete:
-                    sig = self._signature(path, kind=kind, extensions=root.get("extensions"))
-                    entry["checksum"] = sig
-                    entry["complete"] = True
-                    # Drop bulky per-file map once the root is fully done.
+                kind = str(root.get("kind") or KIND_DOCUMENT)
+                domain = str(root.get("domain") or "personal")
+                entry = dict(root_state.get(path) or {})
+                if force:
                     entry.pop("files_done", None)
-                else:
-                    entry["complete"] = False
-                prog = entry.get("progress") or {}
-                if prog:
-                    progress_bits.append(
-                        f"{Path(path).name}:{prog.get('done', 0)}/{prog.get('total', 0)}"
+                    entry.pop("checksum", None)
+                    entry.pop("complete", None)
+
+                # Fully completed + unchanged root → cheap skip (reboot-safe).
+                if not force and entry.get("complete") and entry.get("checksum"):
+                    sig = self._signature(path, kind=kind, extensions=root.get("extensions"))
+                    if sig and sig == entry.get("checksum"):
+                        totals["skipped"] += 1
+                        continue
+
+                try:
+                    root_state[path] = entry
+                    _memory_gate()
+                    complete = self._process_root(
+                        path, kind, domain, cfg, ctx.mission_id, totals,
+                        override_ext=root.get("extensions"),
+                        entry=entry,
+                        flush=_flush_phase,
+                        memory_gate=_memory_gate,
                     )
-                root_state[path] = entry
-            except Exception as exc:  # noqa: BLE001 - a bad root must not stop the whole archive
-                totals["errors"] += 1
-                self._logger.warning("owner archive root failed (%s): %s", path, exc)
+                    changed_any = True
+                    if complete:
+                        sig = self._signature(path, kind=kind, extensions=root.get("extensions"))
+                        entry["checksum"] = sig
+                        entry["complete"] = True
+                        # Drop bulky per-file map once the root is fully done.
+                        entry.pop("files_done", None)
+                    else:
+                        entry["complete"] = False
+                    prog = entry.get("progress") or {}
+                    if prog:
+                        progress_bits.append(
+                            f"{Path(path).name}:{prog.get('done', 0)}/{prog.get('total', 0)}"
+                        )
+                    root_state[path] = entry
+                except _MemoryBudgetSignal:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - a bad root must not stop the whole archive
+                    totals["errors"] += 1
+                    self._logger.warning("owner archive root failed (%s): %s", path, exc)
 
-        # OI-C8 / A10: re-read assets whose coverage was recorded under an older reader version.
-        _flush_phase("reextract", "Checking coverage for reader-version re-reads")
-        reextracted = self._reextract_stale(cfg, totals)
-        if reextracted:
-            changed_any = True
+            # OI-C8 / A10: re-read assets whose coverage was recorded under an older reader version.
+            _flush_phase("reextract", "Checking coverage for reader-version re-reads")
+            _memory_gate()
+            reextracted = self._reextract_stale(cfg, totals)
+            if reextracted:
+                changed_any = True
 
-        # OI-C4: opportunistic Asset links for pre-Phase-C documents (bounded).
-        backfilled = self._backfill_orphan_assets(cfg, totals)
-        if backfilled:
-            changed_any = True
+            # OI-C4: opportunistic Asset links for pre-Phase-C documents (bounded).
+            backfilled = self._backfill_orphan_assets(cfg, totals)
+            if backfilled:
+                changed_any = True
+        except _MemoryBudgetSignal as signal:
+            verdict = signal.verdict
+            action = getattr(verdict, "action", "yield_tick") or "yield_tick"
+            reason = getattr(verdict, "reason", "") or "memory_budget"
+            state["roots"] = root_state
+            state["progress"] = {
+                "roots": progress_bits,
+                "files_done_tick": totals.get("files_done_tick", 0),
+                "files_pending": totals.get("files_pending", 0),
+                "files_seen": totals.get("files_seen", 0),
+            }
+            state["phase"] = "memory_budget_pause"
+            state["phase_detail"] = reason
+            state["phase_updated_at"] = datetime.now(timezone.utc).isoformat()
+            state["memory_action"] = action
+            state["memory_reason"] = reason
+            if hasattr(verdict, "as_dict"):
+                state["memory_verdict"] = verdict.as_dict()
+            state["ticks"] = int(state.get("ticks", 0)) + 1
+            state["last_totals"] = totals
+            ctx.checkpoint_now(state)
+            note = (
+                f"{config_note}IR-RO11 {action}: {reason} "
+                f"(done_tick={totals.get('files_done_tick', 0)}, "
+                f"pending={totals.get('files_pending', 0)})"
+            ).strip()
+            return TickResult(state=state, note=note)
 
         state["roots"] = root_state
         state["progress"] = {
@@ -192,6 +248,8 @@ class OwnerKnowledgeWorker(PersistentWorker):
             f"done_tick={totals.get('files_done_tick', 0)}"
         )
         state["phase_updated_at"] = datetime.now(timezone.utc).isoformat()
+        state.pop("memory_action", None)
+        state.pop("memory_reason", None)
 
         # Drain the prose candidates the doc/chat ingests emitted into findings (P11/P13: the
         # Consolidator is still the single write path; the worker just triggers the drain).
@@ -272,6 +330,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
         override_ext: Any = None,
         entry: dict[str, Any] | None = None,
         flush: Callable[..., None] | None = None,
+        memory_gate: Callable[..., None] | None = None,
     ) -> bool:
         """Process one archive root. Returns True when the root is fully complete.
 
@@ -286,7 +345,12 @@ class OwnerKnowledgeWorker(PersistentWorker):
             if flush is not None:
                 flush(phase, detail, entry_path=path)
 
+        def _gate() -> None:
+            if memory_gate is not None:
+                memory_gate()
+
         if kind == KIND_CODE:
+            _gate()
             _phase(
                 "learning_code",
                 f"{label}: whole-tree learn (large folders can take a long time before % updates)",
@@ -320,10 +384,13 @@ class OwnerKnowledgeWorker(PersistentWorker):
                 "walked": seen,
             }
             _phase("scanning", f"{label}: walked {seen:,} · matched {matched:,} files")
+            if seen == 1 or seen % 500 == 0:
+                _gate()
 
         _phase("scanning", f"{label}: discovering files…")
         files = self._discover(path, extensions, on_progress=on_scan)
         totals["files_seen"] += len(files)
+        _gate()
 
         done_map: dict[str, str] = dict(entry.get("files_done") or {})
         pending: list[Path] = []
@@ -347,10 +414,13 @@ class OwnerKnowledgeWorker(PersistentWorker):
             f"{label}: {len(done_map):,}/{len(files):,} done · {len(pending):,} pending this job",
         )
 
-        per_tick = max(1, int(cfg.get("files_per_tick") or 40))
+        # Prefer smaller batches when operator did not override (IR-RO11 cooperative).
+        default_batch = 40
+        per_tick = max(1, int(cfg.get("files_per_tick") or default_batch))
         batch = pending[:per_tick]
         last_file = None
         for i, file in enumerate(batch):
+            _gate()
             key = str(file.resolve())
             try:
                 res = self._ingestion.ingest_file(

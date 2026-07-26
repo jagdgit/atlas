@@ -43,6 +43,11 @@ from atlas.api.schemas import (
     ScreenerSnapshotRequest,
     ScreenerComputeRequest,
     FilingsSnapshotRequest,
+    InvestmentResearchStartRequest,
+    ResearchOperatorSnapshotRequest,
+    ResearchFilingRefsRequest,
+    ResearchCriticalFlagRequest,
+    ResearchManagementPackRequest,
     CreateGoalRequest,
     UpdateGoalRequest,
     StartProgramRequest,
@@ -223,6 +228,17 @@ def resources_guard(request: Request) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=503, detail=f"host guard unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/resources/watchdog", tags=["resources"])
+def resources_watchdog(request: Request) -> dict:
+    """IR-RO11 — Runtime memory watchdog (Layer 2 RSS / budget posture)."""
+    try:
+        return _app(request).container.resolve("memory_watchdog").snapshot()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"memory watchdog unavailable: {exc}"
         ) from exc
 
 
@@ -2175,9 +2191,215 @@ def market_investor_report_preview(
         mailer = _app(request).container.resolve("investor_mailer")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
-    if str(kind or "morning").strip().lower() == "evening":
+    k = str(kind or "morning").strip().lower()
+    if k == "evening":
         return mailer.preview_evening(program_id=program_id)
+    if k in {"weekly", "research_weekly", "weekly_research"}:
+        return mailer.preview_weekly_research(program_id=program_id)
     return mailer.preview_morning(program_id=program_id)
+
+
+@v1_router.post("/market/investor-report/weekly", tags=["programs"])
+def market_investor_weekly_report(
+    request: Request,
+    program_id: str = "market_intelligence",
+    force: bool = True,
+) -> dict:
+    """Send the weekly research learning digest email."""
+    try:
+        mailer = _app(request).container.resolve("investor_mailer")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
+    return mailer.send_weekly_research(program_id=program_id, force=force)
+
+
+@v1_router.get("/market/research", tags=["programs"])
+def market_research_list(
+    request: Request,
+    program_id: str = "market_intelligence",
+) -> dict:
+    """IRA — list researched symbols (awareness summaries)."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    rows = research.list_researched(program_id=program_id)
+    digest = research.daily_digest(program_id=program_id) if hasattr(research, "daily_digest") else {}
+    return {"program_id": program_id, "count": len(rows), "items": rows, "digest": digest}
+
+
+@v1_router.get("/market/research/{symbol}", tags=["programs"])
+def market_research_get(
+    request: Request,
+    symbol: str,
+    program_id: str = "market_intelligence",
+    full: bool = False,
+) -> dict:
+    """IRA.2 — Research Awareness for a symbol (coverage ≠ confidence)."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    awareness = research.awareness(symbol, program_id=program_id)
+    out: dict = {"awareness": awareness}
+    if full:
+        out["dossier"] = research.dossier(symbol, program_id=program_id)
+    return out
+
+
+@v1_router.post("/market/research/{symbol}", tags=["programs"])
+def market_research_start(
+    request: Request,
+    symbol: str,
+    body: InvestmentResearchStartRequest | None = None,
+) -> dict:
+    """IRA.2b — start on-demand MVR (or deepen) research for any ticker path."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    body = body or InvestmentResearchStartRequest()
+    return research.start(
+        symbol,
+        program_id=body.program_id,
+        mode=body.mode,
+        force=bool(body.force),
+        trigger=body.trigger or "on_demand",
+    )
+
+
+@v1_router.post("/market/research/{symbol}/snapshot", tags=["programs"])
+def market_research_operator_snapshot(
+    request: Request,
+    symbol: str,
+    body: ResearchOperatorSnapshotRequest,
+) -> dict:
+    """IRA F1 — operator snapshot (layer 1) → ResearchMemory → incremental section refresh."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    fields = {
+        k: getattr(body, k)
+        for k in (
+            "pe",
+            "roe",
+            "roic",
+            "debt_to_equity",
+            "fcf",
+            "operating_margin",
+            "net_margin",
+            "revenue_cagr",
+            "earnings_cagr",
+            "price",
+            "shares",
+            "capex",
+            "fcf_growth",
+            "discount_rate",
+            "promoter_holding",
+            "sector",
+        )
+        if getattr(body, k, None) is not None
+    }
+    if not fields:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one field (pe, fcf, price, shares, roe, …)",
+        )
+    return research.apply_operator_snapshot(
+        symbol,
+        fields,
+        program_id=body.program_id,
+        as_of=body.as_of,
+        note=body.note,
+        evidence_confidence=body.evidence_confidence,
+        auto_refresh=bool(body.auto_refresh),
+    )
+
+
+@v1_router.post("/market/research/{symbol}/filings", tags=["programs"])
+def market_research_filing_refs(
+    request: Request,
+    symbol: str,
+    body: ResearchFilingRefsRequest,
+) -> dict:
+    """IRA.24 — attach filing refs (no scrape) → memory → incremental refresh."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    if not body.filings:
+        raise HTTPException(status_code=400, detail="filings[] required (title + kind)")
+    return research.apply_filing_refs(
+        symbol,
+        body.filings,
+        program_id=body.program_id,
+        as_of=body.as_of,
+        note=body.note,
+        auto_refresh=bool(body.auto_refresh),
+    )
+
+
+@v1_router.post("/market/research/{symbol}/critical-flag", tags=["programs"])
+def market_research_critical_flag(
+    request: Request,
+    symbol: str,
+    body: ResearchCriticalFlagRequest,
+) -> dict:
+    """IRA.26b — raise critical evidence (can block paper buys / force avoid)."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    return research.raise_critical_flag(
+        symbol,
+        text=body.text,
+        kind=body.kind,
+        program_id=body.program_id,
+        affects=body.affects,
+    )
+
+
+@v1_router.post("/market/research/{symbol}/management", tags=["programs"])
+def market_research_management_pack(
+    symbol: str,
+    body: ResearchManagementPackRequest,
+    request: Request,
+) -> dict:
+    """IRA F3 — management checklist answers → section evidence + questions."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    if not body.answers:
+        raise HTTPException(status_code=400, detail="answers required (checklist id → text)")
+    return research.apply_management_pack(
+        symbol,
+        body.answers,
+        program_id=body.program_id,
+        operator_note=body.operator_note,
+        evidence_level=body.evidence_level,
+        auto_refresh=body.auto_refresh,
+    )
+
+
+@v1_router.post("/market/research-refresh", tags=["programs"])
+def market_research_refresh(
+    request: Request,
+    program_id: str = "market_intelligence",
+    max_symbols: int = 8,
+    symbol: str | None = None,
+) -> dict:
+    """IRA.7 — incremental TTL refresh for stale dossier sections."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    return research.refresh_stale(
+        symbol,
+        program_id=program_id,
+        max_symbols=max_symbols,
+    )
 
 
 @v1_router.get("/market/watchlist", tags=["programs"])

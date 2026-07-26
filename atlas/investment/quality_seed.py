@@ -55,12 +55,17 @@ def quality_row(
     sector: str | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """One quality seed row for ranking / company ratios."""
+    """One quality seed row for ranking / company ratios.
+
+    Core hermetic fields: ``roe``, ``debt_to_equity``. Optional operator / screener
+    fields (IRA.8) pass through when supplied: ``pe``, ``roic``, ``fcf``,
+    ``operating_margin``, ``net_margin``, ``revenue_cagr``, ``promoter_holding``.
+    """
     base = sector_proxy(sector)
     ov = dict(overrides or {})
     roe = ov.get("roe", base["roe"])
     de = ov.get("debt_to_equity", ov.get("debt_equity", base["debt_to_equity"]))
-    return {
+    row: dict[str, Any] = {
         "roe": float(roe),
         "debt_to_equity": float(de),
         "source": str(ov.get("source") or SOURCE),
@@ -69,6 +74,24 @@ def quality_row(
         "sector": (sector or "").strip() or None,
         "symbol": _normalize_symbol(symbol),
     }
+    # Optional fundamentals — only when supplied (never invent).
+    for fld in (
+        "pe",
+        "roic",
+        "fcf",
+        "operating_margin",
+        "net_margin",
+        "revenue_cagr",
+        "earnings_cagr",
+        "promoter_holding",
+        "screener_score",
+    ):
+        if fld in ov and ov[fld] is not None:
+            try:
+                row[fld] = float(ov[fld])
+            except (TypeError, ValueError):
+                row[fld] = ov[fld]
+    return row
 
 
 def nifty50_quality_seed() -> dict[str, dict[str, Any]]:
@@ -135,16 +158,89 @@ def ratios_for_symbol(
     symbol: str,
     *,
     seed: dict[str, dict[str, Any]] | None = None,
+    program_id: str = "market_intelligence",
+    merge_operator: bool = True,
 ) -> dict[str, Any]:
-    """Ratios dict suitable for CompanyProfile ``ratios`` (empty if unknown)."""
+    """Ratios dict suitable for CompanyProfile / IRA dossier (empty if unknown).
+
+    When ``merge_operator`` is true, overlays the latest screener/research
+    operator snapshot (IRA F1 ladder layer 1) so PE/FCF/price reach MVR.
+    """
     pack = seed if seed is not None else nifty50_quality_seed()
-    row = pack.get(_normalize_symbol(symbol))
+    key = _normalize_symbol(symbol)
+    row = dict(pack.get(key) or {})
+    if merge_operator:
+        try:
+            from atlas.investment.screener_signals import latest_snapshot
+
+            snap = latest_snapshot(program_id)
+            op = None
+            if snap and isinstance(snap.get("symbols"), dict):
+                op = snap["symbols"].get(key)
+            if isinstance(op, dict):
+                for fld in (
+                    "roe",
+                    "debt_to_equity",
+                    "debt_equity",
+                    "pe",
+                    "roic",
+                    "fcf",
+                    "operating_margin",
+                    "net_margin",
+                    "revenue_cagr",
+                    "earnings_cagr",
+                    "promoter_holding",
+                    "price",
+                    "shares",
+                    "share_count",
+                    "capex",
+                    "fcf_growth",
+                    "discount_rate",
+                    "sector",
+                    "evidence_confidence",
+                    "confidence",
+                    "as_of",
+                    "source",
+                    "method",
+                ):
+                    if op.get(fld) is not None:
+                        row[fld] = op[fld]
+                row.setdefault("source", op.get("source") or "operator_snapshot")
+                row.setdefault("method", "operator_snapshot")
+                if op.get("as_of"):
+                    row["as_of"] = op["as_of"]
+        except Exception:  # noqa: BLE001 - operator merge is best-effort
+            pass
     if not row:
         return {}
-    return {
+    out: dict[str, Any] = {
         "roe": row.get("roe"),
-        "debt_to_equity": row.get("debt_to_equity"),
+        "debt_to_equity": row.get("debt_to_equity", row.get("debt_equity")),
         "source": row.get("source"),
         "as_of": row.get("as_of"),
         "method": row.get("method"),
     }
+    for fld in (
+        "pe",
+        "roic",
+        "fcf",
+        "operating_margin",
+        "net_margin",
+        "revenue_cagr",
+        "earnings_cagr",
+        "promoter_holding",
+        "sector",
+        "price",
+        "shares",
+        "share_count",
+        "capex",
+        "fcf_growth",
+        "discount_rate",
+        "evidence_confidence",
+        "confidence",
+    ):
+        if row.get(fld) is not None:
+            out[fld] = row.get(fld)
+    if out.get("shares") is None and out.get("share_count") is not None:
+        out["shares"] = out["share_count"]
+    return out

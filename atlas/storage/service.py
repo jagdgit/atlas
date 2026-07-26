@@ -43,6 +43,18 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Stream a file hash — never load the whole blob into RSS (boot recovery)."""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
 class StorageManager:
     """The ``storage`` capability/service — durable files with integrity + quotas."""
 
@@ -188,12 +200,25 @@ class StorageManager:
 
     # --- integrity (Recovery Manager tie-in, §2.8) ----------------------
 
-    def integrity_check(self) -> dict[str, Any]:
-        """Verify every registered file's checksum. Reports missing/corrupt files."""
+    def integrity_check(
+        self,
+        *,
+        max_files: int | None = None,
+        max_bytes_per_file: int | None = 256 * 1024 * 1024,
+    ) -> dict[str, Any]:
+        """Verify registered files' checksums without loading whole files into RAM.
+
+        ``max_bytes_per_file`` skips huge objects during boot recovery (report as
+        ``skipped_large``) so Atlas can finish startup and serve the UI. Pass
+        ``max_bytes_per_file=None`` for a full verify.
+        """
         checked = ok = 0
         missing: list[str] = []
         corrupt: list[str] = []
+        skipped_large: list[str] = []
         for row in self._repo.all_files():
+            if max_files is not None and checked >= max(0, int(max_files)):
+                break
             checked += 1
             ref = f"{row['scope']}/{row['name']} v{row['version']}"
             path = self._root / str(row["relpath"])
@@ -201,7 +226,11 @@ class StorageManager:
                 missing.append(ref)
                 continue
             try:
-                if _sha256(path.read_bytes()) == row["checksum"]:
+                size = path.stat().st_size
+                if max_bytes_per_file is not None and size > int(max_bytes_per_file):
+                    skipped_large.append(ref)
+                    continue
+                if _sha256_file(path) == row["checksum"]:
                     ok += 1
                 else:
                     corrupt.append(ref)
@@ -212,6 +241,7 @@ class StorageManager:
             "ok": ok,
             "missing": missing,
             "corrupt": corrupt,
+            "skipped_large": skipped_large,
         }
 
     # --- backup orchestration ------------------------------------------

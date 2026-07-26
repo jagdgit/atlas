@@ -490,6 +490,8 @@ button { cursor: pointer; font: inherit; }
 .learner-auto { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .learner-auto input { margin: 0; }
 #view-learner { min-height: 0; overflow-y: auto; }
+/* Flex children must not shrink — otherwise IRA / email panels collapse under the grid */
+#view-learner > * { flex-shrink: 0; }
 .learner-summary {
   display: flex; flex-wrap: wrap; gap: 10px; padding: 0 22px 14px;
 }
@@ -524,6 +526,151 @@ button { cursor: pointer; font: inherit; }
 .learner-row .sym { font-weight: 600; }
 .learner-row .why { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.35; }
 .learner-row .notional { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent); }
+.learner-row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.learner-research-panel.learner-panel {
+  margin: 0 22px 20px;
+  overflow: visible;
+  min-height: 28rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+.learner-research-panel .panel-head {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 0;
+}
+.learner-research-panel > .muted.small,
+.learner-research-panel > #learner-research-status,
+.learner-research-blurb,
+.learner-research-recent-label {
+  flex: 0 0 auto;
+  padding: 6px 14px 0;
+  margin: 0;
+}
+.learner-research-recent-label { margin-top: 4px; }
+.learner-research-panel input {
+  min-width: 12rem;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #333);
+  background: var(--bg, #111);
+  color: inherit;
+  border-radius: 4px;
+}
+.learner-research-detail {
+  flex: 1 1 auto;
+  margin: 10px 14px 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  background: var(--bg-elev2, rgba(0, 0, 0, 0.18));
+  min-height: 24rem;
+  height: auto;
+  max-height: 70vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.learner-research-detail.learner-body {
+  max-height: 70vh;
+  padding: 16px 18px;
+}
+.learner-research-detail:empty::before {
+  content: "Enter a symbol and click Research — thesis, MoS, risks, and gaps appear here.";
+  color: var(--muted);
+  font-size: 13px;
+  display: block;
+  padding: 8px 0;
+}
+.learner-research-verdict {
+  font-weight: 650;
+  font-size: 14px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
+}
+.learner-research-verdict.warn { color: var(--warn); }
+.learner-research-verdict.ok { color: var(--ok); }
+.learner-research-block { margin-bottom: 12px; }
+.learner-research-block .why {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.learner-research-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+#learner-research-body.learner-body {
+  flex: 0 0 auto;
+  max-height: 14rem;
+  margin-bottom: 8px;
+}
+.learner-research-snapshot {
+  margin: 8px 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev2, rgba(0,0,0,.1));
+}
+.learner-research-snapshot summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+}
+.learner-mgmt-pack {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.learner-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+@media (max-width: 900px) {
+  .learner-snapshot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.learner-snapshot-grid label,
+.learner-snapshot-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.learner-snapshot-grid input,
+.learner-snapshot-row input,
+.learner-snapshot-row select {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg, #111);
+  color: inherit;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.learner-snapshot-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 4px;
+}
+.learner-snapshot-note { flex: 1 1 12rem; }
 .learner-avoid { opacity: 0.75; }
 .learner-check {
   display: flex; gap: 8px; align-items: flex-start; padding: 6px 0;

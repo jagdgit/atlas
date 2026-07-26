@@ -203,7 +203,19 @@ def merge_into_quality(
             key = _normalize_symbol(sym)
             cur = dict(base.get(key) or {})
             # Map screener fields into quality / explicit score
-            for fld in ("roe", "debt_to_equity", "debt_equity", "pe", "promoter_holding"):
+            for fld in (
+                "roe",
+                "debt_to_equity",
+                "debt_equity",
+                "pe",
+                "promoter_holding",
+                "roic",
+                "fcf",
+                "operating_margin",
+                "net_margin",
+                "revenue_cagr",
+                "earnings_cagr",
+            ):
                 if fld in row and row[fld] is not None:
                     cur[fld] = row[fld]
             if row.get("screener_score") is not None:

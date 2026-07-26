@@ -20,7 +20,7 @@ EVENT_UNIVERSE_UPDATED = "InvestmentUniverseUpdated"
 
 class InvestmentUniverseWorker(PersistentWorker):
     type = "investment_universe"
-    VERSION = 2
+    VERSION = 3
     journal_ticks = True
 
     def __init__(
@@ -30,12 +30,14 @@ class InvestmentUniverseWorker(PersistentWorker):
         market_reader: Any | None = None,
         policy_engine: Any | None = None,
         experience_os: Any | None = None,
+        investment_research: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._events = events
         self._reader = market_reader
         self._policy = policy_engine
         self._experience = experience_os
+        self._research = investment_research
         self._logger = logger or logging.getLogger("atlas.workers.investment_universe")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -62,10 +64,32 @@ class InvestmentUniverseWorker(PersistentWorker):
         )
 
         try:
-            members = membership(index)
+            extras = cfg.get("extra_members") or cfg.get("custom_members") or []
+            members = membership(
+                index,
+                extra_members=extras if isinstance(extras, list) else None,
+            )
         except KeyError as exc:
             return TickResult(state=state, note=f"idle: {exc}")
 
+        # Always allow pinned symbols into the pool (IRA.10 / on-demand names).
+        if pinned and mode != "pin":
+            have = {m["symbol"] for m in members}
+            for p in pinned:
+                sym = p if p.endswith(".NS") else f"{p}.NS"
+                if sym in have:
+                    continue
+                members.append(
+                    {
+                        "symbol": sym,
+                        "name": p,
+                        "sector": "",
+                        "nse_symbol": p.replace(".NS", ""),
+                        "exchange": "NSE",
+                        "asset_class": "cash_equity",
+                    }
+                )
+                have.add(sym)
         if mode == "pin" and pinned:
             want = {p if p.endswith(".NS") else f"{p}.NS" for p in pinned}
             watch_members = [m for m in members if m["symbol"] in want]
@@ -127,6 +151,8 @@ class InvestmentUniverseWorker(PersistentWorker):
         except Exception:  # noqa: BLE001
             self._logger.debug("government policy deltas skipped", exc_info=True)
         experience_bias = self._experience_bias(pool)
+        research_bias = self._research_bias(pool)
+        research_by_symbol = self._research_awareness_map(pool)
 
         ranked = rank_universe(
             pool,
@@ -134,6 +160,7 @@ class InvestmentUniverseWorker(PersistentWorker):
             quality_by_symbol=quality_seed or None,
             policy_delta_by_symbol=policy_deltas or None,
             experience_bias_by_symbol=experience_bias or None,
+            research_bias_by_symbol=research_bias or None,
             max_watchlist=top_n,
             weights=weights,
             lookback_short=int(cfg.get("lookback_short") or 5),
@@ -174,6 +201,7 @@ class InvestmentUniverseWorker(PersistentWorker):
                 "confidence": phase_info["confidence"],
                 "index": index,
             },
+            research_by_symbol=research_by_symbol or None,
         )
 
         snap = wl.publish(
@@ -320,6 +348,34 @@ class InvestmentUniverseWorker(PersistentWorker):
                 bias += 0.1
             if bias:
                 out[sym] = bias
+        return out
+
+    def _research_bias(self, members: list[dict[str, Any]]) -> dict[str, float]:
+        if self._research is None or not hasattr(self._research, "research_bias_map"):
+            return {}
+        try:
+            syms = [str(m.get("symbol") or "") for m in members if m.get("symbol")]
+            return dict(self._research.research_bias_map(syms) or {})
+        except Exception:  # noqa: BLE001
+            self._logger.debug("research bias skipped", exc_info=True)
+            return {}
+
+    def _research_awareness_map(self, members: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        if self._research is None or not hasattr(self._research, "awareness"):
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for m in members[:40]:
+            sym = str(m.get("symbol") or "").strip()
+            if not sym:
+                continue
+            try:
+                # Only cite symbols that already have a dossier (avoid creating noise).
+                if hasattr(self._research, "_store"):
+                    if self._research._store.get(sym) is None:
+                        continue
+                out[sym] = self._research.awareness(sym)
+            except Exception:  # noqa: BLE001
+                continue
         return out
 
 

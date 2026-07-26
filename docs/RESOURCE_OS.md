@@ -407,10 +407,33 @@ Learn Repository → Extract → Verify → Summarize → Update Engineering Kno
 
 Each child completes independently; parents wait with `WAITING_DEPENDENCY` (IR-M1).
 
-### 12.4 Mission aging & confidence (target)
+### 12.4 Mission aging & confidence (shipped)
 
-- **Aging:** soft priority boost for work queued for a long time (IR-M2) — same spirit as Linux CFS / arbiter starvation aging.  
+- **Aging:** soft priority boost for work queued for a long time (IR-M2) — same spirit as Linux CFS / arbiter starvation aging.
 - **Confidence-aware:** low-confidence / high-uncertainty research may deserve more scheduler attention (IR-M3).
+
+### 12.5 Three layers of memory protection (locked)
+
+| Layer | Owner | Answers | Status |
+|-------|--------|---------|--------|
+| **1 — Admission** | Host Guard + Planner + Arbiter | *Can we start this work?* | ✅ Shipped |
+| **2 — Runtime enforcement** | Runtime Watchdog + budgets + cooperative ticks | *May this work keep growing?* | ❌ Missing → **IR-RO11** |
+| **3 — OS backstop** | systemd `MemoryMax` / `Restart=` | *Emergency stop if Atlas fails Layer 2* | Deploy unit; **not** primary policy |
+
+Layer 1 alone is insufficient: an admitted tick can still grow unboundedly inside one Python process until the kernel OOM-kills Atlas. Layer 3 must remain rare.
+
+### 12.6 Runtime Memory Enforcement (IR-RO11 — target)
+
+```text
+Mission / template profile
+  → Memory budget (MB)
+  → Worker tick (bounded batch)
+  → Checkpoint + release + GC
+  → Watchdog measures RSS vs budget + host watermarks
+  → Continue | Pause + requeue (durable; never drop)
+```
+
+Reservations (IR-RO7) become **enforceable** against measured usage, not advisory. Process isolation (separate Archive vs Market processes) is a **later** hardening step after cooperative ticks exist.
 
 ---
 
@@ -439,6 +462,8 @@ Each child completes independently; parents wait with `WAITING_DEPENDENCY` (IR-M
 | Mission DAG | ✅ Shipped (IR-M1) | IR-M1 |
 | Mission wait-time aging | ✅ Shipped (IR-M2) | IR-M2 |
 | Confidence-aware research attention | ✅ Shipped (IR-M3) | IR-M3 |
+| **Runtime Memory Enforcement (Layer 2)** | 🟡 v0 shipped (watchdog + archive cooperative yield) | **IR-RO11** |
+| systemd MemoryMax backstop (Layer 3) | ✅ Deploy artifact | ops / not IR-* |
 
 ---
 
@@ -457,6 +482,8 @@ Each child completes independently; parents wait with `WAITING_DEPENDENCY` (IR-M
 | **RO9** | Planning OS asks *what*; Resource OS asks *can safely* — keep separate |
 | **RO10** | No new top-level OS; implement via [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md) |
 | **RO11** | Resource Planner estimates time/energy/risk/benefit/storage/checkpointability, not only RAM/CPU |
+| **RO12** | Memory has three layers: **admission** (Layer 1) → **runtime enforcement** (Layer 2 / IR-RO11) → **OS backstop** (Layer 3). systemd is never the primary memory manager |
+| **RO13** | Workers must be **cooperative** under memory pressure (checkpoint → release → pause/requeue); unbounded “process everything” ticks are a Resource OS bug |
 
 ---
 
@@ -464,8 +491,7 @@ Each child completes independently; parents wait with `WAITING_DEPENDENCY` (IR-M
 
 Tracked in [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md). Do not replace that list with new architecture essays.
 
-Near-term (finalized): IR-OPS1 → IR-RO1 (+ Admission Contract) → IR-RO3 → IR-RO2 → IR-RO5 → IR-RO7 → IR-RO6 → …  
-See [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md).
+Shipped through Phase 5 (IR-RO1…RO10, IR-M1…M3, IR-RO9). **Next: IR-RO11 (Runtime Memory Enforcement).**
 
 ---
 
@@ -479,7 +505,8 @@ See [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md).
 | [`ATLAS_MISSION_PHILOSOPHY.md`](ATLAS_MISSION_PHILOSOPHY.md) | Cognitive lifecycle + host principle |
 | [`STAGE_3_2_PLAN.md`](STAGE_3_2_PLAN.md) | Detect→slow, caps, never fail for capacity |
 | [`MISSIONS_OPERATOR_GUIDE.md`](MISSIONS_OPERATOR_GUIDE.md) | How to run Archive safely |
+| [`deploy/systemd/atlas.service`](../deploy/systemd/atlas.service) | Layer 3 MemoryMax + Restart backstop |
 
 ---
 
-*End of document. Architecture frozen — implement IR-* next.*
+*End of document. Architecture frozen — implement IR-RO11 next.*

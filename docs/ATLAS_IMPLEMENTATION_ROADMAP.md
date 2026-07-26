@@ -125,6 +125,49 @@ APIs: `POST /v1/missions/{id}/children`, `GET /v1/missions/{id}/dag`, `POST /v1/
 
 ---
 
+### Phase 6 — Runtime memory ownership (next)
+
+| ID | Item | Outcome | Depends |
+|----|------|---------|---------|
+| **IR-RO11** | **Runtime Memory Enforcement** | Layer 2: every worker/template declares a **memory budget**; a **Runtime Watchdog** samples RSS (and later heap/FD/disk growth); workers **cooperate** (bounded batches → checkpoint → release → GC → measure → continue or pause/requeue) **before** host critical pressure. Resource reservations become **enforceable budgets**, not informational. systemd `MemoryMax` / `Restart=` remain **Layer 3 emergency backstop only** — never the normal memory manager. **v0 shipped:** `RuntimeMemoryWatchdog`, archive cooperative yield/pause, `GET /v1/resources/watchdog` | IR-RO3 (`ram_mb` profiles), IR-RO7 (leases), Host Guard ✅ |
+
+**Why:** Layer 1 (admission) answers *Can we start?* A single admitted tick still grew ~12 GiB anon RSS and the kernel OOM-killed the whole Atlas process. Resource OS must own memory **while work runs**.
+
+**Ideal loop (slow-but-reliable):**
+
+```text
+Host Guard admits
+  → Worker starts (budget known)
+  → Memory grows
+  → Watchdog: nearing budget / host watermark
+  → Checkpoint + release + pause/requeue
+  → Memory returns
+  → Resume later
+  → Mission completes
+```
+
+**Not acceptable as normal path:**
+
+```text
+Memory grows unboundedly → kernel OOM → Atlas terminated
+```
+
+**v1 scope (IR-RO11):**
+
+1. Declare budgets on template profiles (reuse/extend `ram_mb`; soft → hard soft-limit with pause).
+2. Runtime Watchdog (periodic RSS; Ops visibility `/v1/resources/watchdog` or guard extension).
+3. Cooperative archive/owner_knowledge path: small file batches, checkpoint, free, GC, re-measure.
+4. On budget breach: mid-tick checkpoint → pause worker / defer next tick → release reservation → requeue (never drop accepted work).
+5. Document systemd MemoryMax as Layer 3 only.
+
+**Explicit later (not IR-RO11 v1):** separate OS processes per worker class (Core / Market / Archive / Embedding) so one runaway archive cannot kill Market — browser-tab isolation pattern. Track as follow-on once watchdog + cooperative ticks land.
+
+**Done when:** under a large archive, Atlas pauses/requeues on budget instead of relying on OOM; Ops shows budget vs RSS; systemd restart is rare and treated as a bug signal.
+
+**Hardware defaults (16 GiB host, unchanged until IR-RO11 proves safe):** `MemoryMax=8G`, `Restart=always`, archive workers=1, tick slots=2, LLM=1; archive batches 20–50 files/tick.
+
+---
+
 ## Explicit object: Admission Contract
 
 ```text
@@ -230,8 +273,10 @@ After ~1 month continuous run, measure: avg tick duration, queue depth, starvati
 5. **IR-RO5** — Scheduler (Candidate Selector + REALTIME reserve + deadlines)  
 6. **IR-RO7** — Reservations / leases (Disk IO + Storage Growth)  
 7. **IR-RO6** — Storage pressure (consumed by scheduler)  
-8. **IR-RO4 / IR-RO8 / IR-RO10** — budgets, machine profile, should-run-now ✅  
-9. **IR-M1 → IR-M3**, then **IR-RO9** ✅  
+8. **IR-RO4 / IR-RO8 / IR-RO10** — budgets, machine profile, should-run-now ✅
+9. **IR-M1 → IR-M3**, then **IR-RO9** ✅
+10. **IR-RO11** — Runtime Memory Enforcement (Layer 2) — **next**
+11. Process-class isolation (optional follow-on after IR-RO11 v1)
 10. **OC-1 → OC-3** — Operator Communication (email reports → console inbox → Telegram) — see [`OPERATOR_COMMUNICATION.md`](OPERATOR_COMMUNICATION.md)  
 
 ---

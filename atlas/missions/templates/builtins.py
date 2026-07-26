@@ -334,6 +334,60 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "investor_reports"),
     },
     {
+        "name": "research_freshness",
+        "template_version": 2,
+        "description": (
+            "IRA.7 — incremental Investing Research TTL refresh. Marks stale dossier "
+            "sections and refreshes from hermetic seeds / filing refs (no full rebuild). "
+            "IRA.21: bounded batches + IR-RO11 cooperative yield between symbols."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Research Freshness",
+            "roadmap": "IRA.7",
+            "program_id": "market_intelligence",
+            "max_symbols": 4,
+            "tick_interval_seconds": 21600,
+        },
+        "worker_specs": [
+            {"type": "research_freshness", "interval_seconds": 21600},
+            {"type": "research_freshness", "cron": "30 2 * * 1-5", "interval_seconds": 21600},
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "research_freshness"),
+    },
+    {
+        "name": "thesis_outcome",
+        "template_version": 2,
+        "description": (
+            "IRA.14/15/17 — timed ThesisOutcome checkpoints, Mentor writeback to "
+            "Experience OS, optional weekly research learning email. "
+            "IRA.21 cooperative memory budgets."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Thesis Outcome",
+            "roadmap": "IRA.14",
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "checkpoint_hours": 24,
+            "max_symbols": 10,
+            "mentor_writeback": True,
+            "mentor_limit": 8,
+            "send_weekly": True,
+            "force_weekly": False,
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [
+            {"type": "thesis_outcome", "interval_seconds": 86400},
+            {"type": "thesis_outcome", "cron": "0 12 * * 0", "interval_seconds": 86400},
+        ],
+        "knowledge_domains": ["finance", "markets", "experience"],
+        "success_criteria": with_philosophy({}, "thesis_outcome"),
+    },
+    {
         "name": "event_research",
         "template_version": 3,
         "description": (

@@ -28,6 +28,8 @@ class TickContext:
     inputs: list[dict[str, Any]] = field(default_factory=list)  # drained operator inputs
     # Optional mid-tick checkpoint flush (large archive scans) — never raises to the worker.
     save_checkpoint: Any | None = None
+    # IR-RO11: cooperative memory check during a tick (returns MemoryVerdict-like object).
+    memory_check: Any | None = None
 
     def checkpoint_now(self, state: dict[str, Any]) -> None:
         """Persist partial progress so the Archive UI can show scan/ingest status."""
@@ -38,6 +40,21 @@ class TickContext:
             fn(state)
         except Exception:  # noqa: BLE001 - UI progress must not abort the tick
             pass
+
+    def check_memory(self, *, force: bool = False) -> Any | None:
+        """Return a MemoryVerdict if a watchdog session is attached; else None."""
+        fn = self.memory_check
+        if fn is None:
+            return None
+        try:
+            return fn(force=force)
+        except TypeError:
+            try:
+                return fn()
+            except Exception:  # noqa: BLE001
+                return None
+        except Exception:  # noqa: BLE001 - memory checks must not crash the tick
+            return None
 
 
 @dataclass(frozen=True)

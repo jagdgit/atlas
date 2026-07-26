@@ -202,6 +202,8 @@ resources:
   max_archive_workers: 1        # one Owner Knowledge archive ingest at a time
   host_ram_reserve_mb: 2048     # keep ~2 GiB free for OS/desktop
   tick_ram_mb: 512
+  process_rss_soft_mb: 6144     # IR-RO11 Layer 2 process soft ceiling (below systemd MemoryMax)
+  memory_soft_ratio: 0.85       # yield tick at 85% of per-worker ram_mb budget
   ram_used_high: 0.85
   load_pressure_high: 0.90
   ocr_max_pages: 50

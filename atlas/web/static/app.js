@@ -1580,6 +1580,7 @@ async function loadLearner(opts = {}) {
   renderLearnerChecklist(checkBox, status);
   renderLearnerBook(bookBox, { status, portfolios, missions, plan });
   loadInvestorEmailStatus();
+  loadLearnerResearchList();
   startLearnerPoll();
 }
 
@@ -1606,6 +1607,8 @@ async function loadInvestorEmailStatus() {
     if (sendBtn) sendBtn.disabled = !ready;
     const sendEve = $("#learner-email-send-evening");
     if (sendEve) sendEve.disabled = !ready;
+    const sendWeek = $("#learner-email-send-weekly");
+    if (sendWeek) sendWeek.disabled = !ready;
   } catch (err) {
     box.className = "learner-email-status small warn";
     box.textContent = "Could not check email status — is Atlas restarted with investor_mailer?";
@@ -1613,7 +1616,9 @@ async function loadInvestorEmailStatus() {
 }
 
 async function previewInvestorEmail(kind) {
-  const reportKind = (kind === "evening") ? "evening" : "morning";
+  const reportKind = (kind === "evening")
+    ? "evening"
+    : (kind === "weekly" ? "weekly" : "morning");
   const pre = $("#learner-email-preview-body");
   const meta = $("#learner-email-meta");
   const box = $("#learner-email-status");
@@ -1642,23 +1647,29 @@ async function previewInvestorEmail(kind) {
 }
 
 async function sendInvestorEmail(kind) {
-  const reportKind = (kind === "evening") ? "evening" : "morning";
+  const reportKind = (kind === "evening")
+    ? "evening"
+    : (kind === "weekly" ? "weekly" : "morning");
   const btn = reportKind === "evening"
     ? $("#learner-email-send-evening")
-    : $("#learner-email-send");
+    : (reportKind === "weekly"
+      ? $("#learner-email-send-weekly")
+      : $("#learner-email-send"));
   const pre = $("#learner-email-preview-body");
   const box = $("#learner-email-status");
-  const idleLabel = reportKind === "evening" ? "Send evening" : "Send morning";
+  const idleLabel = reportKind === "evening"
+    ? "Send evening"
+    : (reportKind === "weekly" ? "Send weekly" : "Send morning");
   if (btn) {
     btn.disabled = true;
     btn.classList.add("busy");
     btn.textContent = "Sending…";
   }
   try {
-    const result = await api(
-      `/v1/market/investor-report/${reportKind}?force=true`,
-      { method: "POST" },
-    );
+    const path = reportKind === "weekly"
+      ? "/v1/market/investor-report/weekly?force=true"
+      : `/v1/market/investor-report/${reportKind}?force=true`;
+    const result = await api(path, { method: "POST" });
     if (pre) {
       pre.hidden = false;
       pre.textContent = [
@@ -1750,11 +1761,20 @@ function renderLearnerPlan(box, plan) {
   }));
   for (const c of plan.candidates) {
     const why = (c.why || "").trim() || ((c.explanations || [])[0] || "");
+    const whyText = typeof why === "string" ? why : (why && why.text) || "";
+    const researchBits = [];
+    if (c.research_coverage != null) researchBits.push(`cov ${c.research_coverage}%`);
+    if (c.mvr_satisfied) researchBits.push("MVR✓");
+    if (c.thesis_stance) researchBits.push(String(c.thesis_stance));
     const row = el("div", { class: "learner-row" },
       el("div", { class: "rank", text: String(c.rank || "·") }),
       el("div", {},
         el("div", { class: "sym", text: c.symbol + (c.name ? ` · ${c.name}` : "") }),
-        why ? el("div", { class: "why", text: why }) : null,
+        whyText ? el("div", { class: "why", text: whyText }) : null,
+        c.thesis_summary ? el("div", { class: "why", text: c.thesis_summary }) : null,
+        researchBits.length
+          ? el("div", { class: "why", text: "Research: " + researchBits.join(" · ") })
+          : null,
       ),
       el("div", {
         class: "notional",
@@ -1806,19 +1826,558 @@ function renderLearnerWatchlist(box, watch) {
   }));
   rows.forEach((r, i) => {
     const why = (r.reason || r.why || "").trim();
+    const sym = r.symbol || "";
+    const researchBtn = el("button", {
+      class: "link",
+      type: "button",
+      text: "Research",
+      onclick: () => {
+        const input = $("#learner-research-symbol");
+        if (input) input.value = sym;
+        startLearnerResearch(sym);
+      },
+    });
     box.append(el("div", { class: "learner-row" },
       el("div", { class: "rank", text: String(r.rank || i + 1) }),
       el("div", {},
-        el("div", { class: "sym", text: (r.symbol || "") + (r.name ? ` · ${r.name}` : "") }),
+        el("div", { class: "sym", text: sym + (r.name ? ` · ${r.name}` : "") }),
         why ? el("div", { class: "why", text: why }) : null,
         r.sector ? el("div", { class: "why", text: r.sector }) : null,
       ),
-      el("div", {
-        class: "notional",
-        text: r.score != null ? Number(r.score).toFixed(3) : "",
-      }),
+      el("div", { class: "notional learner-row-actions" },
+        r.score != null ? el("span", { text: Number(r.score).toFixed(3) }) : null,
+        researchBtn,
+      ),
     ));
   });
+}
+
+async function loadLearnerResearchList(opts) {
+  const quiet = !!(opts && opts.quiet);
+  const box = $("#learner-research-body");
+  const status = $("#learner-research-status");
+  if (!box) return;
+  try {
+    const data = await api("/v1/market/research");
+    const items = (data && data.items) || [];
+    if (status && !quiet) {
+      const detail = $("#learner-research-detail");
+      if (!detail || !detail.childElementCount) {
+        status.textContent = items.length
+          ? `${items.length} symbol(s) researched`
+          : "No research yet — enter a symbol or use Research on the watchlist.";
+      }
+    }
+    box.innerHTML = "";
+    if (!items.length) {
+      box.append(el("div", {
+        class: "learner-empty",
+        text: "Studied / decided / learned will appear here after MVR runs.",
+      }));
+      return;
+    }
+    for (const aw of items.slice(0, 12)) {
+      const mvr = aw.mvr_satisfied ? "MVR✓" : "MVR…";
+      const thesis = (aw.thesis && aw.thesis.summary) || (aw.brief && aw.brief.thesis) || "";
+      box.append(el("div", { class: "learner-row" },
+        el("div", { class: "rank", text: mvr }),
+        el("div", {},
+          el("div", { class: "sym", text: aw.symbol || "" }),
+          el("div", {
+            class: "why",
+            text: `cov ${aw.coverage}% · conf ${aw.confidence} · ${aw.phase || ""}`
+              + (aw.thesis && aw.thesis.stance ? ` · ${aw.thesis.stance}` : ""),
+          }),
+          thesis ? el("div", { class: "why", text: String(thesis).slice(0, 160) }) : null,
+        ),
+        el("div", { class: "notional" },
+          el("button", {
+            class: "link",
+            type: "button",
+            text: "Open",
+            onclick: () => showLearnerResearch(aw.symbol),
+          }),
+        ),
+      ));
+    }
+  } catch (err) {
+    if (status && !quiet) {
+      status.textContent = "Research API unavailable — restart Atlas to load IRA.";
+    }
+  }
+}
+
+async function startLearnerResearch(symbol) {
+  const status = $("#learner-research-status");
+  const input = $("#learner-research-symbol");
+  const sym = (symbol || (input && input.value) || "").trim();
+  if (!sym) {
+    if (status) status.textContent = "Enter a symbol (e.g. RELIANCE.NS or MTARTECH).";
+    return;
+  }
+  if (status) status.textContent = `Running MVR for ${sym}…`;
+  try {
+    const result = await api(`/v1/market/research/${encodeURIComponent(sym)}`, {
+      method: "POST",
+      body: { mode: "mvr", force: true },
+    });
+    const aw = (result && result.awareness) || {};
+    if (status) {
+      status.textContent = result && result.ok === false
+        ? `Research blocked: ${result.reason || "error"}`
+        : `${aw.symbol || sym}: ${aw.phase || "done"} · cov ${aw.coverage}% · conf ${aw.confidence}`
+          + (aw.mvr_satisfied ? " · MVR✓" : " · MVR incomplete");
+    }
+    await showLearnerResearch(aw.symbol || sym);
+    await loadLearnerResearchList({ quiet: true });
+    const detail = $("#learner-research-detail");
+    if (detail && typeof detail.scrollIntoView === "function") {
+      detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = "Research failed: " + (err && err.message ? err.message : String(err));
+    }
+  }
+}
+
+function _snapNum(id) {
+  const el = $(id);
+  if (!el || el.value === "" || el.value == null) return null;
+  const n = Number(el.value);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function applyLearnerResearchSnapshot() {
+  const status = $("#learner-research-status");
+  const input = $("#learner-research-symbol");
+  const sym = ((input && input.value) || "").trim();
+  if (!sym) {
+    if (status) status.textContent = "Enter a symbol before applying a snapshot.";
+    return;
+  }
+  const body = {
+    pe: _snapNum("#snap-pe"),
+    fcf: _snapNum("#snap-fcf"),
+    price: _snapNum("#snap-price"),
+    shares: _snapNum("#snap-shares"),
+    roe: _snapNum("#snap-roe"),
+    roic: _snapNum("#snap-roic"),
+    debt_to_equity: _snapNum("#snap-de"),
+    revenue_cagr: _snapNum("#snap-rev-cagr"),
+    evidence_confidence: (($("#snap-confidence") || {}).value) || "verified",
+    note: (($("#snap-note") || {}).value) || "",
+    auto_refresh: true,
+  };
+  const fields = Object.entries(body).filter(([k, v]) =>
+    k === "evidence_confidence" || k === "note" || k === "auto_refresh" ? false : v != null
+  );
+  if (!fields.length) {
+    if (status) status.textContent = "Enter at least one number (PE, FCF, price, …).";
+    return;
+  }
+  if (status) status.textContent = `Applying operator snapshot for ${sym}…`;
+  try {
+    const result = await api(`/v1/market/research/${encodeURIComponent(sym)}/snapshot`, {
+      method: "POST",
+      body,
+    });
+    const aw = (result && result.awareness) || {};
+    const impacted = (result && result.impacted_sections) || [];
+    if (status) {
+      status.textContent = `${aw.symbol || sym}: snapshot applied · refreshed ${impacted.join(", ") || "sections"}`
+        + ` · cov ${aw.coverage}% · conf ${aw.confidence}`
+        + (aw.research_quality ? ` · quality ${aw.research_quality.level}` : "");
+    }
+    await showLearnerResearch(aw.symbol || sym);
+    await loadLearnerResearchList({ quiet: true });
+  } catch (err) {
+    if (status) {
+      status.textContent = "Snapshot failed: " + (err && err.message ? err.message : String(err));
+    }
+  }
+}
+
+async function applyLearnerFilingRefs() {
+  const status = $("#learner-research-status");
+  const input = $("#learner-research-symbol");
+  const sym = ((input && input.value) || "").trim();
+  const title = (($("#snap-filing-title") || {}).value || "").trim();
+  if (!sym) {
+    if (status) status.textContent = "Enter a symbol before attaching a filing.";
+    return;
+  }
+  if (!title) {
+    if (status) status.textContent = "Enter a filing title (e.g. Annual Report FY25).";
+    return;
+  }
+  const kind = (($("#snap-filing-kind") || {}).value) || "annual";
+  const url = (($("#snap-filing-url") || {}).value || "").trim();
+  if (status) status.textContent = `Attaching filing ref for ${sym}…`;
+  try {
+    const result = await api(`/v1/market/research/${encodeURIComponent(sym)}/filings`, {
+      method: "POST",
+      body: {
+        filings: [{ title, kind, url }],
+        auto_refresh: true,
+        note: "Operator filing ref from Market UI",
+      },
+    });
+    const aw = (result && result.awareness) || {};
+    const levels = (result && result.evidence_levels) || [];
+    if (status) {
+      status.textContent = `${aw.symbol || sym}: filing attached · levels ${levels.join(",") || "?"}`
+        + ` · management evidence updated`;
+    }
+    await showLearnerResearch(aw.symbol || sym);
+    await loadLearnerResearchList({ quiet: true });
+  } catch (err) {
+    if (status) {
+      status.textContent = "Filing attach failed: "
+        + (err && err.message ? err.message : String(err));
+    }
+  }
+}
+
+async function raiseLearnerCriticalFlag() {
+  const status = $("#learner-research-status");
+  const input = $("#learner-research-symbol");
+  const sym = ((input && input.value) || "").trim();
+  const text = (($("#snap-critical-text") || {}).value || "").trim();
+  if (!sym) {
+    if (status) status.textContent = "Enter a symbol before raising a critical flag.";
+    return;
+  }
+  if (!text) {
+    if (status) status.textContent = "Describe the critical evidence.";
+    return;
+  }
+  const kind = (($("#snap-critical-kind") || {}).value) || "thesis_invalidating";
+  if (status) status.textContent = `Raising critical flag on ${sym}…`;
+  try {
+    const result = await api(`/v1/market/research/${encodeURIComponent(sym)}/critical-flag`, {
+      method: "POST",
+      body: { text, kind },
+    });
+    const aw = (result && result.awareness) || {};
+    if (status) {
+      status.textContent = `${aw.symbol || sym}: critical flag raised · stance `
+        + ((aw.thesis && aw.thesis.stance) || "?");
+    }
+    await showLearnerResearch(aw.symbol || sym);
+    await loadLearnerResearchList({ quiet: true });
+  } catch (err) {
+    if (status) {
+      status.textContent = "Critical flag failed: "
+        + (err && err.message ? err.message : String(err));
+    }
+  }
+}
+
+async function applyLearnerManagementPack() {
+  const status = $("#learner-research-status");
+  const input = $("#learner-research-symbol");
+  const sym = ((input && input.value) || "").trim();
+  if (!sym) {
+    if (status) status.textContent = "Enter a symbol before applying management pack.";
+    return;
+  }
+  const ids = [
+    "capital_allocation",
+    "dilution",
+    "related_party",
+    "governance_red_flags",
+    "roic_trend",
+    "promoter_skin",
+  ];
+  const answers = {};
+  for (const id of ids) {
+    const el = $(`#mgmt-${id}`);
+    const v = ((el && el.value) || "").trim();
+    if (v) answers[id] = v;
+  }
+  if (!Object.keys(answers).length) {
+    if (status) status.textContent = "Fill at least one management checklist field.";
+    return;
+  }
+  if (status) status.textContent = `Applying management pack for ${sym}…`;
+  try {
+    const result = await api(`/v1/market/research/${encodeURIComponent(sym)}/management`, {
+      method: "POST",
+      body: {
+        answers,
+        operator_note: (($("#mgmt-note") || {}).value) || "",
+        evidence_level: "F",
+        auto_refresh: true,
+      },
+    });
+    const aw = (result && result.awareness) || {};
+    if (status) {
+      status.textContent = `${aw.symbol || sym}: management pack · ${result.answered || 0} answered`
+        + ` · cov ${aw.coverage}% · conf ${aw.confidence}`
+        + (aw.research_quality ? ` · quality ${aw.research_quality.level}` : "");
+    }
+    await showLearnerResearch(aw.symbol || sym);
+    await loadLearnerResearchList({ quiet: true });
+  } catch (err) {
+    if (status) {
+      status.textContent = "Management pack failed: "
+        + (err && err.message ? err.message : String(err));
+    }
+  }
+}
+
+async function showLearnerResearch(symbol) {
+  const box = $("#learner-research-detail") || $("#learner-research-body");
+  const status = $("#learner-research-status");
+  if (!box || !symbol) return;
+  try {
+    const data = await api(
+      `/v1/market/research/${encodeURIComponent(symbol)}?full=true`,
+    );
+    const aw = (data && data.awareness) || {};
+    const dossier = (data && data.dossier) || {};
+    const thesis = aw.thesis || {};
+    const val = aw.valuation || {};
+    const brief = aw.brief || {};
+    const sections = dossier.sections || {};
+    const risks = (((sections.risks || {}).fields || {}).top_risks) || [];
+    const biz = (sections.business || {}).fields || {};
+    const gaps = [...(aw.top_gaps || []), ...(aw.known_unknowns || [])].filter(Boolean);
+    const gapQs = (aw.gap_questions || aw.open_questions || []).map((q) =>
+      (typeof q === "string" ? q : (q.text || q.answer_note || ""))
+    ).filter(Boolean);
+
+    box.innerHTML = "";
+    const add = (label, text, { force = false } = {}) => {
+      const body = (text == null || text === "") ? (force ? "(not available)" : "") : String(text);
+      if (!body && !force) return;
+      box.append(el("div", { class: "learner-research-block" },
+        label ? el("div", { class: "learner-research-label", text: label }) : null,
+        el("div", { class: "why", text: body }),
+      ));
+    };
+
+    const stance = (thesis.stance || brief.stance || "unknown").replace(/_/g, " ");
+    const mos = val.margin_of_safety_pct;
+    const mosLine = mos != null
+      ? `MoS ${mos}% (${val.mos_method || "est."})`
+      : "MoS unknown — no buy size from valuation";
+    const conf = aw.confidence || "?";
+    const cov = aw.coverage != null ? `${aw.coverage}%` : "?";
+    const rq = (aw.research_quality && aw.research_quality.level) || "?";
+    const verdictClass = (stance.includes("buy") && mos != null)
+      ? "ok"
+      : (conf === "very_low" || mos == null ? "warn" : "");
+    box.append(el("div", {
+      class: `learner-research-verdict${verdictClass ? ` ${verdictClass}` : ""}`,
+      text: `${aw.symbol || symbol}: ${stance.toUpperCase()} · conf ${conf} · cov ${cov} · quality ${rq} · ${mosLine}`,
+    }));
+
+    add("MVR", (aw.mvr_satisfied ? "Satisfied — enough to continue researching (not enough to invest)." : "Incomplete")
+      + (aw.mvr && (aw.mvr.missing || []).length ? ` Missing: ${aw.mvr.missing.join(", ")}` : ""),
+      { force: true });
+    add("Research quality", [
+      String(rq).toUpperCase(),
+      (aw.research_quality && aw.research_quality.meaning) || null,
+      "Coverage ≠ confidence ≠ quality ≠ evidence sufficiency.",
+    ].filter(Boolean).join("\n"), { force: true });
+    const suf = aw.evidence_sufficiency || {};
+    if (suf.cash_flow || suf.valuation) {
+      add("Evidence sufficiency", [
+        `Cash flow: ${suf.cash_flow || "—"}`,
+        `Management: ${suf.management || "—"}`,
+        `Valuation: ${suf.valuation || "—"}`,
+        `Decision: ${suf.decision || "—"}`,
+      ].join("\n"));
+    }
+    const cf = aw.critical_flags || {};
+    if (cf.count) {
+      add("Critical flags", [
+        cf.note || "Critical evidence outweighs checklists.",
+        ...((cf.active || []).slice(0, 4).map((f) =>
+          `• [${f.kind}] ${f.text || ""}`
+        )),
+      ].join("\n"), { force: true });
+    }
+    const nextWork = aw.next_work || [];
+    if (nextWork.length) {
+      add("Next research work", nextWork.slice(0, 6).map((w) =>
+        `• (${w.kind}) ${w.text || w.id || ""}${w.reason ? ` — ${w.reason}` : ""}`
+      ).join("\n"));
+    }
+    add("Honesty", brief.honesty
+      || "Hermetic / hint-based MVR — not live NSE filings. Coverage ≠ confidence.",
+      { force: true });
+    add("Business",
+      [biz.name, biz.sector, biz.summary].filter(Boolean).join(" · ") || brief.business || "(no business sketch)",
+      { force: true });
+    add(`Thesis (${stance})`, thesis.summary || brief.thesis || "(none yet)", { force: true });
+    if (thesis.base) add("Base case", thesis.base);
+    if (thesis.falsifiers && thesis.falsifiers.length) {
+      add("Falsifiers", thesis.falsifiers.slice(0, 5).join(" · "));
+    }
+    const drivers = aw.thesis_drivers || thesis.drivers || {};
+    if ((drivers.positive || []).length || (drivers.concerns || []).length) {
+      add("Thesis drivers", [
+        (drivers.positive || []).length ? `Positive\n• ${drivers.positive.slice(0, 6).join("\n• ")}` : null,
+        (drivers.concerns || []).length ? `Concerns\n• ${drivers.concerns.slice(0, 6).join("\n• ")}` : null,
+        (drivers.unknowns || []).length ? `Unknown\n• ${drivers.unknowns.slice(0, 6).join("\n• ")}` : null,
+        (drivers.primary_kpis || []).length
+          ? `Sector KPIs\n• ${drivers.primary_kpis.slice(0, 6).join("\n• ")}`
+          : null,
+      ].filter(Boolean).join("\n\n"), { force: true });
+    }
+    const dist = aw.thesis_distinctiveness || thesis.distinctiveness || {};
+    if (dist.score_pct != null) {
+      add("Thesis distinctiveness", [
+        `${dist.score_pct}%`
+          + (dist.identifiable_without_name ? " — identifiable without company name" : " — still too generic"),
+        dist.pack_id ? `Pack: ${dist.pack_id}` : null,
+        (dist.hits || []).length ? `Hits: ${(dist.hits || []).slice(0, 6).join(", ")}` : null,
+        dist.note || null,
+      ].filter(Boolean).join("\n"), { force: true });
+    }
+    if (aw.pack || aw.sector_pack) {
+      add("Sector pack", [
+        aw.pack || (aw.sector_pack && aw.sector_pack.id) || "?",
+        aw.sector_pack && aw.sector_pack.label ? aw.sector_pack.label : null,
+      ].filter(Boolean).join(" · "));
+    }
+    const priors = aw.outcome_priors || {};
+    if (priors.last_result) {
+      add("Outcome priors", [
+        `Last: ${priors.last_result}${priors.last_note ? ` — ${priors.last_note}` : ""}`,
+        priors.ranking_penalty ? `Ranking penalty: ${priors.ranking_penalty}` : null,
+        priors.ranking_bonus ? `Ranking bonus: ${priors.ranking_bonus}` : null,
+      ].filter(Boolean).join("\n"));
+    }
+    const mgmtPack = aw.management_pack || ((sections.management || {}).fields || {}).pack || {};
+    const mgmtItems = (mgmtPack.items || []).filter((i) => i && i.answer);
+    if (mgmtItems.length) {
+      add("Management pack", mgmtItems.slice(0, 8).map((i) =>
+        `• ${i.label || i.id}: ${i.answer} [${i.status || "?"}]`
+      ).join("\n"));
+    }
+    const miss = aw.missing_inputs || {};
+    const fmtMiss = (arr) => (arr || []).map((m) => m.label || m.id).filter(Boolean);
+    const crit = fmtMiss(miss.critical);
+    const imp = fmtMiss(miss.important);
+    const opt = fmtMiss(miss.optional);
+    const missingIn = (val.missing_inputs || []).filter((m) => m && !m.present);
+    add("Valuation", [
+      `Method: ${val.method_label || val.method || "insufficient"}`,
+      val.method_confidence ? `Method confidence: ${val.method_confidence}` : null,
+      mosLine,
+      val.pe != null ? `PE ${val.pe}` : "PE unknown",
+      val.fair_pe != null ? `fair PE ≈ ${val.fair_pe}` : null,
+      val.fcf != null ? `FCF seed ${val.fcf}` : "FCF unknown",
+      (val.gaps || []).length ? `Gaps: ${(val.gaps || []).slice(0, 3).join("; ")}` : null,
+      crit.length ? `Critical missing:\n• ${crit.join("\n• ")}` : null,
+      imp.length ? `Important missing:\n• ${imp.join("\n• ")}` : null,
+      opt.length ? `Optional missing:\n• ${opt.join("\n• ")}` : null,
+      (!crit.length && !imp.length && missingIn.length)
+        ? ("Missing:\n• " + missingIn.slice(0, 6).map((m) => m.label || m.id).join("\n• "))
+        : null,
+    ].filter(Boolean).join("\n"), { force: true });
+    add("Risks",
+      risks.length ? risks.slice(0, 6).join("\n• ").replace(/^/, "• ") : "(none listed)",
+      { force: true });
+
+    const qc = aw.questions_classified || {};
+    const fmtQ = (arr) => (arr || []).slice(0, 6).map((q) =>
+      (typeof q === "string" ? q : (q.text || q.answer_note || q.id || ""))
+    ).filter(Boolean);
+    const ans = fmtQ(qc.answered);
+    const opn = fmtQ(qc.open);
+    const blk = fmtQ(qc.blocked);
+    const def = fmtQ(qc.deferred);
+    if (ans.length || opn.length || blk.length || def.length) {
+      add("Research questions", [
+        ans.length ? `Answered ✓\n• ${ans.join("\n• ")}` : null,
+        opn.length ? `Open\n• ${opn.join("\n• ")}` : null,
+        blk.length ? `Blocked\n• ${blk.join("\n• ")}` : null,
+        def.length ? `Deferred\n• ${def.join("\n• ")}` : null,
+      ].filter(Boolean).join("\n\n"), { force: true });
+    } else {
+      add("Open / gap questions",
+        gapQs.length ? gapQs.slice(0, 8).join("\n• ").replace(/^/, "• ") : "(none)",
+        { force: true });
+    }
+    if (gaps.length) {
+      add("Known unknowns", [...new Set(gaps)].slice(0, 10).join("\n• ").replace(/^/, "• "));
+    }
+    const bySec = aw.coverage_by_section || {};
+    const secDepth = Object.keys(bySec).sort().map((k) => `${k} ${bySec[k]}%`);
+    if (secDepth.length) {
+      add("Coverage by section (depth)", secDepth.join(" · "));
+    }
+    if (aw.coverage_by_evidence != null || aw.coverage_by_reasoning != null) {
+      add("Coverage layers", [
+        `Evidence ${aw.coverage_by_evidence != null ? aw.coverage_by_evidence + "%" : "—"}`,
+        `Reasoning ${aw.coverage_by_reasoning != null ? aw.coverage_by_reasoning + "%" : "—"}`,
+        "High reasoning + low evidence = template risk.",
+      ].join(" · "));
+    }
+    const secEv = aw.section_evidence || {};
+    const evBits = Object.keys(secEv).filter((k) => (secEv[k].levels || []).length).map((k) =>
+      `${k}=${(secEv[k].levels || []).join("+")}/${secEv[k].confidence || "?"}`
+    );
+    if (evBits.length) {
+      add("Evidence levels (A–G)", evBits.slice(0, 10).join(" · "));
+    }
+    if ((brief.watch_items || []).length) {
+      add("Watch next", brief.watch_items.slice(0, 8).join(" · "));
+    }
+
+    const timing = aw.timing || dossier.timing || {};
+    if (timing && (timing.status || timing.label)) {
+      const sig = timing.signals || {};
+      add("Timing (not thesis)", [
+        `Status: ${timing.status || "—"}`,
+        timing.bias ? `Bias: ${timing.bias}` : null,
+        sig.rsi != null ? `RSI ${Number(sig.rsi).toFixed(1)}` : null,
+        (timing.notes || []).slice(0, 3).join("; ") || null,
+        timing.honesty || "Technicals never replace MoS / thesis.",
+      ].filter(Boolean).join("\n"));
+    }
+    const fund = aw.fundamentals_status || dossier.fundamentals_status || {};
+    if (fund && (fund.used || (fund.tried || []).length)) {
+      const tried = (fund.tried || []).map((t) => {
+        if (!t) return null;
+        return t.ok ? `${t.provider} ok` : `${t.provider} gap${t.gap ? ` (${t.gap})` : ""}`;
+      }).filter(Boolean);
+      add("Fundamentals providers",
+        (fund.used ? `Used: ${fund.used}` : "No live profile — hermetic/hint only")
+        + (tried.length ? `\nTried: ${tried.join(", ")}` : ""));
+    }
+
+    add("Trail", `Memories ${aw.memories_count || 0} · Outcomes ${aw.outcomes_count || 0}`
+      + (aw.pack ? ` · pack=${aw.pack}` : "")
+      + ` · phase=${aw.phase || "—"}`);
+
+    const secNames = Object.keys(sections);
+    if (secNames.length) {
+      box.append(el("div", {
+        class: "muted small",
+        style: "margin-top:10px",
+        text: "Sections: " + secNames.map((n) => {
+          const s = sections[n] || {};
+          const g = (s.gaps || []).length ? `/${(s.gaps || []).length} gaps` : "";
+          return `${n}=${s.status}/${s.confidence}${g}`;
+        }).join(", "),
+      }));
+    }
+    if (status) {
+      status.textContent = `${aw.symbol || symbol}: detail loaded · conf ${aw.confidence}`
+        + ` · cov ${aw.coverage}% · quality ${(aw.research_quality && aw.research_quality.level) || "?"}`;
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = "Could not load research: "
+        + (err && err.message ? err.message : String(err));
+    }
+  }
 }
 
 function renderLearnerChecklist(box, status) {
@@ -3065,10 +3624,31 @@ function init() {
   if (emailPreview) emailPreview.addEventListener("click", () => previewInvestorEmail("morning"));
   const emailPreviewEve = $("#learner-email-preview-evening");
   if (emailPreviewEve) emailPreviewEve.addEventListener("click", () => previewInvestorEmail("evening"));
+  const emailPreviewWeek = $("#learner-email-preview-weekly");
+  if (emailPreviewWeek) emailPreviewWeek.addEventListener("click", () => previewInvestorEmail("weekly"));
   const emailSend = $("#learner-email-send");
   if (emailSend) emailSend.addEventListener("click", () => sendInvestorEmail("morning"));
   const emailSendEve = $("#learner-email-send-evening");
   if (emailSendEve) emailSendEve.addEventListener("click", () => sendInvestorEmail("evening"));
+  const emailSendWeek = $("#learner-email-send-weekly");
+  if (emailSendWeek) emailSendWeek.addEventListener("click", () => sendInvestorEmail("weekly"));
+  const researchGo = $("#learner-research-go");
+  if (researchGo) researchGo.addEventListener("click", () => startLearnerResearch());
+  const snapGo = $("#learner-research-snapshot-go");
+  if (snapGo) snapGo.addEventListener("click", () => applyLearnerResearchSnapshot());
+  const filingsGo = $("#learner-research-filings-go");
+  if (filingsGo) filingsGo.addEventListener("click", () => applyLearnerFilingRefs());
+  const critGo = $("#learner-research-critical-go");
+  if (critGo) critGo.addEventListener("click", () => raiseLearnerCriticalFlag());
+  const mgmtGo = $("#learner-research-mgmt-go");
+  if (mgmtGo) mgmtGo.addEventListener("click", () => applyLearnerManagementPack());
+  const researchInput = $("#learner-research-symbol");
+  if (researchInput) researchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      startLearnerResearch();
+    }
+  });
   $("#mission-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const tpl = $("#mission-template").value;

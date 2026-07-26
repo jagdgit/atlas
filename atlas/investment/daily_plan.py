@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-VERSION = "il.6"
+VERSION = "il.6b"
 KIND = "daily_investment_plan"
 
 
@@ -24,10 +24,12 @@ def build_daily_plan(
     deploy_fraction: float = 0.40,
     as_of: str | None = None,
     extra: dict[str, Any] | None = None,
+    research_by_symbol: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build today's plan from ranked universe rows (+ optional watchlist extra)."""
     rows = [r for r in (ranked or []) if isinstance(r, dict) and r.get("symbol")]
     extra = dict(extra or {})
+    research_map = dict(research_by_symbol or {})
     phase = str(extra.get("phase") or "").strip().lower()
     confidence = str(extra.get("confidence") or "").strip().lower()
     if not phase and rows:
@@ -52,6 +54,7 @@ def build_daily_plan(
     per = (budget / len(candidates_src)) if candidates_src else 0.0
 
     candidates: list[dict[str, Any]] = []
+    researched_n = 0
     for i, r in enumerate(candidates_src):
         sym = str(r.get("symbol"))
         score = r.get("score")
@@ -64,21 +67,42 @@ def build_daily_plan(
         # Equal-weight fallback if weights degenerate
         if size <= 0 and per > 0:
             size = round(per, 2)
-        candidates.append(
-            {
-                "symbol": sym,
-                "name": r.get("name") or "",
-                "sector": r.get("sector") or "",
-                "rank": r.get("rank") or (i + 1),
-                "score": score_f,
-                "why": (r.get("reason") or "").strip(),
-                "explanations": list(r.get("explanations") or [])[:6],
-                "suggested_notional": size,
-                "suggested_weight": round(weight, 4),
-                "phase": r.get("phase") or phase,
-                "confidence": r.get("confidence") or confidence,
-            }
-        )
+        cand: dict[str, Any] = {
+            "symbol": sym,
+            "name": r.get("name") or "",
+            "sector": r.get("sector") or "",
+            "rank": r.get("rank") or (i + 1),
+            "score": score_f,
+            "why": (r.get("reason") or "").strip(),
+            "explanations": list(r.get("explanations") or [])[:6],
+            "suggested_notional": size,
+            "suggested_weight": round(weight, 4),
+            "phase": r.get("phase") or phase,
+            "confidence": r.get("confidence") or confidence,
+        }
+        # IRA.13 — cite dossier/thesis/coverage when available
+        aw = research_map.get(sym) or research_map.get(sym.upper()) or {}
+        if not aw and isinstance(r.get("research"), dict):
+            aw = r.get("research") or {}
+        if aw:
+            thesis = aw.get("thesis") if isinstance(aw.get("thesis"), dict) else {}
+            cand["research_coverage"] = aw.get("coverage")
+            cand["research_confidence"] = aw.get("confidence")
+            cand["mvr_satisfied"] = aw.get("mvr_satisfied")
+            cand["thesis_stance"] = thesis.get("stance") or aw.get("stance")
+            cand["thesis_summary"] = (thesis.get("summary") or aw.get("thesis_summary") or "")[:200]
+            if cand["thesis_summary"]:
+                researched_n += 1
+                cand["explanations"] = list(cand["explanations"]) + [
+                    {
+                        "sign": "·",
+                        "text": f"Thesis ({cand.get('thesis_stance') or '?'}): {cand['thesis_summary'][:120]}",
+                        "component": "research",
+                    }
+                ]
+                if not cand["why"]:
+                    cand["why"] = cand["thesis_summary"][:160]
+        candidates.append(cand)
 
     _finalize_weights(candidates, budget)
 
@@ -90,6 +114,10 @@ def build_daily_plan(
         notes.append(
             "Cold start: phase=learning / confidence=very_low — treat sizes as provisional, "
             "not a proven edge."
+        )
+    if researched_n:
+        notes.append(
+            f"{researched_n}/{len(candidates)} candidate(s) cite Investing Research (coverage/thesis)."
         )
     if not rows:
         notes.append("No ranked watchlist yet — start M0 / India learner first.")
@@ -112,6 +140,7 @@ def build_daily_plan(
         "avoids": avoids,
         "notes": notes,
         "summary": _summary(candidates, avoids, learning=learning, capital=capital_f),
+        "research_cited": researched_n,
     }
 
 

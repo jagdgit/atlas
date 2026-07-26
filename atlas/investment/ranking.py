@@ -17,11 +17,12 @@ CONF_MEDIUM = "medium"
 CONF_HIGH = "high"
 
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "momentum": 0.35,
-    "liquidity": 0.25,
+    "momentum": 0.32,
+    "liquidity": 0.22,
     "quality": 0.15,
-    "policy": 0.15,
-    "experience": 0.10,
+    "policy": 0.13,
+    "experience": 0.08,
+    "research": 0.10,
 }
 
 _LEARNING_LINE = {
@@ -38,6 +39,7 @@ def rank_universe(
     quality_by_symbol: dict[str, dict[str, Any]] | None = None,
     policy_delta_by_symbol: dict[str, float] | None = None,
     experience_bias_by_symbol: dict[str, float] | None = None,
+    research_bias_by_symbol: dict[str, float] | None = None,
     max_watchlist: int = 15,
     weights: dict[str, float] | None = None,
     lookback_short: int = 5,
@@ -59,6 +61,7 @@ def rank_universe(
     quality_map = quality_by_symbol or {}
     policy_map = policy_delta_by_symbol or {}
     exp_map = experience_bias_by_symbol or {}
+    research_map = research_bias_by_symbol or {}
     w = _normalize_weights(weights or DEFAULT_WEIGHTS)
     max_n = max(1, int(max_watchlist))
     short_n = max(2, int(lookback_short))
@@ -197,6 +200,27 @@ def rank_universe(
                     "sign": "+",
                     "text": "Experience support",
                     "component": "experience",
+                }
+            )
+
+        # IRA.16 — soft preference for researched / MVR-ready names
+        r_bias = float(research_map.get(sym) or 0.0)
+        r = _clamp01(0.5 + 0.5 * r_bias)
+        components["research"] = r
+        if r_bias >= 0.08:
+            explanations.append(
+                {
+                    "sign": "+",
+                    "text": "Researched (MVR/coverage)",
+                    "component": "research",
+                }
+            )
+        elif r_bias <= -0.05:
+            explanations.append(
+                {
+                    "sign": "−",
+                    "text": "Research thin / stale",
+                    "component": "research",
                 }
             )
 
@@ -352,6 +376,36 @@ def _quality_score(q: dict[str, Any]) -> float:
     if "screener_score" in q and q["screener_score"] is not None:
         try:
             parts.append(_clamp01(float(q["screener_score"])))
+        except (TypeError, ValueError):
+            pass
+    # IRA.8 — optional operator fundamentals (never invent)
+    if "roic" in q and q["roic"] is not None:
+        try:
+            roic = float(q["roic"])
+            roic_pct = roic * 100.0 if abs(roic) <= 1.5 else roic
+            parts.append(_clamp01(0.3 + roic_pct / 50.0))
+        except (TypeError, ValueError):
+            pass
+    for margin_key in ("operating_margin", "net_margin"):
+        if margin_key in q and q[margin_key] is not None:
+            try:
+                m = float(q[margin_key])
+                m_pct = m * 100.0 if abs(m) <= 1.5 else m
+                parts.append(_clamp01(0.3 + m_pct / 40.0))
+            except (TypeError, ValueError):
+                pass
+    if "revenue_cagr" in q and q["revenue_cagr"] is not None:
+        try:
+            cagr = float(q["revenue_cagr"])
+            cagr_pct = cagr * 100.0 if abs(cagr) <= 1.5 else cagr
+            parts.append(_clamp01(0.4 + cagr_pct / 40.0))
+        except (TypeError, ValueError):
+            pass
+    if "fcf" in q and q["fcf"] is not None:
+        try:
+            # Positive FCF → slight quality lift; negative → drag (scale-agnostic sign).
+            fcf = float(q["fcf"])
+            parts.append(0.7 if fcf > 0 else (0.35 if fcf < 0 else 0.5))
         except (TypeError, ValueError):
             pass
     if not parts:

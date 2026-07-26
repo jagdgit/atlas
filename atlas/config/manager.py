@@ -557,6 +557,9 @@ class ResourcesConfig(BaseModel):
     max_archive_workers: int = 1  # parallel owner_knowledge active ingest jobs
     host_ram_reserve_mb: int = 2048  # keep free for OS / desktop / Ollama
     tick_ram_mb: int = 512  # default projected RAM for one worker tick
+    # IR-RO11 Layer 2: soft ceiling for the whole Atlas process (keep below systemd MemoryMax).
+    process_rss_soft_mb: int = 6144
+    memory_soft_ratio: float = 0.85  # yield tick at this fraction of per-worker budget
     ram_used_high: float = 0.85  # defer ticks when used fraction ≥ this
     load_pressure_high: float = 0.90
     # IR-RO10: opt-in BATCH quiet-hours window (off by default).

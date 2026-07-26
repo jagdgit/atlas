@@ -48,6 +48,7 @@ class PaperTradingWorker(PersistentWorker):
         events: Any = None,
         live_market: Any | None = None,
         investor_mailer: Any | None = None,
+        investment_research: Any | None = None,
         clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -62,6 +63,7 @@ class PaperTradingWorker(PersistentWorker):
         self._events = events
         self._live_market = live_market
         self._investor_mailer = investor_mailer
+        self._investment_research = investment_research
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._logger = logger or logging.getLogger("atlas.workers.paper_trading")
 
@@ -550,6 +552,17 @@ class PaperTradingWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("policy_engine evaluate skipped: %s", exc)
 
+        # IRA — research-based buy gate (learner books default on).
+        if kind == "buy" and self._investment_research is not None:
+            gate_note = self._research_buy_gate(
+                symbol=symbol,
+                cfg=cfg,
+                portfolio_key=portfolio_key,
+            )
+            if gate_note:
+                totals["holds"] += 1
+                return gate_note
+
         pack_ctx: dict[str, Any] = {
             "portfolio_key": portfolio_key,
             "persona": persona,
@@ -631,6 +644,14 @@ class PaperTradingWorker(PersistentWorker):
             "realized_pnl": float(trade.get("realized_pnl", 0.0)),
         }
         self._emit("PaperTradingFill", fill_payload)
+        self._record_research_outcome(
+            symbol=symbol,
+            kind=kind,
+            trade=trade,
+            why=why_short or "",
+            cfg=cfg,
+            portfolio_key=portfolio_key,
+        )
         if self._investor_mailer is not None:
             try:
                 decision_doc = {}
@@ -672,6 +693,115 @@ class PaperTradingWorker(PersistentWorker):
                 symbol, trade, decision, indicators=indicators, cfg=learn_cfg
             )
         return f"{symbol}: {kind} {qty:g} @ {price:.2f} ({why_short or 'signal'})"
+
+    # --- IRA research gate + daily learning ------------------------------
+    def _research_buy_gate(
+        self,
+        *,
+        symbol: str,
+        cfg: dict[str, Any],
+        portfolio_key: str,
+    ) -> str | None:
+        """Return a hold note when research gate blocks; None if buy may proceed."""
+        research = self._investment_research
+        if research is None:
+            return None
+        pk = (portfolio_key or "").lower()
+        learnerish = "learner" in pk
+        if cfg.get("require_mvr") is None:
+            require_mvr = learnerish or bool(cfg.get("research_gate", False))
+        else:
+            require_mvr = bool(cfg.get("require_mvr"))
+        if cfg.get("require_thesis") is None:
+            require_thesis = require_mvr
+        else:
+            require_thesis = bool(cfg.get("require_thesis"))
+        require_mos = cfg.get("require_mos")
+        mos_mode = str(cfg.get("mos_mode") or "").strip() or None
+        if mos_mode is None and learnerish:
+            # Soft: unknown MoS still allows learning fills; known adverse MoS blocks.
+            mos_mode = "soft"
+        min_mos_pct = cfg.get("min_mos_pct")
+        min_coverage = float(cfg.get("research_min_coverage") or 0.0)
+        program_id = str(cfg.get("program_id") or "market_intelligence")
+        if not (require_mvr or require_thesis or require_mos is not None or min_coverage or mos_mode):
+            return None
+
+        auto = cfg.get("research_auto_mvr")
+        if auto is None:
+            auto = require_mvr
+        gate_kw = dict(
+            program_id=program_id,
+            require_mvr=require_mvr,
+            require_thesis=require_thesis,
+            require_mos=bool(require_mos) if require_mos is not None else None,
+            min_coverage=min_coverage,
+            min_mos_pct=float(min_mos_pct) if min_mos_pct is not None else None,
+            mos_mode=mos_mode,
+        )
+        try:
+            gate = research.gate_buy(symbol, **gate_kw)
+            if not gate.get("allowed") and auto:
+                # Bounded hermetic MVR pass so paper trading can learn from research.
+                research.start(
+                    symbol,
+                    program_id=program_id,
+                    mode=str(cfg.get("research_mode") or "mvr"),
+                    force=False,
+                    trigger="paper_trading_gate",
+                )
+                gate = research.gate_buy(symbol, **gate_kw)
+            if gate.get("allowed"):
+                return None
+            reasons = ",".join(gate.get("reasons") or []) or "research_incomplete"
+            return f"{symbol}: research_hold ({reasons})"
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("research gate skipped: %s", exc)
+            return None
+
+    def _record_research_outcome(
+        self,
+        *,
+        symbol: str,
+        kind: str,
+        trade: dict[str, Any],
+        why: str,
+        cfg: dict[str, Any],
+        portfolio_key: str,
+    ) -> None:
+        research = self._investment_research
+        if research is None:
+            return
+        program_id = str(cfg.get("program_id") or "market_intelligence")
+        pnl = float(trade.get("realized_pnl") or 0.0)
+        if kind == "buy":
+            result = "observed"
+            note = f"Sim buy entered — {why or 'signal'}"
+        elif pnl > 0:
+            result = "held"
+            note = f"Sim sell profit {pnl:+.2f} — thesis tentatively held"
+        elif pnl < 0:
+            result = "weakened"
+            note = f"Sim sell loss {pnl:+.2f} — review falsifiers"
+        else:
+            result = "observed"
+            note = f"Sim sell flat — {why or 'exit'}"
+        try:
+            research.record_outcome(
+                symbol,
+                program_id=program_id,
+                result=result,
+                note=note,
+                trade={
+                    "side": kind,
+                    "quantity": trade.get("quantity"),
+                    "price": trade.get("price"),
+                    "realized_pnl": pnl,
+                    "portfolio_key": portfolio_key,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("research outcome record failed", exc_info=True)
 
     # --- learning loop ---------------------------------------------------
     def _remember_outcome(

@@ -59,6 +59,10 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
         "portfolio_label": "₹10k India Equity Learner",
         "persona": persona,
         "asset_class": "cash_equity",
+        "require_mvr": True,
+        "require_thesis": True,
+        "research_auto_mvr": True,
+        "mos_mode": "soft",
     }
     return {
         "investment_universe": {
@@ -107,6 +111,17 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "portfolio_key": "india_equity_learner",
             "morning_hour_start": 7,
             "morning_hour_end": 10,
+        },
+        "research_freshness": {
+            "program_id": "market_intelligence",
+            "max_symbols": 4,
+        },
+        "thesis_outcome": {
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "mentor_writeback": True,
+            "send_weekly": True,
+            "max_symbols": 10,
         },
     }
 
@@ -208,6 +223,22 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 cadence="morning IST",
                 status=MEMBER_ENABLED,
                 description="Email daily plan + trade decision reports (Gmail)",
+            ),
+            ProgramMember(
+                role="Research Freshness",
+                template="research_freshness",
+                kind="learning",
+                cadence="6h / overnight",
+                status=MEMBER_ENABLED,
+                description="IRA TTL refresh — incremental dossier sections (no full rebuild)",
+            ),
+            ProgramMember(
+                role="Thesis Outcome",
+                template="thesis_outcome",
+                kind="maintenance",
+                cadence="daily + weekly",
+                status=MEMBER_ENABLED,
+                description="ThesisOutcomes → Mentor lessons + weekly research learning email",
             ),
             ProgramMember(
                 role="Event Research",
