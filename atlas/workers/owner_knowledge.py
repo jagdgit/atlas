@@ -13,10 +13,9 @@ unified pipeline built in C.2–C.6:
 
 After ingesting, it rebuilds the **personal profile** (skills/identity/timeline) from the now-current
 experience + engineering knowledge (:meth:`PersonalService.infer` — inferred facts only, CC7/A9). It
-**never completes**: each tick is a bounded pass; a per-root content checksum in the checkpoint state
-makes an unchanged root a cheap no-op and makes the whole loop resume after a reboot (the manager
-reloads the checkpoint). Document/conversation roots also checkpoint **per file** and process a
-bounded ``files_per_tick`` batch so a large USB archive survives power loss mid-import.
+**never completes** by default (Personal watch loop): each tick is a bounded pass; a per-root
+content checksum in the checkpoint state makes an unchanged root a cheap no-op. Parallel Archive
+UI jobs set ``archive_mode=one_shot`` and stop when all roots are complete (frees Host Guard slot).
 Per tick it also consults the coverage map for **reader-version**
 staleness (A10 / OI-C8) and force-re-reads those assets without requiring content change.
 Per P11 the worker owns no knowledge — it drives stateless translators and
@@ -27,8 +26,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from atlas.engineering.ingest import compute_tree_checksum
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
@@ -45,7 +46,7 @@ _DEFAULT_EXTENSIONS = {
 
 class OwnerKnowledgeWorker(PersistentWorker):
     type = "owner_knowledge"
-    VERSION = 2
+    VERSION = 3
     journal_ticks = True  # journal meaningful ticks (ingests); pure no-ops return empty notes
 
     def __init__(
@@ -99,6 +100,27 @@ class OwnerKnowledgeWorker(PersistentWorker):
         changed_any = False
         progress_bits: list[str] = []
 
+        def _flush_phase(phase: str, detail: str = "", *, entry_path: str | None = None) -> None:
+            state["phase"] = phase
+            state["phase_detail"] = detail
+            state["phase_updated_at"] = datetime.now(timezone.utc).isoformat()
+            state["roots"] = root_state
+            state["progress"] = {
+                "roots": progress_bits,
+                "files_done_tick": totals.get("files_done_tick", 0),
+                "files_pending": totals.get("files_pending", 0),
+                "files_seen": totals.get("files_seen", 0),
+            }
+            if entry_path and entry_path in root_state:
+                state["roots"] = dict(root_state)
+            ctx.checkpoint_now(state)
+
+        if roots:
+            names = ", ".join(
+                Path(str(r.get("path") or "")).name or "?" for r in roots if r.get("path")
+            )
+            _flush_phase("starting", f"Preparing tick for {names}")
+
         for root in roots:
             path = str(root.get("path") or "").strip()
             if not path:
@@ -119,10 +141,12 @@ class OwnerKnowledgeWorker(PersistentWorker):
                     continue
 
             try:
+                root_state[path] = entry
                 complete = self._process_root(
                     path, kind, domain, cfg, ctx.mission_id, totals,
                     override_ext=root.get("extensions"),
                     entry=entry,
+                    flush=_flush_phase,
                 )
                 changed_any = True
                 if complete:
@@ -144,6 +168,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
                 self._logger.warning("owner archive root failed (%s): %s", path, exc)
 
         # OI-C8 / A10: re-read assets whose coverage was recorded under an older reader version.
+        _flush_phase("reextract", "Checking coverage for reader-version re-reads")
         reextracted = self._reextract_stale(cfg, totals)
         if reextracted:
             changed_any = True
@@ -160,6 +185,13 @@ class OwnerKnowledgeWorker(PersistentWorker):
             "files_pending": totals.get("files_pending", 0),
             "files_seen": totals.get("files_seen", 0),
         }
+        state["phase"] = "tick_complete"
+        state["phase_detail"] = (
+            f"files_seen={totals.get('files_seen', 0)} "
+            f"pending={totals.get('files_pending', 0)} "
+            f"done_tick={totals.get('files_done_tick', 0)}"
+        )
+        state["phase_updated_at"] = datetime.now(timezone.utc).isoformat()
 
         # Drain the prose candidates the doc/chat ingests emitted into findings (P11/P13: the
         # Consolidator is still the single write path; the worker just triggers the drain).
@@ -183,6 +215,22 @@ class OwnerKnowledgeWorker(PersistentWorker):
 
         state["ticks"] = int(state.get("ticks", 0)) + 1
         state["last_totals"] = totals
+
+        # One-shot parallel archive jobs: when every root is complete, stop the worker
+        # so Host Guard frees the archive slot. Permanent Personal archive (watch) stays.
+        archive_mode = str(cfg.get("archive_mode") or "watch").strip().lower()
+        roots_state = state.get("roots") if isinstance(state.get("roots"), dict) else {}
+        all_complete = bool(roots_state) and all(
+            isinstance(v, dict) and v.get("complete") for v in roots_state.values()
+        )
+        if archive_mode in {"one_shot", "oneshot", "batch"} and all_complete and not force:
+            note = (
+                f"{config_note}archive ingest complete — stopping one-shot job "
+                f"(findings=+{totals.get('findings', 0)}, experiences=+{totals.get('experiences', 0)}, "
+                f"docs={totals.get('documents', 0)}){profile_note}"
+            ).strip()
+            state["ingest_complete"] = True
+            return TickResult(state=state, note=note, done=True)
 
         if not changed_any and not force:
             note = f"{config_note}no change (archive unchanged)".strip() if config_note else ""
@@ -223,6 +271,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
         *,
         override_ext: Any = None,
         entry: dict[str, Any] | None = None,
+        flush: Callable[..., None] | None = None,
     ) -> bool:
         """Process one archive root. Returns True when the root is fully complete.
 
@@ -231,8 +280,17 @@ class OwnerKnowledgeWorker(PersistentWorker):
         """
         entry = entry if entry is not None else {}
         entry["kind"] = kind
+        label = Path(path).name or path
+
+        def _phase(phase: str, detail: str = "") -> None:
+            if flush is not None:
+                flush(phase, detail, entry_path=path)
 
         if kind == KIND_CODE:
+            _phase(
+                "learning_code",
+                f"{label}: whole-tree learn (large folders can take a long time before % updates)",
+            )
             out = self._intel.learn_repository(
                 path=path,
                 mission_id=mission_id,
@@ -251,7 +309,20 @@ class OwnerKnowledgeWorker(PersistentWorker):
         source = "conversation" if kind == KIND_CONVERSATION else "document"
         asset_kind = "conversation" if kind == KIND_CONVERSATION else "document"
         extensions = self._extensions_for(kind, override=override_ext)
-        files = self._discover(path, extensions)
+
+        def on_scan(seen: int, matched: int) -> None:
+            entry["progress"] = {
+                "total": matched,
+                "done": len(entry.get("files_done") or {}),
+                "pending": None,
+                "last_file": None,
+                "scanning": True,
+                "walked": seen,
+            }
+            _phase("scanning", f"{label}: walked {seen:,} · matched {matched:,} files")
+
+        _phase("scanning", f"{label}: discovering files…")
+        files = self._discover(path, extensions, on_progress=on_scan)
         totals["files_seen"] += len(files)
 
         done_map: dict[str, str] = dict(entry.get("files_done") or {})
@@ -264,10 +335,22 @@ class OwnerKnowledgeWorker(PersistentWorker):
             pending.append(file)
 
         totals["files_pending"] += len(pending)
+        entry["progress"] = {
+            "total": len(files),
+            "done": len(done_map),
+            "pending": len(pending),
+            "last_file": None,
+            "scanning": False,
+        }
+        _phase(
+            "ingesting",
+            f"{label}: {len(done_map):,}/{len(files):,} done · {len(pending):,} pending this job",
+        )
+
         per_tick = max(1, int(cfg.get("files_per_tick") or 40))
         batch = pending[:per_tick]
         last_file = None
-        for file in batch:
+        for i, file in enumerate(batch):
             key = str(file.resolve())
             try:
                 res = self._ingestion.ingest_file(
@@ -291,6 +374,20 @@ class OwnerKnowledgeWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001 - one bad file must not abort the root
                 totals["errors"] += 1
                 self._logger.warning("archive file failed (%s): %s", file, exc)
+            entry["files_done"] = done_map
+            remaining = max(0, len(pending) - (i + 1))
+            entry["progress"] = {
+                "total": len(files),
+                "done": len(done_map),
+                "pending": remaining,
+                "last_file": last_file,
+                "scanning": False,
+            }
+            if (i + 1) % 5 == 0 or i + 1 == len(batch):
+                _phase(
+                    "ingesting",
+                    f"{label}: {len(done_map):,}/{len(files):,} · batch {i + 1}/{len(batch)}",
+                )
 
         entry["files_done"] = done_map
         remaining = max(0, len(pending) - len(batch))
@@ -299,6 +396,7 @@ class OwnerKnowledgeWorker(PersistentWorker):
             "done": len(done_map),
             "pending": remaining,
             "last_file": last_file,
+            "scanning": False,
         }
         return len(done_map) >= len(files) and remaining == 0
 
@@ -392,16 +490,36 @@ class OwnerKnowledgeWorker(PersistentWorker):
         return _DEFAULT_EXTENSIONS.get(kind, ())
 
     @staticmethod
-    def _discover(path: str, extensions: tuple[str, ...]) -> list[Path]:
+    def _discover(
+        path: str,
+        extensions: tuple[str, ...],
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> list[Path]:
         root = Path(path).expanduser()
         if not root.exists():
             raise FileNotFoundError(f"archive root not found: {root}")
         if root.is_file():
             return [root] if root.suffix.lower() in extensions else []
-        return sorted(
-            p for p in root.rglob("*")
-            if p.is_file() and p.suffix.lower() in extensions
-        )
+        matched: list[Path] = []
+        walked = 0
+        last_emit = 0.0
+        ext_set = {e.lower() for e in extensions}
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            walked += 1
+            if p.suffix.lower() in ext_set:
+                matched.append(p)
+            now = time.monotonic()
+            if on_progress is not None and (
+                walked == 1 or walked % 500 == 0 or (now - last_emit) >= 2.0
+            ):
+                on_progress(walked, len(matched))
+                last_emit = now
+        if on_progress is not None:
+            on_progress(walked, len(matched))
+        return sorted(matched)
 
     @staticmethod
     def _file_sig(path: Path) -> str:

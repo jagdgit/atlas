@@ -113,6 +113,100 @@ def format_morning_report(
     return subject, "\n".join(lines)
 
 
+def format_evening_report(
+    *,
+    plan: dict[str, Any] | None,
+    portfolio: dict[str, Any] | None = None,
+    policy_snap: dict[str, Any] | None = None,
+    program_id: str = "market_intelligence",
+    trades: list[dict[str, Any]] | None = None,
+) -> tuple[str, str]:
+    """Post-NSE close digest: what we planned, what filled, portfolio end state."""
+    plan = plan or {}
+    as_of = plan.get("as_of") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    subject = f"[Atlas] Evening EOD digest — {as_of} ({program_id})"
+    lines = [
+        "Atlas evening report (simulation — not broker orders)",
+        f"Date: {as_of}",
+        f"Program: {program_id}",
+        "Window: after NSE cash equity close (~15:30 IST)",
+        f"Morning phase was: {plan.get('phase')} · confidence: {plan.get('confidence')}",
+        "",
+        "Morning plan recap:",
+        str(plan.get("summary") or "(no plan recorded)"),
+        "",
+        "Candidates (planned) — why & suggested notional:",
+    ]
+    for c in plan.get("candidates") or []:
+        lines.append(
+            f"  {c.get('rank', '?')}. {c.get('symbol')} ({c.get('sector') or '—'}) "
+            f"— ₹{c.get('suggested_notional', 0)} "
+            f"(weight {c.get('suggested_weight', 0)})"
+        )
+        why = (c.get("why") or "").strip()
+        if why:
+            lines.append(f"     Why: {why}")
+        for ex in (c.get("explanations") or [])[:4]:
+            if isinstance(ex, dict):
+                lines.append(f"     {ex.get('sign', '·')} {ex.get('text', '')}")
+            else:
+                lines.append(f"     · {ex}")
+
+    trades = list(trades or [])
+    if portfolio and not trades:
+        trades = list(portfolio.get("recent_trades") or [])
+    lines.append("")
+    lines.append(f"Simulated fills today / recent ({len(trades)}):")
+    if not trades:
+        lines.append("  (no fills recorded in this snapshot)")
+    for t in trades[:25]:
+        if not isinstance(t, dict):
+            continue
+        side = (t.get("side") or t.get("action") or "?").upper()
+        lines.append(
+            f"  · {side} {t.get('symbol')} × {t.get('quantity') or t.get('qty')} "
+            f"@ {t.get('price') or t.get('fill_price')}"
+            + (
+                f" — {t.get('reason') or t.get('note') or ''}"
+                if (t.get("reason") or t.get("note"))
+                else ""
+            )
+        )
+        for key in ("rationale", "why"):
+            if t.get(key):
+                lines.append(f"     {t.get(key)}")
+
+    if portfolio:
+        lines.append("")
+        lines.append("End-of-day portfolio snapshot:")
+        lines.append(f"  Cash: {portfolio.get('cash')}")
+        lines.append(
+            f"  Equity value: {portfolio.get('equity_value') or portfolio.get('positions_value')}"
+        )
+        if portfolio.get("trade_count") is not None:
+            lines.append(f"  Trade count (ledger): {portfolio.get('trade_count')}")
+        if portfolio.get("fees_paid") is not None:
+            lines.append(f"  Fees paid: {portfolio.get('fees_paid')}")
+        pos = portfolio.get("positions") or portfolio.get("holdings") or []
+        if isinstance(pos, dict):
+            pos = [{"symbol": k, **(v if isinstance(v, dict) else {})} for k, v in pos.items()]
+        for p in list(pos)[:20]:
+            if not isinstance(p, dict):
+                continue
+            lines.append(
+                f"  · {p.get('symbol')}: qty={p.get('quantity') or p.get('qty')} "
+                f"avg={p.get('avg_price') or p.get('avg_cost')}"
+            )
+
+    if policy_snap:
+        lines.append("")
+        lines.append(format_policy_brief(policy_snap, limit=6))
+
+    lines.append("")
+    lines.append("— Atlas Resource OS / Market Program · P10 simulation only")
+    return subject, "\n".join(lines)
+
+
 def format_trade_report(
     *,
     side: str,
@@ -191,6 +285,7 @@ class InvestorReportMailer:
         self._enabled = bool(enabled)
         self._logger = logger or logging.getLogger("atlas.investment.reports")
         self._sent_morning_dates: set[str] = set()
+        self._sent_evening_dates: set[str] = set()
 
     def recipients(self) -> list[str]:
         got = resolve_investor_recipients(config_to=self._recipients)
@@ -301,6 +396,72 @@ class InvestorReportMailer:
         ok = self._deliver(preview["subject"], preview["body"])
         if ok:
             self._sent_morning_dates.add(today)
+        return {
+            "sent": ok,
+            "as_of": today,
+            "recipients": preview["recipients"],
+            "subject": preview["subject"],
+            "body": preview["body"],
+            "reason": None if ok else "smtp_send_failed",
+        }
+
+    def preview_evening(
+        self,
+        *,
+        program_id: str = "market_intelligence",
+        portfolio: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from atlas.investment import watchlists as wl
+
+        snap = wl.latest(program_id)
+        plan = None
+        if isinstance(snap, dict):
+            plan = (snap.get("extra") or {}).get("daily_plan") or snap.get("daily_plan")
+            if not plan:
+                plan = plan_from_watchlist(snap)
+        policy = load_snapshot(self._data_dir) if self._data_dir else None
+        subject, body = format_evening_report(
+            plan=plan,
+            portfolio=portfolio,
+            policy_snap=policy,
+            program_id=program_id,
+            trades=(portfolio or {}).get("recent_trades") if isinstance(portfolio, dict) else None,
+        )
+        return {
+            "subject": subject,
+            "body": body,
+            "recipients": self.recipients(),
+            "ready": self.available(),
+            "has_plan": bool(plan and (plan.get("candidates") or plan.get("summary"))),
+            "as_of": (plan or {}).get("as_of"),
+        }
+
+    def send_evening(
+        self,
+        *,
+        program_id: str = "market_intelligence",
+        portfolio: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        preview = self.preview_evening(program_id=program_id, portfolio=portfolio)
+        if not self.available():
+            return {
+                "sent": False,
+                "reason": "email_unavailable",
+                "status": self.status(),
+                **{k: preview[k] for k in ("subject", "body", "recipients", "as_of")},
+            }
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if not force and today in self._sent_evening_dates:
+            return {
+                "sent": False,
+                "reason": "already_sent_today",
+                "as_of": today,
+                **{k: preview[k] for k in ("subject", "body", "recipients")},
+            }
+        ok = self._deliver(preview["subject"], preview["body"])
+        if ok:
+            self._sent_evening_dates.add(today)
         return {
             "sent": ok,
             "as_of": today,

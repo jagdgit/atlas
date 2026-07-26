@@ -232,6 +232,7 @@ After ~1 month continuous run, measure: avg tick duration, queue depth, starvati
 7. **IR-RO6** — Storage pressure (consumed by scheduler)  
 8. **IR-RO4 / IR-RO8 / IR-RO10** — budgets, machine profile, should-run-now ✅  
 9. **IR-M1 → IR-M3**, then **IR-RO9** ✅  
+10. **OC-1 → OC-3** — Operator Communication (email reports → console inbox → Telegram) — see [`OPERATOR_COMMUNICATION.md`](OPERATOR_COMMUNICATION.md)  
 
 ---
 

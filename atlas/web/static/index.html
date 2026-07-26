@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlas Console</title>
-  <link rel="stylesheet" href="./styles.css?v=dash17" />
+  <link rel="stylesheet" href="./styles.css?v=dash19" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
@@ -133,8 +133,10 @@
           <div class="panel-head">
             <h3 class="section-h">Investor email report</h3>
             <div class="panel-actions">
-              <button id="learner-email-preview" class="link" type="button">Preview</button>
-              <button id="learner-email-send" class="btn" type="button">Send email</button>
+              <button id="learner-email-preview" class="link" type="button">Preview morning</button>
+              <button id="learner-email-preview-evening" class="link" type="button">Preview evening</button>
+              <button id="learner-email-send" class="btn" type="button">Send morning</button>
+              <button id="learner-email-send-evening" class="btn" type="button">Send evening</button>
             </div>
           </div>
           <div id="learner-email-status" class="learner-email-status muted small">Checking email config…</div>
@@ -281,6 +283,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=dash17"></script>
+  <script src="./app.js?v=dash19"></script>
 </body>
 </html>

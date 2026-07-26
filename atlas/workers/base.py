@@ -26,6 +26,18 @@ class TickContext:
     config_version: int | None             # which config version `config` came from
     state: dict[str, Any]                  # last checkpoint state ({} on first tick)
     inputs: list[dict[str, Any]] = field(default_factory=list)  # drained operator inputs
+    # Optional mid-tick checkpoint flush (large archive scans) — never raises to the worker.
+    save_checkpoint: Any | None = None
+
+    def checkpoint_now(self, state: dict[str, Any]) -> None:
+        """Persist partial progress so the Archive UI can show scan/ingest status."""
+        fn = self.save_checkpoint
+        if fn is None:
+            return
+        try:
+            fn(state)
+        except Exception:  # noqa: BLE001 - UI progress must not abort the tick
+            pass
 
 
 @dataclass(frozen=True)

@@ -1604,21 +1604,24 @@ async function loadInvestorEmailStatus() {
     }
     const sendBtn = $("#learner-email-send");
     if (sendBtn) sendBtn.disabled = !ready;
+    const sendEve = $("#learner-email-send-evening");
+    if (sendEve) sendEve.disabled = !ready;
   } catch (err) {
     box.className = "learner-email-status small warn";
     box.textContent = "Could not check email status — is Atlas restarted with investor_mailer?";
   }
 }
 
-async function previewInvestorEmail() {
+async function previewInvestorEmail(kind) {
+  const reportKind = (kind === "evening") ? "evening" : "morning";
   const pre = $("#learner-email-preview-body");
   const meta = $("#learner-email-meta");
   const box = $("#learner-email-status");
   if (!pre) return;
   pre.hidden = false;
-  pre.textContent = "Building preview…";
+  pre.textContent = `Building ${reportKind} preview…`;
   try {
-    const prev = await api("/v1/market/investor-report/preview");
+    const prev = await api(`/v1/market/investor-report/preview?kind=${reportKind}`);
     const to = ((prev && prev.recipients) || []).join(", ") || "(no recipients)";
     if (meta) {
       meta.textContent = `To: ${to}` + (prev.subject ? ` · Subject: ${prev.subject}` : "");
@@ -1638,17 +1641,24 @@ async function previewInvestorEmail() {
   }
 }
 
-async function sendInvestorEmail() {
-  const btn = $("#learner-email-send");
+async function sendInvestorEmail(kind) {
+  const reportKind = (kind === "evening") ? "evening" : "morning";
+  const btn = reportKind === "evening"
+    ? $("#learner-email-send-evening")
+    : $("#learner-email-send");
   const pre = $("#learner-email-preview-body");
   const box = $("#learner-email-status");
+  const idleLabel = reportKind === "evening" ? "Send evening" : "Send morning";
   if (btn) {
     btn.disabled = true;
     btn.classList.add("busy");
     btn.textContent = "Sending…";
   }
   try {
-    const result = await api("/v1/market/investor-report/morning?force=true", { method: "POST" });
+    const result = await api(
+      `/v1/market/investor-report/${reportKind}?force=true`,
+      { method: "POST" },
+    );
     if (pre) {
       pre.hidden = false;
       pre.textContent = [
@@ -1673,7 +1683,7 @@ async function sendInvestorEmail() {
   } finally {
     if (btn) {
       btn.classList.remove("busy");
-      btn.textContent = "Send email";
+      btn.textContent = idleLabel;
       await loadInvestorEmailStatus();
     }
   }
@@ -2252,16 +2262,26 @@ function renderArchiveRootProgress(r) {
   const wrap = el("div", { class: "archive-root" });
   const done = typeof r.done === "number" ? r.done : 0;
   const total = typeof r.total === "number" ? r.total : 0;
+  const scanning = !!r.scanning;
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : (r.complete ? 100 : 0);
   wrap.append(el("div", { class: "archive-root-name", text:
-    (r.name || r.path || "root") + (r.kind ? ` · ${r.kind}` : "") + (r.complete ? " · complete" : "") }));
+    (r.name || r.path || "root") + (r.kind ? ` · ${r.kind}` : "")
+    + (r.complete ? " · complete" : (scanning ? " · scanning" : "")) }));
   const bar = el("div", { class: "archive-bar" });
   bar.append(el("span", { style: `width:${pct}%` }));
   wrap.append(bar);
-  wrap.append(el("div", { class: "archive-meta muted small", text:
-    (total > 0 ? `${done} / ${total} (${pct}%)` : (r.complete ? "complete" : "scanning…"))
-    + (r.last_file ? ` · last ${r.last_file}` : "")
-    + (r.path ? ` · ${r.path}` : "") }));
+  let meta = "";
+  if (scanning) {
+    meta = `scanning… walked ${(r.walked || 0).toLocaleString()} · matched ${total.toLocaleString()}`;
+  } else if (total > 0) {
+    meta = `${done} / ${total} (${pct}%)`;
+    if (r.pending != null) meta += ` · ${r.pending} pending`;
+  } else {
+    meta = r.complete ? "complete" : "waiting…";
+  }
+  if (r.last_file) meta += ` · last ${r.last_file}`;
+  if (r.path) meta += ` · ${r.path}`;
+  wrap.append(el("div", { class: "archive-meta muted small", text: meta }));
   return wrap;
 }
 
@@ -2307,38 +2327,150 @@ function renderArchive(d) {
   }
 }
 
+function archiveIngestComplete(w) {
+  if (w && w.archive_ingest_complete) return true;
+  const roots = ((w && w.checkpoint) || {}).roots || [];
+  return roots.length > 0 && roots.every((r) => r.complete);
+}
+
+function archiveFmtWhen(iso) {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+  } catch (_) {
+    return String(iso);
+  }
+}
+
+function archivePhaseLine(w) {
+  const cp = (w && w.checkpoint) || {};
+  const phase = cp.phase;
+  const detail = (cp.phase_detail || "").trim();
+  if (!phase && !detail) return "";
+  const label = ({
+    starting: "Starting",
+    scanning: "Scanning",
+    ingesting: "Ingesting",
+    learning_code: "Learning code tree",
+    reextract: "Re-extract",
+    tick_complete: "Tick finished",
+  })[phase] || (phase || "Working");
+  return detail ? `${label}: ${detail}` : label;
+}
+
+function renderArchiveJobStatus(w) {
+  const box = el("div", { class: "archive-job-status muted small" });
+  const cfg = (w && w.configured_roots) || [];
+  if (cfg.length) {
+    box.append(el("div", { text:
+      "Target: " + cfg.map((r) => `${r.name || r.path} (${r.kind || "document"})`).join(" · ")
+    }));
+  }
+  const phase = archivePhaseLine(w);
+  if (phase) {
+    box.append(el("div", { text: phase }));
+  } else if (w && w.queued_for_capacity) {
+    box.append(el("div", { text:
+      "Queued for host capacity" + (w.queue_reason ? ` — ${w.queue_reason}` : "")
+    }));
+  } else if (!(w && w.last_tick_at)) {
+    box.append(el("div", { text:
+      "Waiting for Host Guard to admit the first tick (archive slot / concurrent ticks)."
+    }));
+  } else {
+    box.append(el("div", { text:
+      "First tick in progress — large folders (tens of GB) can scan for a long time before root % appears."
+    }));
+  }
+  const timing = [];
+  if (w && w.last_tick_at) timing.push(`Last tick ${archiveFmtWhen(w.last_tick_at)}`);
+  if (w && w.next_run_at) timing.push(`Next schedule ${archiveFmtWhen(w.next_run_at)}`);
+  if (timing.length) box.append(el("div", { text: timing.join(" · ") }));
+  const prog = ((w && w.checkpoint) || {}).progress || {};
+  if (prog.files_seen || prog.files_pending || prog.files_done_tick) {
+    box.append(el("div", { text:
+      `Seen ${prog.files_seen || 0} · pending ${prog.files_pending || 0} · done this tick ${prog.files_done_tick || 0}`
+    }));
+  }
+  return box;
+}
+
 function renderArchiveWorkerCard(w) {
   const card = el("div", { class: "archive-card", "data-worker-id": w.id });
   const head = el("div", { class: "archive-card-head" });
+  const done = archiveIngestComplete(w);
+  const displayStatus = done && w.status === "running"
+    ? "ingest complete"
+    : (done && w.status === "stopped" ? "complete" : (w.status || "?"));
+  const badgeClass = done
+    ? (w.status === "stopped" || w.status === "paused" ? "ok" : "ok")
+    : (w.status || "");
   head.append(el("span", { class: "intent", text: w.type || "owner_knowledge" }));
-  head.append(el("span", { class: "badge " + w.status, text: w.status }));
+  head.append(el("span", { class: "badge " + badgeClass, text: displayStatus }));
   const label = workerProgressLabel(w);
+  const watchHint = done && w.status === "running"
+    ? " · watching (Stop to free archive slot)"
+    : "";
   head.append(el("span", { class: "muted small", text:
-    `health ${w.health || "?"}` + (label ? ` · ${label}` : "") + ` · ${String(w.id || "").slice(0, 8)}` }));
+    `health ${w.health || "?"}` + (label ? ` · ${label}` : "") + watchHint
+    + ` · ${String(w.id || "").slice(0, 8)}` }));
   card.append(head);
 
   const roots = ((w.checkpoint || {}).roots) || [];
   if (roots.length) {
     for (const r of roots) card.append(renderArchiveRootProgress(r));
   } else {
-    card.append(el("div", { class: "muted small", text: "Waiting for first tick / scan…" }));
+    card.append(renderArchiveJobStatus(w));
+  }
+  const phaseLine = archivePhaseLine(w);
+  if (phaseLine && roots.length) {
+    card.append(el("div", { class: "muted small archive-phase", text: phaseLine }));
+  }
+
+  const totals = ((w.checkpoint || {}).last_totals) || {};
+  const learnedBits = [];
+  if (totals.findings) learnedBits.push(`+${totals.findings} findings`);
+  if (totals.experiences) learnedBits.push(`+${totals.experiences} experiences`);
+  if (totals.documents) learnedBits.push(`${totals.documents} docs`);
+  if (totals.conversations) learnedBits.push(`${totals.conversations} chats`);
+  if (totals.code_repos) learnedBits.push(`${totals.code_repos} repos`);
+  if (totals.candidates) learnedBits.push(`+${totals.candidates} candidates`);
+  if (learnedBits.length) {
+    card.append(el("div", { class: "archive-learned muted small", text:
+      "Learned this job: " + learnedBits.join(" · ") }));
+  } else if (done) {
+    card.append(el("div", { class: "archive-learned muted small", text:
+      "Ingest finished — open Personal / Engineering / mission journal to review what Atlas absorbed." }));
   }
 
   const actions = el("div", { class: "job-actions" });
-  if (["running", "recovering"].includes(w.status)) {
+  if (done && ["running", "recovering"].includes(w.status)) {
+    actions.append(el("button", {
+      onclick: () => archiveWorkerAction(w.id, "stop"),
+    }, "Stop (free slot)"));
+  }
+  if (["running", "recovering"].includes(w.status) && !done) {
     actions.append(el("button", { onclick: () => archiveWorkerAction(w.id, "pause") }, "Pause"));
   }
   if (["paused"].includes(w.status)) {
     actions.append(el("button", { onclick: () => archiveWorkerAction(w.id, "resume") }, "Resume"));
   }
-  if (!["stopped"].includes(w.status)) {
+  if (!["stopped"].includes(w.status) && !(done && w.status === "running")) {
     actions.append(el("button", { onclick: () => archiveWorkerAction(w.id, "stop") }, "Stop"));
   }
   if (w.mission_id) {
     actions.append(el("button", {
       onclick: () => { switchView("missions"); showMissionDetail(w.mission_id); },
-    }, "Open mission"));
+    }, "Open mission / journal"));
   }
+  actions.append(el("button", {
+    onclick: () => switchView("personal"),
+  }, "View Personal learning"));
+  actions.append(el("button", {
+    onclick: () => switchView("engineering"),
+  }, "View Engineering findings"));
   card.append(actions);
   return card;
 }
@@ -2930,9 +3062,13 @@ function init() {
     else stopLearnerPoll();
   });
   const emailPreview = $("#learner-email-preview");
-  if (emailPreview) emailPreview.addEventListener("click", () => previewInvestorEmail());
+  if (emailPreview) emailPreview.addEventListener("click", () => previewInvestorEmail("morning"));
+  const emailPreviewEve = $("#learner-email-preview-evening");
+  if (emailPreviewEve) emailPreviewEve.addEventListener("click", () => previewInvestorEmail("evening"));
   const emailSend = $("#learner-email-send");
-  if (emailSend) emailSend.addEventListener("click", () => sendInvestorEmail());
+  if (emailSend) emailSend.addEventListener("click", () => sendInvestorEmail("morning"));
+  const emailSendEve = $("#learner-email-send-evening");
+  if (emailSendEve) emailSendEve.addEventListener("click", () => sendInvestorEmail("evening"));
   $("#mission-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const tpl = $("#mission-template").value;

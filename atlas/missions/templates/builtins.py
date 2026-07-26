@@ -303,11 +303,12 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "investor_reports",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
-            "Morning investor email: daily plan (why selected + notionals) + government "
-            "policy brief. Trade buy/sell emails are sent from Decision Simulation fills. "
-            "Configure Gmail via ATLAS_EMAIL_* / ATLAS_SMTP_PASSWORD / ATLAS_INVESTOR_REPORT_TO."
+            "Morning + evening investor email: daily plan (why + notionals), government "
+            "policy brief, EOD fills/portfolio after NSE close. Trade buy/sell emails are "
+            "sent from Decision Simulation fills. Configure Gmail via ATLAS_EMAIL_* / "
+            "ATLAS_SMTP_PASSWORD / ATLAS_INVESTOR_REPORT_TO."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
@@ -318,12 +319,16 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "portfolio_key": "india_equity_learner",
             "morning_hour_start": 7,
             "morning_hour_end": 10,
+            "evening_hour_start": 15,
+            "evening_minute_start": 45,
+            "evening_hour_end": 18,
             "force": False,
             "tick_interval_seconds": 1800,
         },
         "worker_specs": [
             {"type": "investor_reports", "interval_seconds": 1800},
             {"type": "investor_reports", "cron": "0 3 * * 1-5", "interval_seconds": 1800},
+            {"type": "investor_reports", "cron": "45 10 * * 1-5", "interval_seconds": 1800},
         ],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "investor_reports"),

@@ -275,6 +275,8 @@ class WorkerManager:
                         "pending": prog.get("pending"),
                         "last_file": prog.get("last_file"),
                         "kind": entry.get("kind"),
+                        "scanning": bool(prog.get("scanning")),
+                        "walked": prog.get("walked"),
                     }
                 )
         data["checkpoint"] = {
@@ -282,9 +284,60 @@ class WorkerManager:
             "roots": root_progress,
             "ticks": (state or {}).get("ticks"),
             "last_totals": (state or {}).get("last_totals"),
+            "ingest_complete": bool((state or {}).get("ingest_complete")),
+            "phase": (state or {}).get("phase"),
+            "phase_detail": (state or {}).get("phase_detail"),
+            "phase_updated_at": (state or {}).get("phase_updated_at"),
         }
-        data["has_progress"] = bool(root_progress) or bool(progress)
+        all_roots_done = bool(root_progress) and all(r.get("complete") for r in root_progress)
+        data["has_progress"] = bool(root_progress) or bool(progress) or bool(
+            (state or {}).get("phase")
+        )
         data["is_archive"] = wtype == "owner_knowledge"
+        data["archive_ingest_complete"] = all_roots_done or bool((state or {}).get("ingest_complete"))
+        # Operator visibility: configured roots + schedule timing even before first checkpoint.
+        cfg_doc: dict[str, Any] = {}
+        mission_id = data.get("mission_id")
+        if mission_id and self._config_repo is not None:
+            try:
+                active = self._config_repo.get_active(mission_id)
+                if active is not None and isinstance(getattr(active, "document", None), dict):
+                    cfg_doc = dict(active.document)
+            except Exception:  # noqa: BLE001
+                cfg_doc = {}
+        cfg_roots: list[dict[str, Any]] = []
+        for r in cfg_doc.get("archive_roots") or []:
+            if isinstance(r, dict) and r.get("path"):
+                cfg_roots.append(
+                    {
+                        "path": r.get("path"),
+                        "name": Path(str(r.get("path"))).name,
+                        "kind": r.get("kind") or "document",
+                    }
+                )
+        data["configured_roots"] = cfg_roots
+        data["archive_mode"] = cfg_doc.get("archive_mode") or (data.get("metadata") or {}).get(
+            "archive_mode"
+        )
+        meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        data["queue_reason"] = meta.get("queue_reason")
+        data["queued_for_capacity"] = bool(meta.get("queued_for_capacity"))
+        next_run = None
+        sid = data.get("schedule_id")
+        if sid and self._schedules is not None and hasattr(self._schedules, "get"):
+            try:
+                sched = self._schedules.get(sid)
+                nr = getattr(sched, "next_run_at", None) if sched is not None else None
+                if nr is not None and hasattr(nr, "isoformat"):
+                    next_run = nr.isoformat()
+                elif nr is not None:
+                    next_run = str(nr)
+            except Exception:  # noqa: BLE001
+                next_run = None
+        data["next_run_at"] = next_run
+        lt = data.get("last_tick_at")
+        if hasattr(lt, "isoformat"):
+            data["last_tick_at"] = lt.isoformat()
         ops = ops_meta(worker if not isinstance(worker, dict) else data)
         if ops:
             data["ops"] = ops
@@ -487,6 +540,13 @@ class WorkerManager:
             inputs = [i.payload for i in self._repo.drain_inputs(worker.id)]
             config, config_version = self._load_config(worker)
             state = self._checkpoints.load(_CHECKPOINT_OWNER, worker.id) or {}
+
+            def _mid_save(partial: dict[str, Any]) -> None:
+                try:
+                    self._checkpoints.save(_CHECKPOINT_OWNER, worker.id, partial or {})
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("mid-tick checkpoint save failed", exc_info=True)
+
             ctx = TickContext(
                 worker_id=worker.id,
                 mission_id=worker.mission_id,
@@ -494,6 +554,7 @@ class WorkerManager:
                 config_version=config_version,
                 state=state,
                 inputs=inputs,
+                save_checkpoint=_mid_save,
             )
             started = time.monotonic()
             try:

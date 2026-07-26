@@ -2140,6 +2140,20 @@ def market_investor_morning_report(
     return mailer.send_morning(program_id=program_id, force=force)
 
 
+@v1_router.post("/market/investor-report/evening", tags=["programs"])
+def market_investor_evening_report(
+    request: Request,
+    program_id: str = "market_intelligence",
+    force: bool = True,
+) -> dict:
+    """Send the post-NSE evening EOD digest email to configured receivers."""
+    try:
+        mailer = _app(request).container.resolve("investor_mailer")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
+    return mailer.send_evening(program_id=program_id, force=force)
+
+
 @v1_router.get("/market/investor-report/status", tags=["programs"])
 def market_investor_report_status(request: Request) -> dict:
     """Check whether Gmail/SMTP + receivers are configured (no secrets returned)."""
@@ -2154,12 +2168,15 @@ def market_investor_report_status(request: Request) -> dict:
 def market_investor_report_preview(
     request: Request,
     program_id: str = "market_intelligence",
+    kind: str = "morning",
 ) -> dict:
-    """Build the morning report body without sending — for Market page review."""
+    """Build a report body without sending — for Market page review."""
     try:
         mailer = _app(request).container.resolve("investor_mailer")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
+    if str(kind or "morning").strip().lower() == "evening":
+        return mailer.preview_evening(program_id=program_id)
     return mailer.preview_morning(program_id=program_id)
 
 

@@ -566,7 +566,8 @@ button { cursor: pointer; font: inherit; }
   cursor: pointer;
 }
 .learner-email-panel .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.learner-email-panel .btn.busy { opacity: 0.7; }
+.archive-learned { padding: 4px 0 8px; line-height: 1.35; }
+.badge.ingest { background: rgba(63,185,80,.16); color: var(--ok); }
 
 /* toast */
 .toast {

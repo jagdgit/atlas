@@ -201,6 +201,7 @@ class ArchiveIngestService:
             "policy": "project",
             "files_per_tick": max(1, int(files_per_tick or 40)),
             "tick_interval_seconds": 60,
+            "archive_mode": "one_shot",
         }
         admission_meta = contract.as_dict()
         result = self._templates.instantiate(
@@ -224,6 +225,7 @@ class ArchiveIngestService:
                 "role": "Archive Ingest",
                 "archive_path": root["path"],
                 "archive_kind": kind,
+                "archive_mode": "one_shot",  # finish → stop worker (free archive slot)
                 "period_start": period_start,
                 "period_end": period_end,
                 "owner_note": note,
@@ -354,10 +356,11 @@ class ArchiveIngestService:
                 else None
             ),
             "note": (
-                "Each parallel archive ingest is its own mission/worker. "
-                "Progress resumes after reboot from per-file checkpoints. "
-                "Large archives require Admission Contract confirmation (IR-RO1). "
-                "Extra starts queue until host capacity frees (slow-but-reliable)."
+                "Parallel Archive jobs use archive_mode=one_shot: when 1/1 files are done "
+                "the worker stops and frees the Host Guard archive slot. "
+                "Older jobs may still show running after 100% — use Stop (free slot). "
+                "Permanent Personal archive (watch) stays running and only ticks on changes. "
+                "Review learning via Personal dashboard, Engineering findings, and mission journal."
             ),
             "version": self.VERSION,
         }
