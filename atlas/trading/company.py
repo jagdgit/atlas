@@ -188,11 +188,14 @@ class OfficialFilingAdapter:
         if not key:
             raise CapabilityGap(
                 f"company_data:{self.name}",
-                f"set {self._api_key_env} for ToS-compliant {self.name} filings (MI4/MI5)",
+                f"set {self._api_key_env} for ToS-compliant {self.name} filings (MI4/MI5); "
+                f"or POST /v1/market/filings-snapshot with operator filing refs",
             )
         raise CapabilityGap(
             f"company_data:{self.name}",
-            f"{self.name} adapter skeleton — key present; live filing client awaits exchange ToS path",
+            f"{self.name} adapter skeleton — key present; live filing client awaits "
+            f"exchange ToS path. Until then use hermetic refs + "
+            f"POST /v1/market/filings-snapshot (IL.5+)",
         )
 
 
@@ -200,7 +203,7 @@ class CompanyDataService:
     """Facade over company/filing adapters (Market Program)."""
 
     name = "company_data"
-    VERSION = "mi.5"
+    VERSION = "mi.5.il5"
 
     def __init__(
         self,
@@ -212,6 +215,7 @@ class CompanyDataService:
         self._logger = logger or logging.getLogger("atlas.trading.company")
         self._adapters: dict[str, Any] = {
             "config_seed": ConfigSeedCompanyAdapter(logger=self._logger),
+            "filings_seed": ConfigSeedCompanyAdapter(logger=self._logger),
             "sec": OfficialFilingAdapter(
                 "sec", api_key_env="ATLAS_SEC_API_KEY", logger=self._logger
             ),
@@ -222,6 +226,8 @@ class CompanyDataService:
                 "bse_filings", api_key_env="ATLAS_BSE_API_KEY", logger=self._logger
             ),
         }
+        # Distinct provider label when loading hermetic filing profiles
+        self._adapters["filings_seed"].name = "filings_seed"
 
     def list_providers(self) -> list[dict[str, Any]]:
         return [
@@ -235,6 +241,62 @@ class CompanyDataService:
         seed = self._adapters.get("config_seed")
         if isinstance(seed, ConfigSeedCompanyAdapter):
             seed.load(profiles)
+        # Keep filings_seed in sync when operator loads companies[]
+        fs = self._adapters.get("filings_seed")
+        if isinstance(fs, ConfigSeedCompanyAdapter):
+            fs.load(profiles)
+
+    def _ensure_filings_seed(self, symbol: str) -> None:
+        """Lazy-load hermetic name/sector/filings for filings_seed provider."""
+        from atlas.investment.filings import filings_for_symbol
+        from atlas.investment.quality_seed import ratios_for_symbol
+        from atlas.investment.universe import INDEX_NIFTY50, membership
+
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return
+        if not sym.endswith(".NS") and "." not in sym:
+            sym = f"{sym}.NS"
+        fs = self._adapters.get("filings_seed")
+        if not isinstance(fs, ConfigSeedCompanyAdapter):
+            return
+        try:
+            fs.fetch_company(sym)
+            return  # already loaded
+        except CapabilityGap:
+            pass
+        name = sym
+        sector = ""
+        exchange = "NSE"
+        for row in membership(INDEX_NIFTY50):
+            if str(row.get("symbol") or "").upper() == sym:
+                name = str(row.get("name") or sym)
+                sector = str(row.get("sector") or "")
+                exchange = str(row.get("exchange") or "NSE")
+                break
+        filings = filings_for_symbol(sym, name=name)
+        ratios = ratios_for_symbol(sym)
+        facts = [
+            f"{name} is studied via hermetic filing refs (IL.5+).",
+            "Official NSE/BSE filing APIs remain capability_gap until ToS path exists.",
+        ]
+        fs.load(
+            [
+                {
+                    "symbol": sym,
+                    "name": name,
+                    "sector": sector,
+                    "exchange": exchange,
+                    "facts": facts,
+                    "filings": filings,
+                    "ratios": {
+                        k: ratios[k]
+                        for k in ("roe", "debt_to_equity")
+                        if k in ratios and ratios[k] is not None
+                    },
+                }
+            ]
+        )
 
     def fetch(
         self,
@@ -247,6 +309,8 @@ class CompanyDataService:
         if companies:
             self.load_config_profiles(companies)
         prov = (provider or self._default or "config_seed").strip().lower()
+        if prov == "filings_seed":
+            self._ensure_filings_seed(symbol)
         adapter = self._adapters.get(prov)
         if adapter is None:
             raise CapabilityGap(
@@ -254,9 +318,19 @@ class CompanyDataService:
                 f"unknown company provider '{prov}' — known: {sorted(self._adapters)}",
             )
         profile = adapter.fetch_company(symbol)
+        # Enrich empty filings from hermetic/operator store when using config_seed
+        data = profile.as_dict()
+        if prov in ("config_seed", "filings_seed") and not data.get("filings"):
+            from atlas.investment.filings import filings_for_symbol
+
+            refs = filings_for_symbol(symbol, name=str(data.get("name") or ""))
+            if refs:
+                data["filings"] = refs
+                profile = profile_from_dict(data, provider=prov)
+                data = profile.as_dict()
         return {
             "provider": prov,
-            "profile": profile.as_dict(),
+            "profile": data,
             "knowledge_text": profile.knowledge_text(),
             "version": self.VERSION,
         }

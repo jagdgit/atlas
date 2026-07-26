@@ -59,6 +59,7 @@ class InvestmentMentorWorker(PersistentWorker):
         force = bool(cfg.get("force"))
         force_topic = str(cfg.get("force_topic") or "").strip() or None
         lookback = max(5, int(cfg.get("lookback") or 40))
+        portfolio_key = str(cfg.get("portfolio_key") or "").strip() or None
 
         # Hermetic seed experiences from config (tests / offline).
         seed = list(cfg.get("seed_experiences") or [])
@@ -69,6 +70,11 @@ class InvestmentMentorWorker(PersistentWorker):
                 experiences = list(listed) + experiences
             except Exception as exc:  # noqa: BLE001
                 self._logger.warning("list_experiences failed: %s", exc)
+
+        if portfolio_key:
+            from atlas.investment.portfolios import filter_journals_for_portfolio
+
+            experiences = filter_journals_for_portfolio(experiences, portfolio_key)
 
         lesson = synthesize_mentor_lesson(
             experiences, focus=focus, force_topic=force_topic
@@ -104,13 +110,15 @@ class InvestmentMentorWorker(PersistentWorker):
                         reflection=lesson.reflection,
                         lesson=lesson.lesson,
                         domain="markets",
-                        tags=list(lesson.tags),
+                        tags=list(lesson.tags)
+                        + ([f"portfolio:{portfolio_key}"] if portfolio_key else []),
                         recommendations=[
                             {"title": r, "why": lesson.lesson}
                             for r in lesson.recommendations
                         ],
                         metadata={
                             "source_experience_ids": list(lesson.source_experience_ids),
+                            **({"portfolio_key": portfolio_key} if portfolio_key else {}),
                         },
                     )
                     wrote = bool(out.get("ok"))

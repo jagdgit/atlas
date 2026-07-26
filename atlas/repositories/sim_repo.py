@@ -19,8 +19,11 @@ _PORTFOLIO_COLS = (
 )
 _POSITION_COLS = "id, portfolio_id, symbol, quantity, avg_price, updated_at"
 _TRADE_COLS = (
-    "id, portfolio_id, mission_id, decision_id, symbol, side, quantity, price, fee, "
+    "id, portfolio_id, mission_id, decision_id, symbol, side, quantity, price, fee, fees, "
     "cash_after, realized_pnl, created_at"
+)
+_CASH_MOVEMENT_COLS = (
+    "id, portfolio_id, mission_id, kind, amount, tds, fee, cash_after, note, metadata, created_at"
 )
 
 
@@ -123,13 +126,17 @@ class SimTradingRepository(BaseRepository):
         fee: float,
         cash_after: float,
         realized_pnl: float,
+        fees: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        import json
+
+        fees_doc = fees if isinstance(fees, dict) else {}
         return self.fetch_one(
             f"""
             INSERT INTO sim.trades
-                (portfolio_id, mission_id, decision_id, symbol, side, quantity, price, fee,
+                (portfolio_id, mission_id, decision_id, symbol, side, quantity, price, fee, fees,
                  cash_after, realized_pnl)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
             RETURNING {_TRADE_COLS}
             """,
             (
@@ -141,6 +148,7 @@ class SimTradingRepository(BaseRepository):
                 float(quantity),
                 float(price),
                 float(fee),
+                json.dumps(fees_doc),
                 float(cash_after),
                 float(realized_pnl),
             ),
@@ -161,4 +169,48 @@ class SimTradingRepository(BaseRepository):
                 "SELECT count(*) FROM sim.trades WHERE portfolio_id = %s", (str(portfolio_id),)
             )
             or 0
+        )
+
+    def record_cash_movement(
+        self,
+        *,
+        portfolio_id: UUID | str,
+        mission_id: UUID | str | None,
+        kind: str,
+        amount: float,
+        tds: float = 0.0,
+        fee: float = 0.0,
+        cash_after: float,
+        note: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        import json
+
+        return self.fetch_one(
+            f"""
+            INSERT INTO sim.cash_movements
+                (portfolio_id, mission_id, kind, amount, tds, fee, cash_after, note, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            RETURNING {_CASH_MOVEMENT_COLS}
+            """,
+            (
+                str(portfolio_id),
+                str(mission_id) if mission_id else None,
+                str(kind),
+                float(amount),
+                float(tds),
+                float(fee),
+                float(cash_after),
+                str(note or ""),
+                json.dumps(metadata or {}),
+            ),
+        )
+
+    def list_cash_movements(
+        self, portfolio_id: UUID | str, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        return self.fetch_all(
+            f"SELECT {_CASH_MOVEMENT_COLS} FROM sim.cash_movements WHERE portfolio_id = %s "
+            "ORDER BY created_at DESC, id DESC LIMIT %s",
+            (str(portfolio_id), limit),
         )

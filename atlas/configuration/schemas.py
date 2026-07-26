@@ -111,12 +111,15 @@ class TradingInstrument(BaseModel):
     """One instrument the Paper-Trading mission replays (Phase D · §D.6).
 
     ``symbol`` is the ticker the strategy + policy reason about; ``asset`` names the OHLCV feed asset
-    (a ``market_data`` asset registered in the Asset Store) — defaults to the symbol if omitted."""
+    (a ``market_data`` asset registered in the Asset Store) — defaults to the symbol if omitted.
+    ``asset_class`` (IL.10/IL.11) filters against persona.allowed_assets / instrument pack.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     symbol: str = Field(min_length=1)
     asset: str = ""
+    asset_class: str = ""
 
 
 class TradingStrategyParams(BaseModel):
@@ -133,6 +136,20 @@ class TradingStrategyParams(BaseModel):
     sell_fraction: float = Field(default=1.0, gt=0, le=1)
 
 
+class PortfolioPersonaConfig(BaseModel):
+    """IL.10 persona for a Decision Simulation book."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    objective: str = "Learning"
+    risk: str = "medium"
+    time_horizon: str = "medium"
+    capital: float = Field(default=10_000.0, gt=0)
+    allowed_assets: list[str] = Field(default_factory=lambda: ["cash_equity"])
+    strategy: dict[str, Any] = Field(default_factory=dict)
+    currency: str = "INR"
+
+
 class PaperTradingConfig(BaseModel):
     """Config for the Paper-Trading mission's worker (Phase D · §D.6, P10 — SIMULATION ONLY).
 
@@ -141,10 +158,12 @@ class PaperTradingConfig(BaseModel):
     B6, and the worker picks it up on the next tick). NO real money, NO real broker (P10).
 
     ``feed_mode``:
-      - ``asset_replay`` — OHLCV from Asset Store ``market_data`` (default; hermetic DEMO path).
+      - ``asset_replay`` — OHLCV from Asset Store ``market_data`` (default; hermetic DEMO / CI path).
       - ``live`` — bars via MarketReader (Yahoo when ``market.yahoo_enabled``, else keyed providers).
+        Operator primary for the India learner.
     ``market_session`` + ``respect_market_hours`` gate buys/sells to regular equity hours
     (``nse_equity`` / ``us_equity`` / ``always_open``; see ``atlas.trading.sessions``).
+    IL.10/IL.11: ``portfolio_key`` / ``persona`` / ``instrument_pack`` bind multi-book packs.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -157,7 +176,7 @@ class PaperTradingConfig(BaseModel):
     bars_per_tick: int = Field(default=1, ge=1)
     drawdown_alert_pct: float = Field(default=0.0, ge=0)   # 0 = no drawdown alert
     tick_interval_seconds: int = Field(default=300, ge=1)
-    # Optional Market Program Broker Profile id (MI.6); empty → fee=0.
+    # Optional Market Program Broker Profile id (MI.6); empty → pack default / fee=0.
     broker_profile: str = ""
     # OI-F1: soft-bias Decision Engine from decisive paper-trade outcomes (profit/loss).
     enable_decision_soft_bias: bool = True
@@ -167,6 +186,18 @@ class PaperTradingConfig(BaseModel):
     live_bars_limit: int = Field(default=100, ge=5, le=5000)
     market_session: str = "always_open"
     respect_market_hours: bool = True
+    # IL.10 — virtual book identity
+    portfolio_key: str = "default"
+    portfolio_label: str = ""
+    persona: PortfolioPersonaConfig | None = None
+    asset_class: str = "cash_equity"
+    program_id: str = "market_intelligence"
+    base_currency: str = "INR"
+    # IL.2 — empty instruments → M0 watchlist
+    auto_max_instruments: int = Field(default=10, ge=1, le=100)
+    universe_index: str = "NIFTY50"
+    # IL.11 — Simulation Engine instrument pack (empty → resolve from asset_class / persona)
+    instrument_pack: str = ""
 
 
 class ResearchWatcherConfig(BaseModel):

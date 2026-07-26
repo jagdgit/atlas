@@ -35,6 +35,15 @@ from atlas.api.schemas import (
     InvokeToolRequest,
     InvokeToolResponse,
     InstantiateMissionRequest,
+    PlanProgramRequest,
+    CreateVirtualPortfolioRequest,
+    WithdrawPortfolioRequest,
+    ScreenerSnapshotRequest,
+    ScreenerComputeRequest,
+    FilingsSnapshotRequest,
+    CreateGoalRequest,
+    UpdateGoalRequest,
+    StartProgramRequest,
     ApprovalActionRequest,
     CreateMissionRequest,
     MissionActionRequest,
@@ -1595,11 +1604,71 @@ def get_program(program_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@v1_router.post("/programs/{program_id}/start", tags=["programs"])
-def start_program(program_id: str, request: Request, activate: bool = True) -> dict:
-    """Start startable Program members using template defaults (no raw JSON)."""
+@v1_router.post("/programs/{program_id}/plan", tags=["programs"])
+def plan_program(
+    program_id: str,
+    request: Request,
+    body: PlanProgramRequest | None = None,
+) -> dict:
+    """OX.2 — preview Program start plan (no missions created). API start stays immediate."""
+    payload = body or PlanProgramRequest()
     try:
-        return _programs(request).start(program_id, activate=activate)
+        programs = _programs(request)
+        preview = programs.preview_start(
+            program_id,
+            title_prefix=payload.title_prefix,
+            preset=payload.preset,
+            member_overrides=payload.member_overrides,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
+
+    plan_doc: dict = {}
+    try:
+        planning = _app(request).container.resolve("planning")
+        plan_doc = planning.plan_program_start(
+            preset=payload.preset or "india_equity_learner",
+            program_id=program_id,
+            capital=payload.capital,
+            universe=payload.universe,
+            mode=payload.mode,
+            broker_profile=payload.broker_profile,
+            objective=payload.objective,
+            activate=False,
+        )
+    except Exception:  # noqa: BLE001
+        plan_doc = {"kind": "program_start_plan", "steps": [], "version": "ox.2"}
+
+    return {
+        "plan": plan_doc,
+        "preview": preview,
+        "side_effecting": False,
+        "start": f"POST /v1/programs/{program_id}/start",
+    }
+
+
+@v1_router.post("/programs/{program_id}/start", tags=["programs"])
+def start_program(
+    program_id: str,
+    request: Request,
+    body: StartProgramRequest | None = None,
+    activate: bool = True,
+) -> dict:
+    """Start startable Program members (optional OX.1 preset: india_equity_learner).
+
+    Always immediate (OX.2 API/scheduler mode) — no preview step.
+    """
+    payload = body or StartProgramRequest(activate=activate)
+    try:
+        return _programs(request).start(
+            program_id,
+            activate=payload.activate if body is not None else activate,
+            title_prefix=payload.title_prefix,
+            preset=payload.preset,
+            member_overrides=payload.member_overrides,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -1648,6 +1717,30 @@ def planning_plan_get(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"planning unavailable: {exc}") from exc
     return planning.plan(goal, program_id=program_id, limit=limit)
+
+
+@v1_router.get("/planning/daily-investment-plan", tags=["programs"])
+@v1_router.get("/market/daily-plan", tags=["programs"])
+def daily_investment_plan(
+    request: Request,
+    program_id: str = "market_intelligence",
+    capital: float = 10000.0,
+    portfolio_key: str | None = None,
+    max_candidates: int = 5,
+    deploy_fraction: float = 0.40,
+) -> dict:
+    """IL.6 — Daily Investment Plan from M0 ranked watchlist (simulation sizing only)."""
+    try:
+        planning = _app(request).container.resolve("planning")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"planning unavailable: {exc}") from exc
+    return planning.plan_daily_investment(
+        program_id=program_id,
+        capital=capital,
+        portfolio_key=portfolio_key,
+        max_candidates=max_candidates,
+        deploy_fraction=deploy_fraction,
+    )
 
 
 @v1_router.get("/governance/daily", tags=["programs"])
@@ -1788,6 +1881,380 @@ def list_broker_profiles(request: Request) -> dict:
         "profiles": ledger.list_profiles(),
         "version": getattr(ledger, "VERSION", "mi.6"),
     }
+
+
+@v1_router.get("/market/instrument-packs", tags=["programs"])
+def list_instrument_packs() -> dict:
+    """IL.11 — Simulation Engine instrument packs (ready vs stub capability gaps)."""
+    from atlas.investment.packs import list_packs
+
+    packs = list_packs()
+    return {
+        "packs": packs,
+        "count": len(packs),
+        "ready": [p["id"] for p in packs if p.get("ready")],
+        "version": "il.11",
+    }
+
+
+@v1_router.get("/market/holidays", tags=["programs"])
+def list_market_holidays(
+    calendar: str = "india_equity",
+    year: int | None = None,
+    session: str | None = None,
+) -> dict:
+    """IL.5+ — holidays Atlas detects for session gates (seeded calendars)."""
+    from atlas.trading.holidays import holidays_view
+
+    return holidays_view(calendar_id=calendar, year=year, session_id=session)
+
+
+@v1_router.get("/market/session-status", tags=["programs"])
+def get_market_session_status(session: str = "nse_equity") -> dict:
+    """Whether the named market_session is open right now (hours + Atlas holidays)."""
+    from atlas.trading.sessions import session_status
+
+    st = session_status(session)
+    return {
+        "session_id": st.session_id,
+        "open": st.open,
+        "reason": st.reason,
+        "local_now": st.local_now,
+        "holiday": st.holiday,
+        "version": "il.5.holidays",
+    }
+
+
+@v1_router.post("/market/holidays", tags=["programs"])
+def post_market_holiday(payload: dict) -> dict:
+    """Operator overlay: add a closed day Atlas should detect for a calendar."""
+    from atlas.trading.holidays import add_operator_holiday, holidays_view
+
+    calendar = str(payload.get("calendar") or payload.get("calendar_id") or "india_equity")
+    day = payload.get("day") or payload.get("date")
+    name = str(payload.get("name") or "operator_holiday")
+    if not day:
+        raise HTTPException(status_code=400, detail="day (YYYY-MM-DD) required")
+    hol = add_operator_holiday(calendar, day, name)
+    return {
+        "holiday": hol.as_dict(),
+        "calendar": holidays_view(calendar_id=calendar, year=hol.day.year),
+    }
+
+
+@v1_router.get("/market/screener-signals", tags=["programs"])
+def get_screener_signals(program_id: str = "market_intelligence") -> dict:
+    """IL.8 — latest operator screener snapshot (no scrape)."""
+    from atlas.investment.screener_signals import signals_view
+
+    return signals_view(program_id)
+
+
+@v1_router.post("/market/screener-snapshot", tags=["programs"])
+def post_screener_snapshot(body: ScreenerSnapshotRequest) -> dict:
+    """IL.8 — upsert hermetic / operator screener rows for M0 ranking."""
+    from atlas.investment.screener_signals import publish_snapshot
+
+    snap = publish_snapshot(
+        body.symbols,
+        program_id=body.program_id,
+        as_of=body.as_of,
+        note=body.note,
+    )
+    return {"snapshot": snap, "version": "il.8"}
+
+
+@v1_router.post("/market/screener-signals/compute", tags=["programs"])
+def compute_screener_signals(body: ScreenerComputeRequest) -> dict:
+    """IL.8 — pure compute from bars + quality (hermetic, no I/O)."""
+    from atlas.investment.screener_signals import compute_from_bars_quality
+
+    rows = compute_from_bars_quality(
+        bars_by_symbol=body.bars_by_symbol,
+        quality_by_symbol=body.quality_by_symbol,
+        symbols=body.symbols,
+    )
+    return {"symbols": rows, "count": len(rows), "version": "il.8"}
+
+
+@v1_router.get("/market/filings", tags=["programs"])
+def get_market_filings(
+    symbol: str | None = None,
+    program_id: str = "market_intelligence",
+    use_hermetic: bool = True,
+) -> dict:
+    """IL.5+ — hermetic / operator filing refs (no live scrape)."""
+    from atlas.investment.filings import filings_view
+
+    return filings_view(
+        symbol=symbol, program_id=program_id, use_hermetic=use_hermetic
+    )
+
+
+@v1_router.post("/market/filings-snapshot", tags=["programs"])
+def post_filings_snapshot(body: FilingsSnapshotRequest) -> dict:
+    """IL.5+ — upsert ToS-compliant operator filing metadata for M2."""
+    from atlas.investment.filings import VERSION, publish_snapshot
+
+    snap = publish_snapshot(
+        body.symbols,
+        program_id=body.program_id,
+        as_of=body.as_of,
+        note=body.note,
+    )
+    return {"snapshot": snap, "version": VERSION}
+
+
+@v1_router.get("/market/portfolios", tags=["programs"])
+def list_virtual_portfolios(
+    request: Request,
+    program_id: str | None = None,
+) -> dict:
+    """IL.10 — list virtual portfolios (persona + mission binding)."""
+    from atlas.investment import portfolios as vp
+
+    rows = vp.list_portfolios(program_id=program_id)
+    return {"portfolios": rows, "count": len(rows), "version": "il.10"}
+
+
+@v1_router.post("/market/portfolios", tags=["programs"])
+def create_virtual_portfolio(
+    request: Request,
+    body: CreateVirtualPortfolioRequest,
+) -> dict:
+    """IL.10 — create a virtual portfolio book (one Decision Simulation per book)."""
+    from atlas.investment import portfolios as vp
+
+    templates = None
+    if body.instantiate:
+        try:
+            templates = _app(request).container.resolve("templates")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=503, detail=f"templates unavailable: {exc}"
+            ) from exc
+    try:
+        row = vp.create_book(
+            label=body.label,
+            persona=body.persona,
+            capital=body.capital,
+            program_id=body.program_id,
+            portfolio_key=body.portfolio_key,
+            universe=body.universe,
+            broker_profile=body.broker_profile,
+            asset_class=body.asset_class,
+            instantiate=body.instantiate,
+            templates=templates,
+            activate=body.activate,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"portfolio": row, "version": "il.10"}
+
+
+@v1_router.get("/market/portfolios/{portfolio_ref}", tags=["programs"])
+def get_virtual_portfolio(portfolio_ref: str, request: Request) -> dict:
+    """IL.10 — get by portfolio_key or id; attach sim snapshot when mission bound."""
+    from atlas.investment import portfolios as vp
+
+    row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown portfolio: {portfolio_ref}")
+    snap = None
+    mid = row.get("mission_id")
+    if mid:
+        try:
+            portfolio_svc = _app(request).container.resolve("portfolio")
+            # Prefer ledger name = portfolio_key under that mission
+            ensured = portfolio_svc.ensure_portfolio(
+                mission_id=mid,
+                name=row.get("portfolio_key") or "default",
+                starting_cash=float((row.get("persona") or {}).get("capital") or 0),
+            )
+            snap = portfolio_svc.snapshot(ensured["id"])
+        except Exception:  # noqa: BLE001
+            snap = None
+    return {"portfolio": row, "snapshot": snap, "version": "il.10"}
+
+
+@v1_router.get("/market/portfolios/{portfolio_ref}/ledger", tags=["programs"])
+def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
+    """IL.7 — fee/TDS rollup statement for a virtual portfolio book."""
+    from atlas.investment import portfolios as vp
+
+    row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown portfolio: {portfolio_ref}")
+    mid = row.get("mission_id") or row.get("ledger_mission_id")
+    if not mid:
+        raise HTTPException(
+            status_code=404,
+            detail="portfolio has no bound Decision Simulation / ledger mission yet",
+        )
+    try:
+        ledger = _app(request).container.resolve("portfolio_ledger")
+        portfolio_svc = _app(request).container.resolve("portfolio")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    ensured = portfolio_svc.ensure_portfolio(
+        mission_id=mid,
+        name=row.get("portfolio_key") or "default",
+        starting_cash=float((row.get("persona") or {}).get("capital") or 0),
+    )
+    stmt = ledger.statement(
+        ensured["id"],
+        broker_profile=str(row.get("broker_profile") or "") or None,
+    )
+    return {"portfolio": row, "statement": stmt, "version": "il.7"}
+
+
+@v1_router.post("/market/portfolios/{portfolio_ref}/withdraw", tags=["programs"])
+def withdraw_from_portfolio(
+    portfolio_ref: str,
+    request: Request,
+    body: WithdrawPortfolioRequest,
+) -> dict:
+    """IL.7 — simulate a cash withdrawal (optional TDS) from a virtual book."""
+    from atlas.investment import portfolios as vp
+
+    row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown portfolio: {portfolio_ref}")
+    mid = body.mission_id or row.get("mission_id") or row.get("ledger_mission_id")
+    if not mid:
+        raise HTTPException(
+            status_code=400,
+            detail="portfolio needs a bound mission before withdrawals",
+        )
+    try:
+        ledger = _app(request).container.resolve("portfolio_ledger")
+        portfolio_svc = _app(request).container.resolve("portfolio")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    ensured = portfolio_svc.ensure_portfolio(
+        mission_id=mid,
+        name=row.get("portfolio_key") or "default",
+        starting_cash=float((row.get("persona") or {}).get("capital") or 0),
+    )
+    profile = body.broker_profile or row.get("broker_profile") or "zerodha"
+    try:
+        out = ledger.withdraw(
+            ensured["id"],
+            amount=body.amount,
+            broker_profile=profile,
+            tds_pct=body.tds_pct,
+            note=body.note,
+            mission_id=mid,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"portfolio": row, "withdrawal": out, "version": "il.7"}
+
+
+@v1_router.get("/goals", tags=["programs"])
+def list_goals(
+    request: Request,
+    status: str | None = "active",
+    program_id: str | None = None,
+    portfolio_key: str | None = None,
+    q: str = "",
+    limit: int = 50,
+) -> dict:
+    """OX.3 — list or search durable Goals (objectives first)."""
+    try:
+        goals = _app(request).container.resolve("goals")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"goals unavailable: {exc}") from exc
+    if (q or "").strip():
+        return goals.search(q, limit=limit)
+    return goals.list(
+        status=status,
+        program_id=program_id,
+        portfolio_key=portfolio_key,
+        limit=limit,
+    )
+
+
+@v1_router.post("/goals", tags=["programs"])
+def create_goal(request: Request, body: CreateGoalRequest) -> dict:
+    """OX.3 — create a Goal from an objective (Program/Portfolio optional)."""
+    try:
+        goals = _app(request).container.resolve("goals")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"goals unavailable: {exc}") from exc
+    try:
+        goal = goals.create(
+            body.title,
+            objective=body.objective,
+            success_criteria=body.success_criteria,
+            program_id=body.program_id,
+            portfolio_key=body.portfolio_key,
+            portfolio_id=body.portfolio_id,
+            status=body.status,
+            metadata=body.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"goal": goal, "version": getattr(goals, "VERSION", "ox.3")}
+
+
+@v1_router.get("/goals/{goal_id}", tags=["programs"])
+def get_goal(goal_id: str, request: Request) -> dict:
+    try:
+        goals = _app(request).container.resolve("goals")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"goals unavailable: {exc}") from exc
+    goal = goals.get(goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail=f"unknown goal: {goal_id}")
+    return {"goal": goal, "version": getattr(goals, "VERSION", "ox.4")}
+
+
+@v1_router.get("/goals/{goal_id}/progress", tags=["programs"])
+def goal_progress(goal_id: str, request: Request, persist: bool = True) -> dict:
+    """OX.4 — deterministic progress narrative (paragraph + bullets)."""
+    try:
+        goals = _app(request).container.resolve("goals")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"goals unavailable: {exc}") from exc
+    report = goals.progress(goal_id, persist=persist)
+    if not report.get("ok"):
+        raise HTTPException(status_code=404, detail=report.get("error") or "goal_not_found")
+    return report
+
+
+@v1_router.get("/learner/status", tags=["programs"])
+def learner_status(request: Request, q: str = "india learner") -> dict:
+    """OX.4 / IL.9 — India learner progress narrative + happy-path checklist."""
+    try:
+        goals = _app(request).container.resolve("goals")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"goals unavailable: {exc}") from exc
+    return goals.learner_status(query=q or "india learner")
+
+
+@v1_router.get("/learner/happy-path", tags=["programs"])
+def learner_happy_path(capital: float = 10000.0) -> dict:
+    """IL.9 — static India ₹10k learner guide (no JSON instruments required)."""
+    from atlas.investment.happy_path import happy_path_guide
+
+    return happy_path_guide(capital=capital)
+
+
+@v1_router.patch("/goals/{goal_id}", tags=["programs"])
+def update_goal(goal_id: str, request: Request, body: UpdateGoalRequest) -> dict:
+    try:
+        goals = _app(request).container.resolve("goals")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"goals unavailable: {exc}") from exc
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        goal = goals.update(goal_id, **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if goal is None:
+        raise HTTPException(status_code=404, detail=f"unknown goal: {goal_id}")
+    return {"goal": goal, "version": getattr(goals, "VERSION", "ox.3")}
 
 
 @v1_router.get("/workers", tags=["workers"])

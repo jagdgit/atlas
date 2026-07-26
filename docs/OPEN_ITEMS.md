@@ -31,7 +31,8 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C11 | 🟢 | P2 | **Personal auto-inference: proficiency + timeline years + heuristic professional.** Skills get graded `proficiency`; stated `years` feed timeline tenure; role/publication heuristics from Experience text. Full CV / Research-finding professional auto-inference still deferred. | C.7b | closed OI-C11 |
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
-| OI-C7 | 🟢 | P3 | **Migration-number placeholders.** Registry honest through `0042`=schedule_cron. Through Phase C: `0028`–`0038`; C.8/C.9 no migration; post-C: `0039`–`0042`. **Next free slot: `0043`.** Re-open this row when a new migration lands without updating the plans. | C.2 | closed OI-C7 |
+| OI-C7 | 🟢 | P3 | **Migration-number placeholders.** Registry through `0044` (IL.7 sim ledger realism). Prior: `0043` goals. **Next free slot: `0045`.** | C.2 | updated IL.7 |
+
 | OI-C12 | 🟢 | P3 | **Personal/Owner SPA dashboard view.** Console `/ui` Personal panel: coverage bars, skills/timeline/professional/identity with P9 "why", Confirm/Reject for inferred facts, Infer + draft-resume actions over `/v1/personal/*`. | C.8d | closed OI-C12 |
 | OI-C13 | 🟢 | P3 | **Conversation → experience extraction.** `build_conversation_experiences` distills owner-stated skills from user turns; `IngestionService` writes them when `source=conversation` + `extract_findings` (Owner Knowledge). | C.8a | closed OI-C13 |
 
@@ -90,6 +91,8 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-MP0 | 🟢 | P1 | **Mission Philosophy** — Layer 1 vs Layer 2; kinds; lifecycle; experience shape. | `docs/ATLAS_MISSION_PHILOSOPHY.md` |
 | OI-MP1 | 🟢 | P1 | **Experience journal** — Experience OS first-class (`GET /v1/experience/shape`, `POST /v1/experience/journal`). | EX.1 |
 | OI-MI0 | 🟢 | P1 | **Market Intelligence Program** — MI→KG→MCA + platform PA gaps ✅. **Next:** governance / ops polish. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
+| OI-IL0 | 🟢 | P1 | **Autonomous Investment Learner** — IL.1–11 + OX ✅; F&O packs, holidays, **filings refs**. Optional: live ToS filing clients. | `docs/AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md` §14–20 | filings 2026-07-26 |
+| OI-IL-OX | 🟢 | P1 | **Orchestration / UX** — OX.1–4 ✅ (preview/start now/API; `system.goals`; `GET /v1/goals/{id}/progress` + `GET /v1/learner/status`). | §14.4–14.6 | OX.4 shipped |
 | OI-MP2 | 🟢 | P1 | **Split paper trading** — `decision_simulation` is primary; `paper_trading` remains compat alias. | `OI-MI0` |
 | OI-MP3 | 🟢 | P1 | **Daily Learning Governance Report** — `GET /v1/governance/daily` + `learning_governance` mission. | MP3 |
 | OI-MP4 | 🟢 | P3 | **Engineering Mentor Mission** — weekly engineering-judgment lessons from repo/architecture Experiences → Experience OS (`engineering_mentor` template + worker; soft-bias default). | Philosophy | closed OI-MP4 |

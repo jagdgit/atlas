@@ -204,6 +204,9 @@ def test_market_reader_service_asset_replay():
 
 
 def test_market_observer_idle_without_symbols():
+    from atlas.investment.watchlists import clear
+
+    clear()
     worker = MarketObserverWorker(market_reader=MarketReaderService())
     result = worker.do_tick(
         TickContext(

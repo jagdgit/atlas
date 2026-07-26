@@ -16,6 +16,7 @@ turn says so plainly instead of failing silently or fabricating a result.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -302,6 +303,9 @@ class AssistantService:
         templates: Any = None,
         assets: Any = None,
         media_learn: Any = None,
+        programs: Any = None,
+        planning: Any = None,
+        goals: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._conversation = conversation
@@ -316,6 +320,9 @@ class AssistantService:
         self._templates = templates
         self._assets = assets
         self._media_learn = media_learn
+        self._programs = programs
+        self._planning = planning
+        self._goals = goals
         self._web_tool = web_tool
         self._search_tool = search_tool
         self._scholar_tool = scholar_tool
@@ -425,6 +432,8 @@ class AssistantService:
             Intent.REACT: self._do_react,
             Intent.INSTANTIATE_MISSION: self._do_instantiate_mission,
             Intent.REGISTER_MARKET_DATA: self._do_register_market_data,
+            Intent.START_INVESTMENT_LEARNER: self._do_start_investment_learner,
+            Intent.MANAGE_GOAL: self._do_manage_goal,
         }.get(intent, self._do_react)
         return handler(args, context, tool_calls)
 
@@ -1366,6 +1375,325 @@ class AssistantService:
                 "in a paper_trading mission config. No live broker credentials are required."
             ),
             extras=info,
+        )
+
+    def _do_start_investment_learner(self, args, context, tool_calls) -> _Outcome:
+        """OX.1 / OX.2 — preview India learner plan (default) or activate immediately."""
+        from atlas.planning.service import PlanningService
+
+        program = str(args.get("program") or "market_intelligence").strip()
+        preset = str(args.get("preset") or "india_equity_learner").strip()
+        capital = float(args.get("capital") or 10000)
+        universe = str(args.get("universe") or "NIFTY50").strip() or "NIFTY50"
+        mode = str(args.get("mode") or "auto")
+        broker = str(args.get("broker_profile") or "paper_demo")
+        objective = str(args.get("objective") or "").strip() or None
+        # OX.2: Chat defaults to preview; power-user / confirm / Jobs set activate.
+        activate = bool(args.get("activate"))
+        if args.get("preview") is True:
+            activate = False
+        if args.get("preview") is False:
+            activate = True
+
+        planner = self._planning if self._planning is not None else PlanningService()
+        plan = planner.plan_program_start(
+            preset=preset,
+            program_id=program,
+            capital=capital,
+            universe=universe,
+            mode=mode,
+            broker_profile=broker,
+            objective=objective,
+            activate=activate,
+        )
+
+        member_overrides: dict[str, dict] = {}
+        sim = {
+            "starting_cash": capital,
+            "universe_index": universe,
+            "instruments": [],
+            "feed_mode": "live",
+            "live_provider": "yahoo",
+            "market_session": "nse_equity",
+            "program_id": program,
+            "broker_profile": broker,
+            "auto_max_instruments": 10,
+        }
+        member_overrides["decision_simulation"] = dict(sim)
+        member_overrides["paper_trading"] = dict(sim)
+        member_overrides["investment_universe"] = {
+            "index": universe,
+            "max_watchlist": 15,
+            "mode": mode,
+            "program_id": program,
+        }
+        member_overrides["portfolio_ledger"] = {
+            "starting_cash": capital,
+            "broker_profile": broker,
+        }
+        title_prefix = f"India ₹{int(capital):,} learner"
+
+        if not activate:
+            preview_members: list[dict] = []
+            if self._programs is not None:
+                try:
+                    dry = self._programs.preview_start(
+                        program,
+                        title_prefix=title_prefix,
+                        preset=preset,
+                        member_overrides=member_overrides,
+                    )
+                    preview_members = list(dry.get("started") or [])
+                except Exception as exc:  # noqa: BLE001
+                    self._logger.debug("program preview_start skipped: %s", exc)
+            tool_calls.append(
+                {
+                    "intent": Intent.START_INVESTMENT_LEARNER,
+                    "action": "preview_program",
+                    "program": program,
+                    "preset": preset,
+                    "capital": capital,
+                    "universe": universe,
+                    "activate": False,
+                    "steps": len(plan.get("steps") or []),
+                }
+            )
+            lines = [
+                f"**Proposed plan — India cash-equity learner** "
+                f"(₹{capital:,.0f}, {universe}, mode={mode})",
+                "",
+                "Steps Atlas will start:",
+            ]
+            for step in plan.get("steps") or []:
+                lines.append(
+                    f"{step.get('order')}. **{step.get('role')}** (`{step.get('template')}`) — "
+                    f"{step.get('detail')}"
+                )
+            if preview_members:
+                lines.append("")
+                lines.append(
+                    f"Would create {len(preview_members)} new mission(s); "
+                    "already-present members are skipped."
+                )
+            lines.append("")
+            for note in plan.get("notes") or []:
+                lines.append(f"- {note}")
+            lines.append("")
+            lines.append(str(plan.get("confirm_hint") or ""))
+            return _Outcome(
+                answer="\n".join(lines).strip(),
+                extras={
+                    "program": program,
+                    "preset": preset,
+                    "plan": plan,
+                    "would_start": preview_members,
+                    "activate": False,
+                },
+            )
+
+        if self._programs is None:
+            return _Outcome(
+                answer="Programs service is not available.",
+                blocked=True,
+                blocked_reason="programs unavailable",
+            )
+        try:
+            result = self._programs.start(
+                program,
+                activate=True,
+                title_prefix=title_prefix,
+                preset=preset,
+                member_overrides=member_overrides,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _Outcome(
+                answer=f"Could not start investment learner: {exc}",
+                blocked=True,
+                blocked_reason=str(exc),
+            )
+        started = result.get("started") or []
+        skipped = result.get("skipped") or []
+        goal_info: dict | None = None
+        if self._goals is not None:
+            try:
+                goal_info = self._goals.ensure_for_learner(
+                    objective_text=objective,
+                    capital=capital,
+                    universe=universe,
+                    program_id=program,
+                    portfolio_key=str(args.get("portfolio") or "india_equity_learner"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("goal ensure_for_learner skipped: %s", exc)
+        tool_calls.append(
+            {
+                "intent": Intent.START_INVESTMENT_LEARNER,
+                "action": "start_program",
+                "program": program,
+                "preset": preset,
+                "capital": capital,
+                "universe": universe,
+                "activate": True,
+                "started": len(started),
+                "skipped": len(skipped),
+                "goal_id": (goal_info or {}).get("id"),
+            }
+        )
+        roles = ", ".join(s.get("role") or s.get("template") for s in started) or "(none new)"
+        goal_bit = ""
+        if goal_info:
+            goal_bit = f" Goal linked: “{goal_info.get('title')}”."
+        return _Outcome(
+            answer=(
+                f"Started Market Intelligence as an India cash-equity learner "
+                f"(₹{capital:,.0f}, {universe}, auto universe → Decision Simulation). "
+                f"New missions: {roles}. "
+                f"Skipped {len(skipped)} already-present/stub member(s)."
+                f"{goal_bit} "
+                "Open Programs → Market Intelligence to watch journals. "
+                "Simulation only — no broker login."
+            ),
+            extras={
+                "program": program,
+                "preset": preset,
+                "plan": plan,
+                "started": started,
+                "skipped": skipped,
+                "activate": True,
+                "goal": goal_info,
+            },
+        )
+
+    def _do_manage_goal(self, args, context, tool_calls) -> _Outcome:
+        """OX.3 — create / list / status durable Goals (objectives first)."""
+        if self._goals is None:
+            return _Outcome(
+                answer="Goals service is not available.",
+                blocked=True,
+                blocked_reason="goals unavailable",
+            )
+        action = str(args.get("action") or "status").strip().lower()
+        title = str(args.get("title") or args.get("objective") or "").strip()
+        query = str(args.get("query") or title).strip()
+
+        if action == "create":
+            if not title:
+                return _Outcome(answer="What objective should I record as your Goal?")
+            goal = self._goals.create(
+                title,
+                objective={"text": title, "intent": "operator"},
+            )
+            tool_calls.append(
+                {
+                    "intent": Intent.MANAGE_GOAL,
+                    "action": "create",
+                    "goal_id": goal.get("id"),
+                }
+            )
+            return _Outcome(
+                answer=(
+                    f"Goal recorded (objective first): “{goal.get('title')}”. "
+                    f"Status={goal.get('status')}. "
+                    "Link a Program or Portfolio later — the Goal stands on its own. "
+                    f"id={goal.get('id')}"
+                ),
+                extras={"goal": goal},
+            )
+
+        if action == "list":
+            result = self._goals.list(status="active", limit=20)
+            goals = result.get("goals") or []
+            tool_calls.append(
+                {"intent": Intent.MANAGE_GOAL, "action": "list", "count": len(goals)}
+            )
+            if not goals:
+                return _Outcome(
+                    answer="No active goals yet. Say “my goal is …” to create one."
+                )
+            lines = ["Active goals:"]
+            for g in goals:
+                links = []
+                if g.get("program_id"):
+                    links.append(f"program={g['program_id']}")
+                if g.get("portfolio_key"):
+                    links.append(f"portfolio={g['portfolio_key']}")
+                link_s = f" ({', '.join(links)})" if links else " (no Program/Portfolio link yet)"
+                lines.append(f"- {g.get('title')} [{g.get('status')}]{link_s}")
+            return _Outcome(answer="\n".join(lines), extras=result)
+
+        if action in {"pause", "complete"}:
+            goal = self._goals.resolve(query)
+            if not goal:
+                return _Outcome(answer=f"I couldn't find a goal matching “{query}”.")
+            new_status = "paused" if action == "pause" else "completed"
+            updated = self._goals.update(goal["id"], status=new_status)
+            tool_calls.append(
+                {
+                    "intent": Intent.MANAGE_GOAL,
+                    "action": action,
+                    "goal_id": goal.get("id"),
+                }
+            )
+            return _Outcome(
+                answer=f"Goal “{(updated or goal).get('title')}” → {new_status}.",
+                extras={"goal": updated or goal},
+            )
+
+        # status / progress / resolve by objective text
+        if action == "progress" or re.search(
+            r"\b(progress|learner status|how(?:'s| is))\b",
+            str(args.get("query") or "").lower(),
+        ):
+            report = self._goals.progress(query=query, persist=True)
+            tool_calls.append(
+                {
+                    "intent": Intent.MANAGE_GOAL,
+                    "action": "progress",
+                    "goal_id": ((report.get("goal") or {}).get("id")),
+                    "query": query,
+                    "ok": report.get("ok"),
+                }
+            )
+            return _Outcome(
+                answer=str(report.get("answer") or report.get("narrative") or ""),
+                extras=report,
+            )
+
+        goal = self._goals.resolve(query)
+        tool_calls.append(
+            {
+                "intent": Intent.MANAGE_GOAL,
+                "action": "status",
+                "goal_id": (goal or {}).get("id"),
+                "query": query,
+            }
+        )
+        if not goal:
+            return _Outcome(
+                answer=(
+                    f"No goal matched “{query}”. "
+                    "Try “list goals” or “my goal is Beat NIFTY over 12 months”."
+                )
+            )
+        # Prefer full OX.4 narrative when available
+        report = self._goals.progress(goal_id=str(goal["id"]), persist=True)
+        if report.get("ok"):
+            return _Outcome(
+                answer=str(report.get("answer") or report.get("narrative") or ""),
+                extras=report,
+            )
+        prog = goal.get("program_id") or "(none)"
+        book = goal.get("portfolio_key") or "(none)"
+        progress = goal.get("progress") or {}
+        note = progress.get("note") or "No progress narrative yet."
+        return _Outcome(
+            answer=(
+                f"Goal: “{goal.get('title')}” [{goal.get('status')}]\n"
+                f"Objective: {(goal.get('objective') or {}).get('text') or goal.get('title')}\n"
+                f"Links: program={prog}, portfolio={book}\n"
+                f"Progress: {note}"
+            ),
+            extras={"goal": goal},
         )
 
     def _do_react(self, args, context, tool_calls) -> _Outcome:

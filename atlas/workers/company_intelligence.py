@@ -1,7 +1,10 @@
-"""CompanyIntelligenceWorker — Market Intelligence M2 (MI.5).
+"""CompanyIntelligenceWorker — Market Intelligence M2 (MI.5 / IL.4).
 
 Loads company profiles (config_seed default; official filing adapters when keys
 exist) → typed knowledge candidates → CandidateConsumer. No scraping.
+
+IL.4: empty tickers/companies → ranked Investment Universe watchlist
+(with minimal membership-based config_seed profiles).
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ import logging
 from typing import Any
 
 from atlas.decision.rules import CapabilityGap
+from atlas.investment import watchlists as wl
 from atlas.knowledge.media_extraction import MediaKnowledgeExtractor
 from atlas.trading.company import CompanyDataService
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
@@ -18,7 +22,7 @@ from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 class CompanyIntelligenceWorker(PersistentWorker):
     type = "company_intelligence"
-    VERSION = 1
+    VERSION = 2
     journal_ticks = True
 
     def __init__(
@@ -42,12 +46,9 @@ class CompanyIntelligenceWorker(PersistentWorker):
         ticks = int(state.get("ticks", 0)) + 1
         state["ticks"] = ticks
 
-        companies = [c for c in (cfg.get("companies") or []) if isinstance(c, dict)]
-        tickers = [str(t).strip() for t in (cfg.get("tickers") or []) if str(t).strip()]
-        for c in companies:
-            sym = str(c.get("symbol") or "").strip()
-            if sym and sym not in tickers:
-                tickers.append(sym)
+        tickers, companies, auto = wl.resolve_company_targets(cfg)
+        state["auto_watchlist"] = auto
+
         # Operator inputs can add a ticker or inline profile
         for inp in ctx.inputs or []:
             if inp.get("company") and isinstance(inp["company"], dict):
@@ -65,9 +66,13 @@ class CompanyIntelligenceWorker(PersistentWorker):
                 state=state,
                 note=(
                     "idle: no tickers — set tickers=['RELIANCE.NS'] and/or "
-                    "companies=[{symbol,name,sector,facts,filings}] (config_seed)"
+                    "companies=[{symbol,name,sector,facts,filings}], or start M0 / "
+                    "India learner so the ranked watchlist auto-loads"
                 ),
             )
+
+        if auto:
+            state["auto_symbols"] = list(tickers)
 
         if companies:
             try:
@@ -177,6 +182,7 @@ class CompanyIntelligenceWorker(PersistentWorker):
             except Exception:  # noqa: BLE001
                 pass
 
-        head = f"company: {ok} ok, {gaps} gap(s), emitted {emitted}"
+        auto_note = f"auto watchlist ({len(tickers)}); " if auto else ""
+        head = f"{auto_note}company: {ok} ok, {gaps} gap(s), emitted {emitted}"
         detail = "; ".join(notes[:6])
         return TickResult(state=state, note=f"{head} | {detail}" if detail else head)

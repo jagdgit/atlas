@@ -110,6 +110,7 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
         "planned_split": [
+            "investment_universe",
             "market_observer",
             "company_intelligence",
             "news_intelligence",
@@ -132,6 +133,19 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
         "compat_alias": "paper_trading",
+    },
+    "investment_universe": {
+        "mission_kind": KIND_MONITORING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            learn=STAGE_PARTIAL,
+            decide=STAGE_PARTIAL,  # ranks → candidates
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_PARTIAL,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
     },
     "market_observer": {
         "mission_kind": KIND_MONITORING,

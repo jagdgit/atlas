@@ -20,9 +20,9 @@ from typing import Any, Callable
 
 from atlas.decision.contracts import ACTION_RECOMMEND, DecisionRequest
 from atlas.decision.rules import CapabilityGap
+from atlas.investment.packs import pack_capability_need, resolve_pack
 from atlas.trading.broker_profiles import compute_fees, get_broker_profile
 from atlas.trading.indicators import compute_indicators
-from atlas.trading.sessions import session_status
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 MISSION_TYPE_PAPER_TRADING = "paper_trading"
@@ -67,22 +67,88 @@ class PaperTradingWorker(PersistentWorker):
         cfg = ctx.config or {}
         state = dict(ctx.state or {})
         instruments = cfg.get("instruments") or []
+        auto_loaded = False
         if not instruments:
-            # Operator-visible idle reason (empty note looked like "doing nothing silently").
+            # IL.2 / IL-Q3: empty instruments → auto-load M0 watchlist (or NIFTY50 seed).
+            from atlas.workers.investment_universe import auto_instruments
+
+            max_auto = max(1, int(cfg.get("auto_max_instruments") or 10))
+            program_id = str(cfg.get("program_id") or "market_intelligence")
+            index = str(cfg.get("universe_index") or "NIFTY50")
+            instruments = auto_instruments(
+                program_id=program_id, max_n=max_auto, fallback_index=index
+            )
+            if not instruments:
+                return TickResult(
+                    state=state,
+                    note=(
+                        "idle: no instruments in config and no Investment Universe "
+                        "watchlist — start M0 / India learner, or set instruments=[...]"
+                    ),
+                )
+            auto_loaded = True
+            state["auto_instruments"] = True
+            state["auto_symbols"] = [i.get("symbol") for i in instruments]
+        else:
+            state["auto_instruments"] = False
+
+        config_note = ""
+        if auto_loaded:
+            config_note = f"auto universe ({len(instruments)} symbols); "
+        if ctx.config_version is not None and ctx.config_version != state.get("config_version"):
+            config_note += f"config v{ctx.config_version} picked up; "
+            state["config_version"] = ctx.config_version
+
+        # IL.10 — virtual book identity + persona (one Decision Simulation per portfolio).
+        from atlas.investment import portfolios as vp
+
+        book = vp.ensure_from_config(cfg, mission_id=str(ctx.mission_id) if ctx.mission_id else None)
+        portfolio_key = str(book.get("portfolio_key") or "default")
+        persona = vp.normalize_persona(book.get("persona"))
+        state["portfolio_key"] = portfolio_key
+        state["persona"] = persona
+        state["experience_scope"] = book.get("experience_scope")
+        # Filter instruments by persona.allowed_assets when asset_class is set on rows.
+        asset_class_default = str(cfg.get("asset_class") or book.get("asset_class") or "cash_equity")
+        # IL.11 — Simulation Engine instrument pack (shared engine + class rules).
+        pack = resolve_pack(
+            cfg.get("instrument_pack") or book.get("instrument_pack"),
+            asset_class=asset_class_default,
+            allowed_assets=list(persona.get("allowed_assets") or []),
+            config=cfg,
+        )
+        state["instrument_pack"] = pack.id
+        state["instrument_pack_ready"] = bool(pack.ready)
+        if not pack.ready:
+            need = pack_capability_need(pack)
             return TickResult(
                 state=state,
                 note=(
-                    "idle: no instruments in config — register sample market_data "
-                    "(Missions UI) and set instruments=[{symbol, asset}], or use "
-                    "Chat/Job: start paper trading with 10000 on DEMO; "
-                    "for live tape set feed_mode=live and instruments=[{symbol}]"
+                    f"capability_gap: {need} — {pack.gap_detail or pack.label} "
+                    f"(portfolio={portfolio_key}; no sim fills)"
                 ),
             )
-
-        config_note = ""
-        if ctx.config_version is not None and ctx.config_version != state.get("config_version"):
-            config_note = f"config v{ctx.config_version} picked up; "
-            state["config_version"] = ctx.config_version
+        filtered: list[dict] = []
+        for inst in instruments:
+            if not isinstance(inst, dict):
+                continue
+            ac = str(inst.get("asset_class") or asset_class_default).strip() or asset_class_default
+            if not vp.asset_allowed(persona, ac):
+                continue
+            if not pack.accepts_asset_class(ac):
+                continue
+            filtered.append(inst)
+        if instruments and not filtered:
+            return TickResult(
+                state=state,
+                note=(
+                    f"idle: persona allowed_assets={persona.get('allowed_assets')} "
+                    f"or pack={pack.id} excludes configured instruments "
+                    f"(portfolio={portfolio_key})"
+                ),
+            )
+        if filtered:
+            instruments = filtered
 
         # Live operator inputs: block/unblock a symbol ("don't trade SYM"), or force a tick.
         blocked = {str(s).lower() for s in (state.get("blocked_symbols") or [])}
@@ -95,10 +161,16 @@ class PaperTradingWorker(PersistentWorker):
 
         portfolio = self._portfolio.ensure_portfolio(
             mission_id=ctx.mission_id,
-            starting_cash=float(cfg.get("starting_cash", 100_000.0)),
+            name=portfolio_key,
+            starting_cash=float(
+                persona.get("capital")
+                or cfg.get("starting_cash", 100_000.0)
+            ),
+            base_currency=str(persona.get("currency") or cfg.get("base_currency") or "INR"),
         )
         portfolio_id = portfolio["id"]
         state["portfolio_id"] = str(portfolio_id)
+        config_note = f"book={portfolio_key}; pack={pack.id}; " + config_note
 
         feed_mode = str(cfg.get("feed_mode") or "asset_replay").strip().lower()
         if feed_mode not in ("asset_replay", "live"):
@@ -106,13 +178,14 @@ class PaperTradingWorker(PersistentWorker):
 
         respect_hours = bool(cfg.get("respect_market_hours", True))
         session_id = str(cfg.get("market_session") or "always_open").strip() or "always_open"
-        sess = session_status(session_id, clock=self._clock)
+        sess = pack.session_status(session_id, clock=self._clock)
         session_open = True if not respect_hours else sess.open
         state["session"] = {
             "id": sess.session_id,
             "open": session_open,
             "reason": sess.reason if respect_hours else "hours_ignored",
             "local_now": sess.local_now,
+            "pack": pack.id,
         }
 
         cursors: dict[str, int] = dict(state.get("cursors") or {})
@@ -189,6 +262,8 @@ class PaperTradingWorker(PersistentWorker):
                     totals=totals,
                     marks=marks,
                     state=state,
+                    pack=pack,
+                    instrument=inst,
                 )
                 last_bar_keys[symbol] = bar_key
                 if action:
@@ -230,6 +305,8 @@ class PaperTradingWorker(PersistentWorker):
                     totals=totals,
                     marks=marks,
                     state=state,
+                    pack=pack,
+                    instrument=inst,
                 )
                 if action:
                     last_actions.append(action)
@@ -300,7 +377,13 @@ class PaperTradingWorker(PersistentWorker):
         totals: dict[str, int],
         marks: dict[str, float],
         state: dict[str, Any],
+        pack: Any = None,
+        instrument: dict[str, Any] | None = None,
     ) -> str | None:
+        from atlas.investment.packs import resolve_pack_or_unknown
+
+        if pack is None:
+            pack = resolve_pack_or_unknown(state.get("instrument_pack") or "cash_equity")
         closes = [float(b["close"]) for b in bars[: cursor + 1]]
         indicators = compute_indicators(closes, strategy)
         price = closes[-1]
@@ -308,16 +391,24 @@ class PaperTradingWorker(PersistentWorker):
         position = self._portfolio.position(portfolio_id, symbol) or {}
         held = float(position.get("quantity", 0.0))
         snapshot = self._portfolio.snapshot(portfolio_id, prices={symbol: price})
+        inst_row = instrument if isinstance(instrument, dict) else {}
 
         mentor_advice = ""
         mission_ctx_summary = ""
         mission_ctx_citations: list[str] = []
         fact_findings: list[dict[str, Any]] = []
         predicted_findings: list[dict[str, Any]] = []
+        portfolio_key = str(state.get("portfolio_key") or cfg.get("portfolio_key") or "").strip()
+        persona = state.get("persona") if isinstance(state.get("persona"), dict) else (
+            cfg.get("persona") if isinstance(cfg.get("persona"), dict) else {}
+        )
+        advice_query = f"markets trading {symbol}"
+        if portfolio_key:
+            advice_query = f"{advice_query} portfolio:{portfolio_key}"
         if self._mission_context is not None:
             try:
                 gathered = self._mission_context.gather(
-                    f"markets trading {symbol}",
+                    advice_query,
                     program_id="market",
                     limit=8,
                 )
@@ -327,6 +418,14 @@ class PaperTradingWorker(PersistentWorker):
                 for it in gathered.get("items") or []:
                     kind = str(it.get("item_kind") or it.get("kind") or "")
                     if kind == "experience_advice":
+                        # IL.10 — drop other books' advice
+                        from atlas.investment.portfolios import filter_journals_for_portfolio
+
+                        journals = filter_journals_for_portfolio(
+                            it.get("journals") or [it], portfolio_key or None
+                        )
+                        if portfolio_key and not journals and it.get("journals"):
+                            continue
                         mentor_advice = str(it.get("advice") or "")[:500]
                     elif kind == "finding":
                         row = {
@@ -347,8 +446,20 @@ class PaperTradingWorker(PersistentWorker):
                 self._logger.debug("mission_context gather skipped: %s", exc)
         if not mentor_advice and self._learning is not None:
             try:
-                adv = self._learning.advice_for(f"markets trading {symbol}", limit=3)
-                mentor_advice = str(adv.get("advice") or "")[:500]
+                adv = self._learning.advice_for(advice_query, limit=3)
+                from atlas.investment.portfolios import filter_journals_for_portfolio
+
+                journals = filter_journals_for_portfolio(
+                    (adv or {}).get("journals") or [], portfolio_key or None
+                )
+                if portfolio_key:
+                    # Rebuild advice text only from this book's journals when present
+                    if journals:
+                        mentor_advice = str(adv.get("advice") or "")[:500]
+                    else:
+                        mentor_advice = ""
+                else:
+                    mentor_advice = str(adv.get("advice") or "")[:500]
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("mentor advice_for skipped: %s", exc)
 
@@ -379,6 +490,13 @@ class PaperTradingWorker(PersistentWorker):
                 # OI-F2 — keep forecasts out of the operative-fact bucket.
                 "fact_findings": fact_findings[:8],
                 "predicted_findings": predicted_findings[:8],
+                # IL.10
+                "portfolio_key": portfolio_key or None,
+                "persona": persona or None,
+                "persona_risk": (persona or {}).get("risk"),
+                "persona_horizon": (persona or {}).get("time_horizon"),
+                "allowed_assets": (persona or {}).get("allowed_assets"),
+                "instrument_pack": getattr(pack, "id", None),
             },
         )
         decision = self._engine.decide(request)
@@ -430,8 +548,43 @@ class PaperTradingWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("policy_engine evaluate skipped: %s", exc)
 
+        pack_ctx: dict[str, Any] = {
+            "portfolio_key": portfolio_key,
+            "persona": persona,
+            "position_qty": held,
+            "equity": snapshot.get("equity"),
+            "cash": snapshot.get("cash"),
+            "instrument": inst_row,
+        }
+        if cfg.get("lot_size") is not None:
+            pack_ctx["lot_size"] = cfg.get("lot_size")
+        if cfg.get("margin_fraction") is not None:
+            pack_ctx["margin_fraction"] = cfg.get("margin_fraction")
+        if cfg.get("write_margin_fraction") is not None:
+            pack_ctx["write_margin_fraction"] = cfg.get("write_margin_fraction")
+        if cfg.get("expiry") is not None:
+            pack_ctx["expiry"] = cfg.get("expiry")
+        if inst_row.get("expiry") is not None:
+            pack_ctx["expiry"] = inst_row.get("expiry")
+        if inst_row.get("underlying_price") is not None:
+            pack_ctx["underlying_price"] = inst_row.get("underlying_price")
+        validation = pack.validate_order(
+            side=kind,
+            symbol=symbol,
+            quantity=qty,
+            price=price,
+            context=pack_ctx,
+        )
+        if not validation.ok:
+            if validation.capability_gap:
+                totals["gaps"] += 1
+                return f"{symbol}: gap ({validation.reason})"
+            totals["holds"] += 1
+            return f"{symbol}: pack_block ({validation.reason})"
+
         fee = 0.0
-        profile_id = str(cfg.get("broker_profile") or "").strip()
+        fees_doc: dict[str, Any] = {}
+        profile_id = str(cfg.get("broker_profile") or "").strip() or pack.default_broker_profile()
         if profile_id:
             breakdown = compute_fees(
                 get_broker_profile(profile_id),
@@ -439,7 +592,16 @@ class PaperTradingWorker(PersistentWorker):
                 quantity=qty,
                 price=price,
             )
+            breakdown = pack.fee_overlay(
+                breakdown,
+                side=kind,
+                symbol=symbol,
+                quantity=qty,
+                price=price,
+                context=pack_ctx,
+            )
             fee = float(breakdown.total)
+            fees_doc = breakdown.as_dict()
         try:
             trade = self._portfolio.apply_trade(
                 portfolio_id,
@@ -448,6 +610,7 @@ class PaperTradingWorker(PersistentWorker):
                 quantity=qty,
                 price=price,
                 fee=fee,
+                fees=fees_doc,
                 mission_id=mission_id,
                 decision_id=decision.id,
             )
@@ -460,11 +623,18 @@ class PaperTradingWorker(PersistentWorker):
         self._emit("PaperTradingFill", {
             "mission_id": str(mission_id), "decision_id": str(decision.id) if decision.id else None,
             "symbol": symbol, "side": kind, "quantity": qty, "price": price,
+            "fee": fee,
+            "fees": fees_doc,
+            "broker_profile": profile_id,
             "realized_pnl": float(trade.get("realized_pnl", 0.0)),
         })
         if kind == "sell":
+            learn_cfg = dict(cfg)
+            learn_cfg.setdefault("portfolio_key", state.get("portfolio_key"))
+            if state.get("persona") and not learn_cfg.get("persona"):
+                learn_cfg["persona"] = state.get("persona")
             self._remember_outcome(
-                symbol, trade, decision, indicators=indicators, cfg=cfg
+                symbol, trade, decision, indicators=indicators, cfg=learn_cfg
             )
         return f"{symbol}: {kind} {qty:g} @ {price:.2f} ({why_short or 'signal'})"
 
@@ -545,11 +715,21 @@ class PaperTradingWorker(PersistentWorker):
             outcome
         )
         tags = decision_knowledge_tags(symbol, outcome, decision_id=decision_id)
+        portfolio_key = str(cfg.get("portfolio_key") or "").strip()
+        if portfolio_key:
+            from atlas.investment.portfolios import experience_tag
+
+            tags = list(tags) + [experience_tag(portfolio_key)]
         meta = link_metadata(
             decision_id=decision_id, symbol=symbol, outcome=outcome, pnl=pnl
         )
         meta["feedback_loop"] = True
         meta["difference"] = difference
+        if portfolio_key:
+            meta["portfolio_key"] = portfolio_key
+            if isinstance(cfg.get("persona"), dict):
+                meta["persona_objective"] = cfg["persona"].get("objective")
+                meta["persona_risk"] = cfg["persona"].get("risk")
         journal_kwargs = build_feedback_journal(
             title=title,
             recommendation=recommendation,

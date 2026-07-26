@@ -69,6 +69,7 @@ from atlas.workers.owner_knowledge import OwnerKnowledgeWorker
 from atlas.workers.paper_trading import PaperTradingWorker
 from atlas.workers.program_stub import ProgramStubWorker
 from atlas.workers.market_observer import MarketObserverWorker
+from atlas.workers.investment_universe import InvestmentUniverseWorker
 from atlas.workers.news_intelligence import NewsIntelligenceWorker
 from atlas.workers.event_research import EventResearchWorker
 from atlas.workers.company_intelligence import CompanyIntelligenceWorker
@@ -110,6 +111,8 @@ from atlas.decision import ApprovalService, DecisionEngine, DecisionRuleRegistry
 from atlas.repositories.approval_repo import ApprovalRepository
 from atlas.repositories.decision_repo import DecisionRepository
 from atlas.policy import PolicyEngine, PolicyService
+from atlas.goals import GoalService
+from atlas.repositories.goal_repo import GoalRepository
 from atlas.llm.ollama_provider import OllamaProvider
 from atlas.llm.service import LLMService
 from atlas.ops.backup import BackupManager
@@ -729,6 +732,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         knowledge_graph=knowledge_graph_service,
         mission_context=mission_context_service,
     )
+    # OX.1 / OX.2 — Chat/Jobs can preview or start India learner via ProgramService.
+    assistant_service._programs = program_service  # noqa: SLF001
 
     # Scheduler hierarchy (SCHED.1) — Program → Mission → Worker cadence view.
     scheduler_hierarchy = SchedulerHierarchyService(
@@ -750,12 +755,23 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         policy_service, logger=get_logger("atlas.policy.engine")
     )
 
+    # OX.3 / OX.4 — durable Goals + progress narratives.
+    goal_service = GoalService(
+        GoalRepository(db_manager),
+        learning=learning_service,
+        experience_os=experience_os,
+        logger=get_logger("atlas.goals"),
+    )
+    assistant_service._goals = goal_service  # noqa: SLF001
+
     # Planning OS (PA.1 / OI-PA-PLAN) — goal → gaps → compare → risk → decide.
     planning_service = PlanningService(
         mission_context=mission_context_service,
         policy=policy_service,
         logger=get_logger("atlas.planning"),
     )
+    # OX.2 — Chat preview uses PlanningService.plan_program_start.
+    assistant_service._planning = planning_service  # noqa: SLF001
 
     research_service = ResearchService(
         verification_service,
@@ -1311,6 +1327,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     portfolio_service = PortfolioService(
         SimTradingRepository(db_manager), logger=get_logger("atlas.trading.portfolio")
     )
+    # OX.4 — progress narratives can include sim book snapshots.
+    goal_service.bind(portfolio=portfolio_service)
     portfolio_ledger_service = PortfolioLedgerService(
         portfolio_service, logger=get_logger("atlas.trading.ledger")
     )
@@ -1348,6 +1366,16 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             jobs=job_service,
             capabilities=capabilities,
             logger=get_logger("atlas.workers.market_observer"),
+        )
+    )
+    # OI-IL0 / IL.2–IL.3 — Investment Universe (M0): NIFTY → ranked watchlist + WHY.
+    worker_manager.register_worker_type(
+        InvestmentUniverseWorker(
+            events=events,
+            market_reader=market_reader_service,
+            policy_engine=policy_engine,
+            experience_os=experience_os,
+            logger=get_logger("atlas.workers.investment_universe"),
         )
     )
     # MI.2 — shared stub worker for remaining planned Program members.
@@ -1646,6 +1674,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("coverage", coverage_service)
     container.register_instance("policy", policy_service)
     container.register_instance("policy_engine", policy_engine)
+    container.register_instance("goals", goal_service)
     container.register_instance("personal", personal_service)
     container.register_instance("arbiter", mission_arbiter)
     container.register_instance("decision", decision_engine)
@@ -1876,6 +1905,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     capabilities.register(
         "policy", policy_service, kind="service", version=PolicyService.VERSION
+    )
+    capabilities.register(
+        "goals", goal_service, kind="service", version=GoalService.VERSION
     )
     capabilities.register(
         "policy_engine",

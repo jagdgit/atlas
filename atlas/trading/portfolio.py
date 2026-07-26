@@ -57,6 +57,7 @@ class PortfolioService:
         quantity: float,
         price: float,
         fee: float = 0.0,
+        fees: dict[str, Any] | None = None,
         mission_id: UUID | str | None = None,
         decision_id: UUID | str | None = None,
     ) -> dict[str, Any]:
@@ -65,6 +66,7 @@ class PortfolioService:
         Buys add to the position (recomputing average cost) and debit cash; sells realize P&L
         against the average cost and credit cash. Raises :class:`PortfolioError` for an unknown
         portfolio, insufficient cash, or selling more than held (honesty over silent clamping).
+        ``fees`` (IL.7) is an optional component breakdown persisted alongside scalar ``fee``.
         """
         side = side.lower()
         if side not in ("buy", "sell"):
@@ -118,8 +120,99 @@ class PortfolioService:
             fee=float(fee),
             cash_after=cash,
             realized_pnl=realized,
+            fees=dict(fees or {}),
         )
         return trade
+
+    def withdraw(
+        self,
+        portfolio_id: UUID | str,
+        *,
+        amount: float,
+        tds: float = 0.0,
+        fee: float = 0.0,
+        note: str = "",
+        mission_id: UUID | str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """IL.7 — debit cash for a simulated withdrawal (principal + TDS + fee)."""
+        portfolio = self._repo.get_portfolio(portfolio_id)
+        if portfolio is None:
+            raise PortfolioError(f"no such portfolio: {portfolio_id}")
+        principal = float(amount)
+        if principal <= 0:
+            raise PortfolioError(f"withdrawal amount must be positive, got {amount}")
+        tds_f = max(0.0, float(tds))
+        fee_f = max(0.0, float(fee))
+        total = principal + tds_f + fee_f
+        cash = float(portfolio["cash"])
+        if total > cash + 1e-9:
+            raise PortfolioError(
+                f"insufficient cash for withdrawal: need {total:.2f}, have {cash:.2f}"
+            )
+        cash -= total
+        self._repo.update_portfolio_cash(portfolio_id, cash=cash, realized_pnl_delta=0.0)
+        record = getattr(self._repo, "record_cash_movement", None)
+        if record is None:
+            return {
+                "kind": "withdraw",
+                "amount": -principal,
+                "tds": tds_f,
+                "fee": fee_f,
+                "cash_after": cash,
+                "note": note,
+            }
+        return record(
+            portfolio_id=portfolio_id,
+            mission_id=mission_id,
+            kind="withdraw",
+            amount=-principal,
+            tds=tds_f,
+            fee=fee_f,
+            cash_after=cash,
+            note=note or "sim withdrawal",
+            metadata=metadata or {},
+        )
+
+    def deposit(
+        self,
+        portfolio_id: UUID | str,
+        *,
+        amount: float,
+        note: str = "",
+        mission_id: UUID | str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """IL.7 — credit cash for a simulated deposit (no TDS)."""
+        portfolio = self._repo.get_portfolio(portfolio_id)
+        if portfolio is None:
+            raise PortfolioError(f"no such portfolio: {portfolio_id}")
+        principal = float(amount)
+        if principal <= 0:
+            raise PortfolioError(f"deposit amount must be positive, got {amount}")
+        cash = float(portfolio["cash"]) + principal
+        self._repo.update_portfolio_cash(portfolio_id, cash=cash, realized_pnl_delta=0.0)
+        record = getattr(self._repo, "record_cash_movement", None)
+        if record is None:
+            return {
+                "kind": "deposit",
+                "amount": principal,
+                "tds": 0.0,
+                "fee": 0.0,
+                "cash_after": cash,
+                "note": note,
+            }
+        return record(
+            portfolio_id=portfolio_id,
+            mission_id=mission_id,
+            kind="deposit",
+            amount=principal,
+            tds=0.0,
+            fee=0.0,
+            cash_after=cash,
+            note=note or "sim deposit",
+            metadata=metadata or {},
+        )
 
     # --- reads / valuation ----------------------------------------------
     def position(self, portfolio_id: UUID | str, symbol: str) -> dict[str, Any] | None:

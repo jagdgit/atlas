@@ -563,6 +563,130 @@ class InstantiateMissionRequest(BaseModel):
     autostart: bool = True
 
 
+class StartProgramRequest(BaseModel):
+    """Start a Program's startable members (OX.1 presets supported)."""
+
+    activate: bool = True
+    title_prefix: str | None = None
+    preset: str | None = Field(
+        default=None,
+        description="e.g. india_equity_learner — ₹10k NIFTY auto-universe live sim",
+    )
+    member_overrides: dict[str, dict[str, Any]] | None = None
+    capital: float | None = Field(
+        default=None,
+        description="OX.2 plan helper — starting cash for india_equity_learner preview",
+    )
+    universe: str | None = Field(
+        default=None,
+        description="OX.2 plan helper — e.g. NIFTY50",
+    )
+
+
+class PlanProgramRequest(BaseModel):
+    """OX.2 — preview Program start plan without creating missions."""
+
+    preset: str | None = Field(
+        default="india_equity_learner",
+        description="e.g. india_equity_learner",
+    )
+    title_prefix: str | None = None
+    member_overrides: dict[str, dict[str, Any]] | None = None
+    capital: float = 10000.0
+    universe: str = "NIFTY50"
+    mode: str = "auto"
+    broker_profile: str = "zerodha"
+    objective: str | None = None
+
+
+class CreateVirtualPortfolioRequest(BaseModel):
+    """IL.10 — register a virtual portfolio (+ optional Decision Simulation mission)."""
+
+    label: str = Field(..., min_length=1, max_length=128)
+    capital: float = 10000.0
+    universe: str = "NIFTY50"
+    broker_profile: str = "paper_demo"
+    asset_class: str = "cash_equity"
+    program_id: str = "market_intelligence"
+    portfolio_key: str | None = None
+    persona: dict[str, Any] | None = None
+    instantiate: bool = Field(
+        default=True,
+        description="If true, spawn a Decision Simulation mission for this book",
+    )
+    activate: bool = True
+
+
+class ScreenerSnapshotRequest(BaseModel):
+    """IL.8 — operator / API screener snapshot (no scrape)."""
+
+    program_id: str = "market_intelligence"
+    as_of: str | None = None
+    note: str = ""
+    # Either map symbol → fields, or list of {symbol, ...}
+    symbols: dict[str, dict[str, Any]] | list[dict[str, Any]] = Field(default_factory=dict)
+
+
+class FilingsSnapshotRequest(BaseModel):
+    """IL.5+ — operator filing refs (no scrape; ToS-compliant source assumed)."""
+
+    program_id: str = "market_intelligence"
+    as_of: str | None = None
+    note: str = ""
+    # Map symbol → [filing…] / {filings:[…]} or list of {symbol, filings|title…}
+    symbols: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
+
+
+class ScreenerComputeRequest(BaseModel):
+    """IL.8 — hermetic compute from bars + quality (no network)."""
+
+    bars_by_symbol: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    quality_by_symbol: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    symbols: list[str] | None = None
+
+
+class WithdrawPortfolioRequest(BaseModel):
+    """IL.7 — simulate withdrawing cash from a virtual portfolio book."""
+
+    amount: float = Field(..., gt=0)
+    tds_pct: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Optional TDS rate; default from Broker Profile withdrawal_tds_pct",
+    )
+    broker_profile: str | None = None
+    note: str = ""
+    mission_id: str | None = None
+
+
+class CreateGoalRequest(BaseModel):
+    """OX.3 — create a durable Goal (objective first)."""
+
+    title: str = Field(..., min_length=1, max_length=500)
+    objective: dict[str, Any] | str | None = None
+    success_criteria: dict[str, Any] | str | None = None
+    program_id: str | None = None
+    portfolio_key: str | None = None
+    portfolio_id: str | None = None
+    status: str = "active"
+    metadata: dict[str, Any] | None = None
+
+
+class UpdateGoalRequest(BaseModel):
+    """OX.3 — patch a Goal (status, links, progress, criteria)."""
+
+    title: str | None = None
+    objective: dict[str, Any] | str | None = None
+    success_criteria: dict[str, Any] | str | None = None
+    status: str | None = None
+    program_id: str | None = None
+    portfolio_key: str | None = None
+    portfolio_id: str | None = None
+    progress: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class MissionActionRequest(BaseModel):
     """Reason attached to a mission lifecycle action (journaled, P9)."""
 

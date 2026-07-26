@@ -25,6 +25,7 @@ class InMemorySimRepo:
         self.portfolios: dict[str, dict[str, Any]] = {}
         self.positions: dict[tuple[str, str], dict[str, Any]] = {}
         self.trades: list[dict[str, Any]] = []
+        self.cash_movements: list[dict[str, Any]] = []
 
     def ensure_portfolio(self, *, mission_id, name="default", base_currency="USD", starting_cash=0.0):
         for p in self.portfolios.values():
@@ -84,6 +85,16 @@ class InMemorySimRepo:
 
     def count_trades(self, portfolio_id):
         return sum(1 for t in self.trades if t["portfolio_id"] == str(portfolio_id))
+
+    def record_cash_movement(self, **kw):
+        row = {"id": str(uuid.uuid4()), **kw}
+        self.cash_movements.append(row)
+        return dict(row)
+
+    def list_cash_movements(self, portfolio_id, *, limit=50):
+        return [
+            dict(m) for m in self.cash_movements if m["portfolio_id"] == str(portfolio_id)
+        ][:limit]
 
 
 def test_builtin_profiles():
@@ -163,3 +174,75 @@ def test_portfolio_ledger_worker_idempotent():
     )
     assert "fills+=0" in r2.note
     assert r2.state["last_fees_paid"] > 0
+
+
+def test_il7_fee_breakdown_includes_tds_field():
+    profile = get_broker_profile(
+        None,
+        custom={
+            "id": "edu",
+            "name": "Edu",
+            "brokerage_flat": 0.0,
+            "tds_pct_sell": 0.01,
+            "stt_pct_sell": 0.0,
+        },
+    )
+    sell = compute_fees(profile, side="sell", quantity=10, price=100.0)
+    assert sell.tds == pytest.approx(10.0)  # 1% of 1000
+    assert "tds" in sell.as_dict()
+    buy = compute_fees(profile, side="buy", quantity=10, price=100.0)
+    assert buy.tds == 0.0
+
+
+def test_il7_apply_fill_persists_fees_json():
+    repo = InMemorySimRepo()
+    portfolio = PortfolioService(repo)
+    ledger = PortfolioLedgerService(portfolio)
+    p = ledger.ensure_portfolio(mission_id="m1", starting_cash=100_000.0)
+    out = ledger.apply_fill(
+        p["id"],
+        symbol="INFY.NS",
+        side="buy",
+        quantity=5,
+        price=1500.0,
+        broker_profile="zerodha",
+        mission_id="m1",
+    )
+    trade = repo.trades[0]
+    assert trade.get("fees", {}).get("total") == pytest.approx(out["fees"]["total"])
+    assert trade["fees"]["stamp"] > 0
+    stmt = ledger.statement(p["id"], broker_profile="zerodha")
+    assert stmt["fee_components"]["stamp"] > 0
+    assert stmt["version"] == "il.7"
+
+
+def test_il7_withdraw_with_tds():
+    repo = InMemorySimRepo()
+    portfolio = PortfolioService(repo)
+    ledger = PortfolioLedgerService(portfolio)
+    p = ledger.ensure_portfolio(mission_id="m1", starting_cash=10_000.0, base_currency="INR")
+    out = ledger.withdraw(
+        p["id"],
+        amount=1000.0,
+        broker_profile="zerodha",
+        tds_pct=0.10,
+        note="take profit out",
+        mission_id="m1",
+    )
+    assert out["tds"]["tds"] == pytest.approx(100.0)
+    assert out["tds"]["total_debit"] == pytest.approx(1100.0)
+    snap = portfolio.snapshot(p["id"])
+    assert snap["cash"] == pytest.approx(8900.0)
+    assert len(repo.cash_movements) == 1
+    assert repo.cash_movements[0]["kind"] == "withdraw"
+    stmt = ledger.statement(p["id"], broker_profile="zerodha")
+    assert stmt["withdrawn"] == pytest.approx(1000.0)
+    assert stmt["withdrawal_tds"] == pytest.approx(100.0)
+
+
+def test_india_learner_uses_zerodha_profile():
+    from atlas.missions.programs import india_equity_learner_overrides
+
+    ov = india_equity_learner_overrides()
+    assert ov["decision_simulation"]["broker_profile"] == "zerodha"
+    assert ov["portfolio_ledger"]["broker_profile"] == "zerodha"

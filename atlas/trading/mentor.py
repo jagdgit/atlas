@@ -90,11 +90,11 @@ def synthesize_mentor_lesson(
                 "provisional."
             ),
             lesson=(
-                "Run Decision Simulation with instruments so sells write Experience "
-                "journal rows; Mentor will synthesize those next tick."
+                "Run Decision Simulation (India learner or pinned instruments) so sells "
+                "write Experience journal rows; Mentor will synthesize those next tick."
             ),
             recommendations=[
-                "Register sample market_data and start decision_simulation",
+                "Start India learner (live) or pin instruments on decision_simulation",
                 "Keep broker_profile set when comparing fee impact (MI.6)",
             ],
             tags=["markets", "investment_mentor", "seed", focus.lower()],

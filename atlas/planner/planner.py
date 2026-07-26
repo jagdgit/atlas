@@ -61,6 +61,8 @@ class Intent:
     REACT = "react"  # escalation: open-ended reasoning + tools via the ReAct strategy
     INSTANTIATE_MISSION = "instantiate_mission"
     REGISTER_MARKET_DATA = "register_market_data"
+    START_INVESTMENT_LEARNER = "start_investment_learner"
+    MANAGE_GOAL = "manage_goal"
     VERIFY_KNOWLEDGE = "verify_knowledge"
 
 
@@ -571,6 +573,99 @@ def _register_market_data_args(message: str, _m: re.Match[str] | None) -> dict[s
     }
 
 
+def _start_investment_learner_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    """OX.1 / OX.2 — NL → structured India learner objective (+ activate vs preview)."""
+    text = message.strip()
+    low = text.lower()
+    capital = 10000.0
+    cash = re.search(
+        r"(?:₹|rs\.?\s*|inr\s*)?\s*(\d[\d,]*(?:\.\d+)?)\s*(?:k|thousand)?",
+        low,
+    )
+    if cash:
+        raw = cash.group(1).replace(",", "")
+        try:
+            val = float(raw)
+            if "k" in (cash.group(0) or "") and val < 1000:
+                val *= 1000
+            if val > 0:
+                capital = val
+        except ValueError:
+            pass
+    universe = "NIFTY50"
+    if "nifty100" in low or "nifty 100" in low:
+        universe = "NIFTY100"
+    elif "nifty500" in low or "nifty 500" in low:
+        universe = "NIFTY500"
+    # OX.2 — default preview; power-user / confirm phrases activate immediately.
+    activate = bool(
+        re.search(
+            r"\b("
+            r"now|immediately|right\s*away|"
+            r"and\s+start|start\s+now|"
+            r"confirm(?:\s+and\s+start)?|"
+            r"go\s+ahead|yes[,.]?\s*start|activate"
+            r")\b",
+            low,
+        )
+    )
+    if re.search(r"\bpreview\b", low) and not re.search(r"\bnow\b", low):
+        activate = False
+    return {
+        "program": "market_intelligence",
+        "preset": "india_equity_learner",
+        "portfolio": "india_equity_learner",
+        "capital": capital,
+        "universe": universe,
+        "mode": "auto",
+        "broker_profile": "paper_demo",
+        "objective": text[:300],
+        "activate": activate,
+        "preview": not activate,
+    }
+
+
+def _manage_goal_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    """OX.3 / OX.4 — create / list / status / progress goals (objectives first)."""
+    text = message.strip()
+    low = text.lower()
+    action = "status"
+    if re.search(r"\b(list|show)\b.{0,20}\bgoals?\b|\bmy goals\b", low):
+        action = "list"
+    elif re.search(
+        r"\b(set|create|add|define|my goal is|goal:)\b",
+        low,
+    ):
+        action = "create"
+    elif re.search(r"\b(pause|pausing)\b.{0,30}\bgoal", low):
+        action = "pause"
+    elif re.search(r"\b(complete|completed|archive|done)\b.{0,30}\bgoal", low):
+        action = "complete"
+    elif re.search(
+        r"\b(learner status|progress|how(?:'s| is) my (?:india )?learner|"
+        r"india learner status|how(?:'s| is) my .{0,40}goal)\b",
+        low,
+    ):
+        action = "progress"
+    # Extract title after common prefixes
+    title = text
+    for pat in (
+        r"(?i)^(?:set|create|add|define)\s+(?:a\s+)?goal\s*(?:to|as|:)?\s*",
+        r"(?i)^my goal is\s*",
+        r"(?i)^goal:\s*",
+        r"(?i)^(?:how is|how's|status of|show|progress on)\s+(?:my\s+)?",
+        r"(?i)\s*goal\s*\??$",
+    ):
+        title = re.sub(pat, "", title).strip() or title
+    title = title.strip(" .?")
+    return {
+        "action": action,
+        "query": text[:400],
+        "title": title[:300] if title else text[:300],
+        "objective": title[:300] if title else text[:300],
+    }
+
+
 ArgBuilder = Callable[[str, "re.Match[str] | None"], dict[str, Any]]
 
 # (intent, capability, pattern, arg_builder) — evaluated in order.
@@ -584,6 +679,36 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
             re.IGNORECASE,
         ),
         _query_args,
+    ),
+    (
+        Intent.MANAGE_GOAL,
+        "goals",
+        re.compile(
+            r"\b(my goal is|goal:)\b"
+            r"|\b(set|create|add|define)\s+(?:a\s+)?goal\b"
+            r"|\b(list|show)\b.{0,20}\bgoals?\b|\bmy goals\b"
+            r"|\b(how(?:'s| is)|status of)\b.{0,40}\bgoal\b"
+            r"|\b(pause|complete|archive)\b.{0,30}\bgoal\b"
+            r"|\b(learner status|how(?:'s| is) my (?:india )?learner|india learner status|"
+            r"progress on my (?:goal|learner))\b",
+            re.IGNORECASE,
+        ),
+        _manage_goal_args,
+    ),
+    (
+        Intent.START_INVESTMENT_LEARNER,
+        "templates",
+        re.compile(
+            r"\b(india|indian|nifty)\b.{0,40}\b(learner|invest|paper\s*trad|market\s*program)\b"
+            r"|\b(start|create|launch|set\s*up|confirm)\b.{0,40}"
+            r"\b(india|indian|nifty|₹\s*10|10000|10,?000)\b.{0,40}"
+            r"\b(learner|invest|equity|market\s*(?:intelligence|program)|paper)\b"
+            r"|\bstart\b.{0,20}\bmarket\s*(?:intelligence|program)\b"
+            r"|\bconfirm\b.{0,30}\b(india|learner)\b"
+            r"|\bindia\s*(?:₹|rs\.?)?\s*10\s*k?\b",
+            re.IGNORECASE,
+        ),
+        _start_investment_learner_args,
     ),
     (
         Intent.INSTANTIATE_MISSION,
@@ -771,6 +896,8 @@ _DESCRIPTIONS = {
     Intent.REACT: "Reason and use tools to answer (ReAct).",
     Intent.INSTANTIATE_MISSION: "Instantiate a mission from a template (with config overrides).",
     Intent.REGISTER_MARKET_DATA: "Register a market_data OHLCV feed asset (fixture/sample).",
+    Intent.START_INVESTMENT_LEARNER: "Preview or start the India equity learner Program (OX.2: preview default; now/confirm activates).",
+    Intent.MANAGE_GOAL: "Create, list, or check durable Goals (OX.3 — objectives first).",
 }
 
 

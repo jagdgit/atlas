@@ -23,6 +23,7 @@ class InMemorySimRepo:
         self.portfolios: dict[str, dict[str, Any]] = {}
         self.positions: dict[tuple[str, str], dict[str, Any]] = {}
         self.trades: list[dict[str, Any]] = []
+        self.cash_movements: list[dict[str, Any]] = []
 
     def ensure_portfolio(self, *, mission_id, name="default", base_currency="USD", starting_cash=0.0):
         for p in self.portfolios.values():
@@ -73,6 +74,16 @@ class InMemorySimRepo:
 
     def count_trades(self, portfolio_id):
         return sum(1 for t in self.trades if t["portfolio_id"] == str(portfolio_id))
+
+    def record_cash_movement(self, **kw):
+        row = {"id": str(uuid.uuid4()), **kw}
+        self.cash_movements.append(row)
+        return dict(row)
+
+    def list_cash_movements(self, portfolio_id, *, limit=50):
+        return [
+            dict(m) for m in self.cash_movements if m["portfolio_id"] == str(portfolio_id)
+        ][:limit]
 
 
 @pytest.fixture()

@@ -93,6 +93,173 @@ class PlanningService:
             context_citations=list(ctx.get("citations") or [])[:8],
         ).as_dict()
 
+    def plan_program_start(
+        self,
+        *,
+        preset: str = "india_equity_learner",
+        program_id: str = "market_intelligence",
+        capital: float = 10000.0,
+        universe: str = "NIFTY50",
+        mode: str = "auto",
+        broker_profile: str = "zerodha",
+        objective: str | None = None,
+        activate: bool = False,
+    ) -> dict[str, Any]:
+        """OX.2 — executable Program-start plan (preview by default; no side effects).
+
+        Chat beginner path shows this before confirm. Power-user / API pass
+        ``activate=True`` and then call ``ProgramService.start``.
+        """
+        preset_l = (preset or "india_equity_learner").strip().lower() or "india_equity_learner"
+        program = (program_id or "market_intelligence").strip() or "market_intelligence"
+        univ = (universe or "NIFTY50").strip() or "NIFTY50"
+        try:
+            cash = float(capital)
+        except (TypeError, ValueError):
+            cash = 10000.0
+        if cash <= 0:
+            cash = 10000.0
+        # IL.9 — India learner happy path defaults to Zerodha fee realism
+        if preset_l in {"india_equity_learner", "india_learner", "inr_10k", "₹10000"}:
+            if not broker_profile or broker_profile == "paper_demo":
+                broker_profile = "zerodha"
+        obj = (objective or "").strip() or (
+            f"India cash-equity learner · ₹{cash:,.0f} · {univ} · auto universe"
+        )
+        steps = [
+            {
+                "id": "M0",
+                "order": 1,
+                "template": "investment_universe",
+                "role": "Investment Universe",
+                "detail": (
+                    f"Refresh {univ} membership → rank with WHY ± explanations → "
+                    "publish watchlist (cold start may be phase=learning / very_low)"
+                ),
+            },
+            {
+                "id": "M1",
+                "order": 2,
+                "template": "market_observer",
+                "role": "Market Observer",
+                "detail": "Observe ranked watchlist bars/moves (auto when symbols empty)",
+            },
+            {
+                "id": "M2",
+                "order": 3,
+                "template": "company_intelligence",
+                "role": "Company Intelligence",
+                "detail": "Refresh company profiles for ranked names",
+            },
+            {
+                "id": "M3",
+                "order": 4,
+                "template": "news_intelligence",
+                "role": "News Intelligence",
+                "detail": "Symbol-scoped news seeds / headlines → Knowledge",
+            },
+            {
+                "id": "M4",
+                "order": 5,
+                "template": "event_research",
+                "role": "Event Research",
+                "detail": "On interesting moves → research Jobs",
+            },
+            {
+                "id": "M5",
+                "order": 6,
+                "template": "decision_simulation",
+                "role": "Decision Simulation",
+                "detail": (
+                    f"Paper trade with ₹{cash:,.0f}, live feed, empty instruments "
+                    f"(auto-load from M0); broker_profile={broker_profile}"
+                ),
+            },
+            {
+                "id": "M6",
+                "order": 7,
+                "template": "portfolio_ledger",
+                "role": "Portfolio Ledger",
+                "detail": "Fee/tax-aware sim ledger for fills",
+            },
+            {
+                "id": "M7",
+                "order": 8,
+                "template": "investment_mentor",
+                "role": "Investment Mentor",
+                "detail": "Weekly lessons → Experience OS (soft bias)",
+            },
+        ]
+        notes = [
+            "Simulation only — no broker login (P10).",
+            "Operator pins (symbols/tickers/instruments) always win over auto watchlist.",
+            "Ranking cold start is labeled Learning / very_low confidence — Atlas will not invent certainty.",
+        ]
+        if mode == "auto":
+            notes.append("Mode=auto: M0 picks the watchlist; you can pin symbols later.")
+        return {
+            "kind": "program_start_plan",
+            "interaction": "activate" if activate else "preview",
+            "side_effecting": bool(activate),
+            "preset": preset_l,
+            "program_id": program,
+            "capital": cash,
+            "universe": univ,
+            "mode": mode,
+            "broker_profile": broker_profile,
+            "objective": obj,
+            "steps": steps,
+            "notes": notes,
+            "confirm_hint": (
+                "Say “confirm India learner” or “start India learner now” to activate."
+                if not activate
+                else "Activating — missions will be created."
+            ),
+            "api": {
+                "preview": f"POST /v1/programs/{program}/plan",
+                "start": f"POST /v1/programs/{program}/start",
+            },
+            "version": "ox.2",
+        }
+
+    def plan_daily_investment(
+        self,
+        *,
+        program_id: str = "market_intelligence",
+        capital: float = 10_000.0,
+        portfolio_key: str | None = None,
+        max_candidates: int = 5,
+        deploy_fraction: float = 0.40,
+    ) -> dict[str, Any]:
+        """IL.6 — Daily Investment Plan from latest M0 watchlist (Planning OS object)."""
+        from atlas.investment.daily_plan import plan_from_watchlist
+        from atlas.investment import watchlists as wl
+        from atlas.investment import portfolios as vp
+
+        pid = (program_id or "market_intelligence").strip() or "market_intelligence"
+        snap = wl.latest(pid)
+        cash = capital
+        pkey = (portfolio_key or "").strip() or None
+        if pkey:
+            book = vp.get(pkey)
+            if book and isinstance(book.get("persona"), dict):
+                try:
+                    cash = float(book["persona"].get("capital") or cash)
+                except (TypeError, ValueError):
+                    pass
+        plan = plan_from_watchlist(
+            snap,
+            capital=cash,
+            portfolio_key=pkey,
+            max_candidates=max_candidates,
+            deploy_fraction=deploy_fraction,
+        )
+        plan["api"] = {
+            "self": "/v1/planning/daily-investment-plan",
+            "alias": "/v1/market/daily-plan",
+        }
+        return plan
+
     def _gather_context(
         self, goal: str, *, program_id: str | None, limit: int
     ) -> dict[str, Any]:

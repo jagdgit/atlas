@@ -1,7 +1,8 @@
 """Equity session calendars for paper-trading simulation (wall-clock gate).
 
 Used so live (and optionally replay) ticks only buy/sell while the configured
-market is open. Holidays are not modeled yet — weekday + local open/close only.
+market is open. Weekday + local open/close, plus **Atlas holiday detection**
+(``atlas.trading.holidays``) for NSE/BSE/US sessions.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
+
+from atlas.trading.holidays import detect_holiday
 
 
 @dataclass(frozen=True)
@@ -24,10 +27,18 @@ class MarketSession:
 
 
 # Named sessions operators can set via ``PaperTradingConfig.market_session``.
+_NSE_CASH = MarketSession(
+    id="nse_equity",
+    timezone="Asia/Kolkata",
+    open_time=time(9, 15),
+    close_time=time(15, 30),
+)
 SESSIONS: dict[str, MarketSession | None] = {
     "always_open": None,
-    "nse_equity": MarketSession(
-        id="nse_equity",
+    "nse_equity": _NSE_CASH,
+    # Equity derivatives hours match cash on NSE.
+    "nse_fno": MarketSession(
+        id="nse_fno",
         timezone="Asia/Kolkata",
         open_time=time(9, 15),
         close_time=time(15, 30),
@@ -53,6 +64,7 @@ class SessionStatus:
     open: bool
     reason: str
     local_now: str | None = None
+    holiday: str | None = None
 
 
 def list_sessions() -> list[str]:
@@ -102,6 +114,17 @@ def session_status(
             reason="weekend",
             local_now=local_s,
         )
+
+    hol = detect_holiday(key, local.date(), as_session=True)
+    if hol is not None:
+        return SessionStatus(
+            session_id=key,
+            open=False,
+            reason=f"holiday:{hol.name}",
+            local_now=local_s,
+            holiday=hol.name,
+        )
+
     t = local.timetz().replace(tzinfo=None)
     if t < session.open_time:
         return SessionStatus(

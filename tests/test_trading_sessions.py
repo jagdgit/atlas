@@ -44,6 +44,14 @@ def test_nse_weekend():
     assert st.reason == "weekend"
 
 
+def test_nse_holiday_republic_day_2024():
+    now = datetime(2024, 1, 26, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    st = session_status("nse_equity", now=now)
+    assert st.open is False
+    assert "holiday" in st.reason
+    assert st.holiday and "Republic" in st.holiday
+
+
 def test_us_equity_open():
     now = datetime(2024, 1, 10, 10, 0, tzinfo=ZoneInfo("America/New_York"))
     assert is_session_open("us_equity", now=now) is True

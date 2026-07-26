@@ -47,6 +47,7 @@ ALIASES: dict[str, str] = {
 
 # Built-in need sets for Market Intelligence members (declare, don't import).
 MISSION_NEEDS: dict[str, tuple[str, ...]] = {
+    "investment_universe": (NEED_WORLD_MODELS, NEED_EVENTS),
     "market_observer": (NEED_MARKET_READER, NEED_EVENTS),
     "company_intelligence": (NEED_COMPANY_DATA, NEED_CANDIDATES),
     "news_intelligence": (NEED_CANDIDATES,),

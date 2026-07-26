@@ -1,8 +1,10 @@
-"""MarketObserverWorker — Market Intelligence M1 (MI.3 / MI.4).
+"""MarketObserverWorker — Market Intelligence M1 (MI.3 / MI.4 / IL.4).
 
 Observes configured symbols/instruments via MarketReader, scores interesting
 events (price + volume), journals moves, emits ``MarketInterestingMove``, and
 optionally spawns research Jobs when ``spawn_research`` is enabled (default off).
+
+IL.4: empty symbols/instruments → ranked Investment Universe watchlist.
 """
 
 from __future__ import annotations
@@ -11,13 +13,14 @@ import logging
 from typing import Any
 
 from atlas.decision.rules import CapabilityGap
+from atlas.investment import watchlists as wl
 from atlas.trading.interesting_events import score_observation
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 
 class MarketObserverWorker(PersistentWorker):
     type = "market_observer"
-    VERSION = 2
+    VERSION = 3
     journal_ticks = True
 
     def __init__(
@@ -56,8 +59,11 @@ class MarketObserverWorker(PersistentWorker):
                     ),
                 )
 
-        instruments = list(cfg.get("instruments") or [])
-        symbols = [str(s).strip() for s in (cfg.get("symbols") or []) if str(s).strip()]
+        targets, auto = wl.resolve_instruments(cfg)
+        state["auto_watchlist"] = auto
+        if auto:
+            state["auto_symbols"] = [t["symbol"] for t in targets]
+
         provider = str(cfg.get("provider") or "").strip() or None
         limit = max(2, int(cfg.get("bars_limit", 60)))
         alert_pct = float(cfg.get("move_alert_pct", 5.0) or 5.0)
@@ -65,24 +71,13 @@ class MarketObserverWorker(PersistentWorker):
         spawn_research = bool(cfg.get("spawn_research") or False)
         score_threshold = float(cfg.get("score_threshold") or 0.7)
 
-        targets: list[dict[str, str]] = []
-        for inst in instruments:
-            if not isinstance(inst, dict):
-                continue
-            sym = str(inst.get("symbol") or "").strip()
-            asset = str(inst.get("asset") or "").strip()
-            if sym or asset:
-                targets.append({"symbol": sym or asset, "asset": asset})
-        for sym in symbols:
-            if not any(t["symbol"] == sym for t in targets):
-                targets.append({"symbol": sym, "asset": ""})
-
         if not targets:
             return TickResult(
                 state=state,
                 note=(
                     "idle: no symbols/instruments — set symbols=['RELIANCE.NS'] "
-                    "or instruments=[{symbol, asset}] (sample market_data feed)"
+                    "or instruments=[{symbol, asset}], or start M0 / India learner "
+                    "so the ranked watchlist auto-loads"
                 ),
             )
 
@@ -162,7 +157,8 @@ class MarketObserverWorker(PersistentWorker):
             except Exception:  # noqa: BLE001
                 pass
 
-        head = f"observe: {ok} ok, {gaps} gap(s)"
+        auto_note = f"auto watchlist ({len(targets)}); " if auto else ""
+        head = f"{auto_note}observe: {ok} ok, {gaps} gap(s)"
         if interesting:
             head += f", {len(interesting)} interesting"
         if spawned:

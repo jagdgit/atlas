@@ -273,6 +273,7 @@ def test_health_reports_template_count(svc):
 def test_market_intelligence_templates_shipped():
     names = {t["name"] for t in BUILTIN_TEMPLATES}
     for required in (
+        "investment_universe",
         "decision_simulation",
         "paper_trading",
         "market_observer",
@@ -285,8 +286,10 @@ def test_market_intelligence_templates_shipped():
         assert required in names
     ds = next(t for t in BUILTIN_TEMPLATES if t["name"] == "decision_simulation")
     assert ds["worker_specs"][0]["type"] == "paper_trading"
+    iu = next(t for t in BUILTIN_TEMPLATES if t["name"] == "investment_universe")
+    assert iu["worker_specs"][0]["type"] == "investment_universe"
     stub = next(t for t in BUILTIN_TEMPLATES if t["name"] == "portfolio_ledger")
-    assert stub["worker_specs"][0]["type"] == "program_stub"
+    assert stub["worker_specs"][0]["type"] in {"program_stub", "portfolio_ledger"}
     observer = next(t for t in BUILTIN_TEMPLATES if t["name"] == "market_observer")
     assert observer["worker_specs"][0]["type"] == "market_observer"
     news = next(t for t in BUILTIN_TEMPLATES if t["name"] == "news_intelligence")

@@ -1,16 +1,131 @@
 # Missions — Operator Guide
 
 > **Audience:** you (the operator) using the console / Jobs / API.  
-> **Last updated:** 2026-07-24  
+> **Last updated:** 2026-07-25  
 > **Related:** [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) (master),
 > [`ATLAS_MISSION_PHILOSOPHY.md`](ATLAS_MISSION_PHILOSOPHY.md),
-> [`MARKET_INTELLIGENCE_MISSIONS_PLAN.md`](MARKET_INTELLIGENCE_MISSIONS_PLAN.md) (Market Program — locked),
+> [`AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md`](AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md) (**locked** — India learner),
+> [`MARKET_INTELLIGENCE_MISSIONS_PLAN.md`](MARKET_INTELLIGENCE_MISSIONS_PLAN.md) (Market Program),
 > [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md),
-> `docs/PHASE_A_PLAN.md`, `docs/PHASE_D_PLAN.md`,
-> `docs/OPEN_ITEMS.md` (`OI-D1`, `OI-MP*`, `OI-MI0`, `OI-PA0`).
+> `docs/OPEN_ITEMS.md` (`OI-IL0`, `OI-IL-OX`, `OI-MI0`, …).
 
-This guide is **how to run** missions. For **why missions exist** and the
-Observe→Learn→Decide→Reflect→Improve loop, read the philosophy doc first.
+This guide is **how to run** missions. For **why missions exist**, read the philosophy doc.
+For the autonomous investment learner (Universe → Rank → Simulate → Learn), read the IL plan.
+
+---
+
+## India equity learner (preferred path)
+
+**Atlas chooses; you constrain.** You do not have to hand-type NIFTY symbols or paste JSON to begin learning.
+
+Guide: `GET /v1/learner/happy-path` · Status: `GET /v1/learner/status` (includes checklist).
+
+### Start (three modes — OX.2)
+
+| Mode | What you say / call | What happens |
+|------|---------------------|--------------|
+| **Beginner** | Chat: `start India learner with 10000` | Preview M0→M7 plan → say `confirm India learner` or `start India learner now` |
+| **Power user** | `start India learner now` | Activates immediately |
+| **API** | `POST /v1/programs/market_intelligence/start` with `{"preset":"india_equity_learner"}` | Always immediate |
+| **Preview API** | `POST /v1/programs/market_intelligence/plan` | Dry-run (no missions created) |
+
+Preset: **₹10k · NIFTY50 · live Yahoo · empty instruments** → M0 ranks the universe (WHY ± lines + hermetic quality seed) → M1/M2/M3/M5 follow the watchlist. Simulation only (P10).
+
+Cold start: ranking may show **phase=learning / confidence=very_low** until enough bars exist — that is honesty, not a finished edge. Quality lines use **sector proxies** (`hermetic_seed`), not live filings — override via M0 `quality_seed` or disable with `use_quality_seed: false`. M2 auto-seed also attaches hermetic **filing refs** (titles/dates only); POST real refs when you have a ToS-compliant source.
+
+### Multiple books (IL.10)
+
+Each virtual portfolio is its **own** Decision Simulation mission + persona (objective, risk, horizon, capital, allowed assets).
+
+```http
+GET  /v1/market/portfolios
+POST /v1/market/portfolios
+{ "label": "F&O Demo", "capital": 50000, "asset_class": "futures",
+  "persona": {"objective": "Learning", "risk": "very_high", "time_horizon": "intraday",
+              "allowed_assets": ["futures"]} }
+```
+
+Books do not share cash or mentor soft-bias (`portfolio:<key>` tags).
+
+### Instrument packs (IL.11) — sim-on-request
+
+Shared Simulation Engine + per-class rules. **India learner uses `cash_equity` (ready).** F&O is operator-selected demo with lot/margin/expiry gates — **not** the default learner and **not** autonomous ranking.
+
+| Pack | Ready? |
+|------|--------|
+| `cash_equity` / `etf` | ✅ |
+| `futures` / `options` | ✅ sim rules (lot / margin / F&O fees) |
+| `commodity` / `currency` / `crypto` | ❌ stub → `capability_gap` |
+
+```http
+GET /v1/market/instrument-packs
+```
+
+F&O tip: set `lot_size` / `expiry` on instruments (NIFTY defaults to lot 25). Thin cash → `pack_block` on open, not silent fills.
+
+### Market holidays (IL.5+)
+
+Atlas **detects** NSE/BSE/US closed days automatically when `market_session` is set (no hand-maintained holiday list required for 2024–2026 seeds).
+
+```http
+GET /v1/market/holidays?calendar=india_equity&year=2026
+GET /v1/market/session-status?session=nse_equity
+POST /v1/market/holidays
+{ "calendar": "india_equity", "day": "2026-07-22", "name": "Special closure" }
+```
+
+On a holiday midday, Decision Simulation journals `session_closed (holiday:…)` instead of trading.
+
+### Filings refs (IL.5+)
+
+Hermetic annual/quarterly **metadata** for NIFTY names (not PDF scrapes). Operator snapshots win when posted.
+
+```http
+GET  /v1/market/filings?symbol=RELIANCE.NS
+POST /v1/market/filings-snapshot
+{ "symbols": { "INFY.NS": [{ "title": "AR FY25", "kind": "annual", "as_of": "2025-03-31", "url": "…" }] } }
+```
+
+Official NSE/BSE adapters stay `capability_gap` until a ToS client exists — use hermetic refs or the snapshot path.
+
+### Goals & progress (OX.3 / OX.4)
+
+Goals are **objectives first** — Program/Portfolio are optional links.
+
+- Chat: `my goal is Beat NIFTY over 12 months` · `list goals` · `how is my beat-NIFTY goal?` · `learner status`
+- API: `GET/POST /v1/goals`, `GET /v1/goals/{id}/progress`, `GET /v1/learner/status`
+
+### Daily Investment Plan (IL.6)
+
+Built from the latest M0 ranked watchlist (simulation sizing only — P10).
+
+```http
+GET /v1/planning/daily-investment-plan?portfolio_key=india_equity_learner&capital=10000
+GET /v1/market/daily-plan
+```
+
+M0 also stashes the plan on the watchlist and refreshes on a **morning cron** (08:45 IST Mon–Fri). Progress / `learner status` shows a “Today's plan …” bullet.
+
+### Screener signals (IL.8)
+
+No website scrapes. Post an operator snapshot (or later a ToS API) — M0 merges into quality ranking.
+
+```http
+POST /v1/market/screener-snapshot
+{ "symbols": { "INFY.NS": { "pe": 22, "roe": 0.28, "score": 0.9 } } }
+GET  /v1/market/screener-signals
+```
+
+Disable with M0 `use_screener_signals: false`. Bars can also contribute computed rel-volume / short momentum when present.
+
+### Feeds: live primary, replay for tests
+
+| Path | Role |
+|------|------|
+| **`feed_mode: live`** | **Operator default** for the India learner (Yahoo / keyed providers) |
+| **`feed_mode: asset_replay`** | **CI / hermetic demos** — DEMO fixtures, sample OHLCV. Not the primary learner story. |
+
+Register sample market data only when you deliberately want a **fixture replay** mission — not required for the India learner preset.
 
 ---
 
@@ -20,107 +135,82 @@ Console **Programs** groups cooperating missions (Market / Engineering / Persona
 
 1. Open **Programs** → **Market Intelligence**
 2. Read the **Cognitive lifecycle** strip (Observe → … → Improve)
-3. Click **Start Program** — instantiates startable members with template defaults (**no JSON**)
-4. Stub members stay listed until MI.2 ships their templates
-5. Optional: **Context** box gathers “everything relevant to X” (MCA.1 spike)
+3. Prefer Chat/API **India learner** preset above, **or** click **Start Program** (template defaults)
+4. Optional: **Context** box gathers “everything relevant to X” (MCA.1)
 
-API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `GET /v1/programs/{id}/context?q=…`
+API: `GET /v1/programs`, `POST /v1/programs/{id}/start`, `POST /v1/programs/{id}/plan`, `GET /v1/programs/{id}/context?q=…`
+
+**M0 — Investment Universe** — NIFTY membership → ranked watchlist with WHY ± explanations. Empty M1/M2/M3/M5 configs auto-load from this list (operator pins still win).
 
 **MI.4 — News / Events**
 
-- **News Intelligence** config: `headlines: ["…"]` or `items: [{text, symbol}]` → extracts claims into Knowledge. Optional `verify: true`.
+- **News Intelligence**: operator `headlines`/`items`, or empty → watchlist monitoring seeds (`seed_from_watchlist`).
 - **Event Research** polls `MarketInterestingMove` and enqueues research Jobs when `score ≥ score_threshold` (default 0.7).
-- **Market Observer** scores price+volume; set `spawn_research: true` to spawn Jobs directly (default off — Event Research owns that path).
+- **Market Observer** scores price+volume; empty symbols → ranked watchlist (IL.4).
 
 **MI.5 — Company Intelligence**
 
-- Config hermetic path (no scrape):
-  ```json
-  {
-    "tickers": ["RELIANCE.NS"],
-    "companies": [{
-      "symbol": "RELIANCE.NS",
-      "name": "Reliance Industries",
-      "sector": "Energy",
-      "facts": ["Reliance Industries owns refining businesses."],
-      "filings": [{"title": "Annual Report FY24", "kind": "annual", "as_of": "2024-03-31"}]
-    }]
-  }
-  ```
+- Empty tickers → ranked watchlist + minimal membership `config_seed` profiles.
+- Richer hermetic profiles still accepted via `companies: […]`.
 - Official SEC/NSE/BSE adapters raise capability gaps until API keys + ToS paths exist (`GET /v1/market/company-providers`).
 
-**Portfolio Ledger (MI.6)** — fee/tax-aware sim book + Broker Profiles (`paper_demo`, `zerodha`, `groww`, `angel`, or `custom_broker_profile`). List profiles: `GET /v1/market/broker-profiles`. Example config:
+**Portfolio Ledger (MI.6 / IL.7)** — fee/tax-aware sim book + Broker Profiles (`paper_demo`, `zerodha`, `groww`, `angel`, or custom). India learner defaults to **`zerodha`**. Fee components (brokerage, STT, stamp, GST, TDS) persist on trades; withdrawals supported.
 
-  ```json
-  {
-    "broker_profile": "zerodha",
-    "starting_cash": 100000,
-    "pending_fills": [
-      {"symbol": "RELIANCE.NS", "side": "buy", "quantity": 10, "price": 2800}
-    ],
-    "marks": {"RELIANCE.NS": 2850}
-  }
-  ```
+```http
+GET  /v1/market/broker-profiles
+GET  /v1/market/portfolios/{key}/ledger
+POST /v1/market/portfolios/{key}/withdraw
+{ "amount": 1000, "tds_pct": 0.1 }
+```
 
-`paper_trading` / `decision_simulation` may set `broker_profile` to charge the same schedules on fills.
+**Investment Mentor (MI.7)** — weekly synthesis into Experience OS; scoped by `portfolio_key` when set so books do not cross-contaminate.
 
-**Investment Mentor (MI.7)** — weekly synthesis of market Experiences into a Lesson written back to Experience OS. Decision Simulation pulls `advice_for` into each tick and lightly biases buy scores (caution vs reinforce). Example:
+`paper_trading` remains a **compat alias**; prefer **`decision_simulation`**.
 
-  ```json
-  {
-    "focus": "markets",
-    "lookback": 40,
-    "force": true,
-    "seed_experiences": [
-      {"title": "Paper trade closed on DEMO: loss -10", "tags": ["demo", "paper_trading", "loss", "markets"], "lessons": "Lesson: re-check"}
-    ]
-  }
-  ```
+**World Models (WM.1)** — domain *structure* (not Knowledge claims). List packs: `GET /v1/world-models`. Indian markets + solar stub. Mission Context returns `item_kind=world_fact` rows.
 
-`paper_trading` remains a **compat alias** for Chat/Jobs; prefer **`decision_simulation`**.
-Start Program instantiates all seven Market members when templates are seeded.
+**Knowledge Graph (KG.1)** — derived Claim↔Concept↔Entity↔SPO view. `GET /v1/knowledge/graph?q=…`.
 
-**World Models (WM.1)** — domain *structure* (not Knowledge claims). List packs: `GET /v1/world-models`. Indian markets + solar stub (solar-plant test). Mission Context (`GET /v1/context?q=NSE`) returns `item_kind=world_fact` rows mixed with Knowledge.
+**Mission Context (MCA.1)** — `GET /v1/context?q=…`. Decision Simulation cites refs each tick.
 
-**Knowledge Graph (KG.1)** — derived Claim↔Concept↔Entity↔SPO view over findings (no separate graph DB). `GET /v1/knowledge/graph?q=cash+flow`. Context also returns `item_kind=graph_node`.
+**Planning OS (PA.1)** — `GET /v1/planning/plan?goal=…` (also `plan_program_start` for India learner). Never broker login (P10).
 
-**Mission Context (MCA.1)** — shared gather for all Programs: `GET /v1/context?q=…` returns `items`, `sources`, `citations`, `summary`. Decision Simulation pulls this each tick and cites refs in the decision rationale.
+**Policy Engine (PA.2)** — soft prefer/avoid + hard `forbid` / `limit`. `POST /v1/policy/evaluate`.
 
-**Planning OS (PA.1)** — `GET /v1/planning/plan?goal=Should+I+buy+RELIANCE.NS` (or POST JSON). Returns gaps, alternatives, risks, recommended next steps, and a non-side-effecting decision (simulate / gather / hold). Never broker login (P10).
+**Memory OS (MEM.1)** — working → session → long_term. `GET /v1/memory/hierarchy`.
 
-**Policy Engine (PA.2)** — soft prefer/avoid plus hard `forbid` / `limit` (provenance caps). Evaluate: `POST /v1/policy/evaluate` with `{action, context}` (optional `scope` / `scopes`). Decision Simulation blocks hard violations before sim fills. Scoped rules (`domain:<x>`, `mission:<id>`) apply on retrieval and advice when the caller threads those scopes (OI-C9); remove a rule with `DELETE /v1/policy/rules/{id}` or `atlas policy delete`.
+**Experience OS (EX.1)** — journal / recall / advice. Mentor + Decision Simulation write through it.
 
-**Memory OS (MEM.1)** — explicit hierarchy: working → session → long_term (then Knowledge / Experience as separate OS). `GET /v1/memory/hierarchy`, `POST /v1/memory/os/remember` `{content, layer}`, `POST /v1/memory/promote` `{memory_id, to_layer}`.
+**Unified ingest (OI-C5)** — `atlas ingest <path>` / `POST /v1/ingest`. Candidate drain: `POST /v1/candidates/drain`.
 
-**Experience OS (EX.1)** — Observation→Reasoning→Decision→Outcome→Reflection→Lesson over `learning.experiences`. `GET /v1/experience/shape`, `POST /v1/experience/journal`, `GET /v1/experience/recall` / `advice`. Decision Simulation + Investment Mentor write through it.
+**Capability Registry (CAP.1)** — `POST /v1/capabilities/needs`, `GET /v1/capabilities/gaps`.
 
-**Unified ingest (OI-C5)** — `atlas ingest <path>` and `POST /v1/ingest` go through the Asset→Reader bridge (with prose candidates). Global candidate drain/prune runs on the scheduler (`candidates_drain` / `candidates_prune`); manual: `POST /v1/candidates/drain`.
+**Scheduler hierarchy (SCHED.1)** — `GET /v1/scheduler/hierarchy?program_id=market`. Cron via `worker_specs.cron`.
 
-**Capability Registry (CAP.1)** — missions declare needs instead of importing adapters. `POST /v1/capabilities/needs` `{needs:["MarketReader"]}` or `{mission:"market_observer"}`. `GET /v1/capabilities/inspect`. Missing needs → honest `capability_gap` (Market Observer).
-
-**Capability gaps (OI-F5 / P15)** — `GET /v1/capabilities/gaps` (or `atlas capability-gaps`): catalog missing + mission need gaps + unhealthy providers + Decision Engine backlog (`GET /v1/decision/gaps`).
-
-**Scheduler hierarchy (SCHED.1)** — Program → Mission → Worker cadence. `GET /v1/scheduler/hierarchy?program_id=market` (alias for `market_intelligence`). Resolve interval: `POST /v1/scheduler/resolve` `{program_id, template}` (worker_specs > mission cadence > program default 300s). **Cron (OI-A1):** template `worker_specs` may set `"cron": "0 9 * * 1-5"` instead of (or beside) `interval_seconds`; `create_worker(cron_expr=…)` and `ScheduleService.register_cron_schedule` store `kind=cron` on `scheduler.schedules` and advance `next_run_at` from the crontab.
-
-**Daily Learning Governance (OI-MP3)** — Layer 2: `GET /v1/governance/daily`. Mission template `learning_governance` journals a daily snapshot (concepts, lessons, conflicts, capability gaps). Not a per-video Learning Report.
+**Daily Learning Governance (OI-MP3)** — `GET /v1/governance/daily`.
 
 ---
 
-## 0. Paper trading FAQ (read this if the mission “does nothing”)
+## 0. Decision Simulation FAQ (if a mission “does nothing”)
+
+### Preferred fix
+
+Chat: `start India learner now` — or confirm after preview. Empty `instruments` is **OK**: M0 watchlist auto-loads (IL.2/IL.4).
 
 ### What is Atlas doing right now?
 
 | You see | Meaning |
 |---------|---------|
-| Journal: `idle: no instruments…` | Mission is running but **config has empty `instruments`**. Defaults alone do not trade. |
-| Journal: `tick: N decision(s) (+buys/sells/holds); equity… \| DEMO: hold @ …` | Fixture replay is live — decisions each tick. |
-| Journal: `feed_exhausted` / `DONE: all feeds exhausted` | Sample/historical bars finished — simulation complete until you load more data. |
-| Empty / silent ticks | Older builds idled quietly; restart Atlas to pick up clearer idle notes. |
+| Journal: `auto universe (N)…` / `book=india_equity_learner` | Learner path — symbols from M0 |
+| Journal: `phase=learning, confidence=very_low` | Cold start — Atlas is not inventing confidence |
+| Journal: `idle: no instruments…` **and** no M0 watchlist | Start Investment Universe / India learner, **or** pin `instruments` |
+| Journal: `tick: N decision(s)… \| DEMO: hold @ …` | **Fixture replay** path (CI/demo) — not the primary learner |
+| Journal: `feed_exhausted` | Replay bars finished — load more fixtures or switch to `live` |
 
-**Default config is not enough.** You must:
+### Fixture replay (CI / demos only)
 
-1. **Register sample market data** (Missions UI button) **or** `POST /v1/assets` with `generate_sample: true`  
-2. Set `instruments` to something like `[{"symbol":"DEMO","asset":"demo-feed"}]`  
+1. **Register sample market data** (Missions UI) **or** `POST /v1/assets` with `generate_sample: true`  
+2. Set `feed_mode: asset_replay` and `instruments: [{"symbol":"DEMO","asset":"demo-feed"}]`  
 3. Or Chat/Job: `start paper trading with 10000 on DEMO`
 
 ### Does it need logins for live markets?
@@ -129,48 +219,29 @@ Start Program instantiates all seven Market members when templates are seeded.
 |------------|---------------|-------|
 | Atlas API / console login | For you to operate Atlas | Normal |
 | **Broker trading login** | **Never** | Forbidden (P10) — no real orders |
-| **Market-data provider API key** | Optional | Yahoo: `market.yahoo_enabled: true` (no key). Polygon/AV: set env from `market.*_api_key_env` (live when key present). NSE/BSE still ToS skeletons. Still **no broker trading login** |
-
-When live data arrives, expect a **data vendor API key** (quotes/candles), not a brokerage password.
+| **Market-data provider API key** | Optional | Yahoo: `market.yahoo_enabled: true` (no key). Polygon/AV: set env from `market.*_api_key_env`. NSE/BSE still ToS skeletons. |
 
 ### Does the mission learn from the web (screener, news sites)?
 
-**Live prices yes; screener/news not yet inside the tick.**
+**Live prices yes; screener sites not yet inside the tick.** News/Company follow the **ranked watchlist** (IL.4). Screener scraping is later (IL.8).
 
-| Path | Today |
-|------|-------|
-| Replay OHLCV → indicators → virtual buy/sell → experience on sells | ✅ `feed_mode: asset_replay` |
-| Live MarketReader bars → same decision path, gated by market hours | ✅ `feed_mode: live` + `market_session` |
-| Screener websites (e.g. Screener.in) inside the tick | ❌ not built |
-| News / web research | ✅ as **separate Jobs/Chat** (`research`, `media.learn`) — **not auto-wired** into each trading decision |
-| Verifying claims from videos/news into trusted knowledge | 📋 [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md) |
-
-So: use **replay** for hermetic practice, or **live** + session hours for a closer-to-real sim. Use separate Jobs for YouTube/news. Verification plan makes that knowledge trustworthy for later mission context.
+| Path | Role today |
+|------|------------|
+| Live MarketReader bars (`feed_mode: live`) | **Operator primary** — India learner preset |
+| Replay OHLCV (`feed_mode: asset_replay`) | **Tests / CI / DEMO demos** |
+| Screener websites inside the tick | ❌ not built |
+| News / company along the watchlist | ✅ M2/M3 auto when configs empty |
+| Extra research Jobs | ✅ Chat/Jobs (`research`, `media.learn`) |
 
 ### How do I verify claims after media.learn?
 
 Learning Reports say **Verification: Not Executed** on purpose (learn ≠ verify).
 
-After a COMPLETE learn (e.g. the Kiyosaki video), in Chat/Job:
-
 ```text
 Verify claims learned from https://youtu.be/zHt5Mdr0QFk
 ```
 
-With optional web corroboration:
-
-```text
-Verify claims learned from https://youtu.be/zHt5Mdr0QFk with web search
-```
-
-Or use `asset_id` from the report Observations. Continuous option: mission template `knowledge_verification`.  
-Expect trust labels / contested flags; a single YouTube source alone will not become HIGH confidence.
-
-Platform framing: [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) · Market Program: [`MARKET_INTELLIGENCE_MISSIONS_PLAN.md`](MARKET_INTELLIGENCE_MISSIONS_PLAN.md).
-
----
-
----
+Or mission template `knowledge_verification`. Platform: [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) · Learner: [`AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md`](AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md).
 
 ## 1. Three different surfaces (don’t mix them up)
 
@@ -228,73 +299,27 @@ Workers survive reboot via checkpoints. Archiving a mission does **not** delete 
 
 ---
 
-### `paper_trading` (flagship simulation mission)
+### `decision_simulation` (preferred) / `paper_trading` (compat)
 
-**Purpose:** Replay / tick market bars → indicators → Decision Engine → **virtual portfolio** fills → journal + learn from outcomes. **No broker, no real money (P10).**
+**Purpose:** Live or replay bars → indicators → Decision Engine → **virtual portfolio** fills → journal + learn. **No broker, no real money (P10).**
+
+**Operator primary path:** India learner preset (`feed_mode: live`, empty `instruments` → M0 watchlist).  
+**Replay path:** keep for tests/CI with DEMO fixtures — not the default story.
 
 **Config (important keys)**
 
-| Key | Meaning | Default idea |
+| Key | Meaning | Operator tip |
 |-----|---------|--------------|
-| `starting_cash` | Virtual cash | `100000` |
-| `instruments` | `[{ "symbol", "asset" }]` — `asset` = Asset Store name (replay); live needs `symbol` only | `[]` (idle until set) |
-| `strategy` | SMA/RSI params | `sma_fast/slow`, `rsi_period`, … |
-| `bars_per_tick` | How many bars per tick (replay) | `1` |
-| `tick_interval_seconds` | Schedule | `300` |
-| `max_position_qty` / `max_exposure_pct` | Risk caps (`0` = unbounded) | `0` |
-| `drawdown_alert_pct` | Notify on drawdown (`0` = off) | `0` |
-| `feed_mode` | `asset_replay` (DEMO/fixtures) or `live` (MarketReader / Yahoo) | `asset_replay` |
-| `live_provider` | When live: `yahoo` / `polygon` / `alphavantage` | `yahoo` |
-| `market_session` | `always_open`, `nse_equity`, `bse_equity`, `us_equity` | `always_open` |
-| `respect_market_hours` | If true, buy/sell only while session is open (still marks prices when closed) | `true` |
+| `starting_cash` | Virtual cash | India learner: `10000` |
+| `instruments` | `[{symbol, asset?}]` | **Empty OK** — auto from M0; or pin symbols |
+| `portfolio_key` / `persona` | IL.10 book identity | Required fields on persona when multi-book |
+| `instrument_pack` / `asset_class` | IL.11 rules pack | Default `cash_equity`; F&O ready for sim books; commodity/FX/crypto → capability_gap |
+| `feed_mode` | `live` (primary) or `asset_replay` (CI) | Prefer `live` |
+| `live_provider` | `yahoo` / `polygon` / `alphavantage` | Yahoo opt-in in config |
+| `market_session` | `nse_equity`, `nse_fno`, `us_equity`, … | India learner: `nse_equity` — **Atlas detects holidays** automatically |
+| `strategy` | SMA/RSI params | defaults fine to start |
 
-**Market data today**
-
-- Kind: `market_data` in the Asset Store (JSON or CSV OHLCV) for **`feed_mode: asset_replay`**.
-- **Live tape:** set `feed_mode: live`, `live_provider: yahoo`, and enable `market.yahoo_enabled: true` in config (you already can in `config/local.yaml`). Use Yahoo symbols (e.g. `AAPL`, `RELIANCE.NS`).
-- **Session hours:** for NSE-like sim use `market_session: nse_equity` (09:15–15:30 Asia/Kolkata, Mon–Fri). For US names use `us_equity`. Holidays are not modeled yet.
-- Easiest path (replay): Missions UI → **Register sample market data** → merge into config → Instantiate.
-- Or Job / Chat NL: `start paper trading with 10000 on DEMO` (setup wizard intents).
-- Or API: `POST /v1/assets` with `generate_sample: true` or real `content`/`bars`.
-
-**Example live config (simulation fills only — P10)**
-
-```json
-{
-  "starting_cash": 10000,
-  "feed_mode": "live",
-  "live_provider": "yahoo",
-  "market_session": "nse_equity",
-  "respect_market_hours": true,
-  "instruments": [{"symbol": "RELIANCE.NS"}],
-  "strategy": {"sma_fast": 10, "sma_slow": 30, "rsi_period": 14},
-  "tick_interval_seconds": 300
-}
-```
-**Live JSON inputs (while running)**
-
-```json
-{"block_symbol": "AAA"}
-```
-
-```json
-{"unblock_symbol": "AAA"}
-```
-
-**Not valid:** free text like “assume you have 10000…” in the worker input box → UI error *Input must be valid JSON*. Put cash/instruments in **config**, not in that box.
-
-**What it already maintains**
-
-- Virtual portfolio (cash, positions, trades)
-- Per-decision journal (why buy/sell/hold)
-- Learning from realized sell outcomes (experience loop)
-- Net equity from marks + cash (simulation accounting)
-
-**What it does *not* do yet**
-
-- Live prices from the exchange
-- Screener sites, news gathering as part of the trading loop
-- Broker-style commissions / TDS / withdrawal ledger (beyond simple sim fills)
+**Live JSON inputs:** `{"block_symbol":"AAA"}` / `{"unblock_symbol":"AAA"}` — not prose.
 
 ---
 
@@ -425,7 +450,7 @@ Code touchpoints (for maintainers): `atlas/web/static/{app.js,index.html,styles.
 
 ## 6. Your question: live markets + screener + news + full sim ledger — is it possible?
 
-**Short answer: yes, as an architecture — it matches where Atlas is pointed. It is not fully built yet.** No code changes in this note; this is the honest map.
+**Short answer: yes.** The India learner path (live + M0 → sim) is the spine; screener-in-tick and full fee/TDS realism are follow-ons (IL.8 / IL.7). No broker login (P10).
 
 ### What you described
 
@@ -438,69 +463,59 @@ Code touchpoints (for maintainers): `atlas/web/static/{app.js,index.html,styles.
 7. Applies **commissions, TDS, withdrawal** math on the simulated ledger.  
 8. **No real money** — only Atlas’s internal records driven by live data.
 
-That combination is exactly: **live MarketDataReader + research/news Jobs + paper-trading Mission + richer portfolio accounting**. It does **not** require giving Atlas a brokerage login to place real orders.
+That combination is **live MarketReader + M0/M2/M3 + Decision Simulation + Broker Profiles** — and still **never** a brokerage login for real orders.
 
 ### How Atlas “learns about markets” *today*
 
-Today it learns from:
+Prefer the **India learner** path (live + M0 watchlist). Atlas learns from:
 
-- **Replay / fixture OHLCV** you register (or sample bars) via `feed_mode: asset_replay`,
-- **Live MarketReader bars** when `feed_mode: live` (Yahoo opt-in / Polygon/AV when keys set), with buy/sell gated by `market_session`,
-- **Decisions + outcomes** written as experiences when simulated sells realize,
-- Optional separate **Jobs/Chat** research (web/scholar) that enrich *knowledge* — still not a continuous news/screener loop into every tick.
+- **Live MarketReader bars** (`feed_mode: live`, Yahoo opt-in / keyed providers) with buy/sell gated by `market_session` — **operator primary**,
+- **M0 ranking WHY** + Company/News along the watchlist (IL.3/IL.4),
+- **Decisions + outcomes** as experiences when simulated sells realize (portfolio-scoped mentor),
+- **Replay / fixture OHLCV** (`feed_mode: asset_replay`) only for CI/demos,
+- Optional **Jobs/Chat** research — not yet a continuous screener loop into every tick.
+
 ### What already exists vs what is still needed
 
 | Piece of your vision | Today | Still needed |
 |----------------------|-------|--------------|
-| Virtual cash & positions | ✅ sim portfolio | — |
-| Buy/sell on signals + journal “why” | ✅ Decision Engine + strategy rule | Richer reasons (news/screener context) |
+| Virtual cash & positions | ✅ sim portfolio + multi-book (IL.10) | — |
+| Buy/sell on signals + journal “why” | ✅ Decision Engine + M0 WHY | Richer news/screener in each tick |
 | Learn from outcomes | ✅ experience loop on sells | Cross-mission feedback polish (`OI-F4`) |
-| Live prices | ✅ `feed_mode: live` + Yahoo/Polygon/AV; session hours gate | NSE/BSE native adapters still ToS skeleton; holidays not modeled |
-| Screener / site review | ❌ not a trading reader | New reader or scheduled Job that scrapes/fetches screener pages → assets/knowledge |
-| News Jobs into the loop | ⚠️ Jobs can research news **separately** | Wire news/knowledge into paper-trading decision context each tick |
-| Commissions / TDS / withdrawal | ❌ simple fill accounting | Extend sim portfolio ledger (fees, tax, cash withdrawals) |
-| Real money / live orders | ❌ forbidden by design (P10) | Stay out of scope |
+| Live prices | ✅ Yahoo/Polygon/AV + session hours + Atlas holidays | NSE/BSE native adapters |
+| Universe selection | ✅ M0 NIFTY + ranking | Broader India depth (IL.5) |
+| Screener / site review | ❌ not in the tick | IL.8 (APIs preferred) |
+| News into the loop | ⚠️ M3 watchlist + separate Jobs | Tighter Decision Context each tick |
+| Commissions / TDS / withdrawal | ⚠️ Broker Profiles (MI.6) started | Full IL.7 ledger realism |
+| F&O / other classes | ⚠️ separate books + persona | IL.11 futures/options packs ready (sim); commodity/FX/crypto stubs |
+| Real money / live orders | ❌ forbidden (P10) | Stay out of scope |
 
 ### Important distinction: “live market data” vs “broker login”
 
-| Credential | Needed for your vision? | Notes |
-|------------|-------------------------|--------|
-| **Atlas API key** | Yes (to use Atlas) | Auth to Atlas only |
-| **Market-data provider key** (e.g. quote API) | Yes, *if* you want live prices | Read-only quotes/candles — still simulation |
-| **Brokerage login / trading password** | **No** | Real orders are out of scope; sim uses Atlas’s own records |
+| Credential | Needed? | Notes |
+|------------|---------|--------|
+| **Atlas API / console** | Yes | Auth to Atlas only |
+| **Market-data provider key** | Optional (Yahoo needs none) | Read-only quotes — still simulation |
+| **Brokerage login** | **Never** | P10 — no real orders |
 
-So: **yes — Atlas should eventually see live markets** for the simulation you want; **no — that does not mean logging into a broker to place real trades.**
+### Mental model
 
-### Is it possible?
-
-**Yes.** The spine is already there:
-
-```
-Live (or fixture) bars → Reader → indicators / knowledge (news, screener)
-        → Decision Engine (recommend buy/sell/hold + why)
-        → Virtual portfolio (cash, lots, fees, TDS, equity)
-        → Journal + experience learning
-```
-
-What remains is mostly **richer inputs + ledger rules** into that spine — live tape is available via Yahoo/Polygon/AV (`OI-D1` ✅); screener/news integration and fee/tax accounting are follow-ons.
-
-### Suggested mental model for you as operator (until live lands)
-
-1. Use **sample or historical OHLCV** to practice the Mission loop now.  
-2. Use **Jobs** for news/research to build knowledge in parallel.  
-3. Treat live quotes + screener + fee/TDS ledger as the **next product slice**, not a missing philosophy — the design already says simulation-only + pluggable market reader.
+1. **Start India learner** (preview → confirm, or `… now`).  
+2. Constrain with pins / persona / policy when you care.  
+3. Use **Goals** + `learner status` for progress.  
+4. Use fixture replay only when you want a hermetic DEMO tape.
 
 ---
 
 ## 7. One-page checklist
 
-- [ ] Pick the right surface: Chat / Job / Mission  
-- [ ] For paper trading: register a `market_data` asset (sample is fine)  
-- [ ] Set `starting_cash` + `instruments` in config  
-- [ ] Instantiate and watch **Journal** + portfolio behaviour  
-- [ ] Steer with JSON live inputs (`block_symbol`), not prose  
-- [ ] Use Jobs for news/research; don’t expect worker input to be a chat box  
-- [ ] Remember: live tape is opt-in (`OI-D1` ✅ Yahoo/Polygon/AV); **no real money ever** (P10)
+- [ ] Prefer **India learner** (`start India learner` → confirm / `… now`) over hand-built JSON  
+- [ ] Remember: **Atlas chooses; you constrain** (pin symbols / persona / policy when needed)  
+- [ ] Multiple books OK — one Decision Simulation + persona each (`/v1/market/portfolios`)  
+- [ ] Goals are objectives first — `my goal is …` / `learner status`  
+- [ ] Live feed is the operator path; **replay is for CI/demos**  
+- [ ] Steer running sims with JSON live inputs (`block_symbol`), not prose  
+- [ ] **No real money ever** (P10)
 
 ---
 

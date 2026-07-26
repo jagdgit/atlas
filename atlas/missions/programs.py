@@ -38,6 +38,67 @@ LIFECYCLE_LABELS: dict[str, str] = {
 }
 
 
+def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
+    """OX.1 / IL-Q5 preset: ₹10k India cash-equity learner (auto universe, live feed)."""
+    from atlas.investment.portfolios import india_equity_learner_persona
+
+    persona = india_equity_learner_persona(capital=10000.0)
+    sim = {
+        "instruments": [],
+        "starting_cash": 10000.0,
+        "feed_mode": "live",
+        "live_provider": "yahoo",
+        "market_session": "nse_equity",
+        "respect_market_hours": True,
+        "universe_index": "NIFTY50",
+        "auto_max_instruments": 10,
+        "program_id": "market_intelligence",
+        "broker_profile": "zerodha",
+        "portfolio_key": "india_equity_learner",
+        "portfolio_label": "₹10k India Equity Learner",
+        "persona": persona,
+        "asset_class": "cash_equity",
+    }
+    return {
+        "investment_universe": {
+            "index": "NIFTY50",
+            "max_watchlist": 15,
+            "mode": "auto",
+            "program_id": "market_intelligence",
+            # IL.5 — live Yahoo .NS bars for ranking (when market.yahoo_enabled)
+            "provider": "yahoo",
+            "use_quality_seed": True,
+        },
+        "decision_simulation": dict(sim),
+        "paper_trading": dict(sim),
+        "portfolio_ledger": {
+            "starting_cash": 10000.0,
+            "broker_profile": "zerodha",
+            "portfolio_key": "india_equity_learner",
+        },
+        "investment_mentor": {
+            "portfolio_key": "india_equity_learner",
+        },
+        "market_observer": {
+            "program_id": "market_intelligence",
+            "symbols": [],
+            "instruments": [],
+            "provider": "yahoo",
+        },
+        "company_intelligence": {
+            "program_id": "market_intelligence",
+            "tickers": [],
+            "companies": [],
+        },
+        "news_intelligence": {
+            "program_id": "market_intelligence",
+            "headlines": [],
+            "items": [],
+            "seed_from_watchlist": True,
+        },
+    }
+
+
 @dataclass(frozen=True)
 class ProgramMember:
     """One planned or live mission role inside a Program."""
@@ -88,6 +149,14 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
             "Simulation only — never broker login (P10)."
         ),
         members=(
+            ProgramMember(
+                role="Investment Universe",
+                template="investment_universe",
+                kind="monitoring",
+                cadence="pre-open + periodic",
+                status=MEMBER_ENABLED,
+                description="NIFTY universe → watchlist + ranked candidates (M0 / OI-IL0)",
+            ),
             ProgramMember(
                 role="Market Observer",
                 template="market_observer",
@@ -366,15 +435,35 @@ class ProgramService:
         *,
         activate: bool = True,
         title_prefix: str | None = None,
+        member_overrides: dict[str, dict[str, Any]] | None = None,
+        preset: str | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Instantiate startable members with template defaults (no raw JSON).
 
         Stub members are listed but not created. Skips a template if a non-archived
         mission already exists for that member under this Program.
+
+        ``preset="india_equity_learner"`` (OX.1 / IL-Q5) applies ₹10k + live + empty
+        instruments (M0 auto-mode) overrides per member template.
+        ``member_overrides`` maps template name → config_overrides merged on top.
+
+        ``dry_run=True`` (OX.2) returns would_start / would_skip without creating
+        missions — used by Chat preview and ``POST /v1/programs/{id}/plan``.
         """
         view = self.describe(program_id)
         if self._templates is None:
             raise RuntimeError("templates service not wired")
+        overrides = dict(member_overrides or {})
+        if (preset or "").strip().lower() in {
+            "india_equity_learner",
+            "india_learner",
+            "inr_10k",
+            "₹10000",
+        }:
+            for tmpl, doc in india_equity_learner_overrides().items():
+                overrides[tmpl] = {**doc, **overrides.get(tmpl, {})}
+            title_prefix = title_prefix or "India ₹10k learner"
         started: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         for member in view["members"]:
@@ -406,12 +495,31 @@ class ProgramService:
                 continue
             prefix = title_prefix or view["title"]
             title = f"{prefix} · {member['role']}"
+            cfg_over = dict(overrides.get(member["template"]) or {})
+            # Compat: decision_simulation and paper_trading share paper_trading schema.
+            if member["template"] == "decision_simulation" and not cfg_over:
+                cfg_over = dict(overrides.get("paper_trading") or {})
+            if dry_run:
+                started.append(
+                    {
+                        "template": member["template"],
+                        "role": member["role"],
+                        "title": title,
+                        "would_start": True,
+                        "config_overrides": cfg_over,
+                    }
+                )
+                continue
             result = self._templates.instantiate(
                 member["template"],
                 title=title,
-                config_overrides={},
+                config_overrides=cfg_over or None,
                 labels=[program_label(program_id), f"role:{member['template']}"],
-                metadata={"program_id": program_id, "template": member["template"]},
+                metadata={
+                    "program_id": program_id,
+                    "template": member["template"],
+                    "preset": preset,
+                },
                 activate=activate,
             )
             mission = result["mission"]
@@ -424,10 +532,31 @@ class ProgramService:
                 }
             )
         return {
-            "program": self.describe(program_id),
+            "program": self.describe(program_id) if not dry_run else view,
             "started": started,
             "skipped": skipped,
+            "preset": preset,
+            "dry_run": dry_run,
+            "side_effecting": not dry_run,
         }
+
+    def preview_start(
+        self,
+        program_id: str,
+        *,
+        title_prefix: str | None = None,
+        member_overrides: dict[str, dict[str, Any]] | None = None,
+        preset: str | None = None,
+    ) -> dict[str, Any]:
+        """OX.2 — same as ``start`` but never creates missions."""
+        return self.start(
+            program_id,
+            activate=False,
+            title_prefix=title_prefix,
+            member_overrides=member_overrides,
+            preset=preset,
+            dry_run=True,
+        )
 
     def context(
         self, topic: str, *, program_id: str | None = None, limit: int = 12

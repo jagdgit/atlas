@@ -50,6 +50,8 @@ _VALID_INTENTS = {
     Intent.REACT,
     Intent.INSTANTIATE_MISSION,
     Intent.REGISTER_MARKET_DATA,
+    Intent.START_INVESTMENT_LEARNER,
+    Intent.MANAGE_GOAL,
 }
 
 _DECOMPOSE_SYSTEM = (
@@ -60,10 +62,14 @@ _DECOMPOSE_SYSTEM = (
     "Allowed intents: smalltalk, recall, remember, web_fetch, web_search, "
     "scholar_search, youtube_transcript, media_learn, run_python, git_status, sql_query, "
     "ocr_image, mail_search, browse_url, research, list_documents, ingest_path, "
-    "ask_knowledge, react, instantiate_mission, register_market_data. "
+    "ask_knowledge, react, instantiate_mission, register_market_data, "
+    "start_investment_learner, manage_goal. "
     "Allowed capabilities: llm, memory, knowledge, web, search, "
     "scholar, transcript, media_learn, python, git, sql, ocr, mail, browser, research, agent, "
     "document, templates, assets. "
+    "For 'start India learner with ₹10000': use start_investment_learner "
+    "(args: program=market_intelligence, preset=india_equity_learner, capital, "
+    "universe, activate=true — Jobs always activate immediately, OX.2). "
     "For 'start paper trading with $N on SYMBOL': first register_market_data "
     "(args: name, symbol, generate_sample=true) then instantiate_mission "
     "(args: template=paper_trading, config_overrides with starting_cash and "

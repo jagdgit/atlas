@@ -79,8 +79,9 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "template_version": 4,
         "description": (
             "COMPAT alias for decision_simulation (Market Intelligence M5). "
-            "Simulation-only — NO real money (P10). Prefer template "
-            "decision_simulation for new missions."
+            "Simulation-only — NO real money (P10). Prefer India learner "
+            "(live + empty instruments → M0) or template decision_simulation. "
+            "asset_replay defaults are for CI/demos, not the operator happy path."
         ),
         "config_schema_type": "paper_trading",
         "config_schema_version": 1,
@@ -107,7 +108,10 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "template_version": 1,
         "description": (
             "Market Intelligence M5 — Buy/Sell/Hold/Watch simulation via Decision Engine "
-            "(P10, no broker login). Compat worker type paper_trading until ledger split (M6)."
+            "(P10, no broker login). Operator path: live feed + empty instruments → M0 "
+            "watchlist; asset_replay is for CI/demos. IL.11 instrument_pack "
+            "(cash_equity ready; other classes stub capability_gap). Compat worker "
+            "paper_trading until ledger split (M6)."
         ),
         "config_schema_type": "paper_trading",
         "config_schema_version": 1,
@@ -124,17 +128,79 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "live_provider": "yahoo",
             "market_session": "always_open",
             "respect_market_hours": True,
+            "portfolio_key": "default",
+            "portfolio_label": "Default",
+            "persona": {
+                "objective": "Learning",
+                "risk": "medium",
+                "time_horizon": "medium",
+                "capital": 100000,
+                "allowed_assets": ["cash_equity"],
+                "strategy": {},
+                "currency": "USD",
+            },
+            "asset_class": "cash_equity",
+            "program_id": "market_intelligence",
         },
         "worker_specs": [{"type": "paper_trading", "interval_seconds": 300}],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "decision_simulation"),
     },
     {
-        "name": "market_observer",
+        "name": "investment_universe",
         "template_version": 2,
         "description": (
+            "Market Intelligence M0 — NIFTY universe → ranked watchlist with WHY ± "
+            "explanations for Decision Simulation auto-mode (OI-IL0 / IL.3). "
+            "IL.5 hermetic quality_seed (sector proxies) + optional Yahoo provider. "
+            "IL.8 screener snapshots (operator JSON / computed bars — no scrape). "
+            "Publishes IL.6 Daily Investment Plan into watchlist extra. "
+            "Not a new Intelligence."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Investment Universe",
+            "roadmap": "OI-IL0",
+            "index": "NIFTY50",
+            "max_watchlist": 15,
+            "mode": "auto",
+            "program_id": "market_intelligence",
+            "pinned_symbols": [],
+            "lookback_bars": 40,
+            "lookback_short": 5,
+            "lookback_long": 20,
+            "min_bars": 5,
+            "cold_start_coverage": 0.25,
+            "rank_weights": {
+                "momentum": 0.35,
+                "liquidity": 0.25,
+                "quality": 0.15,
+                "policy": 0.15,
+                "experience": 0.10,
+            },
+            "quality_seed": {},
+            "use_quality_seed": True,
+            "use_screener_signals": True,
+            "screener_computed": True,
+            "provider": "",
+            "tick_interval_seconds": 3600,
+        },
+        "worker_specs": [
+            {"type": "investment_universe", "interval_seconds": 3600},
+            # IL.6 — pre-open refresh Mon–Fri 08:45 IST (= 03:15 UTC; IST has no DST)
+            {"type": "investment_universe", "cron": "15 3 * * 1-5", "interval_seconds": 3600},
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "investment_universe"),
+    },
+    {
+        "name": "market_observer",
+        "template_version": 3,
+        "description": (
             "Market Intelligence M1 — observe bars/moves via MarketReader adapters "
-            "(asset_replay default; Yahoo opt-in; keyed providers when env set)."
+            "(live Yahoo opt-in / keyed providers for operators; asset_replay for "
+            "CI/demos). Empty symbols → ranked Investment Universe watchlist (IL.4)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
@@ -142,8 +208,10 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "role": "Market Observer",
             "roadmap": "MI.3",
             "provider": "",
+            "program_id": "market_intelligence",
             "symbols": [],
             "instruments": [],
+            "auto_max_instruments": 15,
             "bars_limit": 60,
             "move_alert_pct": 5.0,
             "volume_min_ratio": 2.5,
@@ -157,10 +225,11 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "company_intelligence",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
             "Market Intelligence M2 — company profiles/filings → Knowledge "
-            "(config_seed hermetic; SEC/NSE/BSE skeletons when keys exist; no scrape)."
+            "(config_seed hermetic; SEC/NSE/BSE skeletons when keys exist; no scrape). "
+            "Empty tickers → ranked watchlist (IL.4)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
@@ -168,8 +237,10 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "role": "Company Intelligence",
             "roadmap": "MI.5",
             "provider": "config_seed",
+            "program_id": "market_intelligence",
             "tickers": [],
             "companies": [],
+            "auto_max_tickers": 15,
             "force": False,
             "tick_interval_seconds": 86400,
         },
@@ -179,18 +250,22 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "news_intelligence",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
             "Market Intelligence M3 — headlines/items → typed candidates → Knowledge "
-            "(optional verify). Hermetic headlines config; live RSS later."
+            "(optional verify). Hermetic headlines config; empty → watchlist seeds "
+            "(IL.4); live RSS later."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "News Intelligence",
             "roadmap": "MI.4",
+            "program_id": "market_intelligence",
             "headlines": [],
             "items": [],
+            "seed_from_watchlist": True,
+            "auto_max_symbols": 10,
             "verify": False,
             "gather": False,
             "verify_batch_limit": 5,

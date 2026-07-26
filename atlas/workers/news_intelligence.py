@@ -1,7 +1,10 @@
-"""NewsIntelligenceWorker — Market Intelligence M3 (MI.4).
+"""NewsIntelligenceWorker — Market Intelligence M3 (MI.4 / IL.4).
 
 Ingest configured headlines/items → typed knowledge candidates → CandidateConsumer.
 Optional verify queue hand-off. Hermetic by default (config headlines); live RSS later.
+
+IL.4: empty headlines/items → symbol-tagged watchlist monitoring seeds
+(``source=watchlist_seed``) when ``seed_from_watchlist`` is true (default).
 """
 
 from __future__ import annotations
@@ -10,13 +13,14 @@ import hashlib
 import logging
 from typing import Any
 
+from atlas.investment import watchlists as wl
 from atlas.knowledge.media_extraction import MediaKnowledgeExtractor
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 
 class NewsIntelligenceWorker(PersistentWorker):
     type = "news_intelligence"
-    VERSION = 1
+    VERSION = 2
     journal_ticks = True
 
     def __init__(
@@ -40,13 +44,41 @@ class NewsIntelligenceWorker(PersistentWorker):
         ticks = int(state.get("ticks", 0)) + 1
         state["ticks"] = ticks
 
-        items = self._collect_items(cfg, ctx.inputs)
+        items, auto = wl.resolve_news_items(cfg)
+        # Operator live inputs still append
+        for inp in ctx.inputs or []:
+            if inp.get("headline"):
+                items.append(
+                    {
+                        "text": str(inp["headline"]),
+                        "symbol": str(inp.get("symbol") or ""),
+                        "source": "operator_input",
+                    }
+                )
+                auto = False
+            if inp.get("text"):
+                items.append(
+                    {
+                        "text": str(inp["text"]),
+                        "symbol": str(inp.get("symbol") or ""),
+                        "source": "operator_input",
+                    }
+                )
+                auto = False
+
+        state["auto_watchlist"] = auto
+        if auto:
+            state["auto_symbols"] = [
+                str(i.get("symbol") or "") for i in items if i.get("symbol")
+            ]
+
         if not items:
             return TickResult(
                 state=state,
                 note=(
                     "idle: no headlines — set headlines=['…'] or items="
-                    "[{symbol,text}] (live RSS lands later)"
+                    "[{symbol,text}], or start M0 / India learner so watchlist "
+                    "seeds auto-load (live RSS lands later)"
                 ),
             )
 
@@ -100,7 +132,10 @@ class NewsIntelligenceWorker(PersistentWorker):
                     limit=int(cfg.get("verify_batch_limit") or 5),
                     gather=bool(cfg.get("gather") or False),
                 )
-                verify_note = f"; verify status={result.get('status')} n={result.get('selected', len(result.get('results') or []))}"
+                verify_note = (
+                    f"; verify status={result.get('status')} "
+                    f"n={result.get('selected', len(result.get('results') or []))}"
+                )
             except Exception as exc:  # noqa: BLE001
                 verify_note = f"; verify skipped ({exc})"
 
@@ -118,39 +153,11 @@ class NewsIntelligenceWorker(PersistentWorker):
             except Exception:  # noqa: BLE001
                 pass
 
+        auto_note = f"auto watchlist ({len(items)}); " if auto else ""
         return TickResult(
             state=state,
             note=(
-                f"news: emitted {emitted} candidate(s), skipped {skipped}"
+                f"{auto_note}news: emitted {emitted} candidate(s), skipped {skipped}"
                 f"{verify_note}"
             ),
         )
-
-    @staticmethod
-    def _collect_items(cfg: dict[str, Any], inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        for raw in cfg.get("items") or []:
-            if isinstance(raw, dict) and raw.get("text"):
-                items.append(dict(raw))
-        for headline in cfg.get("headlines") or []:
-            text = str(headline).strip()
-            if text:
-                items.append({"text": text, "source": "headline"})
-        for inp in inputs or []:
-            if inp.get("headline"):
-                items.append(
-                    {
-                        "text": str(inp["headline"]),
-                        "symbol": str(inp.get("symbol") or ""),
-                        "source": "operator_input",
-                    }
-                )
-            if inp.get("text"):
-                items.append(
-                    {
-                        "text": str(inp["text"]),
-                        "symbol": str(inp.get("symbol") or ""),
-                        "source": "operator_input",
-                    }
-                )
-        return items

@@ -22,6 +22,19 @@ def indian_markets_pack() -> StaticWorldModelPack:
             tags=("bse", "india", "equity"),
         ),
         WorldFact(
+            id="idx.nifty50",
+            kind="index",
+            label="NIFTY 50",
+            attributes={
+                "exchange": "NSE",
+                "currency": "INR",
+                "constituents_ref": "atlas.investment.universe.NIFTY50",
+                "size": 50,
+                "note": "Static snapshot for IL.1; lags NSE reconstitutions",
+            },
+            tags=("nifty", "india", "universe", "equity"),
+        ),
+        WorldFact(
             id="session.equity.regular",
             kind="session",
             label="Equity regular session",
