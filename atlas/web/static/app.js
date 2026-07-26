@@ -128,9 +128,11 @@ function switchView(view) {
   if (view !== "missions") stopMissionPoll();
   if (view !== "overview") { stopOpsPoll(); stopOpsStream(); }
   if (view !== "engineering") stopEngStream();
+  if (view !== "learner") stopLearnerPoll();
   if (view === "overview") loadOverview();
   else if (view === "chat") renderSessionSidebar();
   else if (view === "programs") loadPrograms();
+  else if (view === "learner") loadLearner();
   else if (view === "missions") loadMissions();
   else if (view === "engineering") loadEngineering();
   else if (view === "personal") loadPersonal();
@@ -1136,7 +1138,310 @@ function renderProgramContextResults(box, data) {
   }
 }
 
-/* ---------- missions (Phase A · §A.7) ---------- */
+/* ---------- learner dashboard ---------- */
+let learnerPoll = null;
+
+function stopLearnerPoll() {
+  if (learnerPoll) { clearInterval(learnerPoll); learnerPoll = null; }
+}
+
+function startLearnerPoll() {
+  stopLearnerPoll();
+  const box = $("#learner-auto");
+  if (box && !box.checked) return;
+  learnerPoll = setInterval(() => {
+    if (state.view !== "learner") return stopLearnerPoll();
+    const auto = $("#learner-auto");
+    if (auto && !auto.checked) return stopLearnerPoll();
+    loadLearner({ quiet: true });
+  }, 15000);
+}
+
+async function loadLearner(opts = {}) {
+  const quiet = !!(opts && opts.quiet);
+  const summary = $("#learner-summary");
+  const planBox = $("#learner-plan");
+  const wlBox = $("#learner-watchlist");
+  const checkBox = $("#learner-checklist");
+  const bookBox = $("#learner-book");
+  if (!summary || !planBox) return;
+
+  if (!quiet) {
+    summary.innerHTML = "";
+    planBox.innerHTML = "";
+    planBox.append(el("div", { class: "learner-empty", text: "Loading…" }));
+  }
+
+  let status = null;
+  let plan = null;
+  let watch = null;
+  let portfolios = null;
+  let missions = null;
+
+  const results = await Promise.allSettled([
+    api("/v1/learner/status"),
+    api("/v1/market/daily-plan?portfolio_key=india_equity_learner&capital=10000"),
+    api("/v1/market/watchlist?limit=15"),
+    api("/v1/market/portfolios"),
+    api("/v1/missions?limit=100"),
+  ]);
+  if (results[0].status === "fulfilled") status = results[0].value;
+  if (results[1].status === "fulfilled") plan = results[1].value;
+  if (results[2].status === "fulfilled") watch = results[2].value;
+  if (results[3].status === "fulfilled") portfolios = results[3].value;
+  if (results[4].status === "fulfilled") missions = results[4].value;
+
+  renderLearnerSummary(summary, { status, plan, watch });
+  renderLearnerPlan(planBox, plan);
+  renderLearnerWatchlist(wlBox, watch);
+  renderLearnerChecklist(checkBox, status);
+  renderLearnerBook(bookBox, { status, portfolios, missions, plan });
+  startLearnerPoll();
+}
+
+function renderLearnerSummary(box, { status, plan, watch }) {
+  box.innerHTML = "";
+  const phase = (plan && plan.phase) || (watch && watch.extra && watch.extra.phase) || "—";
+  const conf = (plan && plan.confidence) || "—";
+  const nRanked = (watch && watch.count) || 0;
+  const nCand = (plan && plan.candidates && plan.candidates.length) || 0;
+  const capital = (plan && plan.capital) != null ? plan.capital : 10000;
+  const learning = String(phase).toLowerCase() === "learning"
+    || String(conf).toLowerCase().includes("very_low");
+
+  const chips = [
+    { lbl: "Universe", val: (watch && watch.index) || (plan && plan.index) || "NIFTY50" },
+    { lbl: "Watchlist", val: nRanked ? `${nRanked} ranked` : "none yet" },
+    { lbl: "Today's candidates", val: String(nCand), cls: nCand ? "ok" : "" },
+    { lbl: "Phase", val: String(phase), cls: learning ? "warn" : "ok" },
+    { lbl: "Confidence", val: String(conf), cls: learning ? "warn" : "" },
+    { lbl: "Book capital", val: `₹${Number(capital).toLocaleString("en-IN")}` },
+  ];
+  for (const c of chips) {
+    box.append(el("div", { class: "learner-chip" + (c.cls ? " " + c.cls : "") },
+      el("span", { class: "lbl", text: c.lbl }),
+      el("span", { class: "val", text: c.val }),
+    ));
+  }
+  if (plan && plan.summary) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "flex:1 1 100%;padding:4px 2px 0",
+      text: plan.summary,
+    }));
+  } else if (status && status.narrative) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "flex:1 1 100%;padding:4px 2px 0",
+      text: status.narrative,
+    }));
+  }
+}
+
+function renderLearnerPlan(box, plan) {
+  box.innerHTML = "";
+  if (!plan || !(plan.candidates || []).length) {
+    box.append(el("div", {
+      class: "learner-empty",
+      text: (plan && plan.notes && plan.notes[0])
+        || "No daily plan yet — wait for Investment Universe to tick, or start India learner.",
+    }));
+    if (plan && (plan.notes || []).length) {
+      for (const n of plan.notes.slice(0, 4)) {
+        box.append(el("div", { class: "muted small", style: "margin-top:6px", text: n }));
+      }
+    }
+    return;
+  }
+  box.append(el("div", {
+    class: "muted small",
+    style: "margin-bottom:8px",
+    text: `Simulation sizing only (P10) · deploy ~${Math.round((plan.deploy_fraction || 0.4) * 100)}% of ₹${Number(plan.capital || 0).toLocaleString("en-IN")}`,
+  }));
+  for (const c of plan.candidates) {
+    const why = (c.why || "").trim() || ((c.explanations || [])[0] || "");
+    const row = el("div", { class: "learner-row" },
+      el("div", { class: "rank", text: String(c.rank || "·") }),
+      el("div", {},
+        el("div", { class: "sym", text: c.symbol + (c.name ? ` · ${c.name}` : "") }),
+        why ? el("div", { class: "why", text: why }) : null,
+      ),
+      el("div", {
+        class: "notional",
+        text: c.suggested_notional != null
+          ? `₹${Number(c.suggested_notional).toLocaleString("en-IN")}`
+          : "—",
+      }),
+    );
+    box.append(row);
+  }
+  if ((plan.avoids || []).length) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-top:12px;margin-bottom:4px",
+      text: "Avoid / weaker (relative)",
+    }));
+    for (const a of plan.avoids.slice(0, 5)) {
+      const sym = typeof a === "string" ? a : (a.symbol || JSON.stringify(a));
+      const why = typeof a === "object" ? (a.why || a.reason || "") : "";
+      box.append(el("div", { class: "learner-row learner-avoid" },
+        el("div", { class: "rank", text: "–" }),
+        el("div", {},
+          el("div", { class: "sym", text: sym }),
+          why ? el("div", { class: "why", text: why }) : null,
+        ),
+        el("div", { class: "notional", text: "" }),
+      ));
+    }
+  }
+  for (const n of (plan.notes || []).slice(0, 3)) {
+    box.append(el("div", { class: "muted small", style: "margin-top:8px", text: n }));
+  }
+}
+
+function renderLearnerWatchlist(box, watch) {
+  box.innerHTML = "";
+  const rows = (watch && (watch.ranked || watch.watchlist)) || [];
+  if (!rows.length) {
+    box.append(el("div", {
+      class: "learner-empty",
+      text: (watch && watch.note) || "Watchlist empty — open Investment Universe journal or start India learner.",
+    }));
+    return;
+  }
+  box.append(el("div", {
+    class: "muted small",
+    style: "margin-bottom:8px",
+    text: `${watch.index || "universe"} · showing ${rows.length} of ${watch.count || rows.length}`,
+  }));
+  rows.forEach((r, i) => {
+    const why = (r.reason || r.why || "").trim();
+    box.append(el("div", { class: "learner-row" },
+      el("div", { class: "rank", text: String(r.rank || i + 1) }),
+      el("div", {},
+        el("div", { class: "sym", text: (r.symbol || "") + (r.name ? ` · ${r.name}` : "") }),
+        why ? el("div", { class: "why", text: why }) : null,
+        r.sector ? el("div", { class: "why", text: r.sector }) : null,
+      ),
+      el("div", {
+        class: "notional",
+        text: r.score != null ? Number(r.score).toFixed(3) : "",
+      }),
+    ));
+  });
+}
+
+function renderLearnerChecklist(box, status) {
+  box.innerHTML = "";
+  const hp = status && status.happy_path;
+  const checks = (hp && (hp.checklist || hp.runtime_checklist || hp.items)) || [];
+  if (checks.length) {
+    for (const c of checks) {
+      const done = !!(c.done || c.ok || c.status === "done" || c.status === "ok");
+      const text = c.detail || c.text || c.label || c.id || JSON.stringify(c);
+      box.append(el("div", { class: "learner-check" },
+        el("span", { class: "mark " + (done ? "done" : "todo"), text: done ? "✓" : "○" }),
+        el("span", { text }),
+      ));
+    }
+  } else if (status && (status.bullets || []).length) {
+    const ul = el("ul", { class: "learner-bullets" });
+    for (const b of status.bullets) ul.append(el("li", { text: b }));
+    box.append(ul);
+  } else {
+    box.append(el("div", {
+      class: "learner-empty",
+      text: "No learner status yet — create a goal or ask chat: learner status.",
+    }));
+  }
+  if (status && status.narrative) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-top:12px",
+      text: status.narrative,
+    }));
+  }
+  if (hp && (hp.next_actions || []).length) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-top:10px;font-weight:600",
+      text: "Next",
+    }));
+    for (const a of hp.next_actions.slice(0, 5)) {
+      const text = typeof a === "string" ? a : (a.text || a.action || JSON.stringify(a));
+      box.append(el("div", { class: "small", style: "padding:3px 0", text: "→ " + text }));
+    }
+  }
+}
+
+function renderLearnerBook(box, { status, portfolios, missions, plan }) {
+  box.innerHTML = "";
+  const books = (portfolios && (portfolios.portfolios || portfolios.items || portfolios)) || [];
+  const list = Array.isArray(books) ? books : [];
+  if (list.length) {
+    box.append(el("div", { class: "muted small", style: "margin-bottom:6px", text: "Virtual portfolios" }));
+    for (const p of list.slice(0, 8)) {
+      const key = p.portfolio_key || p.name || p.id || "?";
+      const cap = p.persona && p.persona.capital != null ? p.persona.capital : p.capital;
+      const ac = p.asset_class || (p.persona && (p.persona.allowed_assets || [])[0]) || "";
+      box.append(el("div", { class: "learner-row" },
+        el("div", { class: "rank", text: "₹" }),
+        el("div", {},
+          el("div", { class: "sym", text: key }),
+          el("div", { class: "why", text: [ac, p.label].filter(Boolean).join(" · ") }),
+        ),
+        el("div", {
+          class: "notional",
+          text: cap != null ? Number(cap).toLocaleString("en-IN") : "",
+        }),
+      ));
+    }
+  } else {
+    box.append(el("div", {
+      class: "learner-empty",
+      text: "No virtual portfolio registry entries yet (India learner creates india_equity_learner).",
+    }));
+  }
+
+  const ms = (missions && missions.missions) || [];
+  const market = ms.filter((m) => {
+    const t = (m.title || "").toLowerCase();
+    const tpl = (m.template || m.mission_type || "").toLowerCase();
+    return t.includes("market") || t.includes("investment") || t.includes("decision")
+      || t.includes("portfolio") || t.includes("company") || t.includes("news")
+      || ["investment_universe", "decision_simulation", "paper_trading", "market_observer",
+          "company_intelligence", "news_intelligence", "portfolio_ledger", "investment_mentor",
+          "event_research"].includes(tpl);
+  });
+  if (market.length) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-top:14px;margin-bottom:6px",
+      text: "Market missions — click to open journal",
+    }));
+    for (const m of market.slice(0, 12)) {
+      const a = el("a", {
+        href: "#",
+        class: "link",
+        style: "display:block;padding:4px 0;font-size:13px",
+        onclick: (e) => {
+          e.preventDefault();
+          switchView("missions");
+          showMissionDetail(m.id);
+        },
+      }, `${m.title || m.id} · ${m.status}`);
+      box.append(a);
+    }
+  }
+
+  const pkey = (plan && plan.portfolio_key) || "india_equity_learner";
+  box.append(el("div", {
+    class: "muted small",
+    style: "margin-top:14px",
+    text: `Tip: Decision Simulation is a separate mission from Investment Universe. Open it above, or chat “learner status”. Book key: ${pkey}.`,
+  }));
+}
+
 let missionTemplates = [];
 
 async function loadMissions() {
@@ -1671,6 +1976,13 @@ function init() {
   $("#missions-refresh").addEventListener("click", loadMissions);
   const programsRefresh = $("#programs-refresh");
   if (programsRefresh) programsRefresh.addEventListener("click", loadPrograms);
+  const learnerRefresh = $("#learner-refresh");
+  if (learnerRefresh) learnerRefresh.addEventListener("click", () => loadLearner());
+  const learnerAuto = $("#learner-auto");
+  if (learnerAuto) learnerAuto.addEventListener("change", () => {
+    if (learnerAuto.checked && state.view === "learner") startLearnerPoll();
+    else stopLearnerPoll();
+  });
   $("#mission-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const tpl = $("#mission-template").value;

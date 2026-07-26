@@ -1743,6 +1743,36 @@ def daily_investment_plan(
     )
 
 
+@v1_router.get("/market/watchlist", tags=["programs"])
+def market_watchlist(program_id: str = "market_intelligence", limit: int = 20) -> dict:
+    """Latest M0 ranked watchlist snapshot (operator dashboard)."""
+    from atlas.investment import watchlists as wl
+
+    snap = wl.latest(program_id)
+    if not snap:
+        return {
+            "program_id": program_id,
+            "watchlist": [],
+            "ranked": [],
+            "count": 0,
+            "note": "No watchlist yet — start Market Intelligence / India learner (M0).",
+            "version": "il.2",
+        }
+    ranked = list(snap.get("ranked") or snap.get("watchlist") or [])
+    lim = max(1, min(100, int(limit)))
+    return {
+        "program_id": snap.get("program_id") or program_id,
+        "index": snap.get("index"),
+        "mission_id": snap.get("mission_id"),
+        "updated_at": snap.get("updated_at"),
+        "extra": snap.get("extra") or {},
+        "ranked": ranked[:lim],
+        "watchlist": list(snap.get("watchlist") or [])[:lim],
+        "count": len(ranked),
+        "version": "il.2",
+    }
+
+
 @v1_router.get("/governance/daily", tags=["programs"])
 def governance_daily(request: Request, limit: int = 200) -> dict:
     """Daily Learning Governance Report — Layer 2 (OI-MP3)."""

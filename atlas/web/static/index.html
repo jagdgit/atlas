@@ -28,6 +28,7 @@
         <button class="nav-btn" data-view="chat">Chat</button>
         <button class="nav-btn" data-view="personal">Personal</button>
         <button class="nav-btn" data-view="programs">Programs</button>
+        <button class="nav-btn" data-view="learner">Learner</button>
         <button class="nav-btn" data-view="missions">Missions</button>
         <button class="nav-btn" data-view="engineering">Engineering</button>
         <button class="nav-btn" data-view="jobs">Jobs</button>
@@ -92,6 +93,43 @@
         <div class="jobs-layout">
           <div id="programs-list" class="jobs-list"></div>
           <div id="program-detail" class="job-detail"></div>
+        </div>
+      </section>
+
+      <!-- Learner dashboard (India equity / Market Intelligence) -->
+      <section id="view-learner" class="view hidden">
+        <div class="panel-head">
+          <h2>Learner</h2>
+          <div class="panel-actions">
+            <label class="muted small learner-auto">
+              <input type="checkbox" id="learner-auto" checked /> auto-refresh
+            </label>
+            <button id="learner-refresh" class="link" type="button">refresh</button>
+          </div>
+        </div>
+        <p class="muted learner-intro">
+          Interactive view of the India / Market learner — what Atlas ranked, what it would
+          size today (simulation only), checklist, and sim book. Prefer this over digging
+          through mission journals.
+        </p>
+        <div id="learner-summary" class="learner-summary"></div>
+        <div class="learner-grid">
+          <div class="learner-panel">
+            <div class="panel-head"><h3 class="section-h">Today's plan (sim)</h3></div>
+            <div id="learner-plan" class="learner-body"></div>
+          </div>
+          <div class="learner-panel">
+            <div class="panel-head"><h3 class="section-h">Ranked watchlist</h3></div>
+            <div id="learner-watchlist" class="learner-body"></div>
+          </div>
+          <div class="learner-panel">
+            <div class="panel-head"><h3 class="section-h">Checklist &amp; status</h3></div>
+            <div id="learner-checklist" class="learner-body"></div>
+          </div>
+          <div class="learner-panel">
+            <div class="panel-head"><h3 class="section-h">Sim book &amp; missions</h3></div>
+            <div id="learner-book" class="learner-body"></div>
+          </div>
         </div>
       </section>
 

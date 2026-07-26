@@ -14,6 +14,18 @@ For the autonomous investment learner (Universe → Rank → Simulate → Learn)
 
 ---
 
+### Learner dashboard
+
+Sidebar **Learner** — interactive Market / India learner view (plan, watchlist, checklist, missions). Prefer this over digging journals.
+
+```http
+GET /v1/learner/status
+GET /v1/market/daily-plan
+GET /v1/market/watchlist
+```
+
+---
+
 ## India equity learner (preferred path)
 
 **Atlas chooses; you constrain.** You do not have to hand-type NIFTY symbols or paste JSON to begin learning.
