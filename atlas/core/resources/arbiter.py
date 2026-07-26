@@ -50,6 +50,12 @@ class MissionDemand:
     estimated_llm_units: int = 1  # coarse: one worker tick ≈ 1 unit
     ram_mb: int | None = None
     host_available_ram_mb: int | None = None  # filled by WorkerManager from machine RM
+    # IR-RO5 — service class for Candidate Selector + REALTIME reserve
+    service_class: str | None = None
+    # IR-M2 — wall-clock wait start (queue.since)
+    wait_since: datetime | None = None
+    # IR-M3 — research confidence 0..1 (None = unknown → no boost)
+    confidence_score: float | None = None
 
     def importance_rank(self) -> int:
         return _IMPORTANCE_RANK.get((self.importance or "").strip().lower(), 0)
@@ -73,7 +79,7 @@ class ArbitrationVerdict:
 
 class MissionArbiter:
     name = "mission_arbiter"
-    VERSION = "1.2.0"
+    VERSION = "1.5.0"  # IR-M2 wait-time aging + IR-M3 confidence boost
 
     def __init__(
         self,
@@ -86,6 +92,14 @@ class MissionArbiter:
         fair_share_window_seconds: float = 300.0,
         fair_share_penalty_per_admit: float = 1.0,
         fair_share_penalty_max: float = 20.0,
+        # IR-M2: wall-clock wait aging (composses with deferral aging)
+        wait_aging_boost_per_minute: float = 0.5,
+        wait_aging_boost_max: float = 25.0,
+        # IR-M3: low confidence → more attention (capped; cannot outrank REALTIME class)
+        confidence_boost_max: float = 8.0,
+        confidence_low_threshold: float = 0.55,
+        realtime_reserve_slots: int | None = None,
+        budget_controller: Any | None = None,
         clock: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -97,20 +111,51 @@ class MissionArbiter:
         self._fair_window = max(1.0, float(fair_share_window_seconds))
         self._fair_per = max(0.0, float(fair_share_penalty_per_admit))
         self._fair_max = max(0.0, float(fair_share_penalty_max))
+        self._wait_per = max(0.0, float(wait_aging_boost_per_minute))
+        self._wait_max = max(0.0, float(wait_aging_boost_max))
+        self._conf_boost_max = max(0.0, float(confidence_boost_max))
+        self._conf_low = max(0.0, min(1.0, float(confidence_low_threshold)))
+        # IR-RO5: with ≥2 tick slots, reserve ≥1 for REALTIME (static floor).
+        if realtime_reserve_slots is None:
+            if self._global_max is not None and self._global_max >= 2:
+                self._realtime_reserve = 1
+            else:
+                self._realtime_reserve = 0
+        else:
+            self._realtime_reserve = max(0, int(realtime_reserve_slots))
+        self._budget_controller = budget_controller  # IR-RO4 dynamic effective max
         self._clock = clock
         self._logger = logger or logging.getLogger("atlas.arbiter")
         self._lock = threading.RLock()
         self._inflight: dict[str, int] = {}
         self._total = 0
+        self._realtime_inflight = 0
+        self._realtime_holds: dict[str, int] = {}  # mission_id → realtime slots held
         self._deferrals: dict[str, int] = {}  # mission → consecutive deferrals (anti-starvation aging)
         # OI-A3: per-mission sliding window of (unix_ts, units) admissions.
         self._llm_ledger: dict[str, deque[tuple[float, int]]] = {}
         # OI-D2: per-mission sliding window of admit timestamps (fair-share usage).
         self._admit_ledger: dict[str, deque[float]] = {}
+        self._realtime_ready_hint = False  # optional: set True when REALTIME work is READY
+        self._dynamic_reserve = False
+
+    def _hard_global_max(self) -> int | None:
+        return self._global_max
+
+    def _effective_global_max(self) -> int | None:
+        hard = self._global_max
+        if hard is None:
+            return None
+        if self._budget_controller is None:
+            return hard
+        try:
+            return max(1, int(self._budget_controller.effective_tick_slots(hard)))
+        except Exception:  # noqa: BLE001
+            return hard
 
     # --- scoring (deterministic) ----------------------------------------
     def score(self, demand: MissionDemand, *, now: datetime | None = None, deferrals: int | None = None) -> float:
-        """priority + deadline urgency + starvation aging − fair-share usage penalty."""
+        """priority + deadline + deferral aging + wait aging + confidence − fair-share."""
         now = now or self._now()
         defers = self._deferrals.get(demand.mission_id, 0) if deferrals is None else deferrals
         aging = min(self._starve_max, defers * self._starve_per)
@@ -118,8 +163,34 @@ class MissionArbiter:
             float(demand.effective_priority)
             + self._deadline_boost(demand.deadline, now)
             + aging
+            + self._wait_aging_boost(demand.wait_since, now)
+            + self._confidence_boost(demand.confidence_score)
             - self._fair_share_penalty(demand.mission_id, now)
         )
+
+    def _wait_aging_boost(self, wait_since: datetime | None, now: datetime) -> float:
+        """IR-M2 — soft boost for long wall-clock waits (composes with deferral aging)."""
+        if wait_since is None or self._wait_per <= 0 or self._wait_max <= 0:
+            return 0.0
+        since = wait_since
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        minutes = max(0.0, (now - since).total_seconds() / 60.0)
+        return min(self._wait_max, minutes * self._wait_per)
+
+    def _confidence_boost(self, confidence_score: float | None) -> float:
+        """IR-M3 — low confidence gets more scheduler attention (bounded)."""
+        if confidence_score is None or self._conf_boost_max <= 0:
+            return 0.0
+        try:
+            score = float(confidence_score)
+        except (TypeError, ValueError):
+            return 0.0
+        if score >= self._conf_low:
+            return 0.0
+        # Linear: 0.0 → full boost, threshold → 0
+        gap = self._conf_low - max(0.0, min(1.0, score))
+        return self._conf_boost_max * (gap / self._conf_low) if self._conf_low > 0 else 0.0
 
     def _fair_share_penalty(self, mission_id: str, now: datetime) -> float:
         """Bounded soft penalty for recent admits (OI-D2). Zero when fair-share is disabled."""
@@ -141,8 +212,49 @@ class MissionArbiter:
         return self._deadline_boost_max * (1.0 - remaining / self._horizon)
 
     def _sort_key(self, demand: MissionDemand, now: datetime | None) -> tuple:
-        # score desc, importance desc, then mission_id asc → total, stable, deterministic order.
-        return (-self.score(demand, now=now), -demand.importance_rank(), str(demand.mission_id))
+        # IR-RO5: service class → deadline urgency → score (priority+aging−fair) → id
+        from atlas.core.resources.work_profile import service_class_rank
+
+        now = now or self._now()
+        cls_rank = service_class_rank(demand.service_class)
+        if demand.deadline is None:
+            urgency = 10**12
+        else:
+            urgency = (demand.deadline - now).total_seconds()
+        return (cls_rank, urgency, -self.score(demand, now=now), -demand.importance_rank(), str(demand.mission_id))
+
+    def set_realtime_ready(self, ready: bool) -> None:
+        """Hint for dynamic reserve (optional). Static floor still applies when ready=True."""
+        self._realtime_ready_hint = bool(ready)
+
+    def _effective_realtime_reserve(self) -> int:
+        """Static floor when reserve>0; drop reserve when effective slots shrink to 1 (IR-RO4)."""
+        if self._realtime_reserve <= 0:
+            return 0
+        # IR-RO4: with only one effective slot, do not reserve it exclusively for REALTIME —
+        # otherwise BATCH/NORMAL cannot run under pressure. IR-RO5 floor applies when ≥2 slots.
+        eff = self._effective_global_max()
+        if eff is not None and eff < 2:
+            return 0
+        if self._realtime_reserve >= (eff or self._realtime_reserve + 1):
+            return max(0, (eff or 1) - 1)
+        # Dynamic release: when explicitly told no REALTIME is READY, allow BATCH both slots.
+        if not self._realtime_ready_hint and self._realtime_inflight == 0:
+            # Default hint is False — for static floor we still reserve unless caller enables dynamic.
+            # Ship static floor: always reserve. Dynamic opt-in via _dynamic_reserve flag.
+            if getattr(self, "_dynamic_reserve", False):
+                return 0
+        return self._realtime_reserve
+
+    def enable_dynamic_realtime_reserve(self, enabled: bool = True) -> None:
+        self._dynamic_reserve = bool(enabled)
+
+    @staticmethod
+    def _is_realtime(demand: MissionDemand) -> bool:
+        from atlas.core.resources.work_profile import normalize_service_class, SERVICE_REALTIME
+
+        cls = normalize_service_class(demand.service_class)
+        return cls in {SERVICE_REALTIME, "REALTIME_CRITICAL", "REALTIME_STANDARD"}
 
     # --- pure batch arbitration (no state) ------------------------------
     def rank(self, demands: Sequence[MissionDemand], *, now: datetime | None = None) -> list[MissionDemand]:
@@ -153,25 +265,32 @@ class MissionArbiter:
     def select(
         self, demands: Sequence[MissionDemand], slots: int, *, now: datetime | None = None
     ) -> list[ArbitrationVerdict]:
-        """Fill ``slots`` from the ranked demands, honouring hard per-mission caps.
-
-        Returns a verdict per demand in ranked order: the top admissible get in; those over their own
-        hard cap are deferred (a freed slot goes to the next mission, not wasted); the remainder are
-        deferred for lack of slots.
-        """
+        """Fill ``slots`` from the ranked demands, honouring caps + REALTIME reserve."""
         now = now or self._now()
         free = max(0, int(slots))
+        reserve = self._realtime_reserve if self._realtime_reserve > 0 else 0
+        non_rt_used = 0
+        non_rt_cap = max(0, free - reserve) if reserve else free
         out: list[ArbitrationVerdict] = []
         for d in self.rank(demands, now=now):
             s = self.score(d, now=now)
             cap = d.max_concurrent_tasks
+            is_rt = self._is_realtime(d)
             if cap is not None and cap > 0 and d.inflight >= cap:
                 out.append(ArbitrationVerdict(d.mission_id, False, f"mission budget cap {d.inflight}/{cap}", s))
-            elif free > 0:
-                free -= 1
-                out.append(ArbitrationVerdict(d.mission_id, True, "admitted", s))
-            else:
+            elif free <= 0:
                 out.append(ArbitrationVerdict(d.mission_id, False, "no free slots (global capacity)", s))
+            elif not is_rt and reserve and non_rt_used >= non_rt_cap:
+                out.append(
+                    ArbitrationVerdict(
+                        d.mission_id, False, "realtime_reserve", s
+                    )
+                )
+            else:
+                free -= 1
+                if not is_rt:
+                    non_rt_used += 1
+                out.append(ArbitrationVerdict(d.mission_id, True, "admitted", s))
         return out
 
     # --- stateful admission gate ----------------------------------------
@@ -182,13 +301,33 @@ class MissionArbiter:
             current = self._inflight.get(demand.mission_id, 0)
             cap = demand.max_concurrent_tasks
             score = self.score(demand, now=now)
+            is_rt = self._is_realtime(demand)
             if cap is not None and cap > 0 and current >= cap:
                 self._defer_locked(demand.mission_id)
                 return ArbitrationVerdict(demand.mission_id, False, f"mission budget cap {current}/{cap}", score)
-            if self._global_max is not None and self._total >= self._global_max:
+            # IR-RO4: admit against *effective* slots (≤ hard env ceiling).
+            eff_max = self._effective_global_max()
+            if eff_max is not None and self._total >= eff_max:
+                self._defer_locked(demand.mission_id)
+                hard = self._hard_global_max()
+                reason = f"global capacity {self._total}/{eff_max}"
+                if hard is not None and hard != eff_max:
+                    reason = f"effective capacity {self._total}/{eff_max} (hard {hard})"
+                return ArbitrationVerdict(demand.mission_id, False, reason, score)
+            # IR-RO5 REALTIME reserve: non-realtime cannot fill the reserved slot(s).
+            reserve = self._effective_realtime_reserve()
+            if (
+                reserve > 0
+                and not is_rt
+                and eff_max is not None
+                and (self._total - self._realtime_inflight) >= (eff_max - reserve)
+            ):
                 self._defer_locked(demand.mission_id)
                 return ArbitrationVerdict(
-                    demand.mission_id, False, f"global capacity {self._total}/{self._global_max}", score
+                    demand.mission_id,
+                    False,
+                    f"realtime_reserve {self._realtime_inflight}/{reserve} held",
+                    score,
                 )
             # OI-A3 — host RAM reserve (soft): deny when machine available < mission reserve.
             ram_need = demand.ram_mb
@@ -218,6 +357,11 @@ class MissionArbiter:
                 self._llm_record_locked(demand.mission_id, now=now, units=units, window_seconds=window)
             self._inflight[demand.mission_id] = current + 1
             self._total += 1
+            if is_rt:
+                self._realtime_holds[demand.mission_id] = (
+                    self._realtime_holds.get(demand.mission_id, 0) + 1
+                )
+                self._realtime_inflight += 1
             self._deferrals.pop(demand.mission_id, None)  # admitted → reset aging (fairness)
             self._record_admit_locked(demand.mission_id, now)  # OI-D2 fair-share usage
             return ArbitrationVerdict(demand.mission_id, True, "admitted", score)
@@ -230,6 +374,17 @@ class MissionArbiter:
             else:
                 self._inflight[mission_id] = current - 1
             self._total = max(0, self._total - 1)
+            rt_holds = self._realtime_holds.get(mission_id, 0)
+            if rt_holds > 0:
+                if rt_holds <= 1:
+                    self._realtime_holds.pop(mission_id, None)
+                else:
+                    self._realtime_holds[mission_id] = rt_holds - 1
+                self._realtime_inflight = max(0, self._realtime_inflight - 1)
+
+    def release_demand(self, demand: MissionDemand) -> None:
+        """Alias for release — REALTIME tracking uses admit-time holds."""
+        self.release(demand.mission_id)
 
     def _defer_locked(self, mission_id: str) -> None:
         self._deferrals[mission_id] = self._deferrals.get(mission_id, 0) + 1
@@ -302,14 +457,26 @@ class MissionArbiter:
             admits = {
                 mid: self._admits_in_window_locked(mid, now) for mid in self._admit_ledger
             }
+            hard = self._hard_global_max()
+            # effective_tick_slots may take its own lock — release arbiter lock briefly via cached call
+            eff = hard
+            if self._budget_controller is not None and hard is not None:
+                try:
+                    eff = max(1, int(self._budget_controller.effective_tick_slots(hard)))
+                except Exception:  # noqa: BLE001
+                    eff = hard
             return {
                 "total_inflight": self._total,
-                "global_max": self._global_max,
+                "global_max": hard,  # hard env ceiling (unchanged key for Ops)
+                "effective_global_max": eff,
+                "realtime_reserve_slots": self._realtime_reserve,
+                "realtime_inflight": self._realtime_inflight,
                 "inflight": dict(self._inflight),
                 "deferrals": dict(self._deferrals),
                 "llm_units_in_window": llm_used,
                 "admits_in_fair_share_window": admits,
                 "fair_share_window_seconds": self._fair_window,
+                "arbiter_version": self.VERSION,
             }
 
     def _now(self) -> datetime:
@@ -328,11 +495,21 @@ def demand_from_mission(
     estimated_llm_units: int = 1,
 ) -> MissionDemand:
     """Project a ``Mission`` (or any object exposing the arbitration fields) into a MissionDemand."""
+    meta = getattr(mission, "metadata", None) or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    service_class = meta.get("service_class")
+    if not service_class:
+        sc = (getattr(mission, "success_criteria", None) or {}).get("resources") or {}
+        if isinstance(sc, dict):
+            service_class = sc.get("service_class")
+    wait_since = _parse_wait_since(meta)
+    confidence_score = _parse_confidence(meta)
     return MissionDemand(
         mission_id=str(getattr(mission, "id", "")),
         effective_priority=int(getattr(mission, "effective_priority", 0) or 0),
         deadline=getattr(mission, "deadline", None),
-        importance=getattr(mission, "importance", None),
+        importance=getattr(mission, "importance", None) or getattr(mission, "criticality", None),
         max_concurrent_tasks=getattr(mission, "max_concurrent_tasks", None),
         llm_units_per_window=getattr(mission, "llm_units_per_window", None),
         llm_window_seconds=int(
@@ -341,4 +518,37 @@ def demand_from_mission(
         estimated_llm_units=max(0, int(estimated_llm_units)),
         ram_mb=getattr(mission, "ram_mb", None),
         host_available_ram_mb=host_available_ram_mb,
+        service_class=str(service_class) if service_class else None,
+        wait_since=wait_since,
+        confidence_score=confidence_score,
     )
+
+
+def _parse_wait_since(meta: dict[str, Any]) -> datetime | None:
+    queue = meta.get("queue")
+    raw = None
+    if isinstance(queue, dict):
+        raw = queue.get("since")
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    try:
+        text = str(raw).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _parse_confidence(meta: dict[str, Any]) -> float | None:
+    research = meta.get("research")
+    if not isinstance(research, dict):
+        return None
+    raw = research.get("confidence_score")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return None

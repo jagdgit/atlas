@@ -238,7 +238,60 @@ button { cursor: pointer; font: inherit; }
 
 .eng-embed { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--muted); font-size: 13px; }
 .eng-embed input { width: auto; }
+.eng-ingest-form {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.eng-ingest-form #eng-source,
+.eng-ingest-form #eng-note {
+  flex: 1 1 100%;
+  min-width: 200px;
+}
+.eng-period-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+.eng-period-row input {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+.eng-status {
+  padding: 6px 22px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.eng-status.eng-busy { color: #b7791f; }
+.eng-status.eng-ok { color: #2f855a; }
+.eng-status.eng-fail { color: #c53030; }
 .eng-group { font-size: 12px; color: var(--text); margin: 14px 0 6px; font-weight: 600; }
+.eng-period-row select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; min-width: 120px;
+}
+
+/* Archive ingest progress */
+.archive-list { padding: 14px 22px 28px; display: flex; flex-direction: column; gap: 12px; }
+.archive-card {
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px;
+}
+.archive-card-head {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px;
+}
+.archive-card-head .intent { font-weight: 600; }
+.archive-root { margin: 8px 0 0; }
+.archive-root-name { font-size: 13px; margin-bottom: 4px; word-break: break-all; }
+.archive-bar {
+  height: 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 999px; overflow: hidden;
+}
+.archive-bar > span {
+  display: block; height: 100%; background: var(--accent); width: 0%;
+  transition: width 0.35s ease;
+}
+.archive-meta { margin-top: 4px; }
 
 /* Programs / cognitive lifecycle (MI.1) */
 .lifecycle-board { margin: 10px 0 14px; }
@@ -332,6 +385,26 @@ button { cursor: pointer; font: inherit; }
 .card.fail { border-color: #c53030; box-shadow: inset 0 0 0 1px #c5303033; }
 #ops-cards .card { min-width: 140px; flex: 1 1 140px; }
 #ops-cards .card .v { font-size: 17px; }
+.ops-worker-states {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  padding: 4px 22px 12px;
+}
+.ops-state-chip {
+  min-width: 108px; padding: 10px 12px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px;
+}
+.ops-state-chip .k { font-size: 11px; color: var(--muted); text-transform: lowercase; }
+.ops-state-chip .v { font-size: 18px; font-weight: 700; margin-top: 2px; }
+.ops-state-chip.warn { border-color: #b7791f; }
+.ops-state-chip.fail { border-color: #c53030; }
+.ops-state-chip.ok { border-color: #2f855a33; }
+.ops-worker-notable { padding: 0 22px 16px; max-height: 220px; overflow-y: auto; }
+.ops-worker-notable .name { width: auto; min-width: 140px; flex: 1 1 140px; }
+.archive-confirm-bar {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  padding: 8px 22px 4px;
+}
+.archive-confirm-bar.hidden { display: none; }
 .health-list { padding: 0 22px 22px; overflow-y: auto; }
 .health-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .health-row .name { font-weight: 600; width: 150px; }
@@ -463,6 +536,37 @@ button { cursor: pointer; font: inherit; }
 .learner-bullets { margin: 0; padding-left: 18px; }
 .learner-bullets li { margin: 4px 0; }
 .learner-empty { color: var(--muted); padding: 8px 0; }
+.learner-email-panel { margin: 0 22px 16px; }
+.learner-email-status { padding: 8px 14px 0; }
+.learner-email-status.ok { color: var(--ok); }
+.learner-email-status.warn { color: var(--warn); }
+.learner-email-meta { padding: 4px 14px 8px; }
+.learner-email-body {
+  margin: 0 14px 14px;
+  padding: 12px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--panel-2, rgba(0,0,0,.04));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.learner-email-panel .btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--accent, #2a6);
+  color: #fff;
+  cursor: pointer;
+}
+.learner-email-panel .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.learner-email-panel .btn.busy { opacity: 0.7; }
 
 /* toast */
 .toast {

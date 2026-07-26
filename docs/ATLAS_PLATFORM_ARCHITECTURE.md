@@ -1,9 +1,10 @@
 # Atlas Platform Architecture
 
-> **Status:** SETTLED (architecture) · implementation quality next · **Date:** 2026-07-24  
+> **Status:** SETTLED (architecture) · implementation quality next · **Date:** 2026-07-26  
 > **Purpose:** What Atlas *is*. Domain plans are chapters. Stop inventing new top-level concepts here — polish and implement.  
 > **Audience:** architects / operators  
-> **Solar-plant test:** every *platform* box must still make sense if Market → Solar Plant.
+> **Solar-plant test:** every *platform* box must still make sense if Market → Solar Plant.  
+> **Host-first:** [`RESOURCE_OS.md`](RESOURCE_OS.md) — host stability ≻ throughput (passes solar-plant test).
 
 ---
 
@@ -34,6 +35,10 @@ is the operating hierarchy. Platform services sit *under* Programs; finance-spec
     ▼                      ▼                      ▼
  Memory OS          Verification OS        Planning OS
     │                      │                      │
+    ▼                      │                      │
+ Resource OS               │                      │
+ (host-aware)              │                      │
+    │                      │                      │
     └──────────┬───────────┴───────────┬──────────┘
                │                       │
                ▼                       ▼
@@ -49,6 +54,8 @@ is the operating hierarchy. Platform services sit *under* Programs; finance-spec
 ```
 
 Every box above the Programs line is **reusable**. Nothing there is finance-specific.
+
+**Resource OS** passes the solar-plant test: every Program needs a stable host. Principle: [`RESOURCE_OS.md`](RESOURCE_OS.md). Scheduling/admission lock: [`RESOURCE_SCHEDULING_AND_OPS_LOCK.md`](RESOURCE_SCHEDULING_AND_OPS_LOCK.md). Shipped: Host Guard + tick caps (reactive). Target: Admission Contract → Mission Queue → Resource Scheduler (proactive). Execute: [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md).
 
 ---
 
@@ -97,6 +104,7 @@ Today workers mostly own their own `interval_seconds`. Elevate to Program → Mi
 | **Capability Registry** | Discover readers/extractors/verifiers/tools | ✅ CAP.1 | Needs check + aliases; missions declare `MarketReader` etc. |
 | **Decision Engine** | Kernel arbitration | ✅ Phase D | Keep kernel; Programs supply rules + context |
 | **World Models** | Domain *structure* (not claim rows) | ✅ WM.1 | Framework + `indian_markets` + `solar_plant` stub packs |
+| **Resource OS** | Host-aware admit / queue / checkpoint / recover | 🟨 Partial | Host Guard ✅; next: Admission Contract + Queue + Scheduler — [`RESOURCE_SCHEDULING_AND_OPS_LOCK.md`](RESOURCE_SCHEDULING_AND_OPS_LOCK.md) |
 
 ### 4.3 Memory hierarchy (explicit)
 
@@ -225,6 +233,10 @@ Missions never depend on which extractor produced a finding.
 | This master | `ATLAS_PLATFORM_ARCHITECTURE.md` |
 | Constitution | [`ATLAS_OS_ROADMAP.md`](ATLAS_OS_ROADMAP.md) |
 | Mission philosophy | [`ATLAS_MISSION_PHILOSOPHY.md`](ATLAS_MISSION_PHILOSOPHY.md) |
+| Resource OS (host-first) | [`RESOURCE_OS.md`](RESOURCE_OS.md) |
+| Host Guard + Archive (shipped) | [`HOST_RESPECT_AND_ARCHIVE.md`](HOST_RESPECT_AND_ARCHIVE.md) |
+| Scheduling + Ops visibility (**locked**) | [`RESOURCE_SCHEDULING_AND_OPS_LOCK.md`](RESOURCE_SCHEDULING_AND_OPS_LOCK.md) |
+| **Implementation roadmap (execute)** | [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md) |
 | Media extraction | [`MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md`](MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md) |
 | Verification | [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md) |
 | Market Program (proving ground) | [`MARKET_INTELLIGENCE_MISSIONS_PLAN.md`](MARKET_INTELLIGENCE_MISSIONS_PLAN.md) |
@@ -243,5 +255,6 @@ Missions never depend on which extractor produced a finding.
 6. Capability Registry enrichment ✅ CAP.1  
 7. Scheduler hierarchy ✅ SCHED.1  
 8. World Models framework ✅ WM.1  
+9. Resource OS — Host Guard ✅; next slices in [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md) (IR-RO*)
 
-Stop adding top-level OS names unless the solar-plant test forces it.
+**Architecture frozen.** Prefer implementing IR-* over new top-level OS essays. **Resource OS passes** the solar-plant test (every Program needs a stable host).

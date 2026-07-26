@@ -20,7 +20,7 @@ from atlas.missions.philosophy import with_philosophy
 BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "hello_watcher",
-        "template_version": 2,
+        "template_version": 3,
         "description": "Reference heartbeat worker — the Phase-A acceptance vehicle.",
         "config_schema_type": "hello_watcher",
         "config_schema_version": 1,
@@ -31,7 +31,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "research",
-        "template_version": 3,
+        "template_version": 4,
         "description": "Continuous literature research on a topic (Phase D — Research Watcher).",
         "config_schema_type": "research_watcher",
         "config_schema_version": 1,
@@ -50,7 +50,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "knowledge_verification",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
             "Continuously verify UNVERIFIED knowledge findings via the shared "
             "VerificationEngine (KV.7). Optional budget-capped gather (default off); "
@@ -76,7 +76,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "paper_trading",
-        "template_version": 4,
+        "template_version": 5,
         "description": (
             "COMPAT alias for decision_simulation (Market Intelligence M5). "
             "Simulation-only — NO real money (P10). Prefer India learner "
@@ -105,7 +105,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "decision_simulation",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
             "Market Intelligence M5 — Buy/Sell/Hold/Watch simulation via Decision Engine "
             "(P10, no broker login). Operator path: live feed + empty instruments → M0 "
@@ -148,7 +148,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "investment_universe",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
             "Market Intelligence M0 — NIFTY universe → ranked watchlist with WHY ± "
             "explanations for Decision Simulation auto-mode (OI-IL0 / IL.3). "
@@ -196,7 +196,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "market_observer",
-        "template_version": 3,
+        "template_version": 4,
         "description": (
             "Market Intelligence M1 — observe bars/moves via MarketReader adapters "
             "(live Yahoo opt-in / keyed providers for operators; asset_replay for "
@@ -225,7 +225,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "company_intelligence",
-        "template_version": 3,
+        "template_version": 4,
         "description": (
             "Market Intelligence M2 — company profiles/filings → Knowledge "
             "(config_seed hermetic; SEC/NSE/BSE skeletons when keys exist; no scrape). "
@@ -250,7 +250,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "news_intelligence",
-        "template_version": 3,
+        "template_version": 4,
         "description": (
             "Market Intelligence M3 — headlines/items → typed candidates → Knowledge "
             "(optional verify). Hermetic headlines config; empty → watchlist seeds "
@@ -276,8 +276,61 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "news_intelligence"),
     },
     {
+        "name": "government_intelligence",
+        "template_version": 1,
+        "description": (
+            "Market Intelligence — Indian government budget / industrial policy themes "
+            "mapped to NSE sectors for ranking nudges (PLI, capex, defence, renewables). "
+            "Hermetic catalog + operator items; not a live gazette scrape."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Government Intelligence",
+            "roadmap": "MI-GOV",
+            "program_id": "market_intelligence",
+            "include_defaults": True,
+            "items": [],
+            "policies": [],
+            "tick_interval_seconds": 21600,
+        },
+        "worker_specs": [
+            {"type": "government_intelligence", "interval_seconds": 21600},
+            {"type": "government_intelligence", "cron": "0 1 * * 1-5", "interval_seconds": 21600},
+        ],
+        "knowledge_domains": ["finance", "markets", "policy"],
+        "success_criteria": with_philosophy({}, "government_intelligence"),
+    },
+    {
+        "name": "investor_reports",
+        "template_version": 1,
+        "description": (
+            "Morning investor email: daily plan (why selected + notionals) + government "
+            "policy brief. Trade buy/sell emails are sent from Decision Simulation fills. "
+            "Configure Gmail via ATLAS_EMAIL_* / ATLAS_SMTP_PASSWORD / ATLAS_INVESTOR_REPORT_TO."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Investor Reports",
+            "roadmap": "MI-MAIL",
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "morning_hour_start": 7,
+            "morning_hour_end": 10,
+            "force": False,
+            "tick_interval_seconds": 1800,
+        },
+        "worker_specs": [
+            {"type": "investor_reports", "interval_seconds": 1800},
+            {"type": "investor_reports", "cron": "0 3 * * 1-5", "interval_seconds": 1800},
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "investor_reports"),
+    },
+    {
         "name": "event_research",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
             "Market Intelligence M4 — interesting events → research Jobs (MI6). "
             "Polls MarketInterestingMove; score_threshold gated."
@@ -299,7 +352,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "portfolio_ledger",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
             "Market Intelligence M6 — fee/tax-aware sim ledger + Broker Profiles "
             "(paper_demo / zerodha / groww / angel / custom). Simulation only (P10)."
@@ -322,7 +375,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "investment_mentor",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
             "Market Intelligence M7 — weekly lessons + recommendations → Experience OS "
             "(Decision Simulation recalls via advice_for)."
@@ -344,7 +397,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "engineering_mentor",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
             "Engineering Intelligence (OI-MP4) — weekly engineering-judgment lessons "
             "from repository / architecture Experiences → Experience OS "
@@ -367,7 +420,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "personal_mentor",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
             "Personal Intelligence — weekly owner/career judgment lessons from "
             "personal Experiences → Experience OS (advice_for + optional soft-bias)."
@@ -388,7 +441,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "learning_governance",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
             "Layer 2 Daily Learning Governance Report (OI-MP3) — concepts, lessons, "
             "conflicts, capability gaps, sim portfolio. Not a per-media Learning Report."
@@ -408,7 +461,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "system_introspection",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
             "System Introspection (OI-F3) — periodic self-analysis of knowledge, "
             "uncertainty, reader failures, mission cost, policy blocks, and improve-next."
@@ -429,7 +482,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "job_hunting",
-        "template_version": 3,
+        "template_version": 4,
         "description": "Continuous job search against operator constraints (Phase D — recommend-only, P14).",
         "config_schema_type": "job_watcher",
         "config_schema_version": 1,
@@ -450,7 +503,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "patent_watch",
-        "template_version": 2,
+        "template_version": 3,
         "description": "Monitor new patents in an area (Phase B/D).",
         "config_schema_type": "generic",
         "default_config": {"queries": [], "sources": ["uspto", "google_patents", "wipo"]},
@@ -460,7 +513,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "repository_learning",
-        "template_version": 3,
+        "template_version": 4,
         "description": "Continuously ingest + understand a code repository (Phase B — Engineering).",
         "config_schema_type": "repo_watcher",
         "config_schema_version": 1,
@@ -475,7 +528,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "owner_knowledge",
-        "template_version": 2,
+        "template_version": 3,
         "description": "Continuously learn the owner from their archive (Phase C — Personal).",
         "config_schema_type": "owner_knowledge",
         "config_schema_version": 1,
@@ -485,6 +538,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "embed": False,
             "policy": "project",
             "tick_interval_seconds": 3600,
+            "files_per_tick": 40,
         },
         "worker_specs": [{"type": "owner_knowledge", "interval_seconds": 3600}],
         "knowledge_domains": ["personal", "engineering", "experience"],
@@ -492,7 +546,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "technology_watch",
-        "template_version": 3,
+        "template_version": 4,
         "description": "Track breaking changes across chosen technologies (Phase D — recommend-only).",
         "config_schema_type": "tech_security_watcher",
         "config_schema_version": 1,
@@ -511,7 +565,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "security_monitoring",
-        "template_version": 3,
+        "template_version": 4,
         "description": "Watch security advisories relevant to the stack (Phase D — recommend-only, P14).",
         "config_schema_type": "tech_security_watcher",
         "config_schema_version": 1,
@@ -530,7 +584,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "self_improvement",
-        "template_version": 2,
+        "template_version": 3,
         "description": "Watch Atlas eval regressions and propose gated improvements (Phase D · P14).",
         "config_schema_type": "self_improvement",
         "config_schema_version": 1,

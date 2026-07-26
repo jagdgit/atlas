@@ -111,6 +111,14 @@ class FakeMissionRepo:
             row["budget"] = budget
         return True
 
+    def update_metadata(self, mission_id: Any, metadata: dict[str, Any]) -> bool:
+        row = self.rows.get(str(mission_id))
+        if not row:
+            return False
+        row["metadata"] = dict(metadata or {})
+        row["updated_at"] = datetime.now(timezone.utc)
+        return True
+
     def add_journal(self, mission_id, action, reason="", refs=None) -> MissionJournalEntry:
         entry = {
             "id": str(uuid4()),

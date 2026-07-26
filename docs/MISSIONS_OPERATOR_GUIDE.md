@@ -4,6 +4,9 @@
 > **Last updated:** 2026-07-25  
 > **Related:** [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) (master),
 > [`ATLAS_MISSION_PHILOSOPHY.md`](ATLAS_MISSION_PHILOSOPHY.md),
+> [`RESOURCE_OS.md`](RESOURCE_OS.md) (host-first principle + Resource OS — **locked / frozen**),
+> [`ATLAS_IMPLEMENTATION_ROADMAP.md`](ATLAS_IMPLEMENTATION_ROADMAP.md) (**execute** — IR-* gaps),
+> [`HOST_RESPECT_AND_ARCHIVE.md`](HOST_RESPECT_AND_ARCHIVE.md) (Host Guard + Archive ingest — **shipped**),
 > [`AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md`](AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md) (**locked** — India learner),
 > [`MARKET_INTELLIGENCE_MISSIONS_PLAN.md`](MARKET_INTELLIGENCE_MISSIONS_PLAN.md) (Market Program),
 > [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md),
@@ -393,6 +396,16 @@ Do not also call Engineering ingest for the same path — that would duplicate t
 - API: `POST /v1/personal/learn-cv`, `POST /v1/personal/linkedin/suggestions`, `GET|POST /v1/personal/jobs`
 
 API: `POST /v1/programs/{personal_intelligence|engineering_intelligence}/share` with `{"path":"/host/path"}`, or `POST .../chat` with a message like `share /host/path/resume.pdf`.
+
+**Large external archives (USB / One Touch):**
+- Do **not** Engineering-ingest a whole 20GB `personal` tree — use **Archive** in the console (or Owner Knowledge `archive_roots`).
+- Console: **Archive** nav → path + optional note/period → **Start ingest** (parallel checked = separate mission/worker with its own progress bar). Start another job anytime while the first runs.
+- Prefer **selective subfolders** (e.g. Certificates, Design, code projects) — skip photos/zips noise.
+- Keep the disk **mounted until ticks finish**; unplug mid-import causes errors.
+- Document roots resume **per file** after reboot/power loss (`files_done` checkpoint + `files_per_tick`, default 40). Watch Archive progress bars or mission journal `progress name:done/total`.
+- **Host-respect:** only one archive ingest runs by default (`ATLAS_RESOURCES_MAX_ARCHIVE_WORKERS=1`). Extra starts are **accepted and queued** until RAM/CPU/tick slots free — Atlas stays slow but does not drop the job or thrash the host. Ops shows Host guard / tick slots / capacity queue.
+- API: `GET /v1/archive/status`, `POST /v1/archive/ingest` with `{"path":"…","parallel":true}`; `GET /v1/resources/guard`; workers also expose checkpoint progress via `GET /v1/workers`.
+- Optional: copy priority folders to local disk first for speed/safety.
 
 ---
 

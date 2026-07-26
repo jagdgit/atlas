@@ -98,6 +98,9 @@ class ResourceManager:
         llm_max_concurrency: int = 1,
         cost_budgets: dict[str, int] | None = None,
         llm_cost_units: dict[str, int] | None = None,
+        host_ram_reserve_mb: int = 2048,
+        ram_used_high: float | None = None,
+        load_pressure_high: float | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._default_profile = (profile or "balanced").strip().lower()
@@ -107,6 +110,11 @@ class ResourceManager:
         self._max_ocr = max(1, int(max_ocr_workers or 1))
         self._max_extract = max(1, int(max_extract_workers or 1))
         self._llm_max = max(1, int(llm_max_concurrency or 1))
+        self._host_ram_reserve_mb = max(256, int(host_ram_reserve_mb or 2048))
+        if ram_used_high is not None:
+            self.RAM_USED_HIGH = max(0.50, min(0.99, float(ram_used_high)))
+        if load_pressure_high is not None:
+            self.LOAD_PRESSURE_HIGH = max(0.50, min(2.0, float(load_pressure_high)))
         self._cost_budgets = {
             "conservative": 12,
             "balanced": 20,
@@ -252,10 +260,11 @@ class ResourceManager:
                 )
         if ram_mb and snap.mem_available_kb is not None:
             available_mb = snap.mem_available_kb // 1024
-            # Preserve 10% of total RAM as a safety margin when total is known.
-            reserve_mb = (
+            # Preserve operator host reserve + 10% of total as safety margin.
+            pct_reserve = (
                 (snap.mem_total_kb // 1024) // 10 if snap.mem_total_kb else 0
             )
+            reserve_mb = max(self._host_ram_reserve_mb, pct_reserve)
             if ram_mb > max(0, available_mb - reserve_mb):
                 reasons.append(
                     f"projected RAM {ram_mb}MB exceeds safe available "
@@ -275,6 +284,86 @@ class ResourceManager:
             llm_slots=slots,
             budget_units=budget,
         )
+
+    def can_admit_tick(
+        self,
+        *,
+        expected_ram_mb: int | None = None,
+        reserve_mb: int | None = None,
+        profile: str | None = None,
+    ) -> AdmissionDecision:
+        """Host-respect gate for a Persistent Worker tick (defer, never fail).
+
+        Returns allowed=False when RAM reserve would be breached or the machine
+        is under CPU/RAM/thermal pressure. The caller must leave the job queued
+        (schedule stays enabled) so work resumes when capacity returns.
+        """
+        prof = get_profile(profile or self._default_profile)
+        budget = self._cost_budgets.get(prof.name, self._cost_budgets["balanced"])
+        ram_need = max(0, int(expected_ram_mb if expected_ram_mb is not None else 512))
+        reserve = max(
+            256,
+            int(reserve_mb if reserve_mb is not None else self._host_ram_reserve_mb),
+        )
+        snap = read_snapshot(self._logger)
+        reasons: list[str] = []
+        if snap.mem_available_kb is not None:
+            available_mb = snap.mem_available_kb // 1024
+            if available_mb < reserve:
+                reasons.append(
+                    f"host RAM reserve {available_mb}MB < {reserve}MB "
+                    "(keeping headroom for the OS/desktop)"
+                )
+            elif ram_need and available_mb - reserve < ram_need:
+                reasons.append(
+                    f"tick needs ~{ram_need}MB above {reserve}MB reserve "
+                    f"(available {available_mb}MB)"
+                )
+        throttled, pressure_reason = self._pressure(snap, prof)
+        if throttled:
+            reasons.append(pressure_reason)
+        return AdmissionDecision(
+            allowed=not reasons,
+            reason="; ".join(reasons) if reasons else "admitted",
+            cost_units=0,
+            expected_ram_mb=ram_need,
+            llm_slots=0,
+            budget_units=budget,
+        )
+
+    def host_guard_status(
+        self,
+        *,
+        reserve_mb: int | None = None,
+        tick_ram_mb: int | None = None,
+    ) -> dict[str, Any]:
+        """Snapshot for Ops: pressure, reserve, whether a tick would admit now."""
+        reserve = max(
+            256,
+            int(reserve_mb if reserve_mb is not None else self._host_ram_reserve_mb),
+        )
+        tick_ram = max(64, int(tick_ram_mb if tick_ram_mb is not None else 512))
+        snap = read_snapshot(self._logger)
+        prof = get_profile(self._default_profile)
+        throttled, reason = self._pressure(snap, prof)
+        decision = self.can_admit_tick(expected_ram_mb=tick_ram, reserve_mb=reserve)
+        available_mb = (
+            snap.mem_available_kb // 1024 if snap.mem_available_kb is not None else None
+        )
+        return {
+            "profile": prof.name,
+            "throttled": throttled,
+            "throttle_reason": reason,
+            "tick_would_admit": decision.allowed,
+            "tick_admit_reason": decision.reason,
+            "host_ram_reserve_mb": reserve,
+            "tick_ram_mb": tick_ram,
+            "mem_available_mb": available_mb,
+            "max_worker_threads": self._max_worker_threads,
+            "llm_capacity": self.llm_capacity,
+            "snapshot": snap.as_dict(),
+            "message": self._posture_message(snap),
+        }
 
     @contextmanager
     def llm_lane(self, *, kind: str = "llm") -> Iterator[None]:
@@ -366,7 +455,12 @@ class ResourceManager:
             parts.append(f"thermal monitored ({snap.thermal_c:.0f}°C)" if snap.thermal_c else "thermal monitored")
         else:
             parts.append("thermal not monitored")
-        parts.append("power not monitored")
+        if snap.power_monitored:
+            p = snap.power if isinstance(snap.power, dict) else {}
+            src = p.get("source") or "power"
+            parts.append(f"power monitored ({src})")
+        else:
+            parts.append("power not monitored")
         return "; ".join(parts)
 
     def start(self) -> None:

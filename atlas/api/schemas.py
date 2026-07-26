@@ -393,6 +393,17 @@ class EngineeringIngestRequest(BaseModel):
     mission_id: str | None = None
     policy: str | None = None
     embed: bool | None = None
+    # Operator context — "my work from 2022 to March 2025" (feeds Personal timeline; never posts).
+    note: str | None = Field(
+        default=None,
+        description="Free-text owner note, e.g. 'my work from 2022 to March 2025'",
+    )
+    period_start: str | None = Field(
+        default=None, description="Optional period start (YYYY or YYYY-MM)"
+    )
+    period_end: str | None = Field(
+        default=None, description="Optional period end (YYYY or YYYY-MM or present)"
+    )
 
 
 class PolicyRuleRequest(BaseModel):
@@ -448,6 +459,44 @@ class BestJobsRequest(BaseModel):
     )
     limit: int = Field(default=10, ge=1, le=50)
     include_inferred_skills: bool = True
+
+
+class ArchiveIngestRequest(BaseModel):
+    """Start Owner Knowledge archive learning (USB / years-of-work dumps)."""
+
+    path: str = Field(min_length=1)
+    kind: str = Field(default="document", pattern="^(code|document|conversation)$")
+    domain: str = "personal"
+    parallel: bool = Field(
+        default=True,
+        description="True = new mission/worker (parallel). False = add to shared Personal Observer.",
+    )
+    title: str | None = None
+    note: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    files_per_tick: int = Field(default=40, ge=1, le=500)
+    process_now: bool = False
+    confirm: bool = Field(
+        default=False,
+        description="Operator confirmed a prior needs_confirmation estimate (IR-RO1).",
+    )
+    confirmation_token: str | None = Field(
+        default=None,
+        description="Token from a prior needs_confirmation response.",
+    )
+    force: bool = Field(
+        default=False,
+        description="Skip confirmation thresholds (still respects Host Guard deferral).",
+    )
+
+
+class ArchiveEstimateRequest(BaseModel):
+    """Dry-run Resource Planner estimate for an archive path (IR-RO1)."""
+
+    path: str = Field(min_length=1)
+    kind: str = Field(default="document", pattern="^(code|document|conversation)$")
+    files_per_tick: int = Field(default=40, ge=1, le=500)
 
 
 class KnowledgeResolveRequest(BaseModel):
@@ -737,6 +786,25 @@ class MissionActionRequest(BaseModel):
     """Reason attached to a mission lifecycle action (journaled, P9)."""
 
     reason: str = Field(default="", max_length=2000)
+
+
+class SpawnChildMissionRequest(BaseModel):
+    """IR-M1 — spawn a linked child under a parent mission."""
+
+    title: str = Field(min_length=1, max_length=300)
+    objective: str = ""
+    role: str = Field(default="child", max_length=64)
+    wait_on_child: bool = True
+    activate: bool = True
+    metadata: dict[str, Any] | None = None
+
+
+class SetResearchConfidenceRequest(BaseModel):
+    """IR-M3 — attach research confidence for scheduler attention."""
+
+    confidence_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence: str | None = None
+    source: str = "research"
 
 
 class WorkerActionRequest(BaseModel):

@@ -30,6 +30,7 @@ MEMBER_COMPAT = "compat"  # legacy façade (paper_trading)
 LIFECYCLE_LABELS: dict[str, str] = {
     "observe": "Observe",
     "learn": "Learn",
+    "assess_resources": "Assess Resources",
     "decide": "Decide",
     "record_why": "Record Why",
     "evaluate": "Evaluate",
@@ -95,6 +96,17 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "headlines": [],
             "items": [],
             "seed_from_watchlist": True,
+        },
+        "government_intelligence": {
+            "program_id": "market_intelligence",
+            "include_defaults": True,
+            "items": [],
+        },
+        "investor_reports": {
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "morning_hour_start": 7,
+            "morning_hour_end": 10,
         },
     }
 
@@ -180,6 +192,22 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 cadence="hourly",
                 status=MEMBER_ENABLED,
                 description="News claims → Knowledge (optional verify)",
+            ),
+            ProgramMember(
+                role="Government Intelligence",
+                template="government_intelligence",
+                kind="learning",
+                cadence="pre-open + 6h",
+                status=MEMBER_ENABLED,
+                description="Union Budget / PLI / industry policy → sector ranking nudges",
+            ),
+            ProgramMember(
+                role="Investor Reports",
+                template="investor_reports",
+                kind="maintenance",
+                cadence="morning IST",
+                status=MEMBER_ENABLED,
+                description="Email daily plan + trade decision reports (Gmail)",
             ),
             ProgramMember(
                 role="Event Research",

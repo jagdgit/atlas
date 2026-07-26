@@ -111,6 +111,21 @@ class InvestmentUniverseWorker(PersistentWorker):
                 else None,
             )
         policy_deltas = self._policy_deltas(pool)
+        # Government budget/policy sector nudges (Market Program).
+        try:
+            from atlas.config import get_config
+            from atlas.investment.government_policy import (
+                ensure_defaults,
+                policy_delta_by_symbol,
+            )
+
+            data_dir = str(get_config().paths.data)
+            ensure_defaults(data_dir, logger=self._logger)
+            gov = policy_delta_by_symbol(pool, data_dir=data_dir)
+            for sym, delta in gov.items():
+                policy_deltas[sym] = float(policy_deltas.get(sym, 0.0)) + float(delta)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("government policy deltas skipped", exc_info=True)
         experience_bias = self._experience_bias(pool)
 
         ranked = rank_universe(

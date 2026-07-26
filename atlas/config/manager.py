@@ -178,6 +178,10 @@ class EmailConfig(BaseModel):
 
     The password is a **secret**: never in YAML — read from the env var named by
     ``password_env`` at build time (mirrors mail/DB/API-key handling).
+
+    Gmail: set ATLAS_EMAIL_HOST=smtp.gmail.com, ATLAS_EMAIL_USERNAME, ATLAS_EMAIL_FROM_ADDR,
+    ATLAS_SMTP_PASSWORD (app password), and ATLAS_EMAIL_TO_ADDRS or ATLAS_INVESTOR_REPORT_TO
+    (comma-separated receivers).
     """
 
     host: str = ""  # empty => email channel is unavailable (web/SSE still works)
@@ -186,6 +190,8 @@ class EmailConfig(BaseModel):
     password_env: str = "ATLAS_SMTP_PASSWORD"
     from_addr: str = ""
     to_addrs: list[str] = Field(default_factory=list)
+    # Investor morning/trade reports (Market Program). Falls back to to_addrs / env.
+    investor_to_addrs: list[str] = Field(default_factory=list)
     use_tls: bool = True
     timeout: float = 20.0
 
@@ -194,6 +200,16 @@ class EmailConfig(BaseModel):
     def _none_to_blank(cls, value: Any) -> Any:
         """A blank YAML scalar parses to None — treat it as an empty string."""
         return "" if value is None else value
+
+    @field_validator("to_addrs", "investor_to_addrs", mode="before")
+    @classmethod
+    def _split_addrs(cls, value: Any) -> Any:
+        """Accept comma-separated env string or a list."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [a.strip() for a in value.split(",") if a.strip()]
+        return value
 
 
 class NotificationsConfig(BaseModel):
@@ -524,14 +540,30 @@ class ResourcesConfig(BaseModel):
 
     Profiles and full Resource Manager deepen in 3.2c; OCR page/time/DPI bounds are
     needed immediately for 3.2a PDF OCR.
+
+    Host-respect (slow-but-reliable):
+    ``max_concurrent_ticks`` caps how many Persistent Worker ticks may run at once
+    (defaults to ``max_worker_threads``). ``host_ram_reserve_mb`` keeps OS/desktop
+    headroom — under pressure Atlas defers ticks, never drops the job.
     """
 
     profile: str = "balanced"  # conservative | balanced | maximum | overnight
     max_worker_threads: int = 4
+    max_concurrent_ticks: int = 0  # 0 ⇒ use max_worker_threads
     max_download_workers: int = 4
     max_reader_workers: int = 4
     max_ocr_workers: int = 2
     max_extract_workers: int = 2
+    max_archive_workers: int = 1  # parallel owner_knowledge active ingest jobs
+    host_ram_reserve_mb: int = 2048  # keep free for OS / desktop / Ollama
+    tick_ram_mb: int = 512  # default projected RAM for one worker tick
+    ram_used_high: float = 0.85  # defer ticks when used fraction ≥ this
+    load_pressure_high: float = 0.90
+    # IR-RO10: opt-in BATCH quiet-hours window (off by default).
+    enforce_batch_window: bool = False
+    batch_quiet_start_hour: int = 22  # local-ish UTC hour inclusive
+    batch_quiet_end_hour: int = 6  # exclusive; wraps midnight when start > end
+    budget_release_after_seconds: float = 120.0  # IR-RO4 hysteresis before growing ticks
     ocr_max_pages: int = 50
     ocr_max_minutes: float = 15.0
     ocr_dpi: int = 300

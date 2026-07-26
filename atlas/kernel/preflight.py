@@ -91,6 +91,29 @@ def check_config(cfg: "AtlasConfig") -> list[Check]:
                 f"'{cfg.backup.pg_dump_path}' not found on PATH — scheduled backups will fail",
             ))
 
+    # IR-RO8 — machine profile suggestion vs configured profile.
+    try:
+        from atlas.core.resources.machine_profile import detect_machine_profile
+
+        hard = int(cfg.resources.max_concurrent_ticks or 0) or int(
+            cfg.resources.max_worker_threads or 4
+        )
+        suggestion = detect_machine_profile(hard_tick_ceiling=max(1, hard))
+        configured = (cfg.resources.profile or "balanced").strip().lower()
+        detail = (
+            f"suggest {suggestion.suggested_profile} "
+            f"(preferred ticks {suggestion.preferred_tick_slots} ≤ hard {hard}); "
+            f"configured={configured}. {suggestion.reason}"
+        )
+        if configured != suggestion.suggested_profile:
+            checks.append(Check("resources.machine_profile", CHECK_WARN, detail))
+        else:
+            checks.append(Check("resources.machine_profile", CHECK_OK, detail))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(Check(
+            "resources.machine_profile", CHECK_WARN, f"detect failed: {exc}"
+        ))
+
     return checks
 
 

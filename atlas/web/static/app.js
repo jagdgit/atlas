@@ -11,6 +11,7 @@ const state = {
   missionId: null,
   programId: null,
   missionPoll: null,
+  archivePoll: null,
   sending: false,
   jobPoll: null,
   jobPollGen: 0,
@@ -131,6 +132,7 @@ function switchView(view) {
   stopJobPoll();
   if (view !== "jobs") stopJobStream();
   if (view !== "missions") stopMissionPoll();
+  if (view !== "archive") stopArchivePoll();
   if (view !== "overview") { stopOpsPoll(); stopOpsStream(); }
   if (view !== "engineering") stopEngStream();
   if (view !== "learner") stopLearnerPoll();
@@ -139,6 +141,7 @@ function switchView(view) {
   else if (view === "programs") loadPrograms();
   else if (view === "learner") loadLearner();
   else if (view === "missions") loadMissions();
+  else if (view === "archive") loadArchive();
   else if (view === "engineering") loadEngineering();
   else if (view === "personal") loadPersonal();
   else if (view === "jobs") { loadJobs(); startJobStream(); }
@@ -691,18 +694,56 @@ function renderRepoList(repos) {
   }
 }
 
-async function ingestRepo(source, embed) {
+async function ingestRepo(source, embed, extra = {}) {
   const body = /^(https?:\/\/|git@)/.test(source) ? { url: source } : { path: source };
   body.embed = !!embed;
+  if (extra.note) body.note = extra.note;
+  if (extra.period_start) body.period_start = extra.period_start;
+  if (extra.period_end) body.period_end = extra.period_end;
+
+  const btn = $("#eng-ingest-btn");
+  const status = $("#eng-status");
+  const setStatus = (text, cls) => {
+    if (!status) return;
+    status.textContent = text;
+    status.className = "eng-status small" + (cls ? " " + cls : "");
+  };
+
+  if (btn) btn.disabled = true;
+  const started = Date.now();
+  setStatus("Ingesting… please wait (large repos can take several minutes).", "eng-busy");
+  toast("Ingest started…");
+
   try {
-    toast("Ingesting… this can take a moment");
     const out = await api("/v1/engineering/ingest", { method: "POST", body });
-    if (out.outcome !== "ok") { toast("Ingest failed: " + (out.reason || "unknown")); return; }
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    if (out.outcome !== "ok") {
+      setStatus(`Failed (${secs}s): ${out.reason || "unknown error"}`, "eng-fail");
+      toast("Ingest failed: " + (out.reason || "unknown"));
+      return;
+    }
+    const name = (out.repository && out.repository.name) || source;
+    const bits = [
+      `Done (${secs}s): ${name}`,
+      `findings=${out.findings || 0}`,
+      `experiences=${out.experiences || 0}`,
+    ];
+    if (out.owner_context && out.owner_context.statement) {
+      bits.push("timeline note saved — Confirm under Personal → Timeline");
+    }
+    setStatus(bits.join(" · "), "eng-ok");
     $("#eng-source").value = "";
+    // keep note/period so user can reuse for related repos; clear note only
+    if ($("#eng-note")) $("#eng-note").value = "";
     await loadEngineering();
     if (out.repository && out.repository.id) showRepoDetail(out.repository.id);
     toast("Repository ingested");
-  } catch (err) { toast(err.message); }
+  } catch (err) {
+    setStatus("Error: " + err.message, "eng-fail");
+    toast(err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function showRepoDetail(id) {
@@ -1362,7 +1403,7 @@ function renderProgramDetail(p) {
         status: lc[stage],
       }));
       // Keep canonical order if possible
-      const order = ["observe","learn","decide","record_why","evaluate","reflect","improve"];
+      const order = ["observe","learn","assess_resources","decide","record_why","evaluate","reflect","improve"];
       board.sort((a, b) => order.indexOf(a.stage) - order.indexOf(b.stage));
       card.append(renderLifecycleBoard(board));
     }
@@ -1538,7 +1579,104 @@ async function loadLearner(opts = {}) {
   renderLearnerWatchlist(wlBox, watch);
   renderLearnerChecklist(checkBox, status);
   renderLearnerBook(bookBox, { status, portfolios, missions, plan });
+  loadInvestorEmailStatus();
   startLearnerPoll();
+}
+
+async function loadInvestorEmailStatus() {
+  const box = $("#learner-email-status");
+  if (!box) return;
+  try {
+    const st = await api("/v1/market/investor-report/status");
+    const ready = !!(st && st.ready);
+    const recipients = ((st && st.recipients) || []).join(", ") || "(none)";
+    const missing = (st && st.missing) || [];
+    box.className = "learner-email-status small " + (ready ? "ok" : "warn");
+    box.textContent = ready
+      ? `Email ready → ${recipients}`
+      : `Email not ready — missing: ${missing.join("; ") || "check .env"}`;
+    const meta = $("#learner-email-meta");
+    if (meta) {
+      const smtp = (st && st.smtp) || {};
+      meta.textContent = st && st.hint
+        ? st.hint
+        : `SMTP ${smtp.host || "?"} as ${smtp.from_addr || smtp.username || "?"}`;
+    }
+    const sendBtn = $("#learner-email-send");
+    if (sendBtn) sendBtn.disabled = !ready;
+  } catch (err) {
+    box.className = "learner-email-status small warn";
+    box.textContent = "Could not check email status — is Atlas restarted with investor_mailer?";
+  }
+}
+
+async function previewInvestorEmail() {
+  const pre = $("#learner-email-preview-body");
+  const meta = $("#learner-email-meta");
+  const box = $("#learner-email-status");
+  if (!pre) return;
+  pre.hidden = false;
+  pre.textContent = "Building preview…";
+  try {
+    const prev = await api("/v1/market/investor-report/preview");
+    const to = ((prev && prev.recipients) || []).join(", ") || "(no recipients)";
+    if (meta) {
+      meta.textContent = `To: ${to}` + (prev.subject ? ` · Subject: ${prev.subject}` : "");
+    }
+    pre.textContent = [
+      "Subject: " + ((prev && prev.subject) || "(none)"),
+      "To: " + to,
+      "",
+      (prev && prev.body) || "(empty body — wait for daily plan / Investment Universe tick)",
+    ].join("\n");
+    if (box && prev && prev.ready === false) {
+      box.className = "learner-email-status small warn";
+      box.textContent = "Preview OK — but SMTP/receivers not ready to send yet.";
+    }
+  } catch (err) {
+    pre.textContent = "Preview failed: " + (err && err.message ? err.message : String(err));
+  }
+}
+
+async function sendInvestorEmail() {
+  const btn = $("#learner-email-send");
+  const pre = $("#learner-email-preview-body");
+  const box = $("#learner-email-status");
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("busy");
+    btn.textContent = "Sending…";
+  }
+  try {
+    const result = await api("/v1/market/investor-report/morning?force=true", { method: "POST" });
+    if (pre) {
+      pre.hidden = false;
+      pre.textContent = [
+        result.sent ? "SENT ✓" : "NOT SENT: " + (result.reason || "unknown"),
+        "Subject: " + (result.subject || ""),
+        "To: " + (((result.recipients) || []).join(", ") || "(none)"),
+        "",
+        result.body || "(no body returned)",
+      ].join("\n");
+    }
+    if (box) {
+      box.className = "learner-email-status small " + (result.sent ? "ok" : "warn");
+      box.textContent = result.sent
+        ? `Sent to ${((result.recipients) || []).join(", ")}`
+        : `Send failed: ${result.reason || "smtp_send_failed"} — check App Password / Gmail SMTP`;
+    }
+  } catch (err) {
+    if (box) {
+      box.className = "learner-email-status small warn";
+      box.textContent = "Send error: " + (err && err.message ? err.message : String(err));
+    }
+  } finally {
+    if (btn) {
+      btn.classList.remove("busy");
+      btn.textContent = "Send email";
+      await loadInvestorEmailStatus();
+    }
+  }
 }
 
 function renderLearnerSummary(box, { status, plan, watch }) {
@@ -1976,7 +2114,7 @@ function renderMissionDetail(d) {
   // Cognitive lifecycle (philosophy) — MI.1
   const phil = (m.success_criteria && m.success_criteria.philosophy) || null;
   if (phil && phil.lifecycle) {
-    const order = ["observe","learn","decide","record_why","evaluate","reflect","improve"];
+    const order = ["observe","learn","assess_resources","decide","record_why","evaluate","reflect","improve"];
     const board = order.map((stage) => ({
       stage,
       label: stage.replace(/_/g, " "),
@@ -2048,14 +2186,23 @@ function renderMissionDetail(d) {
 
 function renderWorkerCard(w) {
   const card = el("details", { class: "step", "data-worker-id": w.id });
+  const progLabel = workerProgressLabel(w);
   card.append(el("summary", {},
     el("span", { class: "intent", text: w.type }),
     el("span", { class: "badge " + w.status, text: w.status }),
     el("span", { class: "cap muted small", text: `health ${w.health} · v${w.worker_version}`
-      + (w.restart_count ? ` · ${w.restart_count} restart(s)` : "") }),
+      + (w.restart_count ? ` · ${w.restart_count} restart(s)` : "")
+      + (progLabel ? ` · ${progLabel}` : "") }),
   ));
   const body = el("div", { class: "step-body" });
   body.append(el("div", { class: "muted small", text: `id ${w.id}` }));
+
+  const roots = ((w.checkpoint || {}).roots) || [];
+  if (roots.length) {
+    for (const r of roots) body.append(renderArchiveRootProgress(r));
+  } else if (w.checkpoint && w.checkpoint.progress) {
+    body.append(el("div", { class: "muted small", text: "progress " + JSON.stringify(w.checkpoint.progress) }));
+  }
 
   const wactions = el("div", { class: "job-actions" });
   if (["running", "recovering"].includes(w.status)) wactions.append(el("button", { onclick: () => workerAction(w.id, "pause") }, "Pause"));
@@ -2085,6 +2232,251 @@ function renderWorkerCard(w) {
   body.append(inp);
   card.append(body);
   return card;
+}
+
+function workerProgressLabel(w) {
+  const roots = ((w.checkpoint || {}).roots) || [];
+  if (!roots.length) return "";
+  let done = 0, total = 0, complete = 0;
+  for (const r of roots) {
+    if (r.complete) complete += 1;
+    if (typeof r.done === "number") done += r.done;
+    if (typeof r.total === "number") total += r.total;
+  }
+  if (total > 0) return `${done}/${total} files`;
+  if (complete) return `${complete}/${roots.length} roots done`;
+  return `${roots.length} root(s)`;
+}
+
+function renderArchiveRootProgress(r) {
+  const wrap = el("div", { class: "archive-root" });
+  const done = typeof r.done === "number" ? r.done : 0;
+  const total = typeof r.total === "number" ? r.total : 0;
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : (r.complete ? 100 : 0);
+  wrap.append(el("div", { class: "archive-root-name", text:
+    (r.name || r.path || "root") + (r.kind ? ` · ${r.kind}` : "") + (r.complete ? " · complete" : "") }));
+  const bar = el("div", { class: "archive-bar" });
+  bar.append(el("span", { style: `width:${pct}%` }));
+  wrap.append(bar);
+  wrap.append(el("div", { class: "archive-meta muted small", text:
+    (total > 0 ? `${done} / ${total} (${pct}%)` : (r.complete ? "complete" : "scanning…"))
+    + (r.last_file ? ` · last ${r.last_file}` : "")
+    + (r.path ? ` · ${r.path}` : "") }));
+  return wrap;
+}
+
+/* ---------- archive (Owner Knowledge ingest) ---------- */
+let archiveCache = null;
+
+async function loadArchive() {
+  try {
+    const d = await api("/v1/archive/status?limit=50");
+    archiveCache = d;
+    renderArchive(d);
+    startArchivePoll();
+  } catch (err) {
+    toast(err.message);
+    const box = $("#archive-list");
+    if (box) box.innerHTML = "";
+    setArchiveStatus("Could not load archive workers: " + err.message, "fail");
+  }
+}
+
+function renderArchive(d) {
+  const box = $("#archive-list");
+  if (!box) return;
+  box.innerHTML = "";
+  const workers = d.workers || [];
+  if (!workers.length) {
+    box.append(el("div", { class: "muted", text:
+      "No archive workers yet. Start one above (parallel = separate progress bar)." }));
+    return;
+  }
+  for (const w of workers) box.append(renderArchiveWorkerCard(w));
+  if (d.host_guard) {
+    const hg = d.host_guard;
+    box.append(el("div", { class: "muted small", style: "margin-top:8px", text:
+      `Host guard: tick slots ${((hg.arbiter || {}).total_inflight) ?? "—"}/${hg.max_concurrent_ticks}`
+      + ` · archive ${hg.archive_workers_running}/${hg.max_archive_workers}`
+      + ` · queued ${hg.capacity_queued_workers || 0}`
+      + (hg.last_defer_reason ? ` · last defer: ${hg.last_defer_reason}` : "")
+      + " — slow but reliable; jobs wait for capacity." }));
+  }
+  if (d.note) {
+    box.append(el("div", { class: "muted small", style: "margin-top:8px", text: d.note }));
+  }
+}
+
+function renderArchiveWorkerCard(w) {
+  const card = el("div", { class: "archive-card", "data-worker-id": w.id });
+  const head = el("div", { class: "archive-card-head" });
+  head.append(el("span", { class: "intent", text: w.type || "owner_knowledge" }));
+  head.append(el("span", { class: "badge " + w.status, text: w.status }));
+  const label = workerProgressLabel(w);
+  head.append(el("span", { class: "muted small", text:
+    `health ${w.health || "?"}` + (label ? ` · ${label}` : "") + ` · ${String(w.id || "").slice(0, 8)}` }));
+  card.append(head);
+
+  const roots = ((w.checkpoint || {}).roots) || [];
+  if (roots.length) {
+    for (const r of roots) card.append(renderArchiveRootProgress(r));
+  } else {
+    card.append(el("div", { class: "muted small", text: "Waiting for first tick / scan…" }));
+  }
+
+  const actions = el("div", { class: "job-actions" });
+  if (["running", "recovering"].includes(w.status)) {
+    actions.append(el("button", { onclick: () => archiveWorkerAction(w.id, "pause") }, "Pause"));
+  }
+  if (["paused"].includes(w.status)) {
+    actions.append(el("button", { onclick: () => archiveWorkerAction(w.id, "resume") }, "Resume"));
+  }
+  if (!["stopped"].includes(w.status)) {
+    actions.append(el("button", { onclick: () => archiveWorkerAction(w.id, "stop") }, "Stop"));
+  }
+  if (w.mission_id) {
+    actions.append(el("button", {
+      onclick: () => { switchView("missions"); showMissionDetail(w.mission_id); },
+    }, "Open mission"));
+  }
+  card.append(actions);
+  return card;
+}
+
+async function archiveWorkerAction(workerId, action) {
+  try {
+    await api(`/v1/workers/${workerId}/${action}`, { method: "POST", body: { reason: "operator " + action } });
+    await loadArchive();
+  } catch (err) { toast(err.message); }
+}
+
+async function startArchiveIngest(opts) {
+  const path = ($("#archive-path") && $("#archive-path").value.trim()) || "";
+  const btn = $("#archive-start-btn");
+  if (!path) {
+    setArchiveStatus("Need a folder path — e.g. /media/…/Certificates", "fail");
+    toast("Enter an archive path first");
+    return;
+  }
+  if (btn) btn.disabled = true;
+  setArchiveStatus("Assessing resources…", "busy");
+  try {
+    const body = {
+      path,
+      kind: ($("#archive-kind") && $("#archive-kind").value) || "document",
+      parallel: !($("#archive-parallel") && !$("#archive-parallel").checked),
+      note: ($("#archive-note") && $("#archive-note").value.trim()) || null,
+      period_start: ($("#archive-period-start") && $("#archive-period-start").value.trim()) || null,
+      period_end: ($("#archive-period-end") && $("#archive-period-end").value.trim()) || null,
+    };
+    if (opts && opts.confirm) {
+      body.confirm = true;
+      if (opts.confirmation_token) body.confirmation_token = opts.confirmation_token;
+    }
+    const out = await api("/v1/archive/ingest", { method: "POST", body });
+    if (out.mode === "needs_confirmation" || (out.admission && out.admission.status === "needs_confirmation")) {
+      const est = out.estimate || (out.admission && out.admission.estimate) || {};
+      const files = est.file_count != null ? est.file_count : "?";
+      const hours = est.duration_seconds != null ? (est.duration_seconds / 3600).toFixed(1) : "?";
+      const growth = est.storage_growth_mb != null ? Math.round(est.storage_growth_mb) : "?";
+      const token = out.confirmation_token || (out.admission && out.admission.confirmation_token);
+      setArchiveStatus(
+        `Needs confirmation · ~${files} files · ~${hours}h · ~${growth} MB growth — click Confirm to start`,
+        "busy",
+      );
+      showArchiveConfirm(token, `~${files} files · ~${hours}h · ~${growth} MB`);
+      toast("Large archive — confirm to proceed");
+      return;
+    }
+    hideArchiveConfirm();
+    const mode = out.mode || "started";
+    if (mode === "rejected") {
+      setArchiveStatus(out.note || "Rejected by Resource Planner", "fail");
+      toast(out.note || "Rejected");
+      return;
+    }
+    if (mode === "queued_for_capacity" || out.queued) {
+      setArchiveStatus(
+        `Queued until capacity frees · ${out.queue_reason || "host busy"} · mission ${String(out.mission_id || "").slice(0, 8)}`,
+        "busy",
+      );
+    } else {
+      setArchiveStatus(
+        mode === "parallel_mission"
+          ? `Started parallel job · mission ${String(out.mission_id || "").slice(0, 8)} · keep disk mounted`
+          : `Root added to shared Personal Observer (${mode})`,
+        "ok",
+      );
+    }
+    toast(out.note || "Archive ingest accepted");
+    await loadArchive();
+  } catch (err) {
+    setArchiveStatus(err.message || "Start failed", "fail");
+    toast(err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function showArchiveConfirm(token, summary) {
+  let bar = $("#archive-confirm-bar");
+  if (!bar) {
+    const status = $("#archive-status");
+    bar = el("div", { id: "archive-confirm-bar", class: "archive-confirm-bar" });
+    if (status && status.parentNode) status.parentNode.insertBefore(bar, status.nextSibling);
+  }
+  bar.innerHTML = "";
+  bar.classList.remove("hidden");
+  bar.append(
+    el("span", { class: "muted small", text: `Confirm ingest (${summary || "large archive"})` }),
+    el("button", {
+      type: "button",
+      id: "archive-confirm-btn",
+      class: "link",
+      text: "Confirm & start",
+      onclick: () => startArchiveIngest({ confirm: true, confirmation_token: token }),
+    }),
+    el("button", {
+      type: "button",
+      class: "link muted",
+      text: "Cancel",
+      onclick: () => hideArchiveConfirm(),
+    }),
+  );
+}
+
+function hideArchiveConfirm() {
+  const bar = $("#archive-confirm-bar");
+  if (bar) {
+    bar.innerHTML = "";
+    bar.classList.add("hidden");
+  }
+}
+
+function setArchiveStatus(text, kind) {
+  const status = $("#archive-status");
+  if (!status) return;
+  status.textContent = text;
+  status.className = "eng-status small"
+    + (kind === "busy" ? " eng-busy" : kind === "ok" ? " eng-ok" : kind === "fail" ? " eng-fail" : " muted");
+}
+
+function startArchivePoll() {
+  stopArchivePoll();
+  state.archivePoll = setInterval(() => {
+    if (state.view !== "archive") return stopArchivePoll();
+    loadArchiveQuiet();
+  }, 5000);
+}
+function stopArchivePoll() {
+  if (state.archivePoll) { clearInterval(state.archivePoll); state.archivePoll = null; }
+}
+async function loadArchiveQuiet() {
+  try {
+    const d = await api("/v1/archive/status?limit=50");
+    archiveCache = d;
+    if (state.view === "archive") renderArchive(d);
+  } catch (_) { /* keep last good render */ }
 }
 
 function startMissionPoll(id) {
@@ -2197,13 +2589,225 @@ function renderOps(snap) {
     inet.reachable === false ? "warn" : ""));
   cards.append(opsCard("temp", temp.present ? `${temp.celsius}°C` : "not present",
     temp.present && temp.celsius >= 80 ? "warn" : ""));
-  cards.append(opsCard("UPS", ups.present ? "on battery" : "not present"));
+  const pwr = snap.power || {};
+  const upsCard = ups.present
+    ? (ups.on_battery ? "on battery" : (ups.status || "present"))
+    : (pwr.monitored ? (pwr.on_battery ? "on battery" : "AC / present") : "not monitored");
+  cards.append(opsCard(
+    "power",
+    upsCard,
+    (ups.on_battery || pwr.on_battery) ? "warn" : (!pwr.monitored && !ups.present ? "" : ""),
+  ));
 
   cards.append(opsCard("jobs", `${counts.jobs_active || 0} active · ${counts.jobs_total || 0} total`));
   cards.append(opsCard("missions", counts.missions || 0));
-  cards.append(opsCard("workers", counts.workers || 0));
+
+  const ws = snap.worker_states || {};
+  const wcounts = ws.counts || {};
+  const inv = counts.workers != null ? counts.workers : (ws.inventory_running || 0);
+  cards.append(opsCard(
+    "workers (inventory)",
+    `${inv} on · ${ws.active != null ? ws.active : "—"} classified`,
+  ));
+
+  const hg = snap.host_guard || {};
+  const res = hg.resources || {};
+  const arb = hg.arbiter || {};
+  const tickMax = (arb.effective_global_max != null)
+    ? arb.effective_global_max
+    : (hg.max_concurrent_ticks || arb.global_max || "—");
+  const tickHard = hg.max_concurrent_ticks || arb.global_max;
+  const tickIn = arb.total_inflight != null ? arb.total_inflight : (wcounts.running_ticks || 0);
+  const admit = res.tick_would_admit;
+  cards.append(opsCard(
+    "host guard",
+    admit === false ? "deferring" : (res.throttled ? "throttled" : "ok"),
+    admit === false || res.throttled ? "warn" : "",
+  ));
+  cards.append(opsCard(
+    "tick slots",
+    tickHard != null && tickHard !== tickMax
+      ? `${tickIn} / ${tickMax} (hard ${tickHard})`
+      : `${tickIn} / ${tickMax}`,
+  ));
+  const rtRes = arb.realtime_reserve_slots;
+  const rtIn = arb.realtime_inflight;
+  if (rtRes != null) {
+    cards.append(opsCard(
+      "realtime reserve",
+      `${rtIn != null ? rtIn : 0} in · ${rtRes} reserved`,
+      (tickIn >= tickMax - (rtRes || 0) && (rtIn || 0) === 0) ? "warn" : "",
+    ));
+  }
+  const resv = snap.reservations || {};
+  cards.append(opsCard(
+    "leases",
+    `${resv.holding_count != null ? resv.holding_count : 0} holding`,
+    (resv.holding_count || 0) > 0 ? "ok" : "",
+  ));
+  const sp = snap.storage_pressure || {};
+  cards.append(opsCard(
+    "storage",
+    sp.percent != null ? `${sp.percent}% · ${sp.level || "ok"}` : (sp.level || "—"),
+    sp.level === "high" ? "fail" : sp.level === "warn" ? "warn" : "",
+  ));
+  const bud = snap.budgets || {};
+  if (bud.effective_ticks != null) {
+    cards.append(opsCard(
+      "effective ticks",
+      `${bud.effective_ticks} / hard ${bud.hard_tick_ceiling != null ? bud.hard_tick_ceiling : "—"}`
+        + (bud.hysteresis && bud.hysteresis !== "steady" ? ` · ${bud.hysteresis}` : ""),
+      bud.pressure ? "warn" : "",
+    ));
+  }
+  const mp = snap.machine_profile || {};
+  if (mp.suggested_profile) {
+    const cfgP = mp.configured_profile || "—";
+    cards.append(opsCard(
+      "machine profile",
+      `${cfgP} · suggest ${mp.suggested_profile}`,
+      cfgP !== mp.suggested_profile ? "warn" : "",
+    ));
+  }
+  const wa = snap.work_admission || {};
+  if (wa.version) {
+    cards.append(opsCard(
+      "batch window",
+      wa.enforce_batch_window
+        ? (wa.in_batch_window ? "quiet hours · open" : "quiet hours · deferred")
+        : "off (always allow)",
+      wa.enforce_batch_window && !wa.in_batch_window ? "warn" : "",
+    ));
+  }
+  cards.append(opsCard(
+    "capacity queue",
+    `${hg.capacity_queued_workers || 0} waiting · ${hg.deferred_ticks_total || 0} deferred`,
+    (hg.capacity_queued_workers || 0) > 0 ? "warn" : "",
+  ));
+  cards.append(opsCard(
+    "archive slots",
+    `${hg.archive_workers_running || 0} / ${hg.max_archive_workers || 1}`,
+  ));
+
   cards.append(opsCard("last backup", backup.last || "none"));
   cards.append(opsCard("live clients", snap.sse_subscribers || 0));
+
+  renderOpsWorkerStates(ws);
+  renderOpsMissionQueue(snap.mission_queue || {});
+}
+
+const OPS_STATE_LABELS = [
+  ["running_ticks", "Running ticks"],
+  ["holding_reservation", "Holding reservation"],
+  ["ready", "Ready"],
+  ["waiting_host", "Waiting Host"],
+  ["waiting_schedule", "Waiting Schedule"],
+  ["waiting_dependency", "Waiting Dependency"],
+  ["sleeping", "Sleeping"],
+  ["paused", "Paused"],
+  ["starved", "Starved"],
+  ["slow", "Slow"],
+  ["completed", "Completed"],
+];
+
+function opsStateSeverity(key, n) {
+  if (!n) return "";
+  if (key === "starved" || key === "slow") return "fail";
+  if (key === "waiting_host" || key === "waiting_dependency" || key === "holding_reservation") return "warn";
+  if (key === "running_ticks") return "ok";
+  return "";
+}
+
+function renderOpsWorkerStates(ws) {
+  const box = $("#ops-worker-states");
+  const notableBox = $("#ops-worker-notable");
+  if (!box) return;
+  box.innerHTML = "";
+  const counts = (ws && ws.counts) || {};
+  for (const [key, label] of OPS_STATE_LABELS) {
+    const n = counts[key] || 0;
+    const sev = opsStateSeverity(key, n);
+    box.append(el("div", { class: "ops-state-chip" + (sev ? " " + sev : "") },
+      el("div", { class: "k", text: label }),
+      el("div", { class: "v", text: String(n) })));
+  }
+  if (!notableBox) return;
+  notableBox.innerHTML = "";
+  const notable = (ws && ws.notable) || [];
+  if (!notable.length) {
+    notableBox.append(el("div", { class: "muted small", text: "No starved, slow, or waiting-host workers." }));
+    return;
+  }
+  for (const row of notable) {
+    const title = row.mission_title || row.type || row.id || "worker";
+    const age = row.starvation_age_seconds != null
+      ? ` · age ${fmtUptime(row.starvation_age_seconds)}`
+      : "";
+    const tick = row.last_tick_ms != null
+      ? ` · last tick ${Math.round(row.last_tick_ms)}ms (avg ${Math.round(row.avg_tick_ms || 0)}ms)`
+      : "";
+    const wait = row.wait_reason ? ` · ${row.wait_reason}` : "";
+    const sev = opsStateSeverity(row.ops_state, 1) || "ok";
+    notableBox.append(el("div", { class: "health-row" },
+      el("span", { class: "badge " + sev, text: row.ops_state || "?" }),
+      el("span", { class: "name", text: title }),
+      el("span", { class: "detail", text: `${row.type || ""}${wait}${tick}${age}` })));
+  }
+}
+
+const QUEUE_STATE_LABELS = [
+  ["READY", "Ready"],
+  ["WAITING_HOST", "Waiting Host"],
+  ["WAITING_SCHEDULE", "Waiting Schedule"],
+  ["WAITING_DEPENDENCY", "Waiting Dependency"],
+  ["WAITING_OPERATOR", "Waiting Operator"],
+  ["RUNNING", "Running"],
+  ["PAUSED", "Paused"],
+  ["BLOCKED", "Blocked"],
+  ["COMPLETE", "Complete"],
+  ["ARCHIVED", "Archived"],
+];
+
+function queueStateSeverity(key, n) {
+  if (!n) return "";
+  if (key === "WAITING_HOST" || key === "WAITING_DEPENDENCY" || key === "BLOCKED") return "warn";
+  if (key === "RUNNING") return "ok";
+  return "";
+}
+
+function renderOpsMissionQueue(mq) {
+  const box = $("#ops-mission-queue");
+  const notableBox = $("#ops-mission-queue-notable");
+  if (!box) return;
+  box.innerHTML = "";
+  const counts = (mq && mq.counts) || {};
+  for (const [key, label] of QUEUE_STATE_LABELS) {
+    const n = counts[key] || 0;
+    const sev = queueStateSeverity(key, n);
+    box.append(el("div", { class: "ops-state-chip" + (sev ? " " + sev : "") },
+      el("div", { class: "k", text: label }),
+      el("div", { class: "v", text: String(n) })));
+  }
+  if (!notableBox) return;
+  notableBox.innerHTML = "";
+  const notable = (mq && mq.notable) || [];
+  if (!notable.length) {
+    notableBox.append(el("div", { class: "muted small", text: "No waiting-host or dependency-blocked missions." }));
+    return;
+  }
+  for (const row of notable) {
+    const owner = row.owner || {};
+    const title = owner.mission_title || row.mission_id || "mission";
+    const prog = owner.program ? ` · ${owner.program}` : "";
+    const cls = row.service_class ? ` · ${row.service_class}` : "";
+    const reason = row.reason ? ` · ${row.reason}` : "";
+    const deps = (row.depends_on || []).length ? ` · depends ${row.depends_on.length}` : "";
+    const sev = queueStateSeverity(row.state, 1) || "ok";
+    notableBox.append(el("div", { class: "health-row" },
+      el("span", { class: "badge " + sev, text: row.state || "?" }),
+      el("span", { class: "name", text: title }),
+      el("span", { class: "detail", text: `${String(row.mission_id || "").slice(0, 8)}${prog}${cls}${reason}${deps}` })));
+  }
 }
 
 function pushActivity(type, payload) {
@@ -2325,6 +2929,10 @@ function init() {
     if (learnerAuto.checked && state.view === "learner") startLearnerPoll();
     else stopLearnerPoll();
   });
+  const emailPreview = $("#learner-email-preview");
+  if (emailPreview) emailPreview.addEventListener("click", () => previewInvestorEmail());
+  const emailSend = $("#learner-email-send");
+  if (emailSend) emailSend.addEventListener("click", () => sendInvestorEmail());
   $("#mission-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const tpl = $("#mission-template").value;
@@ -2350,10 +2958,28 @@ function init() {
     btn.addEventListener("click", () => setPersonalTab(btn.dataset.tab || "skills"));
   });
   $("#eng-refresh").addEventListener("click", loadEngineering);
+  $("#archive-refresh")?.addEventListener("click", loadArchive);
+  $("#archive-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    startArchiveIngest();
+  });
   $("#eng-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const src = $("#eng-source").value.trim();
-    if (src) ingestRepo(src, $("#eng-embed").checked);
+    if (!src) {
+      toast("Enter a repository path or git URL first");
+      const status = $("#eng-status");
+      if (status) {
+        status.textContent = "Need a path or URL — e.g. /home/jagd/projects/my-app";
+        status.className = "eng-status small eng-fail";
+      }
+      return;
+    }
+    ingestRepo(src, $("#eng-embed").checked, {
+      note: ($("#eng-note") && $("#eng-note").value.trim()) || "",
+      period_start: ($("#eng-period-start") && $("#eng-period-start").value.trim()) || "",
+      period_end: ($("#eng-period-end") && $("#eng-period-end").value.trim()) || "",
+    });
   });
 
   if (state.key) {

@@ -19,7 +19,9 @@ their ``next_retry_at``. Every notable action is journaled on the owning mission
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -38,6 +40,13 @@ from atlas.models.worker import (
     WORKER_TICKABLE,
     Worker,
     backoff_for,
+)
+from atlas.ops.worker_states import (
+    expected_tick_ms,
+    ops_meta,
+    summarize_workers,
+    update_timing_ops,
+    update_wait_ops,
 )
 from atlas.services.base import HealthStatus
 from atlas.workers.base import PersistentWorker, TickContext
@@ -68,9 +77,13 @@ class WorkerManager:
         mission_repo: Any | None = None,
         arbiter: MissionArbiter | None = None,
         resources: Any | None = None,
+        host_guard: Any | None = None,
+        reservations: Any | None = None,
+        work_admission: Any | None = None,
         events: "EventDispatcher | None" = None,
         clock: Any | None = None,
         logger: logging.Logger | None = None,
+        default_tick_ram_mb: int = 512,
     ) -> None:
         self._repo = worker_repo
         self._checkpoints = checkpoint_store
@@ -78,10 +91,14 @@ class WorkerManager:
         self._config_repo = config_repo
         self._missions = mission_repo
         self._resources = resources  # OI-A3: optional machine RM for host RAM snapshot
+        self._host_guard = host_guard  # slow-but-reliable host admission
+        self._reservations = reservations  # IR-RO7 leases
+        self._work_admission = work_admission  # IR-RO10 should-run-now
         self._events = events
         self._clock = clock
         self._logger = logger or logging.getLogger("atlas.workers")
         self._types: dict[str, PersistentWorker] = {}
+        self._default_tick_ram_mb = max(64, int(default_tick_ram_mb or 512))
         # Cross-mission admission (A7/§D.4 / OI-A3): the arbiter weighs effective_priority + deadline
         # urgency + importance and enforces hard per-mission concurrency + llm_units_per_window /
         # ram_mb caps (and optional global concurrency), with anti-starvation aging.
@@ -109,14 +126,18 @@ class WorkerManager:
     ) -> Worker:
         impl = self._require_type(worker_type)
         config_version = self._active_config_version(mission_id)
+        # Queued/deferred starts: create paused with a schedule registered but disabled
+        # so HostGuard / operator resume can enable ticks later (slow-but-reliable).
+        initial_status = WORKER_RUNNING if autostart else WORKER_PAUSED
         worker = self._repo.create(
             mission_id=mission_id,
             type=worker_type,
             worker_version=impl.VERSION,
             config_version=config_version,
+            status=initial_status,
             metadata=metadata,
         )
-        if autostart and self._schedules is not None:
+        if self._schedules is not None:
             if cron_expr:
                 schedule = self._schedules.register_schedule(
                     "worker_tick",
@@ -127,6 +148,7 @@ class WorkerManager:
                     first_run_delay=0.0,
                     kind="cron",
                     cron_expr=cron_expr,
+                    enabled=bool(autostart),
                 )
             else:
                 schedule = self._schedules.register_schedule(
@@ -136,14 +158,21 @@ class WorkerManager:
                     mission_id=mission_id,
                     worker_id=worker.id,
                     first_run_delay=0.0,
+                    enabled=bool(autostart),
                 )
             self._repo.set_schedule(worker.id, schedule.id)
             worker = self._repo.get(worker.id) or worker
         self._journal(
             mission_id,
             "worker_created",
-            f"{worker_type} worker created",
-            {"worker_id": worker.id, "type": worker_type, "worker_version": impl.VERSION},
+            f"{worker_type} worker created"
+            + ("" if autostart else " (queued for capacity)"),
+            {
+                "worker_id": worker.id,
+                "type": worker_type,
+                "worker_version": impl.VERSION,
+                "autostart": bool(autostart),
+            },
         )
         self._emit("WorkerCreated", worker)
         self._logger.info("created %s worker %s (mission %s)", worker_type, worker.id, mission_id)
@@ -163,6 +192,14 @@ class WorkerManager:
         # Fresh start: clear crash backoff so it ticks on the next schedule fire.
         self._repo.record_success(worker.id)
         self._repo.set_status(worker.id, WORKER_RUNNING, health=HEALTH_HEALTHY)
+        # Clear capacity-queue flag so HostGuard does not auto-resume an operator pause later.
+        meta = dict(worker.metadata or {})
+        if meta.pop("queued_for_capacity", None) is not None or "queue_reason" in meta:
+            meta.pop("queue_reason", None)
+            try:
+                self._repo.update_metadata(worker.id, meta)
+            except Exception:  # noqa: BLE001
+                pass
         self._toggle_schedule(worker, enabled=True)
         self._journal(worker.mission_id, "worker_resumed", reason, {"worker_id": worker.id})
         updated = self._require(worker.id)
@@ -191,9 +228,150 @@ class WorkerManager:
         return self._repo.get(worker_id)
 
     def list_workers(
-        self, *, mission_id: str | None = None, status: str | None = None
+        self,
+        *,
+        mission_id: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
     ) -> list[Worker]:
-        return self._repo.list(mission_id=mission_id, status=status)
+        return self._repo.list(mission_id=mission_id, status=status, limit=limit)
+
+    def checkpoint_state(self, worker_id: UUID | str) -> dict[str, Any]:
+        """Durable tick checkpoint for a worker (progress / files_done / etc.)."""
+        worker = self._repo.get(worker_id)
+        if worker is None:
+            return {}
+        try:
+            return dict(self._checkpoints.load(_CHECKPOINT_OWNER, worker.id) or {})
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def enrich_worker(self, worker: Worker | dict[str, Any]) -> dict[str, Any]:
+        """Worker row + checkpoint progress summary (for Archive / Missions UI)."""
+        if hasattr(worker, "to_dict"):
+            data = worker.to_dict()
+            wid = worker.id
+            wtype = worker.type
+        else:
+            data = dict(worker)
+            wid = data.get("id")
+            wtype = data.get("type")
+        state = self.checkpoint_state(wid) if wid else {}
+        progress = state.get("progress") if isinstance(state, dict) else None
+        roots = (state or {}).get("roots") if isinstance(state, dict) else None
+        root_progress: list[dict[str, Any]] = []
+        if isinstance(roots, dict):
+            for path, entry in roots.items():
+                if not isinstance(entry, dict):
+                    continue
+                prog = entry.get("progress") or {}
+                root_progress.append(
+                    {
+                        "path": path,
+                        "name": Path(str(path)).name,
+                        "complete": bool(entry.get("complete")),
+                        "done": prog.get("done"),
+                        "total": prog.get("total"),
+                        "pending": prog.get("pending"),
+                        "last_file": prog.get("last_file"),
+                        "kind": entry.get("kind"),
+                    }
+                )
+        data["checkpoint"] = {
+            "progress": progress,
+            "roots": root_progress,
+            "ticks": (state or {}).get("ticks"),
+            "last_totals": (state or {}).get("last_totals"),
+        }
+        data["has_progress"] = bool(root_progress) or bool(progress)
+        data["is_archive"] = wtype == "owner_knowledge"
+        ops = ops_meta(worker if not isinstance(worker, dict) else data)
+        if ops:
+            data["ops"] = ops
+        return data
+
+    def list_workers_enriched(
+        self,
+        *,
+        mission_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        rows = self.list_workers(mission_id=mission_id, status=status, limit=limit)
+        out = [self.enrich_worker(w) for w in rows[: max(1, limit)]]
+        return out
+
+    def ops_state_snapshot(self, *, limit: int = 500) -> dict[str, Any]:
+        """IR-OPS1: Linux-style worker state breakdown for the Ops dashboard."""
+        rows = self.list_workers(limit=max(1, limit))
+        inflight: set[str] = set()
+        try:
+            snap = self._arbiter.snapshot()
+            for mid, n in (snap.get("inflight") or {}).items():
+                if int(n or 0) > 0:
+                    inflight.add(str(mid))
+        except Exception:  # noqa: BLE001
+            pass
+        holding: set[str] = set()
+        if self._reservations is not None and hasattr(self._reservations, "holding_worker_ids"):
+            try:
+                holding = set(self._reservations.holding_worker_ids())
+            except Exception:  # noqa: BLE001
+                holding = set()
+        now = None
+        if self._clock is not None and hasattr(self._clock, "now"):
+            try:
+                now = self._clock.now()
+            except Exception:  # noqa: BLE001
+                now = None
+        summary = summarize_workers(
+            rows,
+            now=now,
+            inflight_mission_ids=inflight,
+            holding_reservation_ids=holding,
+        )
+        if self._missions is not None and summary.get("notable"):
+            for row in summary["notable"]:
+                mid = row.get("mission_id")
+                if not mid:
+                    continue
+                try:
+                    mission = self._missions.get(mid)
+                except Exception:  # noqa: BLE001
+                    mission = None
+                if mission is None:
+                    continue
+                title = getattr(mission, "title", None)
+                meta = getattr(mission, "metadata", None) or {}
+                if title:
+                    row["mission_title"] = title
+                if isinstance(meta, dict) and meta.get("program_id"):
+                    row.setdefault("owner", {})["program"] = meta.get("program_id")
+        return summary
+
+    def _record_tick_timing(self, worker: Worker, duration_ms: float) -> None:
+        try:
+            meta = dict(worker.metadata or {})
+            ops = update_timing_ops(
+                ops_meta(worker),
+                duration_ms=duration_ms,
+                expected_ms=expected_tick_ms(
+                    worker.type, ops_meta(worker), dict(worker.metadata or {})
+                ),
+                clear_wait=True,
+            )
+            meta["ops"] = ops
+            self._repo.update_metadata(worker.id, meta)
+        except Exception:  # noqa: BLE001 - timing must never break a tick
+            self._logger.debug("failed to record tick timing for %s", worker.id, exc_info=True)
+
+    def _record_wait(self, worker: Worker, reason: str) -> None:
+        try:
+            meta = dict(worker.metadata or {})
+            meta["ops"] = update_wait_ops(ops_meta(worker), reason=reason)
+            self._repo.update_metadata(worker.id, meta)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("failed to record wait for %s", worker.id, exc_info=True)
 
     # --- the tick (registered as the `worker_tick` handler) -------------
 
@@ -219,13 +397,91 @@ class WorkerManager:
             )
             return {"skipped": "unknown type", "worker_id": worker.id}
 
+        # Host-respect gate first: under pressure, defer (job stays scheduled).
+        if self._host_guard is not None:
+            try:
+                ok, reason = self._host_guard.can_run_tick(worker_type=worker.type)
+            except Exception as exc:  # noqa: BLE001 - never block ticks on guard bugs
+                self._logger.debug("host_guard check failed: %s", exc)
+                ok, reason = True, "host_guard_error"
+            if not ok:
+                self._record_wait(worker, "host_pressure")
+                self._emit(
+                    "WorkerDeferred",
+                    worker,
+                    reason=reason,
+                    cause="host_pressure",
+                )
+                return {
+                    "skipped": "host_pressure",
+                    "reason": reason,
+                    "worker_id": worker.id,
+                }
+
         # Cross-mission admission (A7/§D.4): defer this tick if the mission is over its concurrency cap
         # or loses arbitration for a scarce global slot. Deferral is temporary + aged (never starved).
         demand = self._demand_for(worker.mission_id)
+
+        # IR-RO10: Should run *now*? (timing policy — Complements Host Guard Can?).
+        if self._work_admission is not None:
+            try:
+                timing = self._work_admission.should_run_now(
+                    service_class=getattr(demand, "service_class", None),
+                )
+            except Exception as exc:  # noqa: BLE001 - never block ticks on policy bugs
+                self._logger.debug("work_admission check failed: %s", exc)
+                timing = None
+            if timing is not None and not timing.allowed:
+                self._record_wait(worker, "schedule")
+                self._emit(
+                    "WorkerDeferred",
+                    worker,
+                    reason=timing.reason,
+                    cause="schedule_window",
+                    run_at_hint=timing.run_at_hint,
+                )
+                return {
+                    "skipped": "schedule_window",
+                    "reason": timing.reason,
+                    "run_at_hint": timing.run_at_hint,
+                    "worker_id": worker.id,
+                }
+
         verdict = self._arbiter.try_admit(demand)
         if not verdict.admitted:
+            if self._host_guard is not None:
+                try:
+                    self._host_guard.note_deferred(verdict.reason)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._record_wait(worker, "budget")
             self._emit("WorkerThrottled", worker, reason=verdict.reason, score=round(verdict.score, 4))
-            return {"skipped": "budget", "worker_id": worker.id}
+            return {"skipped": "budget", "reason": verdict.reason, "worker_id": worker.id}
+
+        lease_token: str | None = None
+        if self._reservations is not None:
+            try:
+                from atlas.core.resources.reservations import ReservationRequest
+
+                decision = self._reservations.acquire(ReservationRequest.from_worker_meta(worker))
+                if not decision.allowed:
+                    self._arbiter.release(worker.mission_id)
+                    self._record_wait(worker, "reservation")
+                    self._emit(
+                        "WorkerThrottled",
+                        worker,
+                        reason=decision.reason,
+                        cause="reservation",
+                    )
+                    return {
+                        "skipped": "reservation",
+                        "reason": decision.reason,
+                        "worker_id": worker.id,
+                    }
+                lease_token = decision.lease.token if decision.lease else None
+            except Exception as exc:  # noqa: BLE001 - never block ticks on reservation bugs
+                self._logger.debug("reservation acquire failed: %s", exc)
+
         try:
             worker = self._maybe_upgrade(worker, impl)
             inputs = [i.payload for i in self._repo.drain_inputs(worker.id)]
@@ -239,13 +495,21 @@ class WorkerManager:
                 state=state,
                 inputs=inputs,
             )
+            started = time.monotonic()
             try:
                 result = impl.do_tick(ctx)
             except Exception as exc:  # noqa: BLE001 - a worker failure is data, not a crash
+                self._record_tick_timing(worker, (time.monotonic() - started) * 1000.0)
                 return self._on_failure(worker, exc)
+            self._record_tick_timing(worker, (time.monotonic() - started) * 1000.0)
             return self._on_success(worker, impl, result, config_version)
         finally:
             self._arbiter.release(worker.mission_id)
+            if self._reservations is not None:
+                try:
+                    self._reservations.release(lease_token, worker_id=worker.id)
+                except Exception:  # noqa: BLE001
+                    pass
 
     # --- tick outcome handling ------------------------------------------
 
@@ -331,6 +595,7 @@ class WorkerManager:
 
         A missing mission (or repo) yields an unconstrained demand, so non-mission/uncapped work is
         admitted exactly as before (back-compatible with the Phase-A per-mission-cap behaviour).
+        Default ``ram_mb`` from host-respect config applies when the mission has no budget reserve.
         """
         host_ram: int | None = None
         if self._resources is not None:
@@ -348,8 +613,46 @@ class WorkerManager:
             except Exception:  # noqa: BLE001 - arbitration lookup must not break a tick
                 mission = None
             if mission is not None:
-                return demand_from_mission(mission, host_available_ram_mb=host_ram)
-        return MissionDemand(mission_id=str(mission_id), host_available_ram_mb=host_ram)
+                demand = demand_from_mission(mission, host_available_ram_mb=host_ram)
+                if demand.ram_mb is None and self._default_tick_ram_mb:
+                    return MissionDemand(
+                        mission_id=demand.mission_id,
+                        effective_priority=demand.effective_priority,
+                        deadline=demand.deadline,
+                        importance=demand.importance,
+                        max_concurrent_tasks=demand.max_concurrent_tasks or 1,
+                        llm_units_per_window=demand.llm_units_per_window,
+                        llm_window_seconds=demand.llm_window_seconds,
+                        estimated_llm_units=demand.estimated_llm_units,
+                        ram_mb=self._default_tick_ram_mb,
+                        host_available_ram_mb=host_ram,
+                        service_class=demand.service_class,
+                        wait_since=demand.wait_since,
+                        confidence_score=demand.confidence_score,
+                    )
+                if demand.max_concurrent_tasks is None:
+                    return MissionDemand(
+                        mission_id=demand.mission_id,
+                        effective_priority=demand.effective_priority,
+                        deadline=demand.deadline,
+                        importance=demand.importance,
+                        max_concurrent_tasks=1,
+                        llm_units_per_window=demand.llm_units_per_window,
+                        llm_window_seconds=demand.llm_window_seconds,
+                        estimated_llm_units=demand.estimated_llm_units,
+                        ram_mb=demand.ram_mb,
+                        host_available_ram_mb=host_ram,
+                        service_class=demand.service_class,
+                        wait_since=demand.wait_since,
+                        confidence_score=demand.confidence_score,
+                    )
+                return demand
+        return MissionDemand(
+            mission_id=str(mission_id),
+            max_concurrent_tasks=1,
+            ram_mb=self._default_tick_ram_mb,
+            host_available_ram_mb=host_ram,
+        )
 
     def _in_backoff(self, worker: Worker) -> bool:
         if worker.status != WORKER_RECOVERING or worker.next_retry_at is None:

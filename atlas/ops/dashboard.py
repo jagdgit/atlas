@@ -43,7 +43,16 @@ class OperationsDashboard:
         return {
             "atlas": self._guard(self._atlas, {}),
             "counts": self._guard(self._counts, {}),
+            "worker_states": self._guard(self._worker_states, {}),
+            "mission_queue": self._guard(self._mission_queue, {}),
+            "reservations": self._guard(self._reservations, {}),
+            "storage_pressure": self._guard(self._storage_pressure, {}),
+            "budgets": self._guard(self._budgets, {}),
+            "machine_profile": self._guard(self._machine_profile, {}),
+            "work_admission": self._guard(self._work_admission, {}),
+            "power": self._guard(self._power, {}),
             "host": self._guard(self._host.snapshot, {}),
+            "host_guard": self._guard(self._host_guard, {}),
             "backup": self._guard(self._backup, {}),
             "storage": self._guard(self._storage, {}),
             "capabilities": self._guard(self._capabilities, []),
@@ -95,6 +104,97 @@ class OperationsDashboard:
             counts["workers"] = wc.get("running", 0) + wc.get("recovering", 0)
             counts["workers_total"] = sum(wc.values()) if wc else 0
         return counts
+
+    def _worker_states(self) -> dict[str, Any]:
+        """IR-OPS1 — Running ticks / Ready / Waiting Host / Starved / Slow / …"""
+        workers = self._resolve("workers")
+        if workers is None or not hasattr(workers, "ops_state_snapshot"):
+            return {}
+        return workers.ops_state_snapshot()
+
+    def _mission_queue(self) -> dict[str, Any]:
+        """IR-RO2 — Mission Queue states + owners."""
+        queue = self._resolve("mission_queue")
+        if queue is None or not hasattr(queue, "snapshot"):
+            return {}
+        return queue.snapshot()
+
+    def _reservations(self) -> dict[str, Any]:
+        """IR-RO7 — active resource leases."""
+        mgr = self._resolve("reservation_manager")
+        if mgr is None or not hasattr(mgr, "snapshot"):
+            return {}
+        return mgr.snapshot()
+
+    def _storage_pressure(self) -> dict[str, Any]:
+        """IR-RO6 — disk watermarks."""
+        svc = self._resolve("storage_pressure")
+        if svc is None or not hasattr(svc, "snapshot"):
+            return {}
+        return svc.snapshot()
+
+    def _budgets(self) -> dict[str, Any]:
+        """IR-RO4 — dynamic effective tick slots + hysteresis."""
+        ctrl = self._resolve("budget_controller")
+        if ctrl is None or not hasattr(ctrl, "snapshot"):
+            return {}
+        return ctrl.snapshot()
+
+    def _machine_profile(self) -> dict[str, Any]:
+        """IR-RO8 — suggested host profile + preferred tick slots."""
+        from atlas.core.resources.machine_profile import detect_machine_profile, profile_catalog
+
+        hard = None
+        guard = self._resolve("host_guard")
+        if guard is not None and hasattr(guard, "status"):
+            try:
+                hard = (guard.status() or {}).get("max_concurrent_ticks")
+            except Exception:  # noqa: BLE001
+                hard = None
+        suggestion = detect_machine_profile(hard_tick_ceiling=hard)
+        configured = None
+        try:
+            from atlas.config import get_config
+
+            configured = get_config().resources.profile
+        except Exception:  # noqa: BLE001
+            configured = None
+        cached = self._resolve("machine_profile")
+        boot = cached.as_dict() if cached is not None and hasattr(cached, "as_dict") else {}
+        return {
+            **suggestion.as_dict(),
+            "configured_profile": configured,
+            "boot_suggestion": boot,
+            "catalog": profile_catalog(),
+        }
+
+    def _work_admission(self) -> dict[str, Any]:
+        """IR-RO10 — should-run-now / BATCH quiet window."""
+        policy = self._resolve("work_admission")
+        if policy is None or not hasattr(policy, "snapshot"):
+            return {}
+        return policy.snapshot()
+
+    def _power(self) -> dict[str, Any]:
+        """IR-RO9 — power/UPS posture (honest when unmonitored)."""
+        from atlas.core.resources.power import probe_power, read_thermal_zones
+
+        power = probe_power()
+        zones = [z.as_dict() for z in read_thermal_zones()]
+        return {
+            **power.as_dict(),
+            "thermal": {
+                "monitored": bool(zones),
+                "hottest_c": max((z["celsius"] for z in zones), default=None),
+                "zones": zones,
+            },
+        }
+
+    def _host_guard(self) -> dict[str, Any]:
+        guard = self._resolve("host_guard")
+        if guard is None or not hasattr(guard, "status"):
+            return {}
+        return guard.status()
 
     def _backup(self) -> dict[str, Any]:
         backup = self._resolve("backup")

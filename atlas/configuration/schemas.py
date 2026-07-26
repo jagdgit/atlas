@@ -102,6 +102,9 @@ class OwnerKnowledgeConfig(BaseModel):
     embed: bool = False
     policy: str = "project"
     tick_interval_seconds: int = Field(default=3600, ge=1)
+    # Archive robustness: process at most this many document/conversation files per tick
+    # (checkpoint per file). Required by Archive ingest / large USB imports.
+    files_per_tick: int = Field(default=40, ge=1, le=500)
     # OI-C4 — drain pre-Phase-C documents missing asset_id (bounded per tick).
     backfill_orphan_assets: bool = True
     backfill_limit: int = Field(default=25, ge=0, le=500)

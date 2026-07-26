@@ -27,7 +27,9 @@ class SystemSnapshot:
     # Hottest zone in Celsius when /sys thermal is readable.
     thermal_c: float | None = None
     thermal_monitored: bool = False
+    thermal_zones: list[dict[str, Any]] = field(default_factory=list)
     power_monitored: bool = False
+    power: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -44,7 +46,9 @@ class SystemSnapshot:
             ),
             "thermal_c": self.thermal_c,
             "thermal_monitored": self.thermal_monitored,
+            "thermal_zones": list(self.thermal_zones),
             "power_monitored": self.power_monitored,
+            "power": dict(self.power),
             "notes": list(self.notes),
         }
 
@@ -84,10 +88,19 @@ def read_snapshot(logger: logging.Logger | None = None) -> SystemSnapshot:
         snap.thermal_monitored = True
     else:
         snap.notes.append("thermal sensors not monitored")
+    try:
+        from atlas.core.resources.power import probe_power, read_thermal_zones
 
-    # Power/battery hard stops deepen in Stage 4; be honest now.
-    snap.power_monitored = False
-    snap.notes.append("power/battery not monitored")
+        snap.thermal_zones = [z.as_dict() for z in read_thermal_zones()]
+        power = probe_power(logger=log)
+        snap.power = power.as_dict()
+        snap.power_monitored = bool(power.monitored)
+        if not power.monitored:
+            snap.notes.append(power.note or "power/battery not monitored")
+    except Exception as exc:  # noqa: BLE001
+        snap.power_monitored = False
+        snap.power = {"monitored": False, "note": f"power probe failed: {exc}"}
+        snap.notes.append("power/battery not monitored")
 
     log.debug("resource snapshot: %s", snap.as_dict())
     return snap

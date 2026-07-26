@@ -46,7 +46,8 @@ class PaperTradingWorker(PersistentWorker):
         mission_context: Any = None,
         policy_engine: Any = None,
         events: Any = None,
-        live_market: Any = None,
+        live_market: Any | None = None,
+        investor_mailer: Any | None = None,
         clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -60,6 +61,7 @@ class PaperTradingWorker(PersistentWorker):
         self._policy_engine = policy_engine
         self._events = events
         self._live_market = live_market
+        self._investor_mailer = investor_mailer
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._logger = logger or logging.getLogger("atlas.workers.paper_trading")
 
@@ -620,14 +622,47 @@ class PaperTradingWorker(PersistentWorker):
             return f"{symbol}: fill_rejected ({exc})"
 
         totals["buys" if kind == "buy" else "sells"] += 1
-        self._emit("PaperTradingFill", {
+        fill_payload = {
             "mission_id": str(mission_id), "decision_id": str(decision.id) if decision.id else None,
             "symbol": symbol, "side": kind, "quantity": qty, "price": price,
             "fee": fee,
             "fees": fees_doc,
             "broker_profile": profile_id,
             "realized_pnl": float(trade.get("realized_pnl", 0.0)),
-        })
+        }
+        self._emit("PaperTradingFill", fill_payload)
+        if self._investor_mailer is not None:
+            try:
+                decision_doc = {}
+                if decision is not None:
+                    decision_doc = {
+                        "id": getattr(decision, "id", None),
+                        "action": getattr(decision, "action", None)
+                        or getattr(decision, "kind", None),
+                        "rationale": getattr(decision, "rationale", None)
+                        or getattr(decision, "reason", None),
+                        "confidence": getattr(decision, "confidence", None),
+                        "status": getattr(decision, "status", None),
+                    }
+                    if hasattr(decision, "as_dict"):
+                        try:
+                            decision_doc = {**decision_doc, **(decision.as_dict() or {})}
+                        except Exception:  # noqa: BLE001
+                            pass
+                self._investor_mailer.send_trade(
+                    side=kind,
+                    symbol=symbol,
+                    quantity=qty,
+                    price=price,
+                    fee=fee,
+                    fees=fees_doc,
+                    reason=why_short or "",
+                    decision=decision_doc,
+                    mission_id=str(mission_id) if mission_id else None,
+                    realized_pnl=float(trade.get("realized_pnl", 0.0)),
+                )
+            except Exception:  # noqa: BLE001 - never fail a fill on email
+                self._logger.debug("investor trade email failed", exc_info=True)
         if kind == "sell":
             learn_cfg = dict(cfg)
             learn_cfg.setdefault("portfolio_key", state.get("portfolio_key"))

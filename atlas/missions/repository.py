@@ -165,6 +165,19 @@ class MissionRepository(BaseRepository):
             > 0
         )
 
+    def update_metadata(self, mission_id: UUID | str, metadata: dict[str, Any]) -> bool:
+        return (
+            self.execute(
+                """
+                UPDATE mission.missions
+                SET metadata = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (Jsonb(metadata or {}), str(mission_id)),
+            )
+            > 0
+        )
+
     # --- journal --------------------------------------------------------
     def add_journal(
         self,

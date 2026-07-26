@@ -20,6 +20,7 @@ KIND_CAREER = "career"
 LIFECYCLE_STAGES = (
     "observe",
     "learn",
+    "assess_resources",  # Resource OS gate before Execute (MP8 / RO8)
     "decide",
     "record_why",
     "evaluate",
@@ -36,6 +37,9 @@ STAGE_NA = "n/a"  # not applicable for this kind
 
 def _stages(**kwargs: str) -> dict[str, str]:
     out = {s: STAGE_NA for s in LIFECYCLE_STAGES}
+    # Host Guard (Resource OS) admits every Persistent Worker tick — partial until
+    # Resource Planner / Mission Queue land.
+    out["assess_resources"] = STAGE_PARTIAL
     out.update(kwargs)
     return out
 
@@ -53,6 +57,7 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
         "lifecycle": _stages(
             observe=STAGE_ACTIVE,
             learn=STAGE_ACTIVE,
+            assess_resources=STAGE_PARTIAL,  # Host Guard + archive queue; Planner ETA = target
             record_why=STAGE_ACTIVE,
             evaluate=STAGE_PARTIAL,
             reflect=STAGE_WAITING,
@@ -65,6 +70,7 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
         "lifecycle": _stages(
             observe=STAGE_ACTIVE,
             learn=STAGE_ACTIVE,
+            assess_resources=STAGE_PARTIAL,
             record_why=STAGE_ACTIVE,
             evaluate=STAGE_PARTIAL,
             reflect=STAGE_WAITING,
@@ -114,6 +120,8 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             "market_observer",
             "company_intelligence",
             "news_intelligence",
+            "government_intelligence",
+            "investor_reports",
             "event_research",
             "decision_simulation",
             "portfolio_ledger",
@@ -180,6 +188,31 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             learn=STAGE_ACTIVE,
             record_why=STAGE_ACTIVE,
             evaluate=STAGE_PARTIAL,  # optional verify
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "government_intelligence": {
+        "mission_kind": KIND_LEARNING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            learn=STAGE_ACTIVE,
+            decide=STAGE_PARTIAL,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "investor_reports": {
+        "mission_kind": KIND_MONITORING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_PARTIAL,
+            decide=STAGE_WAITING,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_WAITING,
             reflect=STAGE_WAITING,
             improve=STAGE_WAITING,
         ),
@@ -361,7 +394,10 @@ def philosophy_for(template_name: str) -> dict[str, Any]:
 def with_philosophy(
     success_criteria: dict[str, Any] | None, template_name: str
 ) -> dict[str, Any]:
-    """Merge philosophy block into template success_criteria for seeding."""
+    """Merge philosophy (+ IR-RO3 resources) into template success_criteria for seeding."""
     out = dict(success_criteria or {})
     out["philosophy"] = philosophy_for(template_name)
-    return out
+    # Attach Work Resource Profile so Ops/scheduler can read service class without a join.
+    from atlas.missions.templates.resources import with_resources
+
+    return with_resources(out, template_name)

@@ -52,6 +52,7 @@ class HostMetrics:
             "internet": self._safe(self.internet),
             "temperature": self._safe(self.temperature),
             "ups": self._safe(self.ups),
+            "power": self._safe(self.power),
         }
 
     # --- CPU ------------------------------------------------------------
@@ -156,29 +157,50 @@ class HostMetrics:
 
     # --- temperature (best-effort) -------------------------------------
 
-    def temperature(self) -> dict[str, Any]:
-        """Highest thermal-zone reading (°C), or ``present: false`` when no sensor."""
-        readings: list[float] = []
-        try:
-            zones = sorted(Path("/sys/class/thermal").glob("thermal_zone*"))
-        except OSError:
-            zones = []
-        for zone in zones:
-            try:
-                milli = (zone / "temp").read_text().strip()
-                if milli.lstrip("-").isdigit():
-                    readings.append(int(milli) / 1000.0)
-            except OSError:
-                continue
-        if not readings:
-            return {"present": False, "celsius": None}
-        return {"present": True, "celsius": round(max(readings), 1)}
-
-    # --- UPS (best-effort) ---------------------------------------------
-
     def ups(self) -> dict[str, Any]:
-        """UPS status. No standard sysfs source without NUT/apcupsd → not present (A4)."""
-        return {"present": False}
+        """UPS / battery status (IR-RO9). Honest ``present: false`` when nothing found."""
+        try:
+            from atlas.core.resources.power import probe_power
+
+            snap = probe_power(logger=self._logger)
+            if not snap.present:
+                return {
+                    "present": False,
+                    "monitored": False,
+                    "note": snap.note,
+                }
+            return {
+                "present": True,
+                "monitored": snap.monitored,
+                "source": snap.source,
+                "on_battery": snap.on_battery,
+                "charge_percent": snap.charge_percent,
+                "status": snap.status_text,
+                "note": snap.note,
+            }
+        except Exception:  # noqa: BLE001
+            return {"present": False, "monitored": False, "note": "power probe failed"}
+
+    def power(self) -> dict[str, Any]:
+        """IR-RO9 power posture (alias used by Ops / resources API)."""
+        from atlas.core.resources.power import probe_power
+
+        return probe_power(logger=self._logger).as_dict()
+
+    def temperature(self) -> dict[str, Any]:
+        """Highest thermal-zone reading (°C), plus zone list when available (IR-RO9)."""
+        from atlas.core.resources.power import read_thermal_zones
+
+        zones = read_thermal_zones()
+        if not zones:
+            return {"present": False, "celsius": None, "zones": [], "monitored": False}
+        hottest = max(z.celsius for z in zones)
+        return {
+            "present": True,
+            "monitored": True,
+            "celsius": round(hottest, 1),
+            "zones": [z.as_dict() for z in zones],
+        }
 
     # --- helpers --------------------------------------------------------
 

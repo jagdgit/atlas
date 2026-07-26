@@ -122,6 +122,19 @@ class WorkerRepository(BaseRepository):
             > 0
         )
 
+    def update_metadata(self, worker_id: UUID | str, metadata: dict[str, Any]) -> bool:
+        return (
+            self.execute(
+                """
+                UPDATE worker.workers
+                SET metadata = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (Jsonb(metadata or {}), str(worker_id)),
+            )
+            > 0
+        )
+
     def record_success(
         self, worker_id: UUID | str, *, config_version: int | None = None
     ) -> bool:

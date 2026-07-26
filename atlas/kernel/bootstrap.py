@@ -130,6 +130,7 @@ from atlas.workers import HelloWatcher, RepoWatcher, WorkerManager
 from atlas.repositories.template_repo import TemplateRepository
 from atlas.missions.templates import TemplateService
 from atlas.missions.materials import ProgramMaterialsService
+from atlas.missions.archive import ArchiveIngestService
 from atlas.missions.programs import ProgramService
 from atlas.world_models import default_world_model_registry
 from atlas.knowledge.graph import KnowledgeGraphService
@@ -212,6 +213,25 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         timeout=cfg.email.timeout,
         logger=get_logger("atlas.notify.email"),
     )
+    from atlas.investment.reports import InvestorReportMailer, resolve_investor_recipients
+
+    _investor_recipients = resolve_investor_recipients(
+        config_to=list(cfg.email.investor_to_addrs or cfg.email.to_addrs or []),
+    )
+    investor_mailer = InvestorReportMailer(
+        email_sender,
+        data_dir=str(cfg.paths.data),
+        recipients=_investor_recipients,
+        enabled=True,
+        logger=get_logger("atlas.investment.reports"),
+    )
+    # Seed hermetic India government policy catalog for ranking nudges.
+    try:
+        from atlas.investment.government_policy import ensure_defaults
+
+        ensure_defaults(cfg.paths.data, logger=get_logger("atlas.investment.government_policy"))
+    except Exception:  # noqa: BLE001
+        get_logger("atlas.bootstrap").debug("government policy seed skipped", exc_info=True)
     notifier = Notifier(
         event_broker,
         email_sender,
@@ -276,6 +296,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             "embed": cfg.resources.costs.embedding.units,
             "default": cfg.resources.costs.llm_extract.units,
         },
+        host_ram_reserve_mb=cfg.resources.host_ram_reserve_mb,
+        ram_used_high=cfg.resources.ram_used_high,
+        load_pressure_high=cfg.resources.load_pressure_high,
         logger=get_logger("atlas.resources"),
     )
     execution_planner = ExecutionPlanner(
@@ -532,9 +555,75 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     # as short-task + checkpoint loops (reusing the Phase-0 CheckpointStore, owner_type='worker').
     # The `worker_tick` handler is driven by the schedule table; crash backoff + version upgrade +
     # live operator input + journaling are all handled here. Ships the HelloWatcher reference impl.
-    # Cross-mission arbiter (Phase D · §D.4, A7): shared so worker admission weighs effective_priority
-    # + deadline urgency + importance and enforces hard/global caps with anti-starvation aging.
-    mission_arbiter = MissionArbiter(clock=clock, logger=get_logger("atlas.arbiter"))
+    # Cross-mission arbiter (Phase D · §D.4, A7) + host-respect global tick slots.
+    # max_concurrent_ticks (0 ⇒ max_worker_threads) is the hard ceiling on simultaneous
+    # Persistent Worker ticks — excess work stays scheduled and retries (slow but reliable).
+    _tick_slots = int(getattr(cfg.resources, "max_concurrent_ticks", 0) or 0)
+    if _tick_slots <= 0:
+        _tick_slots = int(cfg.resources.max_worker_threads or 4)
+    _tick_hard = max(1, _tick_slots)
+
+    from atlas.core.resources.dynamic_budgets import DynamicBudgetController
+    from atlas.core.resources.machine_profile import detect_machine_profile
+    from atlas.core.resources.work_admission import WorkAdmissionPolicy
+
+    def _budget_pressure() -> tuple[bool, str]:
+        try:
+            st = resource_manager.host_guard_status(
+                reserve_mb=int(getattr(cfg.resources, "host_ram_reserve_mb", 2048) or 2048),
+                tick_ram_mb=int(getattr(cfg.resources, "tick_ram_mb", 512) or 512),
+            )
+            if st.get("throttled") or st.get("tick_would_admit") is False:
+                return True, str(
+                    st.get("throttle_reason")
+                    or st.get("tick_admit_reason")
+                    or st.get("reason")
+                    or "host_pressure"
+                )
+        except Exception:  # noqa: BLE001
+            return False, ""
+        return False, ""
+
+    budget_controller = DynamicBudgetController(
+        hard_tick_ceiling=_tick_hard,
+        profile=str(getattr(cfg.resources, "profile", "conservative") or "conservative"),
+        pressure_fn=_budget_pressure,
+        release_after_seconds=float(
+            getattr(cfg.resources, "budget_release_after_seconds", 120) or 120
+        ),
+        logger=get_logger("atlas.resources.budgets"),
+    )
+    machine_profile = detect_machine_profile(
+        hard_tick_ceiling=_tick_hard,
+        logger=get_logger("atlas.resources.machine_profile"),
+    )
+    get_logger("atlas.resources").info(
+        "machine profile suggest=%s preferred_ticks=%s (configured profile=%s hard_ticks=%s) — %s",
+        machine_profile.suggested_profile,
+        machine_profile.preferred_tick_slots,
+        getattr(cfg.resources, "profile", "?"),
+        _tick_hard,
+        machine_profile.reason,
+    )
+    work_admission = WorkAdmissionPolicy(
+        batch_quiet_start_hour=int(getattr(cfg.resources, "batch_quiet_start_hour", 22) or 22),
+        batch_quiet_end_hour=int(getattr(cfg.resources, "batch_quiet_end_hour", 6) or 6),
+        enforce_batch_window=bool(getattr(cfg.resources, "enforce_batch_window", False)),
+        clock=clock,
+        logger=get_logger("atlas.resources.admission_policy"),
+    )
+    mission_arbiter = MissionArbiter(
+        clock=clock,
+        global_max_concurrent=_tick_hard,
+        budget_controller=budget_controller,
+        logger=get_logger("atlas.arbiter"),
+    )
+    from atlas.core.resources.scheduler import ResourceScheduler
+
+    resource_scheduler = ResourceScheduler(
+        mission_arbiter,
+        logger=get_logger("atlas.resources.scheduler"),
+    )
     worker_manager = WorkerManager(
         worker_repo,
         checkpoint_store,
@@ -543,12 +632,89 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         mission_repo=mission_repo,
         arbiter=mission_arbiter,
         resources=resource_manager,  # OI-A3: host RAM snapshot for mission ram_mb caps
+        work_admission=work_admission,
         events=events,
         clock=clock,
+        default_tick_ram_mb=int(getattr(cfg.resources, "tick_ram_mb", 512) or 512),
         logger=get_logger("atlas.workers"),
+    )
+    from atlas.core.resources.admission import ResourcePlanner
+    from atlas.core.resources.host_guard import HostGuardService
+
+    host_guard = HostGuardService(
+        resources=resource_manager,
+        workers=worker_manager,
+        arbiter=mission_arbiter,
+        missions=mission_service,
+        max_concurrent_ticks=_tick_hard,
+        max_archive_workers=int(getattr(cfg.resources, "max_archive_workers", 1) or 1),
+        host_ram_reserve_mb=int(getattr(cfg.resources, "host_ram_reserve_mb", 2048) or 2048),
+        tick_ram_mb=int(getattr(cfg.resources, "tick_ram_mb", 512) or 512),
+        logger=get_logger("atlas.host_guard"),
+    )
+    from atlas.core.resources.mission_queue import MissionQueueService
+    from atlas.core.resources.reservations import ReservationManager
+    from atlas.core.resources.storage_pressure import StoragePressureService
+
+    storage_pressure = StoragePressureService(
+        disk_path="/",
+        warn_percent=float(getattr(cfg.resources, "disk_warn_percent", 80) or 80),
+        high_percent=float(getattr(cfg.resources, "disk_high_percent", 92) or 92),
+        logger=get_logger("atlas.resources.storage"),
+    )
+    reservation_manager = ReservationManager(
+        ram_budget_mb=max(
+            1024,
+            int(getattr(cfg.resources, "tick_ram_mb", 512) or 512)
+            * max(1, _tick_slots)
+            * 2,
+        ),
+        storage_pressure=storage_pressure,
+        logger=get_logger("atlas.resources.reservations"),
+    )
+    resource_planner = ResourcePlanner(
+        host_guard=host_guard,
+        storage_pressure=storage_pressure,
+        logger=get_logger("atlas.resources.planner"),
+    )
+    worker_manager._reservations = reservation_manager  # noqa: SLF001
+    worker_manager._host_guard = host_guard  # noqa: SLF001 — wired after both exist
+    resource_scheduler.attach(
+        reservations=reservation_manager,
+        storage_pressure=storage_pressure,
+    )
+
+    mission_queue = MissionQueueService(
+        missions=mission_service,
+        workers=worker_manager,
+        arbiter=mission_arbiter,
+        logger=get_logger("atlas.resources.mission_queue"),
     )
     worker_manager.register_worker_type(HelloWatcher())
     handlers.register("worker_tick", worker_manager.worker_tick)
+    handlers.register("host_guard_tick", host_guard.tick)
+    # Periodically resume capacity-queued workers when the host is safe again.
+    _hg_existing = [
+        s
+        for s in schedule_service.list_schedules()
+        if getattr(s, "task_type", None) == "host_guard_tick"
+    ]
+    if not _hg_existing:
+        schedule_service.register_schedule(
+            "host_guard_tick",
+            interval_seconds=60,
+            payload={},
+            first_run_delay=30.0,
+        )
+    else:
+        # Ensure at least one remains enabled after upgrades.
+        for s in _hg_existing:
+            if not getattr(s, "enabled", True):
+                try:
+                    schedule_service.enable(s.id)
+                except Exception:  # noqa: BLE001
+                    pass
+                break
 
     # Template service (Phase A · §A.5, B7): seeds built-in mission blueprints on boot and
     # instantiates a template → Mission + config v1 + worker rows in one call. Composes the
@@ -1064,6 +1230,15 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.missions.materials"),
     )
     program_service._materials = program_materials  # noqa: SLF001
+    archive_ingest = ArchiveIngestService(
+        templates=template_service,
+        workers=worker_manager,
+        missions=mission_service,
+        materials=program_materials,
+        host_guard=host_guard,
+        resource_planner=resource_planner,
+        logger=get_logger("atlas.missions.archive"),
+    )
     # Media Reader Family (M.3/M.4): metadata → transcript/demux → knowledge for local media.
     media_metadata_reader = MediaMetadataReader(
         asset_store, derived_artifacts, logger=get_logger("atlas.readers.media_metadata")
@@ -1369,6 +1544,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             policy_engine=policy_engine,
             events=events,
             live_market=market_reader_service,
+            investor_mailer=investor_mailer,
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )
@@ -1390,6 +1566,23 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             policy_engine=policy_engine,
             experience_os=experience_os,
             logger=get_logger("atlas.workers.investment_universe"),
+        )
+    )
+    from atlas.workers.government_intelligence import GovernmentIntelligenceWorker
+    from atlas.workers.investor_reports import InvestorReportsWorker
+
+    worker_manager.register_worker_type(
+        GovernmentIntelligenceWorker(
+            data_dir=str(cfg.paths.data),
+            events=events,
+            logger=get_logger("atlas.workers.government_intelligence"),
+        )
+    )
+    worker_manager.register_worker_type(
+        InvestorReportsWorker(
+            mailer=investor_mailer,
+            portfolio=portfolio_service,
+            logger=get_logger("atlas.workers.investor_reports"),
         )
     )
     # MI.2 — shared stub worker for remaining planned Program members.
@@ -1525,6 +1718,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("events", events)
     container.register_instance("event_repo", event_repo)
     container.register_instance("notifier", notifier)
+    container.register_instance("email_sender", email_sender)
+    container.register_instance("investor_mailer", investor_mailer)
     container.register_instance("health_repo", health_repo)
     container.register_instance("task_repo", task_repo)
     container.register_instance("task_handlers", handlers)
@@ -1547,8 +1742,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("schedules", schedule_service)
     container.register_instance("scheduler_hierarchy", scheduler_hierarchy)
     container.register_instance("workers", worker_manager)
+    container.register_instance("host_guard", host_guard)
+    container.register_instance("resource_planner", resource_planner)
+    container.register_instance("mission_queue", mission_queue)
+    container.register_instance("resource_scheduler", resource_scheduler)
+    container.register_instance("storage_pressure", storage_pressure)
+    container.register_instance("reservation_manager", reservation_manager)
+    container.register_instance("budget_controller", budget_controller)
+    container.register_instance("work_admission", work_admission)
+    container.register_instance("machine_profile", machine_profile)
     container.register_instance("templates", template_service)
     container.register_instance("programs", program_service)
+    container.register_instance("archive_ingest", archive_ingest)
     container.register_instance("mission_context", mission_context_service)
     container.register_instance("planning", planning_service)
     container.register_instance("governance", governance_service)

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlas Console</title>
-  <link rel="stylesheet" href="./styles.css?v=dash6" />
+  <link rel="stylesheet" href="./styles.css?v=dash17" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
@@ -30,6 +30,7 @@
         <button class="nav-btn" data-view="personal">Personal</button>
         <button class="nav-btn" data-view="programs">Programs</button>
         <button class="nav-btn" data-view="missions">Missions</button>
+        <button class="nav-btn" data-view="archive">Archive</button>
         <button class="nav-btn" data-view="engineering">Engineering</button>
         <button class="nav-btn" data-view="jobs">Jobs</button>
         <button class="nav-btn" data-view="system">System</button>
@@ -50,6 +51,12 @@
           <button id="overview-refresh" class="link">refresh</button>
         </div>
         <div id="ops-cards" class="status-cards"></div>
+        <div class="panel-head"><h3 class="section-h">Workers</h3></div>
+        <div id="ops-worker-states" class="ops-worker-states"></div>
+        <div id="ops-worker-notable" class="ops-worker-notable health-list"></div>
+        <div class="panel-head"><h3 class="section-h">Mission Queue</h3></div>
+        <div id="ops-mission-queue" class="ops-worker-states"></div>
+        <div id="ops-mission-queue-notable" class="ops-worker-notable health-list"></div>
         <div class="panel-head"><h3 class="section-h">Live activity</h3></div>
         <div id="ops-activity" class="health-list"></div>
       </section>
@@ -121,6 +128,20 @@
           If the watchlist is empty, wait for an Investment Universe tick (or refresh after one).
         </p>
         <div id="learner-summary" class="learner-summary"></div>
+
+        <div class="learner-panel learner-email-panel">
+          <div class="panel-head">
+            <h3 class="section-h">Investor email report</h3>
+            <div class="panel-actions">
+              <button id="learner-email-preview" class="link" type="button">Preview</button>
+              <button id="learner-email-send" class="btn" type="button">Send email</button>
+            </div>
+          </div>
+          <div id="learner-email-status" class="learner-email-status muted small">Checking email config…</div>
+          <div id="learner-email-meta" class="learner-email-meta muted small"></div>
+          <pre id="learner-email-preview-body" class="learner-email-body" hidden></pre>
+        </div>
+
         <div class="learner-grid">
           <div class="learner-panel">
             <div class="panel-head"><h3 class="section-h">Today's plan (sim)</h3></div>
@@ -169,6 +190,40 @@
         </div>
       </section>
 
+      <!-- Archive / Owner Knowledge (years-of-work dumps, parallel ingest) -->
+      <section id="view-archive" class="view hidden">
+        <div class="panel-head">
+          <h2>Archive</h2>
+          <div class="panel-actions">
+            <button id="archive-refresh" class="link" type="button">refresh</button>
+          </div>
+        </div>
+        <p class="muted" style="padding:0 22px 8px;margin:0">
+          Learn from large work archives (USB / years of files). Prefer selective folders —
+          not photo dumps. Parallel starts a separate worker so you can run several at once.
+          Keep external disks mounted until progress shows complete.
+        </p>
+        <form id="archive-form" class="job-form eng-ingest-form">
+          <input id="archive-path" placeholder="Archive path, e.g. /media/jagd/One Touch/Data/personal/Certificates" />
+          <input id="archive-note" placeholder="Owner note (optional) — e.g. work 2022–March 2025" />
+          <div class="eng-period-row">
+            <select id="archive-kind" title="Kind">
+              <option value="document" selected>document</option>
+              <option value="code">code</option>
+              <option value="conversation">conversation</option>
+            </select>
+            <input id="archive-period-start" placeholder="From (YYYY or YYYY-MM)" />
+            <input id="archive-period-end" placeholder="To (YYYY-MM or present)" />
+            <label class="eng-embed"><input id="archive-parallel" type="checkbox" checked /> parallel job</label>
+            <button type="submit" id="archive-start-btn">Start ingest</button>
+          </div>
+        </form>
+        <div id="archive-status" class="eng-status muted small" aria-live="polite">
+          Idle — pick a folder and start an ingest job.
+        </div>
+        <div id="archive-list" class="archive-list"></div>
+      </section>
+
       <!-- Engineering (Phase B · §B.7) -->
       <section id="view-engineering" class="view hidden">
         <div class="panel-head">
@@ -177,13 +232,20 @@
         </div>
         <p class="muted" style="padding:0 22px 8px;margin:0">
           Engineering Intelligence — repositories, architecture graphs, and findings.
+          Ingest can take minutes on large repos; watch the status line under the form.
         </p>
         <div id="eng-summary" class="eng-summary"></div>
-        <form id="eng-form" class="job-form">
-          <input id="eng-source" placeholder="Repository path or git URL to ingest, e.g. /data/atlas or https://github.com/…" />
-          <label class="eng-embed"><input id="eng-embed" type="checkbox" /> embed code</label>
-          <button type="submit">Ingest</button>
+        <form id="eng-form" class="job-form eng-ingest-form">
+          <input id="eng-source" placeholder="Repository path or git URL, e.g. /home/jagd/projects/my-app" />
+          <input id="eng-note" placeholder="Owner note (optional) — e.g. my work from 2022 to March 2025" />
+          <div class="eng-period-row">
+            <input id="eng-period-start" placeholder="From (YYYY or YYYY-MM)" />
+            <input id="eng-period-end" placeholder="To (YYYY-MM or present)" />
+            <label class="eng-embed"><input id="eng-embed" type="checkbox" /> embed code</label>
+            <button type="submit" id="eng-ingest-btn">Ingest</button>
+          </div>
         </form>
+        <div id="eng-status" class="eng-status muted small" aria-live="polite">Idle — paste a path/URL and click Ingest.</div>
         <div class="jobs-layout">
           <div id="eng-list" class="jobs-list"></div>
           <div id="eng-detail" class="job-detail"></div>
@@ -219,6 +281,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=dash6"></script>
+  <script src="./app.js?v=dash17"></script>
 </body>
 </html>

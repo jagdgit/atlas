@@ -124,6 +124,43 @@ def test_reboot_resume_uses_checkpoint_state(tmp_path):
     assert resumed.state["last_totals"]["skipped"] == 3
 
 
+def test_document_root_resumes_mid_archive(tmp_path):
+    """Large doc roots batch per tick; reboot continues from files_done, not zero."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for i in range(5):
+        (docs / f"n{i}.md").write_text(f"# note {i}\n")
+    config = {
+        "archive_roots": [{"path": str(docs), "kind": "document", "domain": "personal"}],
+        "build_profile": False,
+        "embed": False,
+        "files_per_tick": 2,
+    }
+    ing = _FakeIngestion()
+    worker = _worker(ingestion=ing, personal=_FakePersonal())
+    first = worker.do_tick(_ctx(config))
+    assert len(ing.calls) == 2
+    assert first.state["roots"][str(docs)]["complete"] is False
+    assert first.state["roots"][str(docs)]["progress"]["done"] == 2
+    assert "progress" in first.note
+
+    # Simulate reboot with persisted state — next batch continues.
+    fresh_ing = _FakeIngestion()
+    fresh = _worker(ingestion=fresh_ing, personal=_FakePersonal())
+    second = fresh.do_tick(_ctx(config, state=first.state))
+    assert len(fresh_ing.calls) == 2
+    assert second.state["roots"][str(docs)]["progress"]["done"] == 4
+
+    third = fresh.do_tick(_ctx(config, state=second.state))
+    assert len(fresh_ing.calls) == 3  # last file
+    assert third.state["roots"][str(docs)]["complete"] is True
+
+    # Fully complete + unchanged → skip.
+    fourth = fresh.do_tick(_ctx(config, state=third.state))
+    assert fourth.state["last_totals"]["skipped"] == 1
+    assert len(fresh_ing.calls) == 3
+
+
 def test_force_input_reprocesses_even_when_unchanged(tmp_path):
     ing = _FakeIngestion()
     worker = _worker(ingestion=ing)

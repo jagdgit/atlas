@@ -148,6 +148,21 @@ def test_owner_knowledge_schema_validates_archive_roots():
     assert doc["build_profile"] is True  # default
 
 
+def test_owner_knowledge_schema_accepts_files_per_tick():
+    from atlas.configuration.schemas import default_registry
+
+    doc, _ver = default_registry().validate(
+        "owner_knowledge",
+        {
+            "archive_roots": [{"path": "/media/usb/Certificates", "kind": "document"}],
+            "files_per_tick": 40,
+            "tick_interval_seconds": 60,
+        },
+    )
+    assert doc["files_per_tick"] == 40
+    assert doc["tick_interval_seconds"] == 60
+
+
 def test_owner_knowledge_schema_rejects_bad_root_kind():
     from atlas.configuration.schemas import default_registry
 

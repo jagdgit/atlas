@@ -31,12 +31,13 @@ notifications:
   sse_max_queue: 1000       # per-client SSE buffer; oldest event dropped when full
 
 email:
-  host:                     # blank => email channel unavailable (web/SSE still works)
+  host:                     # blank => email unavailable; Gmail: smtp.gmail.com via ATLAS_EMAIL_HOST
   port: 587                 # 465 => implicit SSL; else STARTTLS when use_tls
-  username:
+  username:                 # Gmail address via ATLAS_EMAIL_USERNAME
   password_env: ATLAS_SMTP_PASSWORD
-  from_addr:
-  to_addrs: []
+  from_addr:                # usually same as username (ATLAS_EMAIL_FROM_ADDR)
+  to_addrs: []              # ops + default receivers; or ATLAS_EMAIL_TO_ADDRS=a@x,b@y
+  investor_to_addrs: []     # morning/trade reports; or ATLAS_INVESTOR_REPORT_TO / ATLAS_EMAIL_TO_ADDRS
   use_tls: true
   timeout: 20.0
 
@@ -188,14 +189,21 @@ research:
 
 resources:
   # Stage 3.2 — operator-owned caps + OCR safety bounds (D32.3 / Q8).
-  # Profiles deepen with the Resource Manager in 3.2c; env overrides:
-  # ATLAS_RESOURCES_MAX_WORKER_THREADS, ATLAS_RESOURCES_OCR_MAX_PAGES, …
+  # Host-respect: Atlas accepts work, queues/defers under pressure, never drops jobs.
+  # Env: ATLAS_RESOURCES_MAX_WORKER_THREADS, ATLAS_RESOURCES_MAX_CONCURRENT_TICKS,
+  # ATLAS_RESOURCES_HOST_RAM_RESERVE_MB, ATLAS_RESOURCES_MAX_ARCHIVE_WORKERS, …
   profile: balanced
   max_worker_threads: 4
+  max_concurrent_ticks: 0       # 0 = same as max_worker_threads (global tick slots)
   max_download_workers: 4
   max_reader_workers: 4
   max_ocr_workers: 2
   max_extract_workers: 2
+  max_archive_workers: 1        # one Owner Knowledge archive ingest at a time
+  host_ram_reserve_mb: 2048     # keep ~2 GiB free for OS/desktop
+  tick_ram_mb: 512
+  ram_used_high: 0.85
+  load_pressure_high: 0.90
   ocr_max_pages: 50
   ocr_max_minutes: 15
   ocr_dpi: 300

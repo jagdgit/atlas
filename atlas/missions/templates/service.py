@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from atlas.exceptions.base import AtlasError
 from atlas.missions.templates.builtins import BUILTIN_TEMPLATES
+from atlas.missions.templates.resources import profile_from_template_criteria
 from atlas.models.template import MissionTemplate
 from atlas.services.base import HealthStatus
 
@@ -82,9 +83,9 @@ class TemplateService:
         config_overrides: dict[str, Any] | None = None,
         labels: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
-        scheduling_policy: str = "background",
+        scheduling_policy: str | None = None,
         priority: int = 0,
-        criticality: str = "normal",
+        criticality: str | None = None,
         budget: dict[str, Any] | None = None,
         activate: bool = True,
         autostart: bool = True,
@@ -92,7 +93,9 @@ class TemplateService:
         """Create a Mission + config v1 (+ workers) from a template (Q2, B7).
 
         ``config_overrides`` customize the template's ``default_config`` at instantiation.
-        Returns ``{"mission", "config", "workers"}``.
+        IR-RO3: template ``success_criteria.resources`` supplies service class, criticality,
+        scheduling policy, and budget defaults when callers omit them.
+        Returns ``{"mission", "config", "workers", "resources"}``.
         """
         tmpl = self._repo.get_by_name(template_name)
         if tmpl is None:
@@ -101,15 +104,50 @@ class TemplateService:
                 known=[t.name for t in self._repo.list()],
             )
 
+        profile = profile_from_template_criteria(
+            tmpl.success_criteria, template_name=tmpl.name
+        )
+        effective_policy = scheduling_policy or profile.scheduling_policy
+        effective_criticality = criticality or profile.criticality
+        effective_budget = {**profile.budget_defaults(), **(budget or {})}
+
+        mission_meta = dict(metadata or {})
+        for key, value in profile.metadata_fields().items():
+            if key not in mission_meta or mission_meta.get(key) is None:
+                mission_meta[key] = value
+        if "queue" not in mission_meta:
+            from atlas.core.resources.mission_queue import QUEUE_READY, queue_block
+
+            if mission_meta.get("queued_for_capacity"):
+                from atlas.core.resources.mission_queue import QUEUE_WAITING_HOST
+
+                mission_meta["queue"] = queue_block(
+                    state=QUEUE_WAITING_HOST,
+                    reason=str(mission_meta.get("queue_reason") or "queued_for_capacity"),
+                    owner={
+                        "program": mission_meta.get("program_id"),
+                        "operator": mission_meta.get("operator") or "operator",
+                    },
+                )
+            else:
+                mission_meta["queue"] = queue_block(
+                    state=QUEUE_READY,
+                    reason="admitted",
+                    owner={
+                        "program": mission_meta.get("program_id"),
+                        "operator": mission_meta.get("operator") or "operator",
+                    },
+                )
+
         mission = self._missions.create_mission(
             title or tmpl.name,
             objective,
-            scheduling_policy=scheduling_policy,
+            scheduling_policy=effective_policy,
             priority=priority,
-            criticality=criticality,
-            budget=budget,
+            criticality=effective_criticality,
+            budget=effective_budget,
             labels=labels,
-            metadata=metadata,
+            metadata=mission_meta,
             knowledge_domains=list(tmpl.knowledge_domains),
             success_criteria=dict(tmpl.success_criteria),
             template_id=tmpl.id,
@@ -130,20 +168,38 @@ class TemplateService:
         workers = []
         for spec in tmpl.worker_specs:
             cron = spec.get("cron") or spec.get("cron_expr")
+            worker_meta: dict[str, Any] = {
+                "service_class": profile.service_class,
+                "program_id": mission_meta.get("program_id"),
+                "ops": {
+                    "expected_tick_ms": profile.expected_tick_ms,
+                    "service_class": profile.service_class,
+                },
+            }
+            if mission_meta.get("queued_for_capacity"):
+                worker_meta["queued_for_capacity"] = True
+                worker_meta["queue_reason"] = mission_meta.get("queue_reason")
             worker = self._workers.create_worker(
                 mission.id,
                 spec["type"],
                 interval_seconds=int(spec.get("interval_seconds", 60)),
                 cron_expr=str(cron) if cron else None,
+                metadata=worker_meta,
                 autostart=autostart,
             )
             workers.append(worker)
 
         self._logger.info(
-            "instantiated mission %s from template %s v%d (%d worker(s))",
+            "instantiated mission %s from template %s v%d (%d worker(s), class=%s)",
             mission.id, tmpl.name, tmpl.template_version, len(workers),
+            profile.service_class,
         )
-        return {"mission": mission, "config": config, "workers": workers}
+        return {
+            "mission": mission,
+            "config": config,
+            "workers": workers,
+            "resources": profile.as_dict(),
+        }
 
     # --- lifecycle (kernel service) ------------------------------------
 

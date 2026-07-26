@@ -563,6 +563,61 @@ class PersonalService:
             include_inferred_skills=include_inferred_skills,
         )
 
+    def note_project_period(
+        self,
+        *,
+        project: str,
+        note: str | None = None,
+        period_start: str | None = None,
+        period_end: str | None = None,
+        repo_uid: str | None = None,
+        root: str | None = None,
+        actor: str = "operator",
+    ) -> dict[str, Any]:
+        """Record owner context for a project/repo as an inferred timeline fact.
+
+        Example: note=\"my work from 2022 to March 2025\". Confirm/Reject on Personal.
+        """
+        name = (project or root or repo_uid or "project").strip()
+        start = (period_start or "").strip() or None
+        end = (period_end or "").strip() or None
+        note_text = (note or "").strip() or None
+        if not (note_text or start or end):
+            raise ValueError("provide note and/or period_start/period_end")
+
+        period = ""
+        if start or end:
+            period = f" ({start or '?'} → {end or 'present'})"
+        if note_text:
+            statement = note_text if note_text.endswith(".") else note_text + "."
+            if period and period.strip(" ()") not in statement:
+                statement = statement.rstrip(".") + period + "."
+        else:
+            statement = f"Worked on {name}{period}."
+
+        key = f"owner_project:{(repo_uid or name).lower()[:100]}"
+        fact = self._upsert_fact(
+            "timeline",
+            key,
+            subject=(root or "")[:120],
+            statement=statement[:500],
+            value={
+                "kind": "owner_project_period",
+                "project": name,
+                "repo_uid": repo_uid,
+                "root": root,
+                "period_start": start,
+                "period_end": end,
+                "note": note_text,
+            },
+            confidence="HIGH",
+            confidence_score=0.85,
+            source="operator",
+            provenance={"actor": actor, "via": "engineering_ingest"},
+            actor=actor,
+        )
+        return {"fact": fact, "statement": statement}
+
     @staticmethod
     def _presentable(fact: dict[str, Any], include_inferred: bool) -> bool:
         if fact["state"] == "rejected":

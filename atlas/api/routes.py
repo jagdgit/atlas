@@ -49,9 +49,13 @@ from atlas.api.schemas import (
     ApprovalActionRequest,
     CreateMissionRequest,
     MissionActionRequest,
+    SpawnChildMissionRequest,
+    SetResearchConfidenceRequest,
     PersonalLearnCvRequest,
     LinkedInCoachRequest,
     BestJobsRequest,
+    ArchiveEstimateRequest,
+    ArchiveIngestRequest,
     RegisterAssetRequest,
     UpdateMissionConfigRequest,
     WorkerActionRequest,
@@ -209,6 +213,126 @@ def recent_events(
 def ops_dashboard(request: Request) -> dict:
     """Operations Dashboard snapshot (§5.11): the single-screen operator view."""
     return _app(request).container.resolve("ops_dashboard").snapshot()
+
+
+@v1_router.get("/resources/guard", tags=["resources"])
+def resources_guard(request: Request) -> dict:
+    """Host-respect posture — tick caps, RAM reserve, deferred/queued work."""
+    try:
+        return _app(request).container.resolve("host_guard").status()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"host guard unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/resources/queue", tags=["resources"])
+def resources_queue(request: Request, limit: int = 200) -> dict:
+    """IR-RO2 — Mission Queue snapshot (READY / WAITING_* / RUNNING + owners)."""
+    try:
+        queue = _app(request).container.resolve("mission_queue")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"mission queue unavailable: {exc}"
+        ) from exc
+    return queue.snapshot(limit=max(1, min(int(limit or 200), 500)))
+
+
+@v1_router.get("/resources/scheduler", tags=["resources"])
+def resources_scheduler(request: Request) -> dict:
+    """IR-RO5 — Resource Scheduler snapshot (Candidate Selector + REALTIME reserve)."""
+    try:
+        return _app(request).container.resolve("resource_scheduler").snapshot()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"resource scheduler unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/resources/reservations", tags=["resources"])
+def resources_reservations(request: Request) -> dict:
+    """IR-RO7 — active resource leases / Holding Reservation."""
+    try:
+        return _app(request).container.resolve("reservation_manager").snapshot()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"reservations unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/resources/storage", tags=["resources"])
+def resources_storage(request: Request) -> dict:
+    """IR-RO6 — storage pressure watermarks."""
+    try:
+        return _app(request).container.resolve("storage_pressure").snapshot()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"storage pressure unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/resources/budgets", tags=["resources"])
+def resources_budgets(request: Request) -> dict:
+    """IR-RO4 — dynamic effective tick slots within hard ceilings + hysteresis."""
+    try:
+        return _app(request).container.resolve("budget_controller").snapshot()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"budget controller unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/resources/machine-profile", tags=["resources"])
+def resources_machine_profile(request: Request) -> dict:
+    """IR-RO8 — host → conservative/balanced/maximum suggestion + preferred ticks."""
+    from atlas.core.resources.machine_profile import detect_machine_profile, profile_catalog
+
+    try:
+        hard = _app(request).container.resolve("host_guard").status().get("max_concurrent_ticks")
+    except Exception:  # noqa: BLE001
+        hard = None
+    suggestion = detect_machine_profile(hard_tick_ceiling=hard)
+    configured = None
+    try:
+        from atlas.config import get_config
+
+        configured = get_config().resources.profile
+    except Exception:  # noqa: BLE001
+        configured = None
+    return {
+        **suggestion.as_dict(),
+        "configured_profile": configured,
+        "catalog": profile_catalog(),
+    }
+
+
+@v1_router.get("/resources/work-admission", tags=["resources"])
+def resources_work_admission(request: Request) -> dict:
+    """IR-RO10 — should-run-now policy (BATCH quiet window when enforced)."""
+    try:
+        return _app(request).container.resolve("work_admission").snapshot()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"work admission unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/resources/power", tags=["resources"])
+def resources_power(request: Request) -> dict:
+    """IR-RO9 — power/UPS/battery posture (honest not-monitored when absent)."""
+    from atlas.core.resources.power import probe_power, read_thermal_zones
+
+    power = probe_power()
+    zones = [z.as_dict() for z in read_thermal_zones()]
+    hottest = max((z["celsius"] for z in zones), default=None)
+    return {
+        **power.as_dict(),
+        "thermal": {
+            "monitored": bool(zones),
+            "hottest_c": hottest,
+            "zones": zones,
+        },
+    }
 
 
 @v1_router.get("/events/stream", tags=["events"])
@@ -1309,6 +1433,23 @@ def eng_ingest(body: EngineeringIngestRequest, request: Request) -> dict:
         path=body.path, url=body.url, branch=body.branch,
         mission_id=body.mission_id, policy=body.policy, embed=body.embed,
     )
+    # Owner period/note → Personal timeline (Confirm/Reject); Engineering already learned the code.
+    if out.get("outcome") == "ok" and (body.note or body.period_start or body.period_end):
+        try:
+            personal = app.container.resolve("personal")
+            repo = out.get("repository") or {}
+            ctx = personal.note_project_period(
+                project=str(repo.get("name") or body.path or body.url or "repository"),
+                note=body.note,
+                period_start=body.period_start,
+                period_end=body.period_end,
+                repo_uid=repo.get("repo_uid"),
+                root=repo.get("root") or body.path or body.url,
+                actor="operator",
+            )
+            out["owner_context"] = ctx
+        except Exception as exc:  # noqa: BLE001 - ingest still succeeds without timeline note
+            out["owner_context"] = {"error": str(exc)}
     _emit_engineering_event(app, "EngineeringIngested", out)
     return out
 
@@ -1545,7 +1686,69 @@ def get_mission(mission_id: str, request: Request, journal_limit: int = 50) -> d
             view["config"] = active.to_dict()
     except Exception:  # noqa: BLE001 - config layer optional on aggregate view
         pass
+    # Attach checkpoint progress (archive done/total) onto mission workers.
+    try:
+        workers = _workers(request)
+        if hasattr(workers, "enrich_worker"):
+            view["workers"] = [
+                workers.enrich_worker(w) for w in (view.get("workers") or [])
+            ]
+    except Exception:  # noqa: BLE001 - progress is best-effort for the UI
+        pass
+    try:
+        view["dag"] = _missions(request).get_dag(mission_id)
+    except Exception:  # noqa: BLE001
+        pass
     return view
+
+
+@v1_router.get("/missions/{mission_id}/dag", tags=["missions"])
+def get_mission_dag(mission_id: str, request: Request) -> dict:
+    """IR-M1 — parent/child DAG snapshot for one mission."""
+    try:
+        return _missions(request).get_dag(mission_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
+
+
+@v1_router.post("/missions/{mission_id}/children", tags=["missions"])
+def spawn_mission_child(
+    mission_id: str, body: SpawnChildMissionRequest, request: Request
+) -> dict:
+    """IR-M1 — spawn Extract/Verify/Summarize-style child under parent."""
+    try:
+        child = _missions(request).spawn_child(
+            mission_id,
+            body.title,
+            body.objective,
+            role=body.role,
+            wait_on_child=body.wait_on_child,
+            activate=body.activate,
+            metadata=body.metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
+    return {
+        "child": _mission_row(child),
+        "dag": _missions(request).get_dag(mission_id),
+    }
+
+
+@v1_router.post("/missions/{mission_id}/research-confidence", tags=["missions"])
+def set_mission_research_confidence(
+    mission_id: str, body: SetResearchConfidenceRequest, request: Request
+) -> dict:
+    """IR-M3 — store confidence so low-confidence work gets more scheduler attention."""
+    try:
+        mission = _missions(request).set_research_confidence(
+            mission_id,
+            confidence_score=body.confidence_score,
+            confidence=body.confidence,
+            source=body.source,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
+    return {"mission": _mission_row(mission)}
 
 
 @v1_router.get("/missions/{mission_id}/config", tags=["missions"])
@@ -1888,6 +2091,76 @@ def daily_investment_plan(
         max_candidates=max_candidates,
         deploy_fraction=deploy_fraction,
     )
+
+
+@v1_router.get("/market/government-policy", tags=["programs"])
+def market_government_policy(request: Request) -> dict:
+    """India government budget/policy snapshot feeding sector ranking nudges."""
+    from atlas.config import get_config
+    from atlas.investment.government_policy import ensure_defaults, format_policy_brief
+
+    snap = ensure_defaults(get_config().paths.data)
+    return {**snap, "brief": format_policy_brief(snap)}
+
+
+@v1_router.post("/market/government-policy", tags=["programs"])
+def market_government_policy_update(request: Request, body: dict | None = None) -> dict:
+    """Add operator policy/budget items (title, summary, sectors, delta)."""
+    from atlas.config import get_config
+    from atlas.investment.government_policy import refresh_catalog
+
+    body = body or {}
+    items = body.get("items") or body.get("policies") or []
+    if isinstance(body.get("title"), str):
+        items = [body, *list(items or [])]
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items must be a list")
+    include_defaults = body.get("include_defaults")
+    if include_defaults is None:
+        include_defaults = True
+    snap = refresh_catalog(
+        get_config().paths.data,
+        operator_items=[i for i in items if isinstance(i, dict)],
+        include_defaults=bool(include_defaults),
+    )
+    return snap
+
+
+@v1_router.post("/market/investor-report/morning", tags=["programs"])
+def market_investor_morning_report(
+    request: Request,
+    program_id: str = "market_intelligence",
+    force: bool = True,
+) -> dict:
+    """Send the morning investment plan email to configured receivers."""
+    try:
+        mailer = _app(request).container.resolve("investor_mailer")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
+    return mailer.send_morning(program_id=program_id, force=force)
+
+
+@v1_router.get("/market/investor-report/status", tags=["programs"])
+def market_investor_report_status(request: Request) -> dict:
+    """Check whether Gmail/SMTP + receivers are configured (no secrets returned)."""
+    try:
+        mailer = _app(request).container.resolve("investor_mailer")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
+    return mailer.status()
+
+
+@v1_router.get("/market/investor-report/preview", tags=["programs"])
+def market_investor_report_preview(
+    request: Request,
+    program_id: str = "market_intelligence",
+) -> dict:
+    """Build the morning report body without sending — for Market page review."""
+    try:
+        mailer = _app(request).container.resolve("investor_mailer")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
+    return mailer.preview_morning(program_id=program_id)
 
 
 @v1_router.get("/market/watchlist", tags=["programs"])
@@ -2492,19 +2765,109 @@ def update_goal(goal_id: str, request: Request, body: UpdateGoalRequest) -> dict
 
 @v1_router.get("/workers", tags=["workers"])
 def list_workers(
-    request: Request, mission_id: str | None = None, status: str | None = None
+    request: Request,
+    mission_id: str | None = None,
+    status: str | None = None,
+    include_checkpoint: bool = True,
 ) -> dict:
     workers = _workers(request)
+    if include_checkpoint and hasattr(workers, "list_workers_enriched"):
+        return {
+            "workers": workers.list_workers_enriched(
+                mission_id=mission_id, status=status
+            )
+        }
     rows = workers.list_workers(mission_id=mission_id, status=status)
     return {"workers": [w.to_dict() for w in rows]}
 
 
 @v1_router.get("/workers/{worker_id}", tags=["workers"])
 def get_worker(worker_id: str, request: Request) -> dict:
-    worker = _workers(request).get_worker(worker_id)
+    workers = _workers(request)
+    worker = workers.get_worker(worker_id)
     if worker is None:
         raise HTTPException(status_code=404, detail="worker not found")
+    if hasattr(workers, "enrich_worker"):
+        return workers.enrich_worker(worker)
     return worker.to_dict()
+
+
+@v1_router.get("/archive/status", tags=["archive"])
+def archive_status(request: Request, limit: int = 50) -> dict:
+    """Owner Knowledge / archive workers with done/total progress."""
+    try:
+        svc = _app(request).container.resolve("archive_ingest")
+        return svc.status(limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        workers = _workers(request)
+        rows = [
+            workers.enrich_worker(w)
+            for w in workers.list_workers()
+            if getattr(w, "type", None) == "owner_knowledge"
+        ][:limit]
+        return {
+            "workers": rows,
+            "count": len(rows),
+            "note": f"archive service unavailable ({exc}); raw worker list",
+        }
+
+
+@v1_router.post("/archive/estimate", tags=["archive"])
+def archive_estimate(body: ArchiveEstimateRequest, request: Request) -> dict:
+    """IR-RO1 — dry-run Resource Planner estimate (no mission created)."""
+    try:
+        svc = _app(request).container.resolve("archive_ingest")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"archive ingest unavailable: {exc}"
+        ) from exc
+    try:
+        return svc.estimate(
+            body.path, kind=body.kind, files_per_tick=body.files_per_tick
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
+
+
+@v1_router.post("/archive/ingest", tags=["archive"])
+def archive_ingest(body: ArchiveIngestRequest, request: Request) -> dict:
+    """Start archive learning — parallel by default (separate mission/worker).
+
+    Large archives may return ``mode=needs_confirmation`` with an estimate and
+    ``confirmation_token``; resubmit with ``confirm=true`` to create the mission.
+    """
+    try:
+        svc = _app(request).container.resolve("archive_ingest")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"archive ingest unavailable: {exc}"
+        ) from exc
+    try:
+        return svc.start(
+            body.path,
+            kind=body.kind,
+            domain=body.domain,
+            parallel=body.parallel,
+            title=body.title,
+            note=body.note,
+            period_start=body.period_start,
+            period_end=body.period_end,
+            files_per_tick=body.files_per_tick,
+            process_now=body.process_now,
+            confirm=body.confirm,
+            confirmation_token=body.confirmation_token,
+            force=body.force,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _mission_error(exc)
 
 
 @v1_router.post("/workers/{worker_id}/input", tags=["workers"])
@@ -2536,6 +2899,8 @@ def worker_action(
         worker = getattr(workers, method)(worker_id, body.reason)
     except Exception as exc:  # noqa: BLE001 - domain error → HTTP
         raise _mission_error(exc)
+    if hasattr(workers, "enrich_worker"):
+        return workers.enrich_worker(worker)
     return worker.to_dict()
 
 

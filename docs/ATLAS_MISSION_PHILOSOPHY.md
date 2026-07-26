@@ -4,7 +4,8 @@
 > **Not:** APIs, YAML knobs, or UI how-tos — see [`MISSIONS_OPERATOR_GUIDE.md`](MISSIONS_OPERATOR_GUIDE.md) for those.  
 > **Parent constitution:** [`ATLAS_OS_ROADMAP.md`](ATLAS_OS_ROADMAP.md) (P5–P14).  
 > **Platform (settled):** [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) — Programs → Missions → Workers; OS layers.  
-> **Status:** foundational · **Date:** 2026-07-24  
+> **Host / resources:** [`RESOURCE_OS.md`](RESOURCE_OS.md) — host-first principle; Resource OS (partial).  
+> **Status:** foundational · **Date:** 2026-07-26  
 > **Code mirror:** `atlas/missions/philosophy.py`
 
 ---
@@ -26,6 +27,16 @@ Observe → Extract → Store        Evaluate → Reflect → Improve
 ```
 
 **Do not invent a second Knowledge OS.** Governance sits on Learning OS + Decision Engine + Experiences + Reports (P11/P13/P14).
+
+---
+
+## Platform principle — host first
+
+**The host computer is Atlas's first dependency.** Atlas must never knowingly jeopardize the host in pursuit of completing work. Completing work more slowly is always preferable to destabilizing the host.
+
+Every accepted task should be durable, schedulable, checkpointable, resumable, and resource-aware. **Host stability always takes precedence over throughput** — do not optimize for maximum utilization.
+
+This is a **platform** rule (Resource OS), not a per-Program preference. Detail: [`RESOURCE_OS.md`](RESOURCE_OS.md). Shipped reactive gate: [`HOST_RESPECT_AND_ARCHIVE.md`](HOST_RESPECT_AND_ARCHIVE.md).
 
 ---
 
@@ -52,12 +63,22 @@ Every mission — regardless of kind — must expose where it is on this loop:
 
 ```
 1. Observe
-2. Learn
-3. Decide          (may be "n/a" for pure learning/monitoring)
-4. Record Why      (P9 — always)
-5. Evaluate Outcome
-6. Reflect         → Lesson Learned
-7. Improve         → future decisions / policies / strategies
+2. Plan / Learn          (gather or form understanding)
+3. Assess Resources      (platform gate — Resource OS; before Execute)
+4. Decide                (may be "n/a" for pure learning/monitoring)
+5. Execute               (bounded tick / job step — only if Assess passed or queued)
+6. Record Why            (P9 — always)
+7. Evaluate Outcome
+8. Reflect               → Lesson Learned
+9. Improve               → future decisions / policies / strategies
+```
+
+**Assess Resources** does not change how a mission *thinks*; it changes how Atlas *survives*. Under pressure, work stays accepted and queued — it is not dropped.
+
+Compact operator view (execution spine):
+
+```
+Observe → Plan → Assess Resources → Execute → Record → Evaluate → Reflect → Improve
 ```
 
 Operator-facing example:
@@ -71,8 +92,20 @@ Paper Trading
   Improve       Waiting
 ```
 
+Archive / heavy ingest example:
+
+```
+Archive ingest
+  Observe       ✓ (path registered)
+  Assess        ✓ (ETA / slots — target) or Host Guard queue (shipped)
+  Execute       bounded files_per_tick
+  Checkpoint    ✓
+  …
+```
+
 Runtime mission statuses (`draft → active → …`) remain the **ops** lifecycle.  
 This loop is the **cognitive** lifecycle. Both must exist; neither replaces the other.
+Resource / queue wait states (`WAITING_HOST`, …) are the **Resource OS** lifecycle — see [`RESOURCE_OS.md`](RESOURCE_OS.md).
 
 ### Experience journal shape (mandatory for decision-bearing missions)
 
@@ -250,6 +283,7 @@ Code source of truth for this table: `atlas/missions/philosophy.py`.
 | **MP5** | Do not expand media extractor types to satisfy governance — use verification + mission lifecycle (aligns KE14) |
 | **MP6** | Missions teach missions via Experiences / Lessons — no new "meta intelligence" (P5) |
 | **MP7** | Simulated = execution only; observation inputs should become real (OI-D1) |
+| **MP8** | Host stability ≻ throughput; Assess Resources before Execute (Resource OS / RO1–RO8) |
 
 ---
 
@@ -272,6 +306,7 @@ Code source of truth for this table: `atlas/missions/philosophy.py`.
 - Per-mission knowledge silos  
 - A second consolidator / graph DB just to “look mission-ish”  
 - Perfecting heuristics in extractors instead of governance  
+- Maximizing host CPU/RAM utilization at the expense of stability  
 
 ---
 
@@ -280,6 +315,9 @@ Code source of truth for this table: `atlas/missions/philosophy.py`.
 | Doc | Role |
 |-----|------|
 | `ATLAS_OS_ROADMAP.md` | Constitution (P5–P14) |
+| `RESOURCE_OS.md` | Host-first principle; Resource OS (architecture frozen) |
+| `ATLAS_IMPLEMENTATION_ROADMAP.md` | **Execute here** — fill gaps (IR-*) |
+| `HOST_RESPECT_AND_ARCHIVE.md` | Shipped Host Guard + Archive |
 | `MISSIONS_OPERATOR_GUIDE.md` | How to run templates |
 | `MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md` | Layer 1 media learning (V4) |
 | `PHASE_D_PLAN.md` | Decision Engine + paper trading spine |

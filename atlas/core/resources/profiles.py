@@ -16,6 +16,7 @@ class ResourceProfile:
     ram_target: float
     worker_bonus: int  # extra preferred workers vs baseline (within hard max)
     description: str
+    preferred_tick_slots: int = 2  # IR-RO8 — preferred concurrency under hard ceiling
 
 
 PROFILES: dict[str, ResourceProfile] = {
@@ -24,6 +25,7 @@ PROFILES: dict[str, ResourceProfile] = {
         cpu_target=0.40,
         ram_target=0.50,
         worker_bonus=0,
+        preferred_tick_slots=2,
         description="Laptop / background — stay light",
     ),
     "balanced": ResourceProfile(
@@ -31,6 +33,7 @@ PROFILES: dict[str, ResourceProfile] = {
         cpu_target=0.70,
         ram_target=0.70,
         worker_bonus=0,
+        preferred_tick_slots=3,
         description="Default daily research",
     ),
     "maximum": ResourceProfile(
@@ -38,6 +41,7 @@ PROFILES: dict[str, ResourceProfile] = {
         cpu_target=0.95,
         ram_target=0.90,
         worker_bonus=1,
+        preferred_tick_slots=4,
         description="Dedicated box — aggressive within caps",
     ),
     "overnight": ResourceProfile(
@@ -45,6 +49,7 @@ PROFILES: dict[str, ResourceProfile] = {
         cpu_target=0.95,
         ram_target=0.90,
         worker_bonus=2,
+        preferred_tick_slots=4,
         description="Unattended — prefer +1/+2 workers inside env max; time OK",
     ),
 }

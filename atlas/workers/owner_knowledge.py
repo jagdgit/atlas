@@ -15,7 +15,9 @@ After ingesting, it rebuilds the **personal profile** (skills/identity/timeline)
 experience + engineering knowledge (:meth:`PersonalService.infer` — inferred facts only, CC7/A9). It
 **never completes**: each tick is a bounded pass; a per-root content checksum in the checkpoint state
 makes an unchanged root a cheap no-op and makes the whole loop resume after a reboot (the manager
-reloads the checkpoint). Per tick it also consults the coverage map for **reader-version**
+reloads the checkpoint). Document/conversation roots also checkpoint **per file** and process a
+bounded ``files_per_tick`` batch so a large USB archive survives power loss mid-import.
+Per tick it also consults the coverage map for **reader-version**
 staleness (A10 / OI-C8) and force-re-reads those assets without requiring content change.
 Per P11 the worker owns no knowledge — it drives stateless translators and
 journals what it did (P9).
@@ -23,6 +25,7 @@ journals what it did (P9).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -42,7 +45,7 @@ _DEFAULT_EXTENSIONS = {
 
 class OwnerKnowledgeWorker(PersistentWorker):
     type = "owner_knowledge"
-    VERSION = 1
+    VERSION = 2
     journal_ticks = True  # journal meaningful ticks (ingests); pure no-ops return empty notes
 
     def __init__(
@@ -91,8 +94,10 @@ class OwnerKnowledgeWorker(PersistentWorker):
             "findings": 0, "experiences": 0, "documents": 0,
             "conversations": 0, "candidates": 0, "code_repos": 0,
             "skipped": 0, "errors": 0, "reextracted": 0, "backfilled": 0,
+            "files_seen": 0, "files_pending": 0, "files_done_tick": 0,
         }
         changed_any = False
+        progress_bits: list[str] = []
 
         for root in roots:
             path = str(root.get("path") or "").strip()
@@ -100,18 +105,40 @@ class OwnerKnowledgeWorker(PersistentWorker):
                 continue
             kind = str(root.get("kind") or KIND_DOCUMENT)
             domain = str(root.get("domain") or "personal")
-            sig = self._signature(path)
-            prev = root_state.get(path) or {}
-            if not force and sig and sig == prev.get("checksum"):
-                totals["skipped"] += 1
-                continue
+            entry = dict(root_state.get(path) or {})
+            if force:
+                entry.pop("files_done", None)
+                entry.pop("checksum", None)
+                entry.pop("complete", None)
+
+            # Fully completed + unchanged root → cheap skip (reboot-safe).
+            if not force and entry.get("complete") and entry.get("checksum"):
+                sig = self._signature(path, kind=kind, extensions=root.get("extensions"))
+                if sig and sig == entry.get("checksum"):
+                    totals["skipped"] += 1
+                    continue
+
             try:
-                self._process_root(
+                complete = self._process_root(
                     path, kind, domain, cfg, ctx.mission_id, totals,
                     override_ext=root.get("extensions"),
+                    entry=entry,
                 )
                 changed_any = True
-                root_state[path] = {"checksum": sig, "kind": kind}
+                if complete:
+                    sig = self._signature(path, kind=kind, extensions=root.get("extensions"))
+                    entry["checksum"] = sig
+                    entry["complete"] = True
+                    # Drop bulky per-file map once the root is fully done.
+                    entry.pop("files_done", None)
+                else:
+                    entry["complete"] = False
+                prog = entry.get("progress") or {}
+                if prog:
+                    progress_bits.append(
+                        f"{Path(path).name}:{prog.get('done', 0)}/{prog.get('total', 0)}"
+                    )
+                root_state[path] = entry
             except Exception as exc:  # noqa: BLE001 - a bad root must not stop the whole archive
                 totals["errors"] += 1
                 self._logger.warning("owner archive root failed (%s): %s", path, exc)
@@ -127,6 +154,12 @@ class OwnerKnowledgeWorker(PersistentWorker):
             changed_any = True
 
         state["roots"] = root_state
+        state["progress"] = {
+            "roots": progress_bits,
+            "files_done_tick": totals.get("files_done_tick", 0),
+            "files_pending": totals.get("files_pending", 0),
+            "files_seen": totals.get("files_seen", 0),
+        }
 
         # Drain the prose candidates the doc/chat ingests emitted into findings (P11/P13: the
         # Consolidator is still the single write path; the worker just triggers the drain).
@@ -161,11 +194,20 @@ class OwnerKnowledgeWorker(PersistentWorker):
         bf_note = (
             f", backfilled={totals['backfilled']}" if totals.get("backfilled") else ""
         )
+        prog_note = (
+            f"; progress {', '.join(progress_bits)}" if progress_bits else ""
+        )
+        pending_note = (
+            f"; pending_files={totals['files_pending']}"
+            if totals.get("files_pending")
+            else ""
+        )
         note = (
             f"{config_note}archive: {totals['code_repos']} repo(s) "
             f"(+{totals['findings']} finding, +{totals['experiences']} experience), "
             f"{totals['documents']} doc(s), {totals['conversations']} chat(s), "
-            f"+{totals['candidates']} candidate(s){reex_note}{bf_note}{profile_note}"
+            f"+{totals['candidates']} candidate(s)"
+            f"{prog_note}{pending_note}{reex_note}{bf_note}{profile_note}"
         ).strip()
         return TickResult(state=state, note=note)
 
@@ -180,7 +222,16 @@ class OwnerKnowledgeWorker(PersistentWorker):
         totals: dict[str, int],
         *,
         override_ext: Any = None,
-    ) -> None:
+        entry: dict[str, Any] | None = None,
+    ) -> bool:
+        """Process one archive root. Returns True when the root is fully complete.
+
+        Document/conversation roots are batched (``files_per_tick``, default 40) and
+        checkpoint per file so reboot/power loss resumes mid-archive.
+        """
+        entry = entry if entry is not None else {}
+        entry["kind"] = kind
+
         if kind == KIND_CODE:
             out = self._intel.learn_repository(
                 path=path,
@@ -193,29 +244,63 @@ class OwnerKnowledgeWorker(PersistentWorker):
             totals["code_repos"] += 1
             totals["findings"] += int(out.get("findings", 0) or 0)
             totals["experiences"] += int(out.get("experiences", 0) or 0)
-            return
+            entry["progress"] = {"total": 1, "done": 1, "pending": 0, "last_file": path}
+            return True
 
-        # document / conversation: read each matching file through the unified bridge.
         reader = self._conversation_reader if kind == KIND_CONVERSATION else None
         source = "conversation" if kind == KIND_CONVERSATION else "document"
         asset_kind = "conversation" if kind == KIND_CONVERSATION else "document"
         extensions = self._extensions_for(kind, override=override_ext)
-        for file in self._discover(path, extensions):
-            res = self._ingestion.ingest_file(
-                file,
-                kind=asset_kind,
-                domain=domain,
-                embed=bool(cfg.get("embed", False)),
-                extract_findings=True,
-                reader=reader,
-                source=source,
-            )
-            if kind == KIND_CONVERSATION:
-                totals["conversations"] += 1
-            else:
-                totals["documents"] += 1
-            totals["candidates"] += int(res.candidates or 0)
-            totals["experiences"] += int(getattr(res, "experiences", 0) or 0)
+        files = self._discover(path, extensions)
+        totals["files_seen"] += len(files)
+
+        done_map: dict[str, str] = dict(entry.get("files_done") or {})
+        pending: list[Path] = []
+        for file in files:
+            key = str(file.resolve())
+            sig = self._file_sig(file)
+            if done_map.get(key) == sig:
+                continue
+            pending.append(file)
+
+        totals["files_pending"] += len(pending)
+        per_tick = max(1, int(cfg.get("files_per_tick") or 40))
+        batch = pending[:per_tick]
+        last_file = None
+        for file in batch:
+            key = str(file.resolve())
+            try:
+                res = self._ingestion.ingest_file(
+                    file,
+                    kind=asset_kind,
+                    domain=domain,
+                    embed=bool(cfg.get("embed", False)),
+                    extract_findings=True,
+                    reader=reader,
+                    source=source,
+                )
+                done_map[key] = self._file_sig(file)
+                last_file = key
+                totals["files_done_tick"] += 1
+                if kind == KIND_CONVERSATION:
+                    totals["conversations"] += 1
+                else:
+                    totals["documents"] += 1
+                totals["candidates"] += int(res.candidates or 0)
+                totals["experiences"] += int(getattr(res, "experiences", 0) or 0)
+            except Exception as exc:  # noqa: BLE001 - one bad file must not abort the root
+                totals["errors"] += 1
+                self._logger.warning("archive file failed (%s): %s", file, exc)
+
+        entry["files_done"] = done_map
+        remaining = max(0, len(pending) - len(batch))
+        entry["progress"] = {
+            "total": len(files),
+            "done": len(done_map),
+            "pending": remaining,
+            "last_file": last_file,
+        }
+        return len(done_map) >= len(files) and remaining == 0
 
     def _reextract_stale(self, cfg: dict[str, Any], totals: dict[str, int]) -> int:
         """Force-re-read assets stale after a reader version bump (OI-C8 / A10)."""
@@ -319,9 +404,37 @@ class OwnerKnowledgeWorker(PersistentWorker):
         )
 
     @staticmethod
-    def _signature(path: str) -> str | None:
-        """Cheap content signature of a root to skip an unchanged root (reboot-safe)."""
+    def _file_sig(path: Path) -> str:
+        """Cheap per-file signature (size + mtime) for mid-archive resume."""
         try:
-            return compute_tree_checksum(path)
+            st = path.stat()
+            return f"{st.st_size}:{int(st.st_mtime_ns)}"
+        except OSError:
+            return "missing"
+
+    @staticmethod
+    def _signature(
+        path: str,
+        *,
+        kind: str = KIND_CODE,
+        extensions: Any = None,
+    ) -> str | None:
+        """Root signature used to skip an unchanged *completed* root after reboot.
+
+        Code roots use a content tree checksum. Document/conversation roots use a lighter
+        path/size/mtime manifest so a 20GB USB archive is not fully re-hashed every tick.
+        """
+        try:
+            if kind == KIND_CODE:
+                return compute_tree_checksum(path)
+            root = Path(path).expanduser()
+            if root.is_file():
+                return OwnerKnowledgeWorker._file_sig(root)
+            exts = OwnerKnowledgeWorker._extensions_for(kind, override=extensions)
+            h = hashlib.sha256()
+            for file in OwnerKnowledgeWorker._discover(path, exts):
+                rel = file.relative_to(root).as_posix()
+                h.update(f"{rel}\0{OwnerKnowledgeWorker._file_sig(file)}\n".encode())
+            return h.hexdigest()
         except Exception:  # noqa: BLE001 - detection must never crash a tick
             return None

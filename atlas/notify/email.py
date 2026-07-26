@@ -5,10 +5,12 @@ stdlib ``smtplib``/``email`` only. Honest + non-fatal by construction:
 
   * ``available()`` is False when SMTP isn't configured → the Notifier silently skips
     email (email is optional; the web console is the primary channel).
-  * ``send()`` never raises — a failure is logged and returns False.
+  * ``send()`` / ``send_to()`` never raise — a failure is logged and returns False.
 
 The password is a **secret**: it is handed in already-resolved (read from an env var,
 per A1 — never YAML/DB) and is never logged.
+
+Investor reports (Market Program) use ``send_to`` with Gmail recipients from env.
 """
 
 from __future__ import annotations
@@ -42,18 +44,48 @@ class EmailSender:
         self._timeout = float(timeout)
         self._logger = logger or logging.getLogger("atlas.notify.email")
 
+    def can_send(self) -> bool:
+        """True iff SMTP identity is configured (recipients may be supplied per send)."""
+        return bool(self._host and self._from)
+
+    def smtp_ready(self) -> bool:
+        """True when host/from/password look set enough to attempt Gmail SMTP login."""
+        return self.can_send() and bool(self._password)
+
+    def status(self) -> dict:
+        """Operator-facing config check (never includes the password)."""
+        return {
+            "host": self._host or None,
+            "port": self._port,
+            "username": self._username or None,
+            "from_addr": self._from or None,
+            "password_set": bool(self._password),
+            "default_to_addrs": list(self._to),
+            "can_send": self.can_send(),
+            "smtp_ready": self.smtp_ready(),
+            "use_tls": self._use_tls,
+        }
+
     def available(self) -> bool:
-        """True iff enough config is present to attempt a send."""
-        return bool(self._host and self._from and self._to)
+        """True iff enough config is present to attempt a send to default recipients."""
+        return self.can_send() and bool(self._to)
 
     def send(self, subject: str, body: str) -> bool:
-        """Send a plain-text email. Returns True on success; never raises."""
-        if not self.available():
+        """Send a plain-text email to configured default recipients."""
+        return self.send_to(self._to, subject, body)
+
+    def send_to(self, to_addrs: list[str] | str, subject: str, body: str) -> bool:
+        """Send a plain-text email to explicit recipients. Returns True on success; never raises."""
+        if isinstance(to_addrs, str):
+            recipients = [p.strip() for p in to_addrs.split(",") if p.strip()]
+        else:
+            recipients = [str(a).strip() for a in (to_addrs or []) if str(a).strip()]
+        if not self.can_send() or not recipients:
             return False
         msg = EmailMessage()
         msg["Subject"] = subject
         msg["From"] = self._from
-        msg["To"] = ", ".join(self._to)
+        msg["To"] = ", ".join(recipients)
         msg.set_content(body)
         try:
             if self._port == 465:
@@ -64,10 +96,10 @@ class EmailSender:
                     if self._use_tls:
                         smtp.starttls()
                     self._deliver(smtp, msg)
-            self._logger.info("notification email sent: %s", subject)
+            self._logger.info("email sent to %s: %s", recipients, subject)
             return True
         except Exception:  # noqa: BLE001 - email is best-effort; never crash the notifier
-            self._logger.exception("failed to send notification email")
+            self._logger.exception("failed to send email")
             return False
 
     def _deliver(self, smtp: smtplib.SMTP, msg: EmailMessage) -> None:

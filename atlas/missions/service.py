@@ -140,7 +140,9 @@ class MissionService:
         return self._transition(mission_id, MISSION_ACTIVE, "resumed", reason)
 
     def complete(self, mission_id: UUID | str, reason: str = "") -> Mission:
-        return self._transition(mission_id, MISSION_COMPLETED, "completed", reason)
+        mission = self._transition(mission_id, MISSION_COMPLETED, "completed", reason)
+        self._resolve_parent_waits(mission.id)
+        return mission
 
     def archive(self, mission_id: UUID | str, reason: str = "") -> Mission:
         """Non-destructive stop (B5/B9): disable activity, keep everything produced.
@@ -173,6 +175,7 @@ class MissionService:
                     )
             except Exception:  # noqa: BLE001 - archival must not fail on worker cleanup
                 self._logger.exception("failed to stop workers for %s", mission_id)
+        self._resolve_parent_waits(mission.id)
         return mission
 
     def _transition(
@@ -241,16 +244,263 @@ class MissionService:
         self._repo.add_journal(mission_id, "arbitration_updated", "priority/budget changed")
         return updated
 
+    def update_metadata(self, mission_id: UUID | str, metadata: dict[str, Any]) -> Mission:
+        """Replace mission metadata (IR-RO2 queue hints, admission, …)."""
+        mission = self._require(mission_id)
+        self._repo.update_metadata(mission.id, metadata or {})
+        return self._require(mission_id)
+
+    def set_queue_state(
+        self,
+        mission_id: UUID | str,
+        state: str,
+        *,
+        reason: str = "",
+        depends_on: list[str] | None = None,
+        journal: bool = True,
+    ) -> Mission:
+        """Persist ``metadata.queue`` (IR-RO2). Optionally move lifecycle to waiting."""
+        from atlas.core.resources.mission_queue import (
+            QUEUE_STATES,
+            QUEUE_WAITING_DEPENDENCY,
+            owner_from_mission,
+            queue_block,
+        )
+
+        if state not in QUEUE_STATES:
+            raise MissionError(f"invalid queue state: {state!r}")
+        mission = self._require(mission_id)
+        meta = dict(mission.metadata or {})
+        meta["queue"] = queue_block(
+            state=state,
+            reason=reason,
+            depends_on=depends_on,
+            owner=owner_from_mission(mission).as_dict(),
+        )
+        self._repo.update_metadata(mission.id, meta)
+        if state == QUEUE_WAITING_DEPENDENCY and mission.status == MISSION_ACTIVE:
+            try:
+                self.mark_waiting(mission.id, reason or "waiting_dependency")
+            except MissionError:
+                pass
+        elif state == "READY" and mission.status == MISSION_WAITING:
+            try:
+                self.clear_waiting(mission.id, reason or "queue_ready")
+            except MissionError:
+                pass
+        if journal:
+            self._repo.add_journal(
+                mission.id,
+                "queue_state",
+                reason or state,
+                refs={"state": state, "depends_on": list(depends_on or [])},
+            )
+        return self._require(mission_id)
+
+    def set_waiting_dependency(
+        self,
+        mission_id: UUID | str,
+        depends_on: list[str] | str,
+        *,
+        reason: str = "waiting_dependency",
+    ) -> Mission:
+        """Mark mission WAITING_DEPENDENCY on another mission/artifact id(s)."""
+        from atlas.core.resources.mission_queue import QUEUE_WAITING_DEPENDENCY
+
+        deps = depends_on if isinstance(depends_on, list) else [depends_on]
+        return self.set_queue_state(
+            mission_id,
+            QUEUE_WAITING_DEPENDENCY,
+            reason=reason,
+            depends_on=[str(d) for d in deps if d],
+        )
+
+    def clear_queue_wait(self, mission_id: UUID | str, *, reason: str = "cleared") -> Mission:
+        """Set queue state back to READY (e.g. after Host Guard resume)."""
+        from atlas.core.resources.mission_queue import QUEUE_READY
+
+        return self.set_queue_state(mission_id, QUEUE_READY, reason=reason)
+
+    # --- Mission DAG (IR-M1) --------------------------------------------
+
+    def spawn_child(
+        self,
+        parent_id: UUID | str,
+        title: str,
+        objective: str = "",
+        *,
+        role: str = "child",
+        wait_on_child: bool = True,
+        activate: bool = True,
+        metadata: dict[str, Any] | None = None,
+        **create_kwargs: Any,
+    ) -> Mission:
+        """Create a child mission linked under ``parent`` (IR-M1).
+
+        When ``wait_on_child`` is True, the parent is marked WAITING_DEPENDENCY on the child.
+        """
+        from atlas.core.resources.mission_dag import dag_block, read_dag
+
+        parent = self._require(parent_id)
+        meta = dict(metadata or {})
+        meta["dag"] = dag_block(parent_id=str(parent.id), role=role)
+        child = self.create_mission(
+            title,
+            objective or f"{role} for {parent.title}",
+            metadata=meta,
+            **create_kwargs,
+        )
+        # Link on parent
+        pmeta = dict(parent.metadata or {})
+        pdag = read_dag(pmeta)
+        children = list(pdag.get("children") or [])
+        if str(child.id) not in children:
+            children.append(str(child.id))
+        pmeta["dag"] = dag_block(
+            parent_id=pdag.get("parent_id"),
+            role=pdag.get("role") or "parent",
+            children=children,
+            pipeline=pdag.get("pipeline") or [],
+        )
+        self._repo.update_metadata(parent.id, pmeta)
+        self._repo.add_journal(
+            parent.id,
+            "child_spawned",
+            f"spawned {role} child",
+            refs={"child_id": str(child.id), "role": role},
+        )
+        if wait_on_child:
+            parent = self._require(parent.id)
+            q = (parent.metadata or {}).get("queue") if isinstance(parent.metadata, dict) else {}
+            existing = []
+            if isinstance(q, dict):
+                existing = [str(d) for d in (q.get("depends_on") or []) if d]
+            deps = list(dict.fromkeys([*existing, *children]))
+            self.set_waiting_dependency(
+                parent.id,
+                deps,
+                reason=f"waiting_on_child:{role}",
+            )
+        if activate:
+            try:
+                if child.status == MISSION_DRAFT:
+                    self.activate(child.id, reason=f"dag child {role}")
+            except MissionError:
+                pass
+        return self._require(child.id)
+
+    def get_dag(self, mission_id: UUID | str) -> dict[str, Any]:
+        """Snapshot of mission DAG node + loaded children (IR-M1)."""
+        from atlas.core.resources.mission_dag import dag_snapshot, read_dag
+
+        mission = self._require(mission_id)
+        dag = read_dag(mission.metadata if isinstance(mission.metadata, dict) else {})
+        children = []
+        for cid in dag.get("children") or []:
+            try:
+                children.append(self._require(cid))
+            except MissionError:
+                continue
+        return dag_snapshot(mission, children=children)
+
+    def set_research_confidence(
+        self,
+        mission_id: UUID | str,
+        *,
+        confidence_score: float | None = None,
+        confidence: str | None = None,
+        source: str = "research",
+    ) -> Mission:
+        """Persist research confidence on mission metadata (IR-M3 scheduler signal)."""
+        mission = self._require(mission_id)
+        meta = dict(mission.metadata or {})
+        score = None
+        if confidence_score is not None:
+            try:
+                score = max(0.0, min(1.0, float(confidence_score)))
+            except (TypeError, ValueError):
+                score = None
+        from atlas.core.resources.mission_dag import utc_now_iso
+
+        meta["research"] = {
+            "confidence_score": score,
+            "confidence": confidence,
+            "source": source,
+            "updated_at": utc_now_iso(),
+        }
+        self._repo.update_metadata(mission.id, meta)
+        self._repo.add_journal(
+            mission.id,
+            "research_confidence",
+            confidence or (f"score={score}" if score is not None else "updated"),
+            refs={"confidence_score": score, "confidence": confidence, "source": source},
+        )
+        return self._require(mission.id)
+
+    def _resolve_parent_waits(self, child_id: UUID | str) -> None:
+        """When a child completes/archives, unblock parents whose depends_on are all terminal."""
+        from atlas.core.resources.mission_dag import all_deps_terminal, read_dag
+        from atlas.core.resources.mission_queue import QUEUE_WAITING_DEPENDENCY
+
+        child = self._require(child_id)
+        parent_id = None
+        meta = child.metadata if isinstance(child.metadata, dict) else {}
+        parent_id = read_dag(meta).get("parent_id")
+        candidates: list[Mission] = []
+        if parent_id:
+            try:
+                candidates.append(self._require(parent_id))
+            except MissionError:
+                pass
+        # Also scan recent missions that list this child in depends_on (small N).
+        try:
+            for m in self.list_missions(limit=200):
+                q = (m.metadata or {}).get("queue") if isinstance(m.metadata, dict) else {}
+                if not isinstance(q, dict):
+                    continue
+                if q.get("state") != QUEUE_WAITING_DEPENDENCY:
+                    continue
+                deps = [str(d) for d in (q.get("depends_on") or []) if d]
+                if str(child.id) in deps:
+                    if all(str(c.id) != str(m.id) for c in candidates):
+                        candidates.append(m)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("parent wait scan failed", exc_info=True)
+
+        if not candidates:
+            return
+        # Build status map for deps.
+        status_by_id: dict[str, str] = {str(child.id): child.status}
+        for parent in candidates:
+            q = (parent.metadata or {}).get("queue") if isinstance(parent.metadata, dict) else {}
+            deps = [str(d) for d in ((q or {}).get("depends_on") or []) if d] if isinstance(q, dict) else []
+            for dep in deps:
+                if dep not in status_by_id:
+                    try:
+                        status_by_id[dep] = self._require(dep).status
+                    except MissionError:
+                        status_by_id[dep] = ""
+            if all_deps_terminal(deps, status_by_id):
+                try:
+                    self.clear_queue_wait(parent.id, reason=f"deps_complete:{child.id}")
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("clear_queue_wait failed for %s", parent.id, exc_info=True)
+
     # --- reads ----------------------------------------------------------
 
     def get_mission(self, mission_id: UUID | str, *, journal_limit: int = 50) -> dict[str, Any]:
         """Aggregated on-demand view (Q2): mission + owned jobs + workers + journal."""
         mission = self._require(mission_id)
+        workers = self._mission_workers(mission.id)
+        from atlas.core.resources.mission_queue import classify_mission
+
+        queue_item = classify_mission(mission, workers)
         return {
             "mission": mission.to_dict(),
             "effective_priority": mission.effective_priority,
             "job_ids": self._repo.list_job_ids(mission.id),
-            "workers": self._mission_workers(mission.id),
+            "workers": workers,
+            "queue": queue_item.as_dict() if queue_item else None,
             "journal": [e.to_dict() for e in self._repo.list_journal(mission.id, limit=journal_limit)],
         }
 
