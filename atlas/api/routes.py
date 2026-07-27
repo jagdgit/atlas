@@ -2142,6 +2142,95 @@ def market_government_policy_update(request: Request, body: dict | None = None) 
     return snap
 
 
+@v1_router.get("/market/news-feeds", tags=["programs"])
+def get_market_news_feeds() -> dict:
+    """IIP.9 — RSS allow-list status + last fetch (no scrape)."""
+    from atlas.config import get_config
+    from atlas.investment.rss_feeds import allowlist_view, load_last_fetch
+
+    data_dir = str(get_config().paths.data)
+    return {
+        **allowlist_view(),
+        "last_fetch": load_last_fetch(data_dir),
+    }
+
+
+@v1_router.post("/market/news-feeds/fetch", tags=["programs"])
+def post_market_news_feeds_fetch(body: dict | None = None) -> dict:
+    """IIP.9 — fetch enabled allow-listed RSS/Atom feeds (bounded)."""
+    from atlas.config import get_config
+    from atlas.investment import rss_feeds as rss
+
+    body = body or {}
+    feeds = rss.merge_allowlist(
+        body.get("feeds") if isinstance(body.get("feeds"), list) else None,
+        include_defaults=bool(body.get("include_defaults", True)),
+    )
+    enable_ids = {str(x).strip() for x in (body.get("enable") or []) if str(x).strip()}
+    if enable_ids:
+        for row in feeds:
+            if row.get("id") in enable_ids:
+                row["enabled"] = True
+    # Explicit feed dicts in body.feeds with enabled=true
+    if isinstance(body.get("feeds"), list):
+        for row in feeds:
+            for raw in body["feeds"]:
+                if isinstance(raw, dict) and str(raw.get("id")) == str(row.get("id")):
+                    if "enabled" in raw:
+                        row["enabled"] = bool(raw["enabled"])
+                    if raw.get("url"):
+                        row["url"] = raw["url"]
+    kinds = body.get("kinds")
+    result = rss.fetch_allowlist(
+        feeds,
+        kinds=[str(k) for k in kinds] if isinstance(kinds, list) else None,
+        max_per_feed=int(body.get("max_per_feed") or 15),
+    )
+    data_dir = str(get_config().paths.data)
+    rss.save_last_fetch(data_dir, result)
+    into_policy = bool(body.get("into_policy"))
+    policy_snap = None
+    if into_policy:
+        from atlas.investment.government_policy import refresh_catalog
+
+        policy_items = rss.items_as_policy(result)
+        policy_snap = refresh_catalog(
+            data_dir,
+            operator_items=policy_items,
+            include_defaults=bool(body.get("include_defaults", True)),
+        )
+    return {
+        "ok": True,
+        "fetch": {
+            "item_count": result.get("item_count"),
+            "ok_feeds": result.get("ok_feeds"),
+            "feeds": result.get("feeds"),
+            "fetched_at": result.get("fetched_at"),
+            "titles": [
+                {"title": i.get("title"), "source": i.get("source")}
+                for i in (result.get("items") or [])[:20]
+            ],
+        },
+        "policy_snapshot": (
+            {
+                "item_count": policy_snap.get("item_count"),
+                "updated_at": policy_snap.get("updated_at"),
+            }
+            if policy_snap
+            else None
+        ),
+        "note": "Allow-list RSS/Atom only — HTML responses are refused.",
+    }
+
+
+@v1_router.get("/market/chart-links/{symbol}", tags=["programs"])
+def get_market_chart_links(symbol: str) -> dict:
+    """IIP.9 — TradingView / Yahoo chart links (non-primary)."""
+    from atlas.investment.chart_links import chart_links_for
+
+    return chart_links_for(symbol)
+
+
 @v1_router.post("/market/investor-report/morning", tags=["programs"])
 def market_investor_morning_report(
     request: Request,
@@ -2701,6 +2790,27 @@ def market_intelligence_catalog(request: Request) -> dict:
         }
     except Exception:  # noqa: BLE001
         base["live"]["mkg"] = {"stats": {"nodes": 0, "edges": 0}}
+    try:
+        from atlas.investment.thesis_tracker import list_trackers
+
+        base["live"]["thesis_tracker"] = list_trackers(data_dir, limit=25)
+    except Exception:  # noqa: BLE001
+        base["live"]["thesis_tracker"] = {"trackers": [], "count": 0, "priors": {}}
+    try:
+        from atlas.investment.rss_feeds import allowlist_view, load_last_fetch
+
+        base["live"]["news_feeds"] = {
+            **allowlist_view(),
+            "last_fetch": load_last_fetch(data_dir),
+        }
+    except Exception:  # noqa: BLE001
+        base["live"]["news_feeds"] = {"feeds": [], "enabled_count": 0}
+    try:
+        from atlas.investment.chart_links import chart_links_for
+
+        base["live"]["chart_links_demo"] = chart_links_for("INFY.NS")
+    except Exception:  # noqa: BLE001
+        base["live"]["chart_links_demo"] = {}
     return base
 
 
@@ -3060,6 +3170,222 @@ def get_market_investment_score(
         },
         "note": score.get("note"),
     }
+
+
+@v1_router.post("/market/portfolio/pre-trade", tags=["programs"])
+def post_market_portfolio_pre_trade(request: Request, body: dict | None = None) -> dict:
+    """IIP.7 — pre-trade portfolio gate (concentration, cash, persona, score)."""
+    from atlas.investment.portfolio_optimizer import optimize_candidate, pre_trade_check
+    from atlas.investment.portfolios import normalize_persona
+
+    body = body or {}
+    symbol = str(body.get("symbol") or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol required")
+    side = str(body.get("side") or "buy").lower()
+    price = float(body.get("price") or 0)
+    quantity = body.get("quantity")
+    persona = normalize_persona(body.get("persona") if isinstance(body.get("persona"), dict) else {})
+    snapshot = body.get("snapshot") if isinstance(body.get("snapshot"), dict) else {
+        "cash": float(body.get("cash") or persona.get("capital") or 10000),
+        "equity": float(body.get("equity") or body.get("cash") or persona.get("capital") or 10000),
+        "positions": body.get("positions") or [],
+    }
+    score = body.get("investment_score") if isinstance(body.get("investment_score"), dict) else {}
+    research_gate = body.get("research_gate") if isinstance(body.get("research_gate"), dict) else {}
+
+    # Optionally pull live score + research gate
+    if body.get("use_live_research", True):
+        try:
+            research = _app(request).container.resolve("investment_research")
+            aw = research.awareness(
+                symbol,
+                program_id=str(body.get("program_id") or "market_intelligence"),
+            )
+            if not score:
+                score = aw.get("investment_score") or {}
+            if not research_gate:
+                research_gate = research.gate_buy(
+                    symbol,
+                    program_id=str(body.get("program_id") or "market_intelligence"),
+                )
+            val = aw.get("valuation") if isinstance(aw.get("valuation"), dict) else {}
+            if body.get("mos_pct") is None and val.get("margin_of_safety_pct") is not None:
+                body = {**body, "mos_pct": val.get("margin_of_safety_pct")}
+        except Exception:  # noqa: BLE001
+            pass
+
+    cfg = {
+        "max_names": body.get("max_names"),
+        "max_name_pct": body.get("max_name_pct"),
+        "sector_cap_pct": body.get("sector_cap_pct"),
+        "min_cash_pct": body.get("min_cash_pct"),
+        "min_investment_confidence": body.get("min_investment_confidence") or "low",
+        "mos_pct": body.get("mos_pct"),
+    }
+    if quantity is None or float(quantity or 0) <= 0:
+        if price <= 0:
+            raise HTTPException(status_code=400, detail="price required to size")
+        return optimize_candidate(
+            symbol=symbol,
+            price=price,
+            snapshot=snapshot,
+            persona=persona,
+            investment_score=score,
+            research_gate=research_gate or {"allowed": True},
+            mos_pct=body.get("mos_pct"),
+            horizon=str(body.get("horizon") or persona.get("time_horizon") or "long_term"),
+            asset_class=str(body.get("asset_class") or "cash_equity"),
+            cfg=cfg,
+        )
+    return pre_trade_check(
+        side=side,
+        symbol=symbol,
+        quantity=float(quantity),
+        price=price,
+        snapshot=snapshot,
+        persona=persona,
+        investment_score=score,
+        research_gate=research_gate or {"allowed": True},
+        asset_class=str(body.get("asset_class") or "cash_equity"),
+        require_research=bool(body.get("require_research", True)),
+        require_score=bool(body.get("require_score", True)),
+        cfg=cfg,
+    )
+
+
+@v1_router.get("/market/thesis-tracker", tags=["programs"])
+def get_market_thesis_tracker(
+    program_id: str = "market_intelligence",
+    status: str | None = None,
+    limit: int = 40,
+) -> dict:
+    """IIP.8 — list Thesis Trackers + durable priors."""
+    from atlas.config import get_config
+    from atlas.investment.thesis_tracker import list_trackers
+
+    return list_trackers(
+        str(get_config().paths.data),
+        program_id=program_id,
+        status=status,
+        limit=limit,
+    )
+
+
+@v1_router.get("/market/thesis-tracker/priors", tags=["programs"])
+def get_market_thesis_priors(program_id: str = "market_intelligence") -> dict:
+    """IIP.8 — durable discovery/scoring priors from closed outcomes."""
+    from atlas.config import get_config
+    from atlas.investment.thesis_tracker import load_priors, priors_view
+
+    return priors_view(load_priors(str(get_config().paths.data), program_id))
+
+
+@v1_router.get("/market/thesis-tracker/{symbol}", tags=["programs"])
+def get_market_thesis_tracker_symbol(
+    symbol: str,
+    program_id: str = "market_intelligence",
+) -> dict:
+    """IIP.8 — single-symbol Thesis Tracker."""
+    from atlas.config import get_config
+    from atlas.investment.thesis_tracker import load_tracker, normalize_symbol
+
+    data_dir = str(get_config().paths.data)
+    tr = load_tracker(data_dir, symbol, program_id)
+    if not tr:
+        return {
+            "symbol": normalize_symbol(symbol),
+            "status": "absent",
+            "tracker": None,
+            "note": "No tracker yet — opens on sim buy / observed fill.",
+        }
+    return {"symbol": tr.get("symbol"), "status": tr.get("status"), "tracker": tr}
+
+
+@v1_router.post("/market/thesis-tracker/{symbol}/open", tags=["programs"])
+def post_market_thesis_tracker_open(
+    request: Request,
+    symbol: str,
+    body: dict | None = None,
+) -> dict:
+    """IIP.8 — open/refresh tracker (operator or from live awareness)."""
+    from atlas.config import get_config
+    from atlas.investment import thesis_tracker as tt
+
+    body = body or {}
+    data_dir = str(get_config().paths.data)
+    program_id = str(body.get("program_id") or "market_intelligence")
+    if body.get("from_awareness", True):
+        try:
+            research = _app(request).container.resolve("investment_research")
+            aw = research.awareness(symbol, program_id=program_id)
+            tracker = tt.tracker_from_awareness(
+                data_dir,
+                aw,
+                program_id=program_id,
+                decision=body.get("decision"),
+            )
+            return {"ok": True, "tracker": tracker, "source": "awareness"}
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=f"awareness open failed: {exc}") from exc
+    tracker = tt.open_tracker(
+        data_dir,
+        symbol,
+        program_id=program_id,
+        hypothesis=str(body.get("hypothesis") or ""),
+        theme_links=list(body.get("theme_links") or []),
+        assumptions=body.get("assumptions"),
+        horizon=str(body.get("horizon") or "long_term"),
+        research_confidence=body.get("research_confidence"),
+        investment_confidence=body.get("investment_confidence"),
+        decision=str(body.get("decision") or "watch"),
+        size_note=str(body.get("size_note") or ""),
+        force=bool(body.get("force", True)),
+    )
+    return {"ok": True, "tracker": tracker, "source": "manual"}
+
+
+@v1_router.post("/market/thesis-tracker/{symbol}/revisit", tags=["programs"])
+def post_market_thesis_tracker_revisit(symbol: str, body: dict | None = None) -> dict:
+    """IIP.8 — assumption check vs new evidence."""
+    from atlas.config import get_config
+    from atlas.investment.thesis_tracker import revisit_tracker
+
+    body = body or {}
+    tracker = revisit_tracker(
+        str(get_config().paths.data),
+        symbol,
+        program_id=str(body.get("program_id") or "market_intelligence"),
+        assumption_updates=body.get("assumption_updates"),
+        note=str(body.get("note") or ""),
+        evidence_note=str(body.get("evidence_note") or ""),
+    )
+    return {"ok": True, "tracker": tracker}
+
+
+@v1_router.post("/market/thesis-tracker/{symbol}/close", tags=["programs"])
+def post_market_thesis_tracker_close(symbol: str, body: dict | None = None) -> dict:
+    """IIP.8 — close with attribution → update priors."""
+    from atlas.config import get_config
+    from atlas.investment.thesis_tracker import close_with_attribution
+
+    body = body or {}
+    result = str(body.get("result") or "").lower()
+    if result not in {"held", "weakened", "falsified"}:
+        raise HTTPException(
+            status_code=400,
+            detail="result must be held | weakened | falsified",
+        )
+    out = close_with_attribution(
+        str(get_config().paths.data),
+        symbol,
+        program_id=str(body.get("program_id") or "market_intelligence"),
+        result=result,
+        pnl=body.get("pnl"),
+        note=str(body.get("note") or ""),
+        trade=body.get("trade") if isinstance(body.get("trade"), dict) else {},
+    )
+    return {"ok": True, **out}
 
 
 @v1_router.get("/market/themes", tags=["programs"])

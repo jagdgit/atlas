@@ -264,9 +264,54 @@ class InvestmentResearchService:
 
             aw_for_score = dict(out)
             aw_for_score["sections"] = sections
-            out["investment_score"] = score_from_awareness(aw_for_score)
+            # IIP.8 — apply durable scoring axis penalties from priors when unlocked
+            try:
+                from atlas.investment.thesis_tracker import load_priors, priors_view
+
+                root = getattr(self._store, "_root", None)
+                pri = load_priors(str(root) if root else None, program_id)
+                view = priors_view(pri)
+                out["thesis_priors"] = view
+                score = score_from_awareness(aw_for_score)
+                if view.get("ready_for_weight_shift"):
+                    pens = (view.get("weight_deltas") or {}).get("scoring_axis_penalty") or {}
+                    axes = dict(score.get("axes") or {})
+                    for axis, pen in pens.items():
+                        if axis in axes:
+                            axes[axis] = max(0.0, float(axes[axis]) - float(pen))
+                    score["axes"] = {k: round(v, 3) for k, v in axes.items()}
+                    # recompute overall lightly
+                    w = score.get("weights") or {}
+                    overall = sum(float(axes.get(a, 0)) * float(w.get(a, 0)) for a in axes)
+                    score["overall"] = round(min(1.0, max(0.0, overall)), 3)
+                    score["priors_applied"] = True
+                out["investment_score"] = score
+            except Exception:  # noqa: BLE001
+                out["investment_score"] = score_from_awareness(aw_for_score)
         except Exception:  # noqa: BLE001
             out["investment_score"] = None
+        # IIP.8 tracker snapshot
+        try:
+            from atlas.investment.thesis_tracker import load_tracker
+
+            root = getattr(self._store, "_root", None)
+            tr = load_tracker(str(root) if root else None, str(doc.get("symbol") or symbol), program_id)
+            out["thesis_tracker"] = {
+                "status": (tr or {}).get("status"),
+                "hypothesis": ((tr or {}).get("hypothesis") or "")[:160],
+                "decision": (tr or {}).get("decision"),
+                "assumptions": (tr or {}).get("assumptions") or [],
+                "lessons": ((tr or {}).get("lessons") or [])[:5],
+            } if tr else None
+        except Exception:  # noqa: BLE001
+            out["thesis_tracker"] = None
+        # IIP.9 — chart links (non-primary)
+        try:
+            from atlas.investment.chart_links import chart_links_for
+
+            out["chart_links"] = chart_links_for(str(doc.get("symbol") or symbol))
+        except Exception:  # noqa: BLE001
+            out["chart_links"] = None
         return out
 
     def _mkg_awareness(self, symbol: str, *, program_id: str = DEFAULT_PROGRAM) -> dict[str, Any]:
@@ -462,6 +507,42 @@ class InvestmentResearchService:
         # IRA.29 — outcome → section priors + question priority
         self._apply_outcome_priors(doc, result=result, note=note)
         self._store.save(doc)
+        # IIP.8 — Thesis Tracker attribution + durable program priors
+        try:
+            from atlas.investment import thesis_tracker as tt
+
+            root = getattr(self._store, "_root", None)
+            data_dir = str(root) if root is not None else None
+            res_l = str(result or "").lower()
+            pnl = None
+            if isinstance(trade, dict) and trade.get("realized_pnl") is not None:
+                try:
+                    pnl = float(trade["realized_pnl"])
+                except (TypeError, ValueError):
+                    pnl = None
+            if res_l in {"held", "weakened", "falsified"}:
+                tt.close_with_attribution(
+                    data_dir,
+                    symbol,
+                    program_id=program_id,
+                    result=res_l,
+                    pnl=pnl,
+                    note=note,
+                    trade=trade,
+                )
+            elif res_l in {"fill", "observed"}:
+                existing = tt.load_tracker(data_dir, symbol, program_id)
+                if not existing or existing.get("status") == "closed":
+                    aw = self.awareness(symbol, program_id=program_id)
+                    side = str((trade or {}).get("side") or "").lower() if isinstance(trade, dict) else ""
+                    tt.tracker_from_awareness(
+                        data_dir,
+                        aw,
+                        program_id=program_id,
+                        decision="buy" if side == "buy" else None,
+                    )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("thesis tracker update skipped", exc_info=True)
         return outcome
 
     def _apply_outcome_priors(

@@ -491,35 +491,47 @@ IIP.9  News/policy live feeds & extra market-data vendors (as needed)
 
 ---
 
-### IIP.7 — Portfolio Optimizer · ~1–2 weeks
+### IIP.7 — Portfolio Optimizer · ~1–2 weeks · ✅ shipped 2026-07-27
 
 | Work | Detail |
 |------|--------|
-| Gates | Concentration, cash, persona, max names, investment confidence floor |
-| Sizing | MoS + risk + horizon |
-| Pre-trade check | Explicit pass/fail reasons |
+| Gates | Concentration, cash, persona, max names, investment confidence floor ✅ |
+| Sizing | MoS + risk + horizon (`suggest_notional`) ✅ |
+| Pre-trade check | Explicit pass/fail reasons + checks log ✅ |
+| Wire | Paper trading buy path after research gate; `POST /v1/market/portfolio/pre-trade` ✅ |
 
-**Done when:** buys require score + research gate + portfolio gate (all logged).
+**Done when:** buys require score + research gate + portfolio gate (all logged) — **met** in tests + paper worker.
 
 ---
 
-### IIP.8 — Thesis Tracker + outcome learning · ~2 weeks + ongoing
+### IIP.8 — Thesis Tracker + outcome learning · ~2 weeks + ongoing · ✅ shipped 2026-07-27
 
 | Work | Detail |
 |------|--------|
-| Tracker object | Hypothesis · assumptions · horizons · dual confidence at entry |
-| Revisit job | Periodic assumption check vs new evidence |
-| Attribution | P&L ↔ which assumptions held |
-| Priors | Feed discovery/theme/scoring weights |
-| Mentor | Surface failures (“ignored debt”, “overpay”) |
+| Tracker object | Hypothesis · assumptions · horizons · dual confidence at entry ✅ |
+| Revisit job | Periodic assumption check vs new evidence (`POST …/revisit`) ✅ |
+| Attribution | P&L ↔ which assumptions held/failed ✅ |
+| Priors | Feed discovery theme boost + scoring axis penalties (unlock N≥20) ✅ |
+| Mentor | Surface failures (“ignored debt”, “overpay”) ✅ |
+| Wire | `record_outcome` opens on sim buy / closes on held·weakened·falsified; awareness + Invest intel UI ✅ |
+| APIs | `GET/POST /v1/market/thesis-tracker*` ✅ |
 
-**Done when:** N≥20 closed paper outcomes shift at least one prior with test coverage.
+**Done when:** N≥20 closed paper outcomes shift at least one prior with test coverage — **met**.
 
 ---
 
-### IIP.9 — Live news/policy + vendors · as needed
+### IIP.9 — Live news/policy + vendors · as needed · ✅ shipped 2026-07-27
 
-RSS allow-lists · PIB/policy refresh · Alpha Vantage/Polygon/Stooq/etc. behind existing adapters · TradingView chart links.
+| Work | Detail |
+|------|--------|
+| RSS allow-list | Official/operator URLs only; HTML refused; disabled by default ✅ |
+| PIB/policy refresh | Policy-kind RSS → gov catalog (`into_policy` / gov worker) ✅ |
+| Vendors | Stooq history adapter registered; AV/Polygon unchanged behind keys ✅ |
+| Chart links | TradingView / Yahoo / Screener URLs (non-primary) ✅ |
+| APIs | `GET/POST /v1/market/news-feeds*`, `GET /v1/market/chart-links/{symbol}` ✅ |
+| UI | Invest intel News feeds panel (`dash40`) ✅ |
+
+**Done when:** allow-listed RSS can deepen policy/news without scrape; Stooq + chart links available — **met**.
 
 ---
 
@@ -595,4 +607,4 @@ IIP: **Theme + Universe + Discovery + MKG + Thesis Tracker** inside that house.
 - [x] No ToS scraping; Screener via export; TradingView non-primary  
 - [x] India cash equity first  
 
-**Next action:** implement **IIP.7 — Portfolio Optimizer**.
+**Next action:** operate IIP.1–9 on paper trading; deepen evidence (fundamentals / docs / enabled official RSS).

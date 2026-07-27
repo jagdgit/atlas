@@ -45,6 +45,53 @@ class NewsIntelligenceWorker(PersistentWorker):
         state["ticks"] = ticks
 
         items, auto = wl.resolve_news_items(cfg)
+        # IIP.9 — optional RSS allow-list (enabled feeds only)
+        rss_note = ""
+        if cfg.get("rss_feeds") or cfg.get("use_rss_allowlist") or cfg.get("fetch_rss"):
+            try:
+                from atlas.investment import rss_feeds as rss
+
+                feeds = rss.merge_allowlist(
+                    cfg.get("rss_feeds") if isinstance(cfg.get("rss_feeds"), list) else None,
+                    include_defaults=bool(cfg.get("rss_include_defaults", True)),
+                )
+                # Mission may pass enabled ids
+                enable_ids = {
+                    str(x).strip()
+                    for x in (cfg.get("rss_enable") or [])
+                    if str(x).strip()
+                }
+                if enable_ids:
+                    for row in feeds:
+                        if row.get("id") in enable_ids:
+                            row["enabled"] = True
+                result = rss.fetch_allowlist(
+                    feeds,
+                    kinds=None
+                    if cfg.get("rss_kinds") is None
+                    else [str(k) for k in (cfg.get("rss_kinds") or [])],
+                    max_per_feed=int(cfg.get("rss_max_per_feed") or 12),
+                )
+                data_dir = cfg.get("data_dir")
+                if data_dir:
+                    rss.save_last_fetch(str(data_dir), result)
+                rss_items = rss.items_as_news(result)
+                if rss_items:
+                    items = list(items) + rss_items
+                    auto = False
+                    rss_note = f"; rss={result.get('ok_feeds')}/{len(result.get('feeds') or [])} feeds"
+                else:
+                    rss_note = f"; rss=0 items ({result.get('ok_feeds') or 0} ok feeds)"
+                state["rss"] = {
+                    "ok_feeds": result.get("ok_feeds"),
+                    "item_count": result.get("item_count"),
+                    "feeds": result.get("feeds"),
+                }
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("rss allow-list skipped: %s", exc)
+                rss_note = f"; rss skipped ({exc})"
+                state["rss_error"] = str(exc)[:200]
+
         # Operator live inputs still append
         for inp in ctx.inputs or []:
             if inp.get("headline"):
@@ -77,8 +124,9 @@ class NewsIntelligenceWorker(PersistentWorker):
                 state=state,
                 note=(
                     "idle: no headlines — set headlines=['…'] or items="
-                    "[{symbol,text}], or start M0 / India learner so watchlist "
-                    "seeds auto-load (live RSS lands later)"
+                    "[{symbol,text}], enable rss_feeds / use_rss_allowlist, "
+                    "or start M0 / India learner so watchlist seeds auto-load"
+                    f"{rss_note}"
                 ),
             )
 
@@ -158,6 +206,6 @@ class NewsIntelligenceWorker(PersistentWorker):
             state=state,
             note=(
                 f"{auto_note}news: emitted {emitted} candidate(s), skipped {skipped}"
-                f"{verify_note}"
+                f"{verify_note}{rss_note}"
             ),
         )

@@ -422,6 +422,136 @@ class PolygonAdapter:
         return bars
 
 
+class StooqAdapter:
+    """Free daily history via Stooq CSV (no API key). Opt-in by selecting provider=stooq.
+
+    India NSE: SYMBOL.NS → symbol.in on Stooq. US bare symbols → symbol.us.
+    """
+
+    name = "stooq"
+    CSV_URL = "https://stooq.com/q/d/l/?s={symbol}&i=d"
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 20.0,
+        opener: Any | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._timeout = float(timeout)
+        self._opener = opener  # callable(url) -> str/bytes CSV
+        self._logger = logger or logging.getLogger("atlas.trading.adapters.stooq")
+
+    def fetch_bars(
+        self, symbol: str, *, limit: int = 100, **kwargs: Any
+    ) -> list[Bar]:
+        sym = (symbol or "").strip()
+        if not sym:
+            return []
+        stooq_sym = self.to_stooq_symbol(sym)
+        url = self.CSV_URL.format(symbol=stooq_sym)
+        try:
+            text = self._fetch_text(url)
+        except CapabilityGap:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise CapabilityGap(
+                "market_data:stooq",
+                f"fetch failed for {sym} ({stooq_sym}): {exc}",
+            ) from exc
+        bars = self._parse_csv(text)
+        if not bars:
+            raise CapabilityGap(
+                "market_data:stooq",
+                f"no bars for {sym} (stooq={stooq_sym}) — check symbol mapping",
+            )
+        if limit > 0:
+            bars = bars[-limit:]
+        return bars
+
+    @staticmethod
+    def to_stooq_symbol(symbol: str) -> str:
+        s = (symbol or "").strip().upper()
+        if s.endswith(".NS"):
+            return f"{s[:-3].lower()}.in"
+        if s.endswith(".BO"):
+            return f"{s[:-3].lower()}.in"
+        if "." in s:
+            return s.lower()
+        # Bare tickers: assume US on Stooq
+        return f"{s.lower()}.us"
+
+    def _fetch_text(self, url: str) -> str:
+        if self._opener is not None:
+            data = self._opener(url)
+            if isinstance(data, bytes):
+                return data.decode("utf-8", errors="replace")
+            return str(data)
+        import httpx
+
+        with httpx.Client(
+            timeout=self._timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "AtlasMarketReader/1.0"},
+        ) as client:
+            resp = client.get(url)
+            if resp.status_code >= 400:
+                raise CapabilityGap(
+                    "market_data:stooq",
+                    f"HTTP {resp.status_code} from Stooq",
+                )
+            return resp.text
+
+    @staticmethod
+    def _parse_csv(text: str) -> list[Bar]:
+        import csv
+        import io
+        from datetime import datetime, timezone
+
+        raw = (text or "").strip()
+        if not raw or raw.lower().startswith("<!"):
+            return []
+        reader = csv.DictReader(io.StringIO(raw))
+        bars: list[Bar] = []
+        for row in reader:
+            if not isinstance(row, dict):
+                continue
+            # Stooq headers: Date,Open,High,Low,Close,Volume
+            date_s = row.get("Date") or row.get("date")
+            close_s = row.get("Close") or row.get("close")
+            if not date_s or close_s is None or close_s == "":
+                continue
+            try:
+                c = float(close_s)
+                dt = datetime.strptime(str(date_s).strip()[:10], "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc
+                )
+                ts = int(dt.timestamp())
+            except (TypeError, ValueError):
+                continue
+
+            def _f(key: str, fallback: float) -> float:
+                v = row.get(key) or row.get(key.lower())
+                if v is None or v == "":
+                    return fallback
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return fallback
+
+            bars.append(
+                {
+                    "t": ts,
+                    "open": _f("Open", c),
+                    "high": _f("High", c),
+                    "low": _f("Low", c),
+                    "close": c,
+                    "volume": _f("Volume", 0.0),
+                }
+            )
+        return bars
+
+
 class KeyedProviderAdapter:
     """Placeholder for NSE / BSE — requires API key + exchange ToS path (OI-D1)."""
 

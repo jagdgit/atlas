@@ -603,6 +603,7 @@ class PaperTradingWorker(PersistentWorker):
                 self._logger.debug("policy_engine evaluate skipped: %s", exc)
 
         # IRA — research-based buy gate (learner books default on).
+        research_gate_result: dict[str, Any] | None = None
         if kind == "buy" and self._investment_research is not None:
             gate_note = self._research_buy_gate(
                 symbol=symbol,
@@ -612,6 +613,98 @@ class PaperTradingWorker(PersistentWorker):
             if gate_note:
                 totals["holds"] += 1
                 return gate_note
+            # Capture last gate for portfolio optimizer (best-effort)
+            try:
+                research_gate_result = self._investment_research.gate_buy(
+                    symbol,
+                    program_id=str(cfg.get("program_id") or "market_intelligence"),
+                    require_mvr=bool(
+                        cfg.get("require_mvr")
+                        if cfg.get("require_mvr") is not None
+                        else ("learner" in (portfolio_key or "").lower())
+                    ),
+                    require_thesis=bool(
+                        cfg.get("require_thesis")
+                        if cfg.get("require_thesis") is not None
+                        else True
+                    ),
+                    mos_mode=str(cfg.get("mos_mode") or "soft") if "learner" in (portfolio_key or "").lower() else cfg.get("mos_mode"),
+                )
+            except Exception:  # noqa: BLE001
+                research_gate_result = {"allowed": True, "action": "buy_ok"}
+
+        # IIP.7 — portfolio optimizer pre-trade gate (buys)
+        if kind == "buy" and cfg.get("portfolio_gate", True):
+            try:
+                from atlas.investment.portfolio_optimizer import pre_trade_check
+
+                score = None
+                mos_pct = None
+                if self._investment_research is not None:
+                    try:
+                        aw = self._investment_research.awareness(
+                            symbol,
+                            program_id=str(cfg.get("program_id") or "market_intelligence"),
+                        )
+                        score = aw.get("investment_score")
+                        val = aw.get("valuation") if isinstance(aw.get("valuation"), dict) else {}
+                        if val.get("margin_of_safety_pct") is not None:
+                            mos_pct = float(val["margin_of_safety_pct"])
+                    except Exception:  # noqa: BLE001
+                        score = None
+                port_cfg = {
+                    "max_names": cfg.get("max_names"),
+                    "max_name_pct": cfg.get("max_name_pct") or cfg.get("max_exposure_pct"),
+                    "sector_cap_pct": cfg.get("sector_cap_pct"),
+                    "min_cash_pct": cfg.get("min_cash_pct"),
+                    "min_investment_confidence": cfg.get("min_investment_confidence") or "low",
+                    "mos_pct": mos_pct,
+                }
+                # max_exposure_pct historically 0–100
+                if port_cfg.get("max_name_pct") is not None:
+                    try:
+                        m = float(port_cfg["max_name_pct"])
+                        if m > 1.0:
+                            port_cfg["max_name_pct"] = m / 100.0
+                    except (TypeError, ValueError):
+                        pass
+                pcheck = pre_trade_check(
+                    side="buy",
+                    symbol=symbol,
+                    quantity=qty,
+                    price=price,
+                    snapshot=snapshot,
+                    persona=persona,
+                    investment_score=score if isinstance(score, dict) else {},
+                    research_gate=research_gate_result or {"allowed": True},
+                    asset_class=str(
+                        cfg.get("asset_class")
+                        or getattr(pack, "id", None)
+                        or "cash_equity"
+                    ),
+                    require_research=bool(cfg.get("portfolio_require_research", True)),
+                    require_score=bool(cfg.get("portfolio_require_score", True)),
+                    cfg=port_cfg,
+                )
+                state.setdefault("portfolio_gate_log", [])
+                log = list(state.get("portfolio_gate_log") or [])
+                log.append(
+                    {
+                        "symbol": symbol,
+                        "allowed": pcheck.get("allowed"),
+                        "action": pcheck.get("action"),
+                        "reasons": pcheck.get("reasons"),
+                        "qty": qty,
+                        "price": price,
+                    }
+                )
+                state["portfolio_gate_log"] = log[-40:]
+                if not pcheck.get("allowed"):
+                    totals["holds"] += 1
+                    reasons = ",".join(pcheck.get("reasons") or []) or "portfolio_block"
+                    return f"{symbol}: portfolio_hold ({reasons})"
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("portfolio gate skipped: %s", exc)
 
         pack_ctx: dict[str, Any] = {
             "portfolio_key": portfolio_key,

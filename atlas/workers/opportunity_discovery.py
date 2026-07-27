@@ -145,6 +145,42 @@ class OpportunityDiscoveryWorker(PersistentWorker):
             max_enqueue_research=max_research,
             include_themes=bool(include_themes),
         )
+        # IIP.8 — soft/unlocked theme boost from Thesis Tracker priors
+        try:
+            from atlas.investment.thesis_tracker import load_priors, priors_view
+
+            view = priors_view(load_priors(self._data_dir))
+            boost = (view.get("weight_deltas") or {}).get("discovery_theme_boost") or {}
+            if view.get("ready_for_weight_shift") and boost:
+                interesting = list(doc.get("interesting") or [])
+                for row in interesting:
+                    if not isinstance(row, dict):
+                        continue
+                    add = 0.0
+                    for tid in row.get("themes") or []:
+                        add = max(add, float(boost.get(str(tid).lower()) or 0))
+                    if add:
+                        row["score"] = round(float(row.get("score") or 0) + add, 4)
+                        row["priors_theme_boost"] = add
+                interesting = sorted(interesting, key=lambda r: -float(r.get("score") or 0))
+                doc["interesting"] = interesting
+                doc["research_queue"] = [
+                    {
+                        "symbol": r["symbol"],
+                        "horizon": r.get("horizon"),
+                        "why": r.get("why"),
+                        "mode": r.get("mode"),
+                    }
+                    for r in interesting[: max(0, int(max_research))]
+                ]
+                doc["thesis_priors_applied"] = True
+                doc["thesis_priors"] = {
+                    "closed_outcomes": view.get("closed_outcomes"),
+                    "ready_for_weight_shift": True,
+                }
+        except Exception:  # noqa: BLE001
+            self._logger.debug("thesis prior boost skipped", exc_info=True)
+
         doc["universes"] = resolved.get("universes")
         doc["bars_symbols"] = len(bars_by_symbol)
         doc["feed_failures"] = feed_fails

@@ -92,7 +92,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-MP1 | 🟢 | P1 | **Experience journal** — Experience OS first-class (`GET /v1/experience/shape`, `POST /v1/experience/journal`). | EX.1 |
 | OI-MI0 | 🟢 | P1 | **Market Intelligence Program** — MI→KG→MCA + platform PA gaps ✅. **Next:** governance / ops polish. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
 | OI-IL0 | 🟢 | P1 | **Autonomous Investment Learner** — IL.1–11 + OX ✅; F&O packs, holidays, **filings refs**. Optional: live ToS filing clients. | `docs/AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md` §14–20 | filings 2026-07-26 |
-| OI-IIP0 | 🟡 | P1 | **Investment Intelligence Platform** — IIP.1–6 ✅ (… MKG, scoring). **Next: IIP.7** Portfolio Optimizer. | `docs/INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md` |
+| OI-IIP0 | 🟢 | P1 | **Investment Intelligence Platform** — IIP.1–9 ✅ (Universe→…→Thesis Tracker→News/policy/vendors). Operate & deepen evidence. | `docs/INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md` |
 | OI-IL-OX | 🟢 | P1 | **Orchestration / UX** — OX.1–4 ✅ (preview/start now/API; `system.goals`; `GET /v1/goals/{id}/progress` + `GET /v1/learner/status`). | §14.4–14.6 | OX.4 shipped |
 | OI-MP2 | 🟢 | P1 | **Split paper trading** — `decision_simulation` is primary; `paper_trading` remains compat alias. | `OI-MI0` |
 | OI-MP3 | 🟢 | P1 | **Daily Learning Governance Report** — `GET /v1/governance/daily` + `learning_governance` mission. | MP3 |

@@ -1749,6 +1749,81 @@ async function loadIip() {
     const reseedBtn = $("#iip-mkg-reseed");
     if (reseedBtn) reseedBtn.addEventListener("click", () => runIipMkgReseed());
 
+    const thesisBox = $("#iip-thesis");
+    const ttLive = live.thesis_tracker || {};
+    const priors = ttLive.priors || {};
+    let thHtml = "<div class='panel-head'><h3 class='section-h'>Thesis Tracker (IIP.8)</h3></div>";
+    thHtml += "<p class='muted small'>Hypothesis → assumptions → outcome → priors. "
+      + "Weight shifts unlock at N≥20 closed paper outcomes.</p>";
+    thHtml += `<p class='small'>Closed outcomes <strong>${priors.closed_outcomes || 0}</strong>`
+      + ` · ready for weight shift: <strong>${priors.ready_for_weight_shift ? "yes" : "no"}</strong></p>`;
+    const lessons = priors.failure_lessons || [];
+    if (lessons.length) {
+      thHtml += "<p class='muted small'>Recent failure lessons:</p><ul class='small'>";
+      lessons.slice(0, 5).forEach((l) => { thHtml += `<li>${esc(l)}</li>`; });
+      thHtml += "</ul>";
+    }
+    thHtml += "<div class='iip-doc-form'>";
+    thHtml += "<input id='iip-thesis-symbol' placeholder='Symbol e.g. INFY' /> ";
+    thHtml += "<button id='iip-thesis-open' class='btn' type='button'>Open from awareness</button> ";
+    thHtml += "<button id='iip-thesis-load' class='link' type='button'>Load tracker</button>";
+    thHtml += "</div>";
+    thHtml += "<div id='iip-thesis-result' class='small muted' style='margin-top:8px'></div>";
+    const rows = ttLive.trackers || [];
+    if (rows.length) {
+      thHtml += "<ul class='small' style='margin-top:8px'>";
+      rows.slice(0, 12).forEach((r) => {
+        thHtml += `<li><strong>${esc(r.symbol)}</strong> <code>${esc(r.status)}</code>`
+          + ` · ${esc(r.decision || "?")} — ${esc(r.hypothesis || "")}</li>`;
+      });
+      thHtml += "</ul>";
+    } else {
+      thHtml += "<p class='muted small'>No trackers yet — open after a sim buy or via the form.</p>";
+    }
+    if (thesisBox) thesisBox.innerHTML = thHtml;
+    const thOpen = $("#iip-thesis-open");
+    if (thOpen) thOpen.addEventListener("click", () => runIipThesisOpen());
+    const thLoad = $("#iip-thesis-load");
+    if (thLoad) thLoad.addEventListener("click", () => runIipThesisLoad());
+
+    const newsBox = $("#iip-news");
+    const nf = live.news_feeds || {};
+    const demoLinks = live.chart_links_demo || {};
+    let newsHtml = "<div class='panel-head'><h3 class='section-h'>News feeds &amp; chart links (IIP.9)</h3></div>";
+    newsHtml += "<p class='muted small'>RSS allow-list only (no HTML scrape). Feeds disabled by default — enable verified ids then Fetch.</p>";
+    newsHtml += `<p class='small'>Allow-list feeds: <strong>${(nf.feeds || []).length}</strong> · enabled <strong>${nf.enabled_count || 0}</strong></p>`;
+    const last = nf.last_fetch || {};
+    if (last.fetched_at) {
+      newsHtml += `<p class='muted small'>Last fetch ${esc(last.fetched_at)} · items ${last.item_count || 0}</p>`;
+    }
+    newsHtml += "<ul class='small'>";
+    (nf.feeds || []).slice(0, 8).forEach((f) => {
+      newsHtml += `<li><code>${esc(f.id)}</code> ${esc(f.label || "")} `
+        + `<strong>${f.enabled ? "on" : "off"}</strong> · ${esc(f.kind || "news")}</li>`;
+    });
+    newsHtml += "</ul>";
+    newsHtml += "<div class='iip-doc-form'>";
+    newsHtml += "<input id='iip-rss-enable' placeholder='Enable ids e.g. pib_press' style='min-width:180px' /> ";
+    newsHtml += "<button id='iip-rss-fetch' class='btn' type='button'>Fetch RSS</button> ";
+    newsHtml += "<label class='small'><input type='checkbox' id='iip-rss-policy' /> into policy</label>";
+    newsHtml += "</div>";
+    newsHtml += "<div id='iip-news-result' class='small muted' style='margin-top:8px'></div>";
+    if (demoLinks.tradingview) {
+      newsHtml += `<p class='small' style='margin-top:10px'>Chart links demo (INFY): `
+        + `<a href="${esc(demoLinks.tradingview)}" target="_blank" rel="noopener">TradingView</a>`
+        + ` · <a href="${esc(demoLinks.yahoo)}" target="_blank" rel="noopener">Yahoo</a></p>`;
+    }
+    newsHtml += "<div class='iip-doc-form'>";
+    newsHtml += "<input id='iip-chart-symbol' placeholder='Symbol for chart links' /> ";
+    newsHtml += "<button id='iip-chart-load' class='link' type='button'>Chart links</button>";
+    newsHtml += "</div>";
+    newsHtml += "<div id='iip-chart-result' class='small muted' style='margin-top:6px'></div>";
+    if (newsBox) newsBox.innerHTML = newsHtml;
+    const rssBtn = $("#iip-rss-fetch");
+    if (rssBtn) rssBtn.addEventListener("click", () => runIipRssFetch());
+    const chartBtn = $("#iip-chart-load");
+    if (chartBtn) chartBtn.addEventListener("click", () => runIipChartLinks());
+
     let srcHtml = "<div class='panel-head'><h3 class='section-h'>Websites &amp; data sources</h3></div><ul class='small'>";
     (data.sources || []).forEach((s) => {
       const link = s.url ? ` · <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>` : "";
@@ -1929,6 +2004,87 @@ async function runIipMkgReseed() {
     loadIip();
   } catch (err) {
     toast(err.message || String(err));
+  }
+}
+
+async function runIipThesisOpen() {
+  const sym = ($("#iip-thesis-symbol") && $("#iip-thesis-symbol").value || "").trim() || "INFY";
+  const out = $("#iip-thesis-result");
+  try {
+    const res = await api(`/v1/market/thesis-tracker/${encodeURIComponent(sym)}/open`, {
+      method: "POST",
+      body: { from_awareness: true, decision: "watch" },
+    });
+    const tr = res.tracker || {};
+    if (out) {
+      out.innerHTML = `<strong>${esc(tr.symbol || sym)}</strong> <code>${esc(tr.status)}</code>`
+        + ` · ${esc(tr.decision || "")}<div>${esc((tr.hypothesis || "").slice(0, 200))}</div>`;
+    }
+    loadIip();
+  } catch (err) {
+    if (out) out.textContent = err.message || String(err);
+    else toast(err.message || String(err));
+  }
+}
+
+async function runIipThesisLoad() {
+  const sym = ($("#iip-thesis-symbol") && $("#iip-thesis-symbol").value || "").trim() || "INFY";
+  const out = $("#iip-thesis-result");
+  try {
+    const res = await api(`/v1/market/thesis-tracker/${encodeURIComponent(sym)}`);
+    const tr = res.tracker || {};
+    if (!tr || res.status === "absent") {
+      if (out) out.textContent = res.note || "No tracker";
+      return;
+    }
+    const assump = (tr.assumptions || []).map((a) => `${a.kind}:${a.status}`).join(", ");
+    if (out) {
+      out.innerHTML = `<strong>${esc(tr.symbol)}</strong> <code>${esc(tr.status)}</code>`
+        + `<div>${esc((tr.hypothesis || "").slice(0, 200))}</div>`
+        + `<div class='muted'>Assumptions: ${esc(assump || "—")}</div>`;
+    }
+  } catch (err) {
+    if (out) out.textContent = err.message || String(err);
+    else toast(err.message || String(err));
+  }
+}
+
+async function runIipRssFetch() {
+  const out = $("#iip-news-result");
+  const raw = ($("#iip-rss-enable") && $("#iip-rss-enable").value || "").trim();
+  const enable = raw ? raw.split(/[\s,]+/).filter(Boolean) : [];
+  const intoPolicy = !!( $("#iip-rss-policy") && $("#iip-rss-policy").checked );
+  try {
+    const res = await api("/v1/market/news-feeds/fetch", {
+      method: "POST",
+      body: { enable, into_policy: intoPolicy },
+    });
+    const f = res.fetch || {};
+    if (out) {
+      out.textContent = `ok_feeds=${f.ok_feeds || 0} items=${f.item_count || 0}`
+        + (intoPolicy ? " · merged into policy catalog" : "");
+    }
+    toast("RSS fetch done");
+    loadIip();
+  } catch (err) {
+    if (out) out.textContent = err.message || String(err);
+    else toast(err.message || String(err));
+  }
+}
+
+async function runIipChartLinks() {
+  const sym = ($("#iip-chart-symbol") && $("#iip-chart-symbol").value || "").trim() || "INFY";
+  const out = $("#iip-chart-result");
+  try {
+    const res = await api(`/v1/market/chart-links/${encodeURIComponent(sym)}`);
+    if (out) {
+      out.innerHTML = `<a href="${esc(res.tradingview)}" target="_blank" rel="noopener">TradingView</a>`
+        + ` · <a href="${esc(res.yahoo)}" target="_blank" rel="noopener">Yahoo</a>`
+        + ` · <a href="${esc(res.screener)}" target="_blank" rel="noopener">Screener</a>`
+        + `<div class='muted'>${esc(res.note || "")}</div>`;
+    }
+  } catch (err) {
+    if (out) out.textContent = err.message || String(err);
   }
 }
 
@@ -2767,8 +2923,33 @@ async function showLearnerResearch(symbol) {
         + `research conf ${iscore.research_confidence || "?"} · `
         + `investment conf ${iscore.investment_confidence || "?"} → ${iscore.path || "?"}`
         + (iscore.path_reason ? `\n${iscore.path_reason}` : "")
+        + (iscore.priors_applied ? "\nPriors applied (IIP.8 weight shift)." : "")
         + "\nOverall ≠ buy. High research + low investment → watch.");
     }
+    const ttrack = aw.thesis_tracker;
+    if (ttrack && ttrack.status) {
+      const assump = (ttrack.assumptions || []).slice(0, 4)
+        .map((a) => `${a.kind || "?"}:${a.status || "?"}`).join(", ");
+      add("Thesis Tracker (IIP.8)",
+        `${ttrack.status} · ${ttrack.decision || "?"} — ${(ttrack.hypothesis || "").slice(0, 160)}`
+        + (assump ? `\nAssumptions: ${assump}` : "")
+        + ((ttrack.lessons || []).length
+          ? `\nLessons: ${(ttrack.lessons || []).slice(0, 2).join(" · ")}` : ""));
+    }
+    const tpri = aw.thesis_priors || {};
+    if (tpri.closed_outcomes != null) {
+      add("Thesis priors",
+        `Closed ${tpri.closed_outcomes} · weight shift ${tpri.ready_for_weight_shift ? "ready" : "locked (<20)"}`);
+    }
+    const links = aw.chart_links || {};
+    if (links.tradingview) {
+      add("Chart links (IIP.9)",
+        `TradingView: ${links.tradingview}\nYahoo: ${links.yahoo}\n`
+        + (links.note || "Non-primary — local OHLCV for technicals."));
+    }
+    add("Portfolio gate (IIP.7)",
+      "Buys also need portfolio pre-trade: cash buffer, max names, name/sector concentration, "
+      + "persona assets, investment-confidence floor — beside research gate.");
 
     add("Trail", `Memories ${aw.memories_count || 0} · Outcomes ${aw.outcomes_count || 0}`
       + (aw.pack ? ` · pack=${aw.pack}` : "")

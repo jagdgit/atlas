@@ -114,6 +114,27 @@ def websites_and_sources() -> list[dict[str, Any]]:
             "operator_help": "Set API key then restart Atlas.",
         },
         {
+            "id": "stooq",
+            "name": "Stooq daily history",
+            "url": "https://stooq.com/",
+            "purpose": "Free daily OHLCV history fallback (NSE → .in mapping)",
+            "status": "available",
+            "needs": "provider=stooq + network",
+            "operator_help": "Select stooq as MarketReader provider; SYMBOL.NS maps to symbol.in.",
+        },
+        {
+            "id": "rss_allowlist",
+            "name": "RSS / Atom allow-list",
+            "url": None,
+            "purpose": "Official news/policy feeds only (PIB/SEBI/etc. when verified)",
+            "status": "operator_enable",
+            "needs": "Enable feed ids via POST /v1/market/news-feeds/fetch or mission config",
+            "operator_help": (
+                "Feeds are disabled by default. Verify each URL serves RSS/Atom XML — "
+                "HTML pages are refused (no scrape)."
+            ),
+        },
+        {
             "id": "nse_bse",
             "name": "NSE / BSE adapters",
             "url": None,
@@ -159,7 +180,7 @@ def websites_and_sources() -> list[dict[str, Any]]:
             "id": "tradingview",
             "name": "TradingView",
             "url": "https://www.tradingview.com/",
-            "purpose": "Chart links / optional weak community ideas",
+            "purpose": "Chart links only (GET /v1/market/chart-links/{symbol})",
             "status": "non_primary",
             "needs": None,
             "operator_help": "Never the primary price feed; technicals computed locally from OHLCV.",
@@ -177,10 +198,13 @@ def websites_and_sources() -> list[dict[str, Any]]:
             "id": "gov_catalog",
             "name": "Atlas India policy catalog",
             "url": None,
-            "purpose": "Budget / PLI / sector nudges (hermetic + operator)",
-            "status": "hermetic_plus_operator",
-            "needs": "Optional operator policy items; later official RSS",
-            "operator_help": "Add real policy items via Government Intelligence mission inputs.",
+            "purpose": "Budget / PLI / sector nudges (hermetic + operator + optional policy RSS)",
+            "status": "hermetic_plus_operator_rss",
+            "needs": "Optional operator items; enable policy RSS via news-feeds fetch into_policy",
+            "operator_help": (
+                "Add policy via Government Intelligence or POST /v1/market/news-feeds/fetch "
+                "with into_policy=true after enabling verified RSS ids."
+            ),
         },
         {
             "id": "operator_snapshots",
@@ -271,10 +295,31 @@ def capabilities_matrix() -> list[dict[str, Any]]:
             ),
         },
         {
+            "id": "portfolio_optimizer",
+            "name": "Portfolio Optimizer",
+            "status": "shipping",
+            "description": (
+                "Pre-trade gates: concentration, cash, persona, max names, "
+                "investment confidence; MoS/horizon sizing"
+            ),
+        },
+        {
             "id": "thesis_tracker",
             "name": "Thesis Tracker",
-            "status": "planned_iip8",
-            "description": "Hypothesis → evidence → decision → outcome",
+            "status": "shipping",
+            "description": (
+                "Hypothesis → assumptions → decision → outcome → lessons; "
+                "N≥20 closed paper outcomes unlock discovery/scoring prior shifts"
+            ),
+        },
+        {
+            "id": "news_policy_vendors",
+            "name": "News / policy RSS + vendors",
+            "status": "shipping",
+            "description": (
+                "RSS allow-list (no scrape), policy RSS → gov catalog, "
+                "Stooq history adapter, TradingView chart links"
+            ),
         },
         {
             "id": "feed_failure_log",
@@ -289,12 +334,14 @@ def how_to_help_atlas() -> list[str]:
     return [
         "Keep Atlas online (systemd + Wi‑Fi); check Feed failures on this page after market hours.",
         "If Yahoo fails: restore internet; confirm market.yahoo_enabled; restart atlas.service.",
-        "Add ATLAS_POLYGON_API_KEY or ATLAS_ALPHAVANTAGE_API_KEY for alternate price feeds.",
+        "Add ATLAS_POLYGON_API_KEY or ATLAS_ALPHAVANTAGE_API_KEY for alternate price feeds; try provider=stooq for free history.",
         "Post operator research snapshots / filing refs for names you care about (Market → Research).",
         "Enable additional universes (NEXT50 / Midcap) when you want broader discovery (IIP.1).",
         "Import Screener CSV/JSON on Invest intel (Fundamentals) or drop into data/imports/fundamentals/ — no HTML scraping.",
         "Upload annual/quarterly PDFs on Invest intel (Documents) or drop SYMBOL__kind__period.pdf into data/imports/company_documents/.",
         "Ask ‘Why own X?’ on Invest intel MKG or Research dossier — answers cite labeled theme/policy edges only.",
+        "Review Thesis Tracker on Invest intel after sim sells — tag assumption failures so priors compound (N≥20).",
+        "Enable verified official RSS ids on Invest intel (News feeds) — HTML pages are refused.",
         "Add government policy items when Budget/PLI news lands (Government Intelligence inputs).",
     ]
 

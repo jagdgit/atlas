@@ -49,6 +49,49 @@ class GovernmentIntelligenceWorker(PersistentWorker):
             if isinstance(inp, dict) and (inp.get("title") or inp.get("text") or inp.get("summary")):
                 operator_items.append(inp)
 
+        # IIP.9 — optional policy RSS allow-list → catalog items
+        rss_note = ""
+        if cfg.get("policy_rss") or cfg.get("fetch_policy_rss") or cfg.get("rss_feeds"):
+            try:
+                from atlas.investment import rss_feeds as rss
+
+                feeds = rss.merge_allowlist(
+                    cfg.get("rss_feeds") if isinstance(cfg.get("rss_feeds"), list) else None,
+                    include_defaults=bool(cfg.get("rss_include_defaults", True)),
+                )
+                enable_ids = {
+                    str(x).strip()
+                    for x in (cfg.get("rss_enable") or cfg.get("policy_rss_enable") or [])
+                    if str(x).strip()
+                }
+                if enable_ids:
+                    for row in feeds:
+                        if row.get("id") in enable_ids:
+                            row["enabled"] = True
+                if isinstance(cfg.get("policy_rss"), list):
+                    feeds = rss.merge_allowlist(cfg["policy_rss"], include_defaults=True)
+                    for row in feeds:
+                        for r in cfg["policy_rss"]:
+                            if isinstance(r, dict) and str(r.get("id")) == str(row.get("id")):
+                                row["enabled"] = bool(r.get("enabled", True))
+                                if r.get("url"):
+                                    row["url"] = r["url"]
+                result = rss.fetch_allowlist(feeds, kinds=["policy", "gov", "budget"])
+                rss.save_last_fetch(self._data_dir, result)
+                policy_items = rss.items_as_policy(result)
+                operator_items.extend(policy_items)
+                rss_note = (
+                    f"; rss_policy={len(policy_items)} "
+                    f"from {result.get('ok_feeds') or 0} feeds"
+                )
+                state["rss_policy"] = {
+                    "ok_feeds": result.get("ok_feeds"),
+                    "item_count": len(policy_items),
+                }
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("policy rss skipped: %s", exc)
+                rss_note = f"; rss_policy skipped ({exc})"
+
         include_defaults = cfg.get("include_defaults")
         if include_defaults is None:
             include_defaults = True
@@ -85,5 +128,5 @@ class GovernmentIntelligenceWorker(PersistentWorker):
         top = ", ".join(list(state["sector_deltas"])[:5]) or "(none)"
         return TickResult(
             state=state,
-            note=f"government policy items={state['item_count']}; sectors={top}",
+            note=f"government policy items={state['item_count']}; sectors={top}{rss_note}",
         )

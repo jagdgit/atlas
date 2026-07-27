@@ -14,6 +14,7 @@ from atlas.trading.adapters import (
     AssetReplayAdapter,
     KeyedProviderAdapter,
     PolygonAdapter,
+    StooqAdapter,
     YahooFinanceAdapter,
     pct_move,
 )
@@ -37,6 +38,7 @@ class MarketReaderService:
         yahoo_opener: Any | None = None,
         polygon_opener: Any | None = None,
         alphavantage_opener: Any | None = None,
+        stooq_opener: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._default = (default_provider or "asset_replay").strip().lower()
@@ -58,6 +60,9 @@ class MarketReaderService:
             api_key_env=alphavantage_api_key_env,
             opener=alphavantage_opener,
             logger=self._logger,
+        )
+        self._adapters["stooq"] = StooqAdapter(
+            opener=stooq_opener, logger=self._logger
         )
         # Indian-exchange adapters stay skeletons until exchange ToS path (OI-D1).
         self._adapters["nse"] = KeyedProviderAdapter(
