@@ -70,6 +70,10 @@ async function api(path, { method = "GET", body } = {}) {
 
 function toast(msg) {
   const t = $("#toast");
+  if (!t) {
+    console.warn("toast:", msg);
+    return;
+  }
   t.textContent = msg;
   t.classList.remove("hidden");
   clearTimeout(toast._t);
@@ -134,9 +138,10 @@ function switchView(view) {
   state.view = view;
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
-  $(`#view-${view}`).classList.remove("hidden");
+  const viewEl = $(`#view-${view}`);
+  if (viewEl) viewEl.classList.remove("hidden");
   const extra = $("#sidebar-extra");
-  extra.innerHTML = "";
+  if (extra) extra.innerHTML = "";
   stopJobPoll();
   if (view !== "jobs") stopJobStream();
   if (view !== "missions") stopMissionPoll();
@@ -1752,35 +1757,35 @@ async function loadIip() {
     const thesisBox = $("#iip-thesis");
     const ttLive = live.thesis_tracker || {};
     const priors = ttLive.priors || {};
-    let thHtml = "<div class='panel-head'><h3 class='section-h'>Thesis Tracker (IIP.8)</h3></div>";
-    thHtml += "<p class='muted small'>Hypothesis → assumptions → outcome → priors. "
+    let thesisHtml = "<div class='panel-head'><h3 class='section-h'>Thesis Tracker (IIP.8)</h3></div>";
+    thesisHtml += "<p class='muted small'>Hypothesis → assumptions → outcome → priors. "
       + "Weight shifts unlock at N≥20 closed paper outcomes.</p>";
-    thHtml += `<p class='small'>Closed outcomes <strong>${priors.closed_outcomes || 0}</strong>`
+    thesisHtml += `<p class='small'>Closed outcomes <strong>${priors.closed_outcomes || 0}</strong>`
       + ` · ready for weight shift: <strong>${priors.ready_for_weight_shift ? "yes" : "no"}</strong></p>`;
     const lessons = priors.failure_lessons || [];
     if (lessons.length) {
-      thHtml += "<p class='muted small'>Recent failure lessons:</p><ul class='small'>";
-      lessons.slice(0, 5).forEach((l) => { thHtml += `<li>${esc(l)}</li>`; });
-      thHtml += "</ul>";
+      thesisHtml += "<p class='muted small'>Recent failure lessons:</p><ul class='small'>";
+      lessons.slice(0, 5).forEach((l) => { thesisHtml += `<li>${esc(l)}</li>`; });
+      thesisHtml += "</ul>";
     }
-    thHtml += "<div class='iip-doc-form'>";
-    thHtml += "<input id='iip-thesis-symbol' placeholder='Symbol e.g. INFY' /> ";
-    thHtml += "<button id='iip-thesis-open' class='btn' type='button'>Open from awareness</button> ";
-    thHtml += "<button id='iip-thesis-load' class='link' type='button'>Load tracker</button>";
-    thHtml += "</div>";
-    thHtml += "<div id='iip-thesis-result' class='small muted' style='margin-top:8px'></div>";
+    thesisHtml += "<div class='iip-doc-form'>";
+    thesisHtml += "<input id='iip-thesis-symbol' placeholder='Symbol e.g. INFY' /> ";
+    thesisHtml += "<button id='iip-thesis-open' class='btn' type='button'>Open from awareness</button> ";
+    thesisHtml += "<button id='iip-thesis-load' class='link' type='button'>Load tracker</button>";
+    thesisHtml += "</div>";
+    thesisHtml += "<div id='iip-thesis-result' class='small muted' style='margin-top:8px'></div>";
     const rows = ttLive.trackers || [];
     if (rows.length) {
-      thHtml += "<ul class='small' style='margin-top:8px'>";
+      thesisHtml += "<ul class='small' style='margin-top:8px'>";
       rows.slice(0, 12).forEach((r) => {
-        thHtml += `<li><strong>${esc(r.symbol)}</strong> <code>${esc(r.status)}</code>`
+        thesisHtml += `<li><strong>${esc(r.symbol)}</strong> <code>${esc(r.status)}</code>`
           + ` · ${esc(r.decision || "?")} — ${esc(r.hypothesis || "")}</li>`;
       });
-      thHtml += "</ul>";
+      thesisHtml += "</ul>";
     } else {
-      thHtml += "<p class='muted small'>No trackers yet — open after a sim buy or via the form.</p>";
+      thesisHtml += "<p class='muted small'>No trackers yet — open after a sim buy or via the form.</p>";
     }
-    if (thesisBox) thesisBox.innerHTML = thHtml;
+    if (thesisBox) thesisBox.innerHTML = thesisHtml;
     const thOpen = $("#iip-thesis-open");
     if (thOpen) thOpen.addEventListener("click", () => runIipThesisOpen());
     const thLoad = $("#iip-thesis-load");
@@ -4173,6 +4178,21 @@ function stopOpsStream() {
 
 /* ---------- wiring ---------- */
 function init() {
+  try {
+    _wireUi();
+  } catch (err) {
+    console.error("Atlas UI init failed", err);
+    const login = $("#login");
+    if (login) login.classList.remove("hidden");
+    const app = $("#app");
+    if (app) app.classList.add("hidden");
+    try {
+      showLoginError("UI failed to start: " + (err && err.message ? err.message : String(err)));
+    } catch (_) { /* ignore */ }
+  }
+}
+
+function _wireUi() {
   $("#login-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const key = $("#login-key").value.trim();
@@ -4184,32 +4204,39 @@ function init() {
     b.addEventListener("click", () => switchView(b.dataset.view)));
 
   const input = $("#composer-input");
-  input.addEventListener("input", () => {
-    input.style.height = "auto";
-    input.style.height = Math.min(input.scrollHeight, 180) + "px";
-  });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      const text = input.value;
-      input.value = ""; input.style.height = "auto";
-      sendMessage(text);
-    }
-  });
-  $("#composer").addEventListener("submit", (e) => {
+  if (input) {
+    input.addEventListener("input", () => {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 180) + "px";
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const text = input.value;
+        input.value = ""; input.style.height = "auto";
+        sendMessage(text);
+      }
+    });
+  }
+  const composer = $("#composer");
+  if (composer) composer.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (!input) return;
     const text = input.value;
     input.value = ""; input.style.height = "auto";
     sendMessage(text);
   });
 
-  $("#job-form").addEventListener("submit", (e) => {
+  const jobForm = $("#job-form");
+  if (jobForm) jobForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const obj = $("#job-objective").value.trim();
     if (obj) createJob(obj);
   });
-  $("#jobs-refresh").addEventListener("click", loadJobs);
-  $("#missions-refresh").addEventListener("click", loadMissions);
+  const jobsRefresh = $("#jobs-refresh");
+  if (jobsRefresh) jobsRefresh.addEventListener("click", loadJobs);
+  const missionsRefresh = $("#missions-refresh");
+  if (missionsRefresh) missionsRefresh.addEventListener("click", loadMissions);
   const programsRefresh = $("#programs-refresh");
   if (programsRefresh) programsRefresh.addEventListener("click", loadPrograms);
   const learnerRefresh = $("#learner-refresh");
@@ -4267,7 +4294,8 @@ function init() {
       startLearnerResearch();
     }
   });
-  $("#mission-form").addEventListener("submit", (e) => {
+  const missionForm = $("#mission-form");
+  if (missionForm) missionForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const tpl = $("#mission-template").value;
     if (tpl) instantiateMission(tpl, $("#mission-title").value.trim());
@@ -4282,8 +4310,10 @@ function init() {
   if (cfgTa) cfgTa.addEventListener("input", () => { cfgTa.dataset.touched = "1"; cfgTa.dataset.seeded = ""; });
   const feedBtn = $("#mission-feed-sample");
   if (feedBtn) feedBtn.addEventListener("click", registerSampleMarketData);
-  $("#system-refresh").addEventListener("click", loadSystem);
-  $("#overview-refresh").addEventListener("click", refreshOps);
+  const systemRefresh = $("#system-refresh");
+  if (systemRefresh) systemRefresh.addEventListener("click", loadSystem);
+  const overviewRefresh = $("#overview-refresh");
+  if (overviewRefresh) overviewRefresh.addEventListener("click", refreshOps);
   $("#personal-refresh")?.addEventListener("click", loadPersonal);
   $("#personal-infer")?.addEventListener("click", personalInfer);
   $("#personal-draft")?.addEventListener("click", personalDraft);
@@ -4291,15 +4321,17 @@ function init() {
   document.querySelectorAll(".personal-tab").forEach((btn) => {
     btn.addEventListener("click", () => setPersonalTab(btn.dataset.tab || "skills"));
   });
-  $("#eng-refresh").addEventListener("click", loadEngineering);
+  const engRefresh = $("#eng-refresh");
+  if (engRefresh) engRefresh.addEventListener("click", loadEngineering);
   $("#archive-refresh")?.addEventListener("click", loadArchive);
   $("#archive-form")?.addEventListener("submit", (e) => {
     e.preventDefault();
     startArchiveIngest();
   });
-  $("#eng-form").addEventListener("submit", (e) => {
+  const engForm = $("#eng-form");
+  if (engForm) engForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    const src = $("#eng-source").value.trim();
+    const src = ($("#eng-source") && $("#eng-source").value || "").trim();
     if (!src) {
       toast("Enter a repository path or git URL first");
       const status = $("#eng-status");
@@ -4309,7 +4341,7 @@ function init() {
       }
       return;
     }
-    ingestRepo(src, $("#eng-embed").checked, {
+    ingestRepo(src, !!($("#eng-embed") && $("#eng-embed").checked), {
       note: ($("#eng-note") && $("#eng-note").value.trim()) || "",
       period_start: ($("#eng-period-start") && $("#eng-period-start").value.trim()) || "",
       period_end: ($("#eng-period-end") && $("#eng-period-end").value.trim()) || "",
@@ -4317,9 +4349,16 @@ function init() {
   });
 
   if (state.key) {
-    tryConnect(state.key).then((ok) => { if (!ok) { $("#login").classList.remove("hidden"); } });
+    showLoginError("Connecting…");
+    tryConnect(state.key).then((ok) => {
+      if (!ok) {
+        $("#login").classList.remove("hidden");
+        $("#app").classList.add("hidden");
+      }
+    });
   } else {
     $("#login").classList.remove("hidden");
+    $("#app").classList.add("hidden");
   }
 }
 

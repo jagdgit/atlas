@@ -8,8 +8,8 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
-  <!-- Login gate -->
-  <div id="login" class="login-overlay hidden">
+  <!-- Login gate (visible by default so a blank screen cannot stick if init fails) -->
+  <div id="login" class="login-overlay">
     <form id="login-form" class="login-card">
       <h1>Atlas</h1>
       <p class="muted">Enter your API key to connect to the local Atlas server.</p>
@@ -425,6 +425,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=dash40"></script>
+  <script src="./app.js?v=dash42"></script>
 </body>
 </html>
