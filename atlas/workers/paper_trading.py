@@ -31,7 +31,7 @@ ASSET_KIND_MARKET_DATA = "market_data"
 
 class PaperTradingWorker(PersistentWorker):
     type = "paper_trading"
-    VERSION = 1
+    VERSION = 2
     journal_ticks = True
 
     def __init__(
@@ -210,6 +210,17 @@ class PaperTradingWorker(PersistentWorker):
         marks: dict[str, float] = {}
         exhausted = 0
         last_actions: list[str] = []
+        reason_counts: dict[str, int] = {}
+        feed_gap_days: float | None = None
+        from atlas.investment.session_notes import classify_action
+
+        def _record_action(action: str | None) -> None:
+            if not action:
+                return
+            last_actions.append(action)
+            bucket = classify_action(action)
+            if bucket:
+                reason_counts[bucket] = int(reason_counts.get(bucket, 0)) + 1
 
         for inst in instruments:
             symbol = str(inst.get("symbol") or "").strip()
@@ -223,34 +234,53 @@ class PaperTradingWorker(PersistentWorker):
                     bars = self._load_bars(asset_name)
             except CapabilityGap as exc:
                 totals["gaps"] += 1
-                last_actions.append(f"{symbol}: gap ({exc.capability})")
+                _record_action(f"{symbol}: gap ({exc.capability})")
+                self._record_feed_failure(
+                    provider=str(cfg.get("live_provider") or "yahoo"),
+                    symbol=symbol,
+                    reason=str(exc)[:400],
+                    capability=str(getattr(exc, "capability", "") or "market_data"),
+                )
                 continue
             except Exception as exc:  # noqa: BLE001 - a bad feed must not stop the others
                 totals["errors"] += 1
                 self._logger.warning("feed load failed for %s (%s): %s", symbol, asset_name, exc)
-                last_actions.append(f"{symbol}: feed_error")
+                _record_action(f"{symbol}: feed_error")
+                self._record_feed_failure(
+                    provider=str(cfg.get("live_provider") or feed_mode),
+                    symbol=symbol,
+                    reason=f"feed_error: {exc}"[:400],
+                )
                 continue
             if not bars:
                 if feed_mode == "live":
-                    last_actions.append(f"{symbol}: empty_live_feed")
+                    _record_action(f"{symbol}: empty_live_feed")
+                    self._record_feed_failure(
+                        provider=str(cfg.get("live_provider") or "yahoo"),
+                        symbol=symbol,
+                        reason="empty_live_feed",
+                    )
                 else:
                     exhausted += 1
-                    last_actions.append(f"{symbol}: empty_feed")
+                    _record_action(f"{symbol}: empty_feed")
                 continue
 
             if feed_mode == "live":
+                gap = self._detect_feed_gap(state, symbol, bars)
+                if gap is not None and (feed_gap_days is None or gap > feed_gap_days):
+                    feed_gap_days = gap
                 cursor = len(bars) - 1
                 price = float(bars[cursor]["close"])
                 marks[symbol] = price
                 bar_key = str(bars[cursor].get("t") if bars[cursor].get("t") is not None else cursor)
                 if not session_open:
                     totals["session_skips"] += 1
-                    last_actions.append(
+                    _record_action(
                         f"{symbol}: session_closed ({sess.reason}) mark @ {price:.2f}"
                     )
                     continue
                 if last_bar_keys.get(symbol) == bar_key:
-                    last_actions.append(f"{symbol}: mark_only @ {price:.2f} (same bar)")
+                    _record_action(f"{symbol}: mark_only @ {price:.2f} (same bar)")
                     continue
                 action = self._decide_bar(
                     symbol=symbol,
@@ -270,8 +300,7 @@ class PaperTradingWorker(PersistentWorker):
                     instrument=inst,
                 )
                 last_bar_keys[symbol] = bar_key
-                if action:
-                    last_actions.append(action)
+                _record_action(action)
                 bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
                 self._check_drawdown(state, bar_snapshot, cfg, ctx.mission_id)
                 continue
@@ -280,7 +309,7 @@ class PaperTradingWorker(PersistentWorker):
             cursor = int(cursors.get(symbol, 0))
             if cursor >= len(bars):
                 exhausted += 1
-                last_actions.append(f"{symbol}: feed_exhausted ({len(bars)} bars)")
+                _record_action(f"{symbol}: feed_exhausted ({len(bars)} bars)")
                 continue
 
             if not session_open:
@@ -288,7 +317,7 @@ class PaperTradingWorker(PersistentWorker):
                 price = float(bars[min(cursor, len(bars) - 1)]["close"])
                 marks[symbol] = price
                 totals["session_skips"] += 1
-                last_actions.append(
+                _record_action(
                     f"{symbol}: session_closed ({sess.reason}) mark @ {price:.2f}"
                 )
                 continue
@@ -312,8 +341,7 @@ class PaperTradingWorker(PersistentWorker):
                     pack=pack,
                     instrument=inst,
                 )
-                if action:
-                    last_actions.append(action)
+                _record_action(action)
                 # Track equity peak + drawdown per bar so an intra-replay drawdown is caught (not
                 # just the end-of-tick value) — reboot-safe via the persisted peak in state.
                 bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
@@ -328,6 +356,28 @@ class PaperTradingWorker(PersistentWorker):
         state["last_bar_keys"] = last_bar_keys
         state["ticks"] = int(state.get("ticks", 0)) + 1
         state["feed_mode"] = feed_mode
+        if feed_gap_days is not None:
+            state["feed_gap_days"] = feed_gap_days
+
+        # Persist hold/feed reasons for evening honesty + outage catch-up digests.
+        try:
+            from zoneinfo import ZoneInfo
+
+            from atlas.config import get_config
+            from atlas.investment.session_notes import merge_day_notes
+
+            ist_date = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+            data_dir = str(get_config().paths.data)
+            merge_day_notes(
+                data_dir,
+                portfolio_key=portfolio_key,
+                ist_date=ist_date,
+                reason_counts=reason_counts,
+                samples=last_actions[-12:],
+                extra={"feed_gap_days": feed_gap_days} if feed_gap_days is not None else None,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("session notes merge skipped", exc_info=True)
 
         snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
         state["equity"] = snapshot["equity"]
@@ -957,6 +1007,65 @@ class PaperTradingWorker(PersistentWorker):
         if artifact.get("outcome") != "ok":
             raise RuntimeError(f"feed unreadable: {artifact.get('reason', 'unknown')}")
         return list(artifact.get("bars") or [])
+
+    def _detect_feed_gap(
+        self, state: dict[str, Any], symbol: str, bars: list[dict[str, Any]]
+    ) -> float | None:
+        """Calendar-day gap vs last successfully seen bar for this symbol (live resume)."""
+        if not bars:
+            return None
+        last = bars[-1].get("t")
+        if last is None:
+            return None
+        try:
+            if isinstance(last, datetime):
+                bar_dt = last
+            else:
+                raw = str(last).replace("Z", "+00:00")
+                bar_dt = datetime.fromisoformat(raw)
+            if bar_dt.tzinfo is None:
+                bar_dt = bar_dt.replace(tzinfo=timezone.utc)
+        except Exception:  # noqa: BLE001
+            return None
+        seen = dict(state.get("last_bar_seen_utc") or {})
+        prev_raw = seen.get(symbol)
+        gap: float | None = None
+        if prev_raw:
+            try:
+                prev = datetime.fromisoformat(str(prev_raw).replace("Z", "+00:00"))
+                if prev.tzinfo is None:
+                    prev = prev.replace(tzinfo=timezone.utc)
+                gap = max(0.0, (bar_dt - prev).total_seconds() / 86400.0)
+                if gap < 1.0:
+                    gap = None
+            except Exception:  # noqa: BLE001
+                gap = None
+        seen[symbol] = bar_dt.astimezone(timezone.utc).isoformat()
+        state["last_bar_seen_utc"] = seen
+        return gap
+
+    def _record_feed_failure(
+        self,
+        *,
+        provider: str,
+        symbol: str,
+        reason: str,
+        capability: str = "market_data",
+    ) -> None:
+        try:
+            from atlas.config import get_config
+            from atlas.investment.feed_failures import record_failure
+
+            record_failure(
+                str(get_config().paths.data),
+                provider=provider,
+                symbol=symbol,
+                reason=reason,
+                capability=capability,
+                source="paper_trading",
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("feed failure log skipped", exc_info=True)
 
     def _load_live_bars(self, symbol: str, cfg: dict[str, Any]) -> list[dict[str, Any]]:
         if self._live_market is None:

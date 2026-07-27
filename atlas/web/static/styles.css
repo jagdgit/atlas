@@ -722,3 +722,18 @@ button { cursor: pointer; font: inherit; }
   background: var(--fail); color: #fff; padding: 10px 16px; border-radius: 8px;
   z-index: 30; box-shadow: 0 8px 24px rgba(0,0,0,.4);
 }
+
+/* IIP operator review */
+.iip-uni-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
+.iip-uni-row { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.iip-fail-list { max-height: 280px; overflow: auto; padding-right: 8px; }
+#view-iip .learner-panel { margin: 10px 22px; padding-bottom: 8px; }
+#view-iip textarea {
+  width: 100%;
+  max-width: 720px;
+  display: block;
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 8px;
+}

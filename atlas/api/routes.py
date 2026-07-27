@@ -2602,6 +2602,522 @@ def list_market_providers(request: Request) -> dict:
     }
 
 
+@v1_router.get("/market/universes", tags=["programs"])
+def list_market_universes(request: Request) -> dict:
+    """IIP.1 — list index/theme universes + enabled union."""
+    from atlas.config import get_config
+    from atlas.investment.universe_manager import universes_view
+
+    return universes_view(str(get_config().paths.data))
+
+
+@v1_router.post("/market/universes/enabled", tags=["programs"])
+def set_market_universes_enabled(request: Request, body: dict | None = None) -> dict:
+    """IIP.1 — persist which universes are enabled for the learner."""
+    from atlas.config import get_config
+    from atlas.investment.universe_manager import save_enabled, universes_view
+
+    body = body or {}
+    enabled = body.get("enabled") or body.get("universes") or []
+    if not isinstance(enabled, list):
+        raise HTTPException(status_code=400, detail="enabled must be a list of universe ids")
+    data_dir = str(get_config().paths.data)
+    save_enabled(data_dir, [str(x) for x in enabled])
+    return universes_view(data_dir)
+
+
+@v1_router.get("/market/feed-failures", tags=["programs"])
+def list_market_feed_failures(
+    request: Request,
+    limit: int = 100,
+    provider: str | None = None,
+    symbol: str | None = None,
+) -> dict:
+    """Recent web/live market-data fetch failures for operator triage."""
+    from atlas.config import get_config
+    from atlas.investment.feed_failures import list_failures
+
+    return list_failures(
+        str(get_config().paths.data),
+        limit=max(1, min(500, int(limit or 100))),
+        provider=provider,
+        symbol=symbol,
+    )
+
+
+@v1_router.get("/market/intelligence-catalog", tags=["programs"])
+def market_intelligence_catalog(request: Request) -> dict:
+    """Operator review: methodology, websites/sources, capabilities, live hooks."""
+    from atlas.config import get_config
+    from atlas.investment.feed_failures import list_failures
+    from atlas.investment.intelligence_catalog import catalog_skeleton
+    from atlas.investment.universe_manager import universes_view
+
+    base = catalog_skeleton()
+    cfg = get_config()
+    data_dir = str(cfg.paths.data)
+    yahoo_on = bool(getattr(cfg.market, "yahoo_enabled", False))
+    providers: list[dict] = []
+    try:
+        reader = _app(request).container.resolve("market_reader")
+        providers = reader.list_providers()
+    except Exception:  # noqa: BLE001
+        providers = []
+    base["live"] = {
+        "yahoo_enabled": yahoo_on,
+        "providers": providers,
+        "universes": universes_view(data_dir),
+        "feed_failures": list_failures(data_dir, limit=40),
+    }
+    try:
+        from atlas.investment.discovery import load_latest_discovery
+        from atlas.investment.themes import themes_view
+
+        base["live"]["themes"] = themes_view()
+        base["live"]["discovery"] = load_latest_discovery(data_dir)
+    except Exception:  # noqa: BLE001
+        base["live"]["themes"] = {"themes": [], "count": 0}
+        base["live"]["discovery"] = {"interesting": []}
+    try:
+        from atlas.investment.fundamentals import fundamentals_view
+
+        base["live"]["fundamentals"] = fundamentals_view(data_dir, limit=25)
+    except Exception:  # noqa: BLE001
+        base["live"]["fundamentals"] = {"count": 0, "rows": []}
+    try:
+        from atlas.investment.company_documents import documents_view
+
+        base["live"]["company_documents"] = documents_view(data_dir, limit=25)
+    except Exception:  # noqa: BLE001
+        base["live"]["company_documents"] = {"documents": [], "count": 0}
+    try:
+        from atlas.investment import mkg as mkg_mod
+
+        graph = mkg_mod.ensure_seeded(data_dir)
+        base["live"]["mkg"] = mkg_mod.graph_view(graph, limit_nodes=20, limit_edges=30)
+        base["live"]["mkg_demo"] = {
+            "why_own_waaree": mkg_mod.why_own(graph, "WAAREE.NS"),
+            "who_benefits_defence": mkg_mod.who_benefits(graph, theme_id="defence", limit=12),
+        }
+    except Exception:  # noqa: BLE001
+        base["live"]["mkg"] = {"stats": {"nodes": 0, "edges": 0}}
+    return base
+
+
+@v1_router.get("/market/fundamentals", tags=["programs"])
+def get_market_fundamentals(
+    program_id: str = "market_intelligence",
+    limit: int = 40,
+) -> dict:
+    """IIP.3 — durable fundamentals store status (operator / Screener import)."""
+    from atlas.config import get_config
+    from atlas.investment.fundamentals import fundamentals_view
+
+    return fundamentals_view(str(get_config().paths.data), program_id=program_id, limit=limit)
+
+
+@v1_router.post("/market/fundamentals/import", tags=["programs"])
+def post_market_fundamentals_import(request: Request, body: dict | None = None) -> dict:
+    """IIP.3 — import JSON rows or CSV text into fundamentals store."""
+    from atlas.config import get_config
+    from atlas.investment.fundamentals import import_csv_text, import_json_payload
+
+    body = body or {}
+    program_id = str(body.get("program_id") or "market_intelligence")
+    source = str(body.get("source") or "operator_import")
+    note = str(body.get("note") or "")
+    data_dir = str(get_config().paths.data)
+    if body.get("csv"):
+        result = import_csv_text(
+            data_dir,
+            str(body["csv"]),
+            program_id=program_id,
+            source=str(body.get("source") or "screener_export"),
+            note=note,
+        )
+    else:
+        payload = body.get("rows") or body.get("symbols") or body.get("json")
+        if payload is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide csv=... or rows=/symbols=/json= fundamentals payload",
+            )
+        result = import_json_payload(
+            data_dir,
+            payload,
+            program_id=program_id,
+            source=source,
+            note=note,
+        )
+
+    # Optional: push each imported row into IRA operator-snapshot ladder
+    if body.get("push_to_ira") and result.get("rows"):
+        ira_out: list[dict] = []
+        try:
+            research = _app(request).container.resolve("investment_research")
+        except Exception:  # noqa: BLE001
+            research = None
+        if research is not None:
+            for row in result["rows"][: int(body.get("push_to_ira_limit") or 40)]:
+                sym = row.get("symbol")
+                if not sym:
+                    continue
+                fields = {
+                    k: row[k]
+                    for k in (
+                        "roe",
+                        "roce",
+                        "roic",
+                        "debt_to_equity",
+                        "pe",
+                        "pb",
+                        "fcf",
+                        "operating_margin",
+                        "net_margin",
+                        "revenue_cagr",
+                        "earnings_cagr",
+                        "promoter_holding",
+                        "pledge_pct",
+                        "price",
+                        "shares",
+                        "sector",
+                    )
+                    if row.get(k) is not None
+                }
+                # IRA / ranking expect fraction ROE when >1.5 stored as percent
+                for ratio in ("roe", "roic"):
+                    if fields.get(ratio) is not None and float(fields[ratio]) > 1.5:
+                        fields[ratio] = float(fields[ratio]) / 100.0
+                try:
+                    ira_out.append(
+                        research.apply_operator_snapshot(
+                            str(sym),
+                            fields,
+                            program_id=program_id,
+                            as_of=row.get("as_of"),
+                            note=note or "Fundamentals import (IIP.3)",
+                            evidence_confidence=str(
+                                body.get("evidence_confidence") or "estimated"
+                            ),
+                            auto_refresh=bool(body.get("auto_refresh", False)),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    ira_out.append({"symbol": sym, "error": str(exc)[:200]})
+        result["ira"] = {"pushed": len(ira_out), "items": ira_out[:10]}
+    return result
+
+
+@v1_router.post("/market/fundamentals/import-drop", tags=["programs"])
+def post_market_fundamentals_import_drop(
+    program_id: str = "market_intelligence",
+) -> dict:
+    """IIP.3 — ingest files from data/imports/fundamentals/."""
+    from atlas.config import get_config
+    from atlas.investment.fundamentals import import_drop_folder
+
+    return import_drop_folder(str(get_config().paths.data), program_id=program_id)
+
+
+@v1_router.get("/market/company-documents", tags=["programs"])
+def get_market_company_documents(
+    program_id: str = "market_intelligence",
+    symbol: str | None = None,
+    limit: int = 40,
+) -> dict:
+    """IIP.4 — list imported company documents (AR / quarterly / deck / transcript)."""
+    from atlas.config import get_config
+    from atlas.investment.company_documents import list_documents
+
+    return list_documents(
+        str(get_config().paths.data),
+        program_id=program_id,
+        symbol=symbol,
+        limit=limit,
+    )
+
+
+@v1_router.post("/market/company-documents/import", tags=["programs"])
+def post_market_company_documents_import(
+    request: Request,
+    body: dict | None = None,
+) -> dict:
+    """IIP.4 — import company PDF/TXT by host path or pasted text → IRA."""
+    from atlas.config import get_config
+
+    body = body or {}
+    symbol = str(body.get("symbol") or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol required")
+    path = body.get("path")
+    text = body.get("text")
+    if not path and text is None:
+        raise HTTPException(status_code=400, detail="Provide path= or text=")
+    program_id = str(body.get("program_id") or "market_intelligence")
+    push = body.get("push_to_ira", True)
+    if push:
+        try:
+            research = _app(request).container.resolve("investment_research")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=503, detail=f"investment research unavailable: {exc}"
+            ) from exc
+        return research.apply_company_document(
+            symbol,
+            kind=str(body.get("kind") or "annual"),
+            path=str(path) if path else None,
+            text=str(text) if text is not None else None,
+            title=str(body.get("title") or ""),
+            as_of=body.get("as_of"),
+            period=str(body.get("period") or ""),
+            note=str(body.get("note") or ""),
+            program_id=program_id,
+            auto_refresh=bool(body.get("auto_refresh", True)),
+            apply_numeric_fields=bool(body.get("apply_numeric_fields", True)),
+            ocr_enabled=bool(body.get("ocr_enabled", True)),
+        )
+    from atlas.investment.company_documents import ingest_path
+
+    return ingest_path(
+        str(get_config().paths.data),
+        path or "",
+        symbol=symbol,
+        kind=str(body.get("kind") or "annual"),
+        program_id=program_id,
+        as_of=body.get("as_of"),
+        period=str(body.get("period") or ""),
+        note=str(body.get("note") or ""),
+        title=str(body.get("title") or ""),
+        text_override=str(text) if text is not None else None,
+        ocr_enabled=bool(body.get("ocr_enabled", True)),
+    )
+
+
+@v1_router.post("/market/company-documents/import-drop", tags=["programs"])
+def post_market_company_documents_import_drop(
+    request: Request,
+    body: dict | None = None,
+) -> dict:
+    """IIP.4 — ingest drop folder + optionally push each file to IRA."""
+    from atlas.config import get_config
+    from atlas.investment.company_documents import import_drop_folder
+    from pathlib import Path
+
+    body = body or {}
+    program_id = str(body.get("program_id") or "market_intelligence")
+    data_dir = str(get_config().paths.data)
+    push = body.get("push_to_ira", True)
+    # Import files into manifests first (moves to done/)
+    dropped = import_drop_folder(data_dir, program_id=program_id)
+    if not push:
+        return dropped
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        dropped["ira_error"] = str(exc)[:200]
+        return dropped
+    ira_items: list[dict] = []
+    done_dir = Path(data_dir) / "imports" / "company_documents" / "done"
+    for row in dropped.get("files") or []:
+        if row.get("error") or not row.get("symbol"):
+            continue
+        fname = row.get("file")
+        fpath = done_dir / fname if fname else None
+        if not fpath or not fpath.is_file():
+            continue
+        try:
+            ira_items.append(
+                research.apply_company_document(
+                    str(row["symbol"]),
+                    kind=str(row.get("kind") or "annual"),
+                    path=str(fpath),
+                    program_id=program_id,
+                    note=f"drop:{fname}",
+                    auto_refresh=bool(body.get("auto_refresh", False)),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            ira_items.append({"symbol": row.get("symbol"), "error": str(exc)[:200]})
+    dropped["ira"] = {
+        "pushed": sum(1 for x in ira_items if x.get("ok")),
+        "items": [
+            {
+                "symbol": x.get("symbol"),
+                "claims_count": x.get("claims_count"),
+                "coverage_after": x.get("coverage_after"),
+                "lifted": x.get("lifted"),
+                "error": x.get("error"),
+            }
+            for x in ira_items[:20]
+        ],
+    }
+    return dropped
+
+
+@v1_router.get("/market/mkg", tags=["programs"])
+def get_market_mkg(
+    limit_nodes: int = 40,
+    limit_edges: int = 60,
+    reseed: bool = False,
+) -> dict:
+    """IIP.5 — Market Knowledge Graph snapshot."""
+    from atlas.config import get_config
+    from atlas.investment import mkg as mkg_mod
+
+    data_dir = str(get_config().paths.data)
+    graph = mkg_mod.ensure_seeded(data_dir, force=reseed)
+    return mkg_mod.graph_view(graph, limit_nodes=limit_nodes, limit_edges=limit_edges)
+
+
+@v1_router.get("/market/mkg/neighborhood", tags=["programs"])
+def get_market_mkg_neighborhood(
+    symbol: str | None = None,
+    node: str | None = None,
+    depth: int = 1,
+    limit: int = 80,
+) -> dict:
+    """IIP.5 — 1-hop neighborhood around a company or node."""
+    from atlas.config import get_config
+    from atlas.investment import mkg as mkg_mod
+
+    if not symbol and not node:
+        raise HTTPException(status_code=400, detail="symbol= or node= required")
+    graph = mkg_mod.ensure_seeded(str(get_config().paths.data))
+    return mkg_mod.neighborhood(graph, symbol=symbol, node=node, depth=depth, limit=limit)
+
+
+@v1_router.get("/market/mkg/why-own/{symbol}", tags=["programs"])
+def get_market_mkg_why_own(
+    symbol: str,
+    program_id: str = "market_intelligence",
+) -> dict:
+    """IIP.5 — Why own/watch X? (theme + policy edges + fundamentals cites)."""
+    from atlas.config import get_config
+    from atlas.investment import mkg as mkg_mod
+
+    data_dir = str(get_config().paths.data)
+    graph = mkg_mod.ensure_seeded(data_dir)
+    fin = mkg_mod.financial_cites_for(data_dir, symbol, program_id=program_id)
+    return mkg_mod.why_own(graph, symbol, financial_cites=fin)
+
+
+@v1_router.get("/market/mkg/who-benefits", tags=["programs"])
+def get_market_mkg_who_benefits(theme_id: str, limit: int = 40) -> dict:
+    """IIP.5 — Who benefits from theme Y?"""
+    from atlas.config import get_config
+    from atlas.investment import mkg as mkg_mod
+
+    if not (theme_id or "").strip():
+        raise HTTPException(status_code=400, detail="theme_id required")
+    graph = mkg_mod.ensure_seeded(str(get_config().paths.data))
+    return mkg_mod.who_benefits(graph, theme_id=theme_id, limit=limit)
+
+
+@v1_router.post("/market/mkg/reseed", tags=["programs"])
+def post_market_mkg_reseed() -> dict:
+    """IIP.5 — rebuild hermetic MKG from themes + policy catalog."""
+    from atlas.config import get_config
+    from atlas.investment import mkg as mkg_mod
+    from atlas.investment.mkg.store import store_path
+
+    data_dir = str(get_config().paths.data)
+    graph = mkg_mod.ensure_seeded(data_dir, force=True)
+    return {
+        "ok": True,
+        "stats": graph.get("stats"),
+        "path": str(store_path(data_dir)),
+        "graph": mkg_mod.graph_view(graph, limit_nodes=15, limit_edges=20),
+    }
+
+
+@v1_router.get("/market/score/{symbol}", tags=["programs"])
+def get_market_investment_score(
+    request: Request,
+    symbol: str,
+    horizon: str = "long_term",
+    program_id: str = "market_intelligence",
+) -> dict:
+    """IIP.6 — multi-axis investment score + dual confidence."""
+    from atlas.investment.scoring import score_from_awareness
+
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    aw = research.awareness(symbol, program_id=program_id)
+    score = score_from_awareness(aw, horizon=horizon)
+    gate = research.gate_buy(symbol, program_id=program_id)
+    return {
+        "symbol": score.get("symbol") or symbol,
+        "score": score,
+        "gate": {
+            "allowed": gate.get("allowed"),
+            "action": gate.get("action"),
+            "reasons": gate.get("reasons"),
+            "score_band": gate.get("score_band"),
+            "research_confidence": gate.get("research_confidence"),
+            "investment_confidence": gate.get("investment_confidence"),
+        },
+        "note": score.get("note"),
+    }
+
+
+@v1_router.get("/market/themes", tags=["programs"])
+def list_market_themes() -> dict:
+    """IIP.2 — macro theme seeds (hypothesis → beneficiaries)."""
+    from atlas.investment.themes import themes_view
+
+    return themes_view()
+
+
+@v1_router.get("/market/discovery", tags=["programs"])
+def get_market_discovery(request: Request) -> dict:
+    """IIP.2 — latest opportunity discovery run."""
+    from atlas.config import get_config
+    from atlas.investment.discovery import load_latest_discovery
+
+    return load_latest_discovery(str(get_config().paths.data))
+
+
+@v1_router.post("/market/discovery/run", tags=["programs"])
+def run_market_discovery_now(request: Request, body: dict | None = None) -> dict:
+    """Operator-triggered discovery tick (bounded scan)."""
+    from atlas.config import get_config
+    from atlas.workers.base import TickContext
+    from atlas.workers.opportunity_discovery import OpportunityDiscoveryWorker
+
+    body = body or {}
+    try:
+        reader = _app(request).container.resolve("market_reader")
+    except Exception:
+        reader = None
+    worker = OpportunityDiscoveryWorker(
+        market_reader=reader,
+        data_dir=str(get_config().paths.data),
+    )
+    cfg = {
+        "provider": str(body.get("provider") or "yahoo"),
+        "max_interesting": int(body.get("max_interesting") or 40),
+        "max_enqueue_research": int(body.get("max_enqueue_research") or 10),
+        "max_scan": int(body.get("max_scan") or 120),
+        "include_themes": body.get("include_themes", True),
+    }
+    if body.get("universes"):
+        cfg["universes"] = body["universes"]
+    result = worker.do_tick(
+        TickContext(
+            worker_id="api-discovery",
+            mission_id="api-discovery",
+            config=cfg,
+            state={},
+            inputs=[],
+            config_version=1,
+        )
+    )
+    latest = worker.latest()
+    return {"note": result.note, "state": result.state, "discovery": latest}
+
+
 @v1_router.get("/market/company-providers", tags=["programs"])
 def list_company_providers(request: Request) -> dict:
     """List company/filing adapters (MI.5 — official preferred, no scrape)."""

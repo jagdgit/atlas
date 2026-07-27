@@ -1588,7 +1588,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             policy_engine=policy_engine,
             experience_os=experience_os,
             investment_research=investment_research,
+            data_dir=str(cfg.paths.data),
             logger=get_logger("atlas.workers.investment_universe"),
+        )
+    )
+    from atlas.workers.opportunity_discovery import OpportunityDiscoveryWorker
+
+    worker_manager.register_worker_type(
+        OpportunityDiscoveryWorker(
+            market_reader=market_reader_service,
+            events=events,
+            data_dir=str(cfg.paths.data),
+            logger=get_logger("atlas.workers.opportunity_discovery"),
         )
     )
     from atlas.workers.government_intelligence import GovernmentIntelligenceWorker
@@ -1622,6 +1633,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         InvestorReportsWorker(
             mailer=investor_mailer,
             portfolio=portfolio_service,
+            data_dir=str(cfg.paths.data),
             logger=get_logger("atlas.workers.investor_reports"),
         )
     )

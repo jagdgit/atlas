@@ -6,10 +6,10 @@
 #   - crash / OOM → systemd restarts it
 #   - operator can stop / start / restart cleanly
 Description=Atlas AI Operating System
-After=network-online.target postgresql.service
-Wants=network-online.target
+After=network-online.target postgresql.service NetworkManager-wait-online.service
+Wants=network-online.target NetworkManager-wait-online.service
 # Uncomment if Ollama is a systemd unit on this host:
-# After=network-online.target postgresql.service ollama.service
+# After=network-online.target postgresql.service ollama.service NetworkManager-wait-online.service
 
 [Service]
 Type=simple

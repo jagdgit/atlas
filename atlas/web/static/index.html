@@ -27,6 +27,7 @@
         <button class="nav-btn active" data-view="overview">Overview</button>
         <button class="nav-btn" data-view="chat">Chat</button>
         <button class="nav-btn" data-view="learner">Market</button>
+        <button class="nav-btn" data-view="iip">Invest intel</button>
         <button class="nav-btn" data-view="personal">Personal</button>
         <button class="nav-btn" data-view="programs">Programs</button>
         <button class="nav-btn" data-view="missions">Missions</button>
@@ -276,6 +277,33 @@
         </div>
       </section>
 
+      <!-- Investment Intelligence operator review (IIP) -->
+      <section id="view-iip" class="view hidden">
+        <div class="panel-head">
+          <h2>Investment Intelligence</h2>
+          <div class="panel-actions">
+            <button id="iip-refresh" class="link" type="button">refresh</button>
+            <button id="iip-run-discovery" class="link" type="button">Run discovery now</button>
+            <button id="iip-save-universes" class="btn" type="button">Save universes</button>
+          </div>
+        </div>
+        <p class="muted learner-intro">
+          Review what Atlas uses (sources, methodology, capabilities), enable broader universes,
+          and triage web/data fetch failures so you can help Atlas get missing data.
+        </p>
+        <div id="iip-failures" class="learner-panel"></div>
+        <div id="iip-universes" class="learner-panel"></div>
+        <div id="iip-discovery" class="learner-panel"></div>
+        <div id="iip-themes" class="learner-panel"></div>
+        <div id="iip-fundamentals" class="learner-panel"></div>
+        <div id="iip-documents" class="learner-panel"></div>
+        <div id="iip-mkg" class="learner-panel"></div>
+        <div id="iip-sources" class="learner-panel"></div>
+        <div id="iip-capabilities" class="learner-panel"></div>
+        <div id="iip-methodology" class="learner-panel"></div>
+        <div id="iip-help" class="learner-panel"></div>
+      </section>
+
       <!-- Missions -->
       <section id="view-missions" class="view hidden">
         <div class="panel-head">
@@ -395,6 +423,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=dash31"></script>
+  <script src="./app.js?v=dash37"></script>
 </body>
 </html>

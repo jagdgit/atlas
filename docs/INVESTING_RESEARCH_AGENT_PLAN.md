@@ -9,6 +9,7 @@
 > [`RESOURCE_OS.md`](RESOURCE_OS.md) ·
 > [`OPERATOR_COMMUNICATION.md`](OPERATOR_COMMUNICATION.md)  
 > **Open item:** `OI-IRA0` — Investing Research Agent spine  
+> **Stage 4 feed:** [`INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md`](INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md) 🔒 — themes, discovery, MKG, dual confidence, Thesis Tracker
 > **Non-negotiables:** P10 simulation-only · MI4/MI5 compliant sources · Capability-gap honesty · host-first Resource OS (IR-RO11)
 
 ---

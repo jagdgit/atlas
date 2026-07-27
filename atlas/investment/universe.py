@@ -66,11 +66,21 @@ _NIFTY50_RAW: tuple[tuple[str, str, str], ...] = (
 INDEX_NIFTY50 = "NIFTY50"
 INDEX_NIFTY100 = "NIFTY100"
 INDEX_NIFTY500 = "NIFTY500"  # staged: same as NIFTY100 until full list lands
+INDEX_NIFTY_NEXT50 = "NIFTY_NEXT50"
+INDEX_NIFTY_MIDCAP150 = "NIFTY_MIDCAP150"
+INDEX_NIFTY_SMALLCAP250 = "NIFTY_SMALLCAP250"
 
-KNOWN_INDICES = (INDEX_NIFTY50, INDEX_NIFTY100, INDEX_NIFTY500)
+KNOWN_INDICES = (
+    INDEX_NIFTY50,
+    INDEX_NIFTY_NEXT50,
+    INDEX_NIFTY100,
+    INDEX_NIFTY_MIDCAP150,
+    INDEX_NIFTY_SMALLCAP250,
+    INDEX_NIFTY500,
+)
 
 # IRA.10 — staged mid/large next-50 seed (not an official NSE reconstitutions dump).
-# Merged with NIFTY50 for NIFTY100 / NIFTY500 until a full membership list is curated.
+# Also used as NIFTY_NEXT50 membership (IIP.1).
 _NIFTY100_EXTRA_RAW: tuple[tuple[str, str, str], ...] = (
     ("ABB", "ABB India", "Capital Goods"),
     ("ABBOTINDIA", "Abbott India", "Healthcare"),
@@ -113,6 +123,108 @@ _NIFTY100_EXTRA_RAW: tuple[tuple[str, str, str], ...] = (
     ("ZOMATO", "Zomato", "Consumer Services"),
 )
 
+# IIP.1 — staged midcap seed (not full official Nifty Midcap 150).
+_MIDCAP_EXTRA_RAW: tuple[tuple[str, str, str], ...] = (
+    ("ASTRAL", "Astral", "Capital Goods"),
+    ("BALKRISHNA", "Balkrishna Industries", "Automobile"),
+    ("BHARATFORG", "Bharat Forge", "Automobile"),
+    ("COFORGE", "Coforge", "Information Technology"),
+    ("CONCOR", "Container Corporation", "Services"),
+    ("COROMANDEL", "Coromandel International", "Chemicals"),
+    ("DEEPAKNTR", "Deepak Nitrite", "Chemicals"),
+    ("ESCORTS", "Escorts Kubota", "Automobile"),
+    ("EXIDEIND", "Exide Industries", "Automobile"),
+    ("FACT", "FACT", "Chemicals"),
+    ("FORTIS", "Fortis Healthcare", "Healthcare"),
+    ("GLENMARK", "Glenmark Pharma", "Healthcare"),
+    ("GODREJPROP", "Godrej Properties", "Realty"),
+    ("GUJGASLTD", "Gujarat Gas", "Oil Gas & Fuels"),
+    ("HFCL", "HFCL", "Telecommunication"),
+    ("HUDCO", "HUDCO", "Financial Services"),
+    ("IDEA", "Vodafone Idea", "Telecommunication"),
+    ("IEX", "Indian Energy Exchange", "Financial Services"),
+    ("IGL", "Indraprastha Gas", "Oil Gas & Fuels"),
+    ("INDUSINDBK", "IndusInd Bank", "Financial Services"),
+    ("INDUSTOWER", "Indus Towers", "Telecommunication"),
+    ("IPCALAB", "IPCA Laboratories", "Healthcare"),
+    ("JINDALSTEL", "Jindal Steel & Power", "Metals & Mining"),
+    ("JSL", "Jindal Stainless", "Metals & Mining"),
+    ("KEI", "KEI Industries", "Capital Goods"),
+    ("KPITTECH", "KPIT Technologies", "Information Technology"),
+    ("LTTS", "L&T Technology Services", "Information Technology"),
+    ("MOTHERSON", "Samvardhana Motherson", "Automobile"),
+    ("MPHASIS", "Mphasis", "Information Technology"),
+    ("MRF", "MRF", "Automobile"),
+    ("NHPC", "NHPC", "Power"),
+    ("NMDC", "NMDC", "Metals & Mining"),
+    ("OBEROIRLTY", "Oberoi Realty", "Realty"),
+    ("OFSS", "Oracle Financial Services", "Information Technology"),
+    ("OIL", "Oil India", "Oil Gas & Fuels"),
+    ("PATANJALI", "Patanjali Foods", "FMCG"),
+    ("PETRONET", "Petronet LNG", "Oil Gas & Fuels"),
+    ("POLYCAB", "Polycab India", "Capital Goods"),
+    ("PRESTIGE", "Prestige Estates", "Realty"),
+    ("SAIL", "SAIL", "Metals & Mining"),
+    ("SOLARINDS", "Solar Industries", "Chemicals"),
+    ("SONACOMS", "Sona BLW Precision", "Automobile"),
+    ("SUNTV", "Sun TV Network", "Media"),
+    ("SUPREMEIND", "Supreme Industries", "Capital Goods"),
+    ("SUZLON", "Suzlon Energy", "Capital Goods"),
+    ("SYNGENE", "Syngene International", "Healthcare"),
+    ("TATACHEM", "Tata Chemicals", "Chemicals"),
+    ("TATACOMM", "Tata Communications", "Telecommunication"),
+    ("TATAELXSI", "Tata Elxsi", "Information Technology"),
+    ("TATAPOWER", "Tata Power", "Power"),
+    ("TIINDIA", "Tube Investments", "Automobile"),
+    ("TORNTPOWER", "Torrent Power", "Power"),
+    ("UNOMINDA", "UNO Minda", "Automobile"),
+    ("VOLTAS", "Voltas", "Consumer Durables"),
+    ("ZEEL", "Zee Entertainment", "Media"),
+)
+
+# IIP.1 — staged smallcap seed (not full official Nifty Smallcap 250).
+_SMALLCAP_EXTRA_RAW: tuple[tuple[str, str, str], ...] = (
+    ("AFFLE", "Affle India", "Information Technology"),
+    ("ANGELONE", "Angel One", "Financial Services"),
+    ("BSE", "BSE Ltd", "Financial Services"),
+    ("CAMS", "CAMS", "Financial Services"),
+    ("CDSL", "CDSL", "Financial Services"),
+    ("CLEAN", "Clean Science", "Chemicals"),
+    ("CRAFTSMAN", "Craftsman Automation", "Automobile"),
+    ("CYIENT", "Cyient", "Information Technology"),
+    ("DATAPATTNS", "Data Patterns", "Capital Goods"),
+    ("DEVYANI", "Devyani International", "Consumer Services"),
+    ("EASEMYTRIP", "Easy Trip Planners", "Consumer Services"),
+    ("ELECON", "Elecon Engineering", "Capital Goods"),
+    ("GESHIP", "Great Eastern Shipping", "Services"),
+    ("HAPPSTMNDS", "Happiest Minds", "Information Technology"),
+    ("HBLPOWER", "HBL Power", "Capital Goods"),
+    ("IIFL", "IIFL Finance", "Financial Services"),
+    ("INTELLECT", "Intellect Design", "Information Technology"),
+    ("JBCHEPHARM", "JB Chemicals", "Healthcare"),
+    ("JUBLPHARMA", "Jubilant Pharmova", "Healthcare"),
+    ("KAYNES", "Kaynes Technology", "Capital Goods"),
+    ("LATENTVIEW", "Latent View", "Information Technology"),
+    ("LXCHEM", "Laxmi Organic", "Chemicals"),
+    ("MAPMYINDIA", "C.E. Info Systems", "Information Technology"),
+    ("MAZDOCK", "Mazagon Dock", "Capital Goods"),
+    ("MEDPLUS", "Medplus Health", "Healthcare"),
+    ("METROPOLIS", "Metropolis Healthcare", "Healthcare"),
+    ("NAVINFLUOR", "Navin Fluorine", "Chemicals"),
+    ("NEWGEN", "Newgen Software", "Information Technology"),
+    ("PPLPHARMA", "Piramal Pharma", "Healthcare"),
+    ("PRAJIND", "Praj Industries", "Capital Goods"),
+    ("RADICO", "Radico Khaitan", "FMCG"),
+    ("ROUTE", "Route Mobile", "Telecommunication"),
+    ("RVNL", "Rail Vikas Nigam", "Construction"),
+    ("TANLA", "Tanla Platforms", "Telecommunication"),
+    ("TEJASNET", "Tejas Networks", "Telecommunication"),
+    ("TRITURBINE", "Triveni Turbine", "Capital Goods"),
+    ("UJJIVANSFB", "Ujjivan Small Finance", "Financial Services"),
+    ("WELCORP", "Welspun Corp", "Metals & Mining"),
+    ("ZENTEC", "Zen Technologies", "Capital Goods"),
+)
+
 
 def _row(sym: str, name: str, sector: str) -> dict[str, Any]:
     yahoo = f"{sym}.NS"
@@ -134,8 +246,18 @@ NIFTY100_EXTRA: tuple[dict[str, Any], ...] = tuple(
     _row(s, n, sec) for s, n, sec in _NIFTY100_EXTRA_RAW
 )
 
+NIFTY_NEXT50: tuple[dict[str, Any], ...] = NIFTY100_EXTRA
 
-def _merge_unique(*packs: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+MIDCAP_EXTRA: tuple[dict[str, Any], ...] = tuple(
+    _row(s, n, sec) for s, n, sec in _MIDCAP_EXTRA_RAW
+)
+
+SMALLCAP_EXTRA: tuple[dict[str, Any], ...] = tuple(
+    _row(s, n, sec) for s, n, sec in _SMALLCAP_EXTRA_RAW
+)
+
+
+def merge_unique(*packs: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for pack in packs:
@@ -148,24 +270,82 @@ def _merge_unique(*packs: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
     return out
 
 
+def _merge_unique(*packs: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return merge_unique(*packs)
+
+
+def universe_meta(index: str) -> dict[str, Any]:
+    key = (index or INDEX_NIFTY50).strip().upper().replace(" ", "")
+    meta = {
+        INDEX_NIFTY50: {
+            "family": "index",
+            "label": "Nifty 50",
+            "staged": False,
+            "note": "Primary India large-cap snapshot (lags official reconstitutions).",
+        },
+        INDEX_NIFTY_NEXT50: {
+            "family": "index",
+            "label": "Nifty Next 50 (staged)",
+            "staged": True,
+            "note": "Staged seed ≈ next-50 names — not a live NSE dump.",
+        },
+        INDEX_NIFTY100: {
+            "family": "index",
+            "label": "Nifty 100 (staged)",
+            "staged": True,
+            "note": "NIFTY50 ∪ Next50 seed.",
+        },
+        INDEX_NIFTY_MIDCAP150: {
+            "family": "index",
+            "label": "Nifty Midcap (staged seed)",
+            "staged": True,
+            "note": "Curated midcap seed for IIP.1 — not full Midcap 150 yet.",
+        },
+        INDEX_NIFTY_SMALLCAP250: {
+            "family": "index",
+            "label": "Nifty Smallcap (staged seed)",
+            "staged": True,
+            "note": "Curated smallcap seed for IIP.1 — not full Smallcap 250 yet.",
+        },
+        INDEX_NIFTY500: {
+            "family": "index",
+            "label": "Nifty 500 (staged)",
+            "staged": True,
+            "note": "Currently NIFTY100 ∪ midcap ∪ smallcap seeds until full list curated.",
+        },
+    }
+    return dict(meta.get(key) or {"family": "index", "label": key, "staged": True, "note": ""})
+
+
 def membership(
     index: str = INDEX_NIFTY50,
     *,
     extra_members: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return constituent rows for an index.
-
-    NIFTY100 = NIFTY50 + staged mid/large extras (IRA.10).
-    NIFTY500 currently mirrors NIFTY100 until a full list is curated.
-    Optional ``extra_members`` always append (custom / pinned expansion).
-    """
+    """Return constituent rows for an index (IIP.1 multi-set)."""
     key = (index or INDEX_NIFTY50).strip().upper().replace(" ", "")
+    aliases = {
+        "NIFTYNEXT50": INDEX_NIFTY_NEXT50,
+        "NEXT50": INDEX_NIFTY_NEXT50,
+        "NIFTYMIDCAP150": INDEX_NIFTY_MIDCAP150,
+        "MIDCAP150": INDEX_NIFTY_MIDCAP150,
+        "NIFTYSMALLCAP250": INDEX_NIFTY_SMALLCAP250,
+        "SMALLCAP250": INDEX_NIFTY_SMALLCAP250,
+    }
+    key = aliases.get(key, key)
+
     if key in {"NIFTY50", "NIFTY_50", "CNX50"}:
         rows = [dict(r) for r in NIFTY50]
+    elif key in {INDEX_NIFTY_NEXT50, "NIFTY_NEXT_50"}:
+        rows = [dict(r) for r in NIFTY_NEXT50]
     elif key in {"NIFTY100", "NIFTY_100"}:
-        rows = _merge_unique(NIFTY50, NIFTY100_EXTRA)
+        rows = merge_unique(NIFTY50, NIFTY_NEXT50)
+    elif key in {INDEX_NIFTY_MIDCAP150, "NIFTY_MIDCAP"}:
+        rows = merge_unique(MIDCAP_EXTRA)
+    elif key in {INDEX_NIFTY_SMALLCAP250, "NIFTY_SMALLCAP"}:
+        rows = merge_unique(SMALLCAP_EXTRA)
     elif key in {"NIFTY500", "NIFTY_500"}:
-        rows = _merge_unique(NIFTY50, NIFTY100_EXTRA)
+        rows = merge_unique(NIFTY50, NIFTY_NEXT50, MIDCAP_EXTRA, SMALLCAP_EXTRA)
     elif key in {"CUSTOM", "PINNED"}:
         rows = []
     else:
@@ -192,6 +372,7 @@ def membership(
             }
         )
     return rows
+
 
 
 def symbols(index: str = INDEX_NIFTY50) -> list[str]:

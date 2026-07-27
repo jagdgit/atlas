@@ -217,6 +217,19 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
     },
+    "opportunity_discovery": {
+        "mission_kind": KIND_MONITORING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            learn=STAGE_PARTIAL,
+            decide=STAGE_PARTIAL,  # enqueue research suggestions
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
     "event_research": {
         "mission_kind": KIND_RESEARCH,
         "never_stops": False,

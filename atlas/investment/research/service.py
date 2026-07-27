@@ -52,6 +52,7 @@ from atlas.investment.research.evidence import (
     prioritize_missing_inputs,
     schedule_research_questions,
     section_evidence_levels,
+    sections_impacted_by_claims,
     sections_impacted_by_fields,
     sections_impacted_by_filings,
 )
@@ -192,7 +193,7 @@ class InvestmentResearchService:
             caution = True
         # warn: coverage looks "done enough" while confidence stays very_low
         caution_cov_conf = cov >= 35 and conf == CONF_VERY_LOW
-        return {
+        out: dict[str, Any] = {
             "version": VERSION,
             "symbol": doc.get("symbol"),
             "program_id": program_id,
@@ -252,7 +253,51 @@ class InvestmentResearchService:
                 thesis.get("distinctiveness") if thesis else None
             ),
             "sector_pack": packs.pack_by_id(doc.get("pack")) if doc.get("pack") else None,
+            "mkg": self._mkg_awareness(
+                str(doc.get("symbol") or symbol),
+                program_id=program_id,
+            ),
         }
+        # IIP.6 — dual-confidence investment score on awareness
+        try:
+            from atlas.investment.scoring import score_from_awareness
+
+            aw_for_score = dict(out)
+            aw_for_score["sections"] = sections
+            out["investment_score"] = score_from_awareness(aw_for_score)
+        except Exception:  # noqa: BLE001
+            out["investment_score"] = None
+        return out
+
+    def _mkg_awareness(self, symbol: str, *, program_id: str = DEFAULT_PROGRAM) -> dict[str, Any]:
+        """IIP.5 — attach MKG why-own + neighborhood to dossier awareness."""
+        try:
+            from atlas.investment import mkg as mkg_mod
+
+            root = getattr(self._store, "_root", None)
+            data_dir = str(root) if root is not None else None
+            graph = mkg_mod.ensure_seeded(data_dir)
+            fin = mkg_mod.financial_cites_for(data_dir, symbol, program_id=program_id)
+            why = mkg_mod.why_own(graph, symbol, financial_cites=fin)
+            hood = mkg_mod.neighborhood(graph, symbol=symbol, depth=1, limit=40)
+            return {
+                "why_own": why,
+                "neighborhood": {
+                    "nodes": hood.get("nodes") or [],
+                    "edges": hood.get("edges") or [],
+                    "status": hood.get("status"),
+                    "stats": hood.get("stats"),
+                },
+                "summary": why.get("summary"),
+                "status": why.get("status"),
+            }
+        except Exception:  # noqa: BLE001
+            return {
+                "status": "unavailable",
+                "summary": "MKG unavailable",
+                "why_own": {},
+                "neighborhood": {"nodes": [], "edges": []},
+            }
 
     def start(
         self,
@@ -821,6 +866,230 @@ class InvestmentResearchService:
             "awareness": self.awareness(sym, program_id=program_id),
         }
 
+    def apply_company_document(
+        self,
+        symbol: str,
+        *,
+        kind: str = "annual",
+        path: str | None = None,
+        text: str | None = None,
+        title: str = "",
+        as_of: str | None = None,
+        period: str = "",
+        note: str = "",
+        program_id: str = DEFAULT_PROGRAM,
+        auto_refresh: bool = True,
+        apply_numeric_fields: bool = True,
+        ocr_enabled: bool = True,
+    ) -> dict[str, Any]:
+        """IIP.4 — ingest company PDF/text → extracted claims → dossier evidence."""
+        from atlas.investment import filings as fl_mod
+        from atlas.investment.company_documents import ingest_path
+
+        sym = normalize_symbol(symbol)
+        before = self.awareness(sym, program_id=program_id)
+        before_cov = float(before.get("coverage") or 0)
+        before_q = str((before.get("research_quality") or {}).get("level") or "")
+
+        root = getattr(self._store, "_root", None)
+        data_dir = str(root) if root is not None else None
+        result = ingest_path(
+            data_dir,
+            path or "",
+            symbol=sym,
+            kind=kind,
+            program_id=program_id,
+            as_of=as_of,
+            period=period,
+            note=note,
+            title=title,
+            ocr_enabled=ocr_enabled,
+            text_override=text,
+        )
+        if not result.get("ok") and result.get("reason") == "missing_file" and text is None:
+            return {"ok": False, "reason": "missing_file", "symbol": sym, "path": path}
+
+        manifest = result.get("manifest") or {}
+        claims = list(manifest.get("claims") or [])
+        kind_n = str(manifest.get("kind") or kind)
+        level = level_for_filing(kind_n, source="company_document")
+        title_n = str(manifest.get("title") or title or f"{kind_n} — {sym}")
+
+        filing_row = {
+            "title": title_n,
+            "kind": kind_n,
+            "as_of": manifest.get("as_of") or as_of or "",
+            "url": "",
+            "source": "company_document",
+            "period": period or manifest.get("period") or "",
+            "evidence_level": level,
+            "doc_id": manifest.get("doc_id"),
+            "content_hash": manifest.get("content_hash"),
+            "read_method": manifest.get("read_method"),
+            "claims_count": len(claims),
+        }
+        fl_mod.publish_snapshot(
+            {sym: [filing_row]},
+            program_id=program_id,
+            source="company_document",
+            as_of=as_of,
+            note=note or "Company document import (IIP.4)",
+        )
+
+        doc = self.get_or_create(sym, program_id=program_id)
+        self._add_memory(
+            doc,
+            observation=(
+                f"Company document ingested: {title_n[:80]} "
+                f"({len(claims)} claims, method={manifest.get('read_method')})"
+            ),
+            interpretation=(
+                f"IIP.4 extract · evidence level {level}. "
+                "Claims from document text — not invented line items. "
+                + str(manifest.get("read_note") or "")
+            ),
+            evidence={
+                "level": level,
+                "doc_id": manifest.get("doc_id"),
+                "claims": claims[:12],
+                "source": "company_document",
+                "status": "present" if claims else "empty_extract",
+            },
+            confidence=CONF_LOW if claims else CONF_VERY_LOW,
+        )
+
+        by_section: dict[str, list[dict[str, Any]]] = {}
+        for c in claims:
+            sec = str(c.get("section_hint") or "management")
+            by_section.setdefault(sec, []).append(c)
+        if not by_section and manifest.get("read_outcome") == "ok":
+            by_section["management"] = []
+
+        for sec, sec_claims in by_section.items():
+            existing = (doc.get("sections") or {}).get(sec) or {}
+            fields = dict((existing.get("fields") if isinstance(existing, dict) else {}) or {})
+            ev_list = (
+                list(fields.get("evidence") or [])
+                if isinstance(fields.get("evidence"), list)
+                else []
+            )
+            for c in sec_claims:
+                ev_list.append(
+                    make_evidence(
+                        claim=str(c.get("claim") or "")[:200],
+                        level=level,
+                        status="present",
+                        source="company_document",
+                        ref=str(manifest.get("doc_id") or title_n),
+                        confidence=str(c.get("confidence") or "low"),
+                    )
+                )
+            if not sec_claims and sec == "management":
+                ev_list.append(
+                    make_evidence(
+                        claim=(
+                            f"Document attached ({title_n[:60]}) — "
+                            "no guidance/KPI patterns matched"
+                        ),
+                        level=level,
+                        status=(
+                            "present"
+                            if manifest.get("read_outcome") == "ok"
+                            else "not_found"
+                        ),
+                        source="company_document",
+                        ref=str(manifest.get("doc_id") or ""),
+                        confidence=CONF_VERY_LOW,
+                    )
+                )
+            fields["evidence"] = ev_list[-16:]
+            refs = list(fields.get("filings_refs") or [])
+            refs.append(filing_row)
+            fields["filings_refs"] = refs[-6:]
+            fields["company_document"] = {
+                "doc_id": manifest.get("doc_id"),
+                "kind": kind_n,
+                "claims_count": len(claims),
+                "read_method": manifest.get("read_method"),
+            }
+            mark_section(
+                doc,
+                sec,
+                fields=fields,
+                confidence=CONF_LOW if claims else CONF_VERY_LOW,
+                gaps=[]
+                if claims
+                else [
+                    f"{sec}: document attached but extract found few claims — deepen manually"
+                ],
+                sources=["company_document", "filings"],
+                status="present",
+            )
+
+        self._store.save(doc)
+
+        snap_result = None
+        fields_map = dict(result.get("snapshot_fields") or {})
+        if apply_numeric_fields and fields_map:
+            for ratio in ("roe", "roic"):
+                if fields_map.get(ratio) is not None and float(fields_map[ratio]) > 1.5:
+                    fields_map[ratio] = float(fields_map[ratio]) / 100.0
+            snap_result = self.apply_operator_snapshot(
+                sym,
+                fields_map,
+                program_id=program_id,
+                as_of=as_of or manifest.get("as_of"),
+                note=note or "Numeric fields parsed from company document (IIP.4)",
+                evidence_confidence="estimated",
+                auto_refresh=False,
+            )
+
+        impacted = sections_impacted_by_claims(claims)
+        for sec in sections_impacted_by_filings([filing_row]):
+            if sec not in impacted:
+                impacted.append(sec)
+        refresh_result = None
+        if auto_refresh:
+            if doc.get("phase") in {PHASE_QUEUED, None, ""} or not doc.get("thesis"):
+                self.start(
+                    sym,
+                    program_id=program_id,
+                    mode="mvr",
+                    force=True,
+                    trigger="company_document",
+                )
+            refresh_result = self.refresh_stale(
+                sym, program_id=program_id, force_sections=impacted
+            )
+            doc = self.get_or_create(sym, program_id=program_id)
+            cap_confidence_without_evidence(doc)
+            self._store.save(doc)
+
+        after = self.awareness(sym, program_id=program_id)
+        after_cov = float(after.get("coverage") or 0)
+        after_q = str((after.get("research_quality") or {}).get("level") or "")
+        return {
+            "ok": True,
+            "symbol": sym,
+            "kind": kind_n,
+            "evidence_level": level,
+            "doc_id": manifest.get("doc_id"),
+            "claims_count": len(claims),
+            "claims": claims[:12],
+            "read": result.get("read"),
+            "snapshot_fields": result.get("snapshot_fields"),
+            "numeric_snapshot": snap_result,
+            "impacted_sections": impacted,
+            "refresh": refresh_result,
+            "coverage_before": before_cov,
+            "coverage_after": after_cov,
+            "quality_before": before_q,
+            "quality_after": after_q,
+            "lifted": bool(claims) or after_cov > before_cov,
+            "awareness": after,
+            "manifest_path": result.get("path"),
+        }
+
     def raise_critical_flag(
         self,
         symbol: str,
@@ -1118,6 +1387,28 @@ class InvestmentResearchService:
             action = "watch"
         if any("thesis_invalidating" in r for r in reasons):
             action = "avoid"
+
+        # IIP.6 — score band + dual confidence beside research gate
+        score = aw.get("investment_score") if isinstance(aw.get("investment_score"), dict) else {}
+        if not score:
+            try:
+                from atlas.investment.scoring import score_from_awareness
+
+                score = score_from_awareness({**aw, "sections": (self.get_or_create(sym, program_id=program_id).get("sections") or {})})
+            except Exception:  # noqa: BLE001
+                score = {}
+        # High research + low investment → force watch path even if MVR checklist passed
+        if score.get("path") == "watch" and score.get("path_reason") == "high_research_low_investment":
+            if allowed:
+                allowed = False
+                reasons.append("high_research_low_investment")
+                action = "watch"
+        elif score.get("path") == "avoid":
+            allowed = False
+            if "investment_confidence_very_low" not in reasons and score.get("path_reason"):
+                reasons.append(str(score.get("path_reason")))
+            action = "avoid"
+
         return {
             "allowed": allowed,
             "action": action,
@@ -1125,12 +1416,20 @@ class InvestmentResearchService:
             "symbol": sym,
             "mos_mode": mode,
             "mos": mos,
+            "score_band": score.get("score_band"),
+            "research_confidence": score.get("research_confidence") or aw.get("confidence"),
+            "investment_confidence": score.get("investment_confidence"),
+            "investment_score": score.get("overall"),
+            "score_path": score.get("path"),
             "awareness": {
                 "phase": aw.get("phase"),
                 "coverage": aw.get("coverage"),
                 "confidence": aw.get("confidence"),
                 "mvr_satisfied": aw.get("mvr_satisfied"),
                 "stance": stance,
+                "research_confidence": score.get("research_confidence"),
+                "investment_confidence": score.get("investment_confidence"),
+                "score_band": score.get("score_band"),
             },
         }
 

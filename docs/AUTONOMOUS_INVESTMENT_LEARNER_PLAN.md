@@ -6,7 +6,8 @@
 > [`ATLAS_MISSION_PHILOSOPHY.md`](ATLAS_MISSION_PHILOSOPHY.md) ·
 > [`ATLAS_PLATFORM_ARCHITECTURE.md`](ATLAS_PLATFORM_ARCHITECTURE.md) ·
 > [`MISSIONS_OPERATOR_GUIDE.md`](MISSIONS_OPERATOR_GUIDE.md)  
-> **Open items:** `OI-IL0` (Universe → Rank → Plan → Simulate) · `OI-IL-OX` (orchestration / operator experience ship-along)
+> **Open items:** `OI-IL0` (Universe → Rank → Plan → Simulate) · `OI-IL-OX` (orchestration / operator experience ship-along)  
+> **Stage 4 (next):** [`INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md`](INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md) 🔒 — Theme → Discover → MKG · `OI-IIP0`
 
 ---
 

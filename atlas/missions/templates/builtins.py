@@ -195,6 +195,37 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "investment_universe"),
     },
     {
+        "name": "opportunity_discovery",
+        "template_version": 1,
+        "description": (
+            "IIP.2 — Discovery Engine: screen enabled universes + theme hypotheses → "
+            "interesting ≤40 with why/horizon. Does not buy. Post-close IST cadence."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Opportunity Discovery",
+            "roadmap": "OI-IIP0",
+            "program_id": "market_intelligence",
+            "provider": "yahoo",
+            "max_interesting": 40,
+            "max_enqueue_research": 10,
+            "max_scan": 200,
+            "lookback_bars": 60,
+            "include_themes": True,
+            "use_quality_seed": True,
+            "use_enabled_universes": True,
+            "tick_interval_seconds": 3600,
+        },
+        "worker_specs": [
+            {"type": "opportunity_discovery", "interval_seconds": 3600},
+            # Post-close Mon–Fri ~16:00 IST = 10:30 UTC
+            {"type": "opportunity_discovery", "cron": "30 10 * * 1-5", "interval_seconds": 3600},
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "opportunity_discovery"),
+    },
+    {
         "name": "market_observer",
         "template_version": 4,
         "description": (

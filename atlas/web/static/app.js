@@ -76,6 +76,14 @@ function toast(msg) {
   toast._t = setTimeout(() => t.classList.add("hidden"), 4000);
 }
 
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 /* ---------- auth ---------- */
 function signOut(msg) {
   localStorage.removeItem(KEY_STORE);
@@ -140,6 +148,7 @@ function switchView(view) {
   else if (view === "chat") renderSessionSidebar();
   else if (view === "programs") loadPrograms();
   else if (view === "learner") loadLearner();
+  else if (view === "iip") loadIip();
   else if (view === "missions") loadMissions();
   else if (view === "archive") loadArchive();
   else if (view === "engineering") loadEngineering();
@@ -1540,6 +1549,389 @@ function startLearnerPoll() {
   }, 15000);
 }
 
+async function loadIip() {
+  const failBox = $("#iip-failures");
+  const uniBox = $("#iip-universes");
+  const srcBox = $("#iip-sources");
+  const capBox = $("#iip-capabilities");
+  const methBox = $("#iip-methodology");
+  const helpBox = $("#iip-help");
+  if (!failBox) return;
+  failBox.innerHTML = "<p class='muted'>Loading intelligence catalog…</p>";
+  try {
+    const data = await api("/v1/market/intelligence-catalog");
+    const live = data.live || {};
+    const failures = live.feed_failures || {};
+    const items = failures.items || [];
+    const byReason = failures.by_reason || {};
+    let failHtml = "<div class='panel-head'><h3 class='section-h'>Web / feed failures</h3></div>";
+    failHtml += `<p class='muted small'>${esc(failures.help || "")}</p>`;
+    failHtml += `<p class='small'>Yahoo enabled: <strong>${live.yahoo_enabled ? "yes" : "no"}</strong>`;
+    if (live.providers && live.providers.length) {
+      failHtml += ` · providers: ${live.providers.map((p) => esc(p.name || p)).join(", ")}`;
+    }
+    failHtml += "</p>";
+    if (Object.keys(byReason).length) {
+      failHtml += "<ul class='small'>";
+      Object.entries(byReason).slice(0, 8).forEach(([r, n]) => {
+        failHtml += `<li><code>${esc(r)}</code> ×${n}</li>`;
+      });
+      failHtml += "</ul>";
+    }
+    if (!items.length) {
+      failHtml += "<p class='muted small'>No recent fetch failures logged.</p>";
+    } else {
+      failHtml += "<ul class='small iip-fail-list'>";
+      items.slice(0, 25).forEach((row) => {
+        failHtml += `<li><span class='muted'>${esc((row.ts || "").slice(0, 19))}</span> `
+          + `<strong>${esc(row.provider || "?")}</strong> ${esc(row.symbol || "")} — ${esc(row.reason || "")}</li>`;
+      });
+      failHtml += "</ul>";
+    }
+    failBox.innerHTML = failHtml;
+
+    const uv = live.universes || {};
+    let uniHtml = "<div class='panel-head'><h3 class='section-h'>Universes (IIP.1)</h3></div>";
+    uniHtml += `<p class='muted small'>${esc(uv.note || "")} Union size: <strong>${uv.union_count || 0}</strong></p>`;
+    uniHtml += "<div class='iip-uni-list'>";
+    (uv.universes || []).forEach((u) => {
+      const staged = u.staged ? ", staged" : "";
+      uniHtml += `<label class='iip-uni-row'><input type='checkbox' class='iip-uni-cb' data-uni='${esc(u.id)}' `
+        + `${u.enabled ? "checked" : ""} /> ${esc(u.label)} `
+        + `<span class='muted small'>(${u.count || 0}${staged})</span></label>`;
+      if (u.note) uniHtml += `<div class='muted small' style='margin:-2px 0 6px 24px'>${esc(u.note).slice(0, 160)}</div>`;
+    });
+    uniHtml += "</div>";
+    uniBox.innerHTML = uniHtml;
+
+    const discBox = $("#iip-discovery");
+    const disc = live.discovery || {};
+    let discHtml = "<div class='panel-head'><h3 class='section-h'>Latest discovery (IIP.2)</h3></div>";
+    discHtml += `<p class='muted small'>${esc(disc.note || "Run discovery after enabling universes.")}</p>`;
+    if (disc.ist_date) {
+      discHtml += `<p class='small'>Date <strong>${esc(disc.ist_date)}</strong> · interesting `
+        + `<strong>${disc.interesting_count || (disc.interesting || []).length}</strong>`
+        + ` · scanned ${disc.scanned || "?"} · feed failures ${disc.feed_failures || 0}</p>`;
+    }
+    const interesting = disc.interesting || [];
+    if (!interesting.length) {
+      discHtml += "<p class='muted small'>No discovery run yet — click <em>Run discovery now</em>.</p>";
+    } else {
+      discHtml += "<ul class='small'>";
+      interesting.slice(0, 20).forEach((r) => {
+        discHtml += `<li><strong>${esc(r.symbol)}</strong> <code>${esc(r.mode)}</code> `
+          + `<span class='muted'>${esc(r.horizon)}</span> — ${esc((r.why || "").slice(0, 160))}</li>`;
+      });
+      discHtml += "</ul>";
+    }
+    if (discBox) discBox.innerHTML = discHtml;
+
+    const themeBox = $("#iip-themes");
+    const themes = (live.themes && live.themes.themes) || [];
+    let thHtml = "<div class='panel-head'><h3 class='section-h'>Macro themes</h3></div>";
+    thHtml += `<p class='muted small'>${esc((live.themes && live.themes.note) || "")}</p><ul class='small'>`;
+    themes.forEach((t) => {
+      thHtml += `<li><strong>${esc(t.label)}</strong> (${t.count || 0} names) `
+        + `<span class='muted'>${esc(t.horizon_default)}</span>`
+        + `<div class='muted'>${esc(t.hypothesis || "")}</div></li>`;
+    });
+    thHtml += "</ul>";
+    if (themeBox) themeBox.innerHTML = thHtml;
+
+    const fundBox = $("#iip-fundamentals");
+    const fund = live.fundamentals || {};
+    let fundHtml = "<div class='panel-head'><h3 class='section-h'>Fundamentals import (IIP.3)</h3></div>";
+    fundHtml += `<p class='muted small'>${esc(fund.guide || "")}</p>`;
+    fundHtml += `<p class='small'>Store count: <strong>${fund.count || 0}</strong>`;
+    if (fund.drop_dir) fundHtml += ` · drop dir <code>${esc(fund.drop_dir)}</code>`;
+    fundHtml += "</p>";
+    const fundRows = fund.rows || [];
+    if (fundRows.length) {
+      fundHtml += "<ul class='small'>";
+      fundRows.slice(0, 15).forEach((r) => {
+        fundHtml += `<li><strong>${esc(r.symbol)}</strong> `
+          + `<code>${esc(r.evidence_sufficiency || "?")}</code> `
+          + `ROE ${r.roe != null ? esc(String(r.roe)) : "—"} · `
+          + `ROCE ${r.roce != null ? esc(String(r.roce)) : "—"} · `
+          + `D/E ${r.debt_to_equity != null ? esc(String(r.debt_to_equity)) : "—"} `
+          + `<span class='muted'>${esc(r.source || "")} ${esc(r.as_of || "")}</span></li>`;
+      });
+      fundHtml += "</ul>";
+    } else {
+      fundHtml += "<p class='muted small'>No imported fundamentals yet — paste CSV/JSON below.</p>";
+    }
+    fundHtml += "<label class='muted small' for='iip-fund-paste'>Paste Screener CSV or JSON rows</label>";
+    fundHtml += "<textarea id='iip-fund-paste' rows='5' spellcheck='false' "
+      + "placeholder='symbol,roe,roce,debt_to_equity,operating_margin,promoter_holding,pe&#10;INFY,28,32,0.1,24,60,25'></textarea>";
+    fundHtml += "<div class='panel-actions' style='margin-top:8px'>";
+    fundHtml += "<button id='iip-fund-import' class='btn' type='button'>Import paste</button> ";
+    fundHtml += "<button id='iip-fund-drop' class='link' type='button'>Ingest drop folder</button>";
+    fundHtml += "<label class='small' style='margin-left:12px'><input type='checkbox' id='iip-fund-ira' /> push to IRA</label>";
+    fundHtml += "</div>";
+    if (fundBox) fundBox.innerHTML = fundHtml;
+    const fundImportBtn = $("#iip-fund-import");
+    if (fundImportBtn) fundImportBtn.addEventListener("click", () => importIipFundamentals());
+    const fundDropBtn = $("#iip-fund-drop");
+    if (fundDropBtn) fundDropBtn.addEventListener("click", () => ingestIipFundamentalsDrop());
+
+    const docsBox = $("#iip-documents");
+    const docs = live.company_documents || {};
+    let docsHtml = "<div class='panel-head'><h3 class='section-h'>Company documents (IIP.4)</h3></div>";
+    docsHtml += `<p class='muted small'>${esc(docs.guide || "")}</p>`;
+    docsHtml += `<p class='small'>Imported: <strong>${docs.count || 0}</strong>`;
+    if (docs.drop_dir) docsHtml += ` · drop <code>${esc(docs.drop_dir)}</code>`;
+    docsHtml += "</p>";
+    const docRows = docs.documents || [];
+    if (docRows.length) {
+      docsHtml += "<ul class='small'>";
+      docRows.slice(0, 12).forEach((r) => {
+        docsHtml += `<li><strong>${esc(r.symbol)}</strong> <code>${esc(r.kind || "")}</code> `
+          + `claims ${r.claims_count != null ? r.claims_count : "?"} `
+          + `<span class='muted'>${esc(r.outcome || "")} ${esc(r.as_of || "")}</span></li>`;
+      });
+      docsHtml += "</ul>";
+    } else {
+      docsHtml += "<p class='muted small'>No company docs yet — paste text or host path below.</p>";
+    }
+    docsHtml += "<div class='iip-doc-form'>";
+    docsHtml += "<input id='iip-doc-symbol' placeholder='Symbol e.g. INFY' /> ";
+    docsHtml += "<select id='iip-doc-kind'>"
+      + "<option value='annual'>annual (A)</option>"
+      + "<option value='quarterly'>quarterly (B)</option>"
+      + "<option value='presentation'>presentation (C)</option>"
+      + "<option value='deck'>deck (C)</option>"
+      + "<option value='transcript'>transcript (D)</option>"
+      + "<option value='earnings_call'>earnings call (D)</option>"
+      + "</select>";
+    docsHtml += "<input id='iip-doc-path' placeholder='Host path to PDF (optional)' style='min-width:240px' />";
+    docsHtml += "</div>";
+    docsHtml += "<label class='muted small' for='iip-doc-text'>Or paste excerpt / transcript text</label>";
+    docsHtml += "<textarea id='iip-doc-text' rows='4' spellcheck='false' "
+      + "placeholder='Management guidance: we expect mid-teens revenue growth. Key risks include commodity prices. ROCE 22%. Debt to equity 0.2.'></textarea>";
+    docsHtml += "<div class='panel-actions' style='margin-top:8px'>";
+    docsHtml += "<button id='iip-doc-import' class='btn' type='button'>Import to IRA</button> ";
+    docsHtml += "<button id='iip-doc-drop' class='link' type='button'>Ingest drop folder</button>";
+    docsHtml += "</div>";
+    if (docsBox) docsBox.innerHTML = docsHtml;
+    const docImportBtn = $("#iip-doc-import");
+    if (docImportBtn) docImportBtn.addEventListener("click", () => importIipDocument());
+    const docDropBtn = $("#iip-doc-drop");
+    if (docDropBtn) docDropBtn.addEventListener("click", () => ingestIipDocumentsDrop());
+
+    const mkgBox = $("#iip-mkg");
+    const mkg = live.mkg || {};
+    const demo = live.mkg_demo || {};
+    let mkgHtml = "<div class='panel-head'><h3 class='section-h'>Market Knowledge Graph (IIP.5)</h3></div>";
+    mkgHtml += `<p class='muted small'>${esc(mkg.note || "Theme ↔ company ↔ policy edges (hermetic).")}</p>`;
+    const st = mkg.stats || {};
+    mkgHtml += `<p class='small'>Nodes <strong>${st.nodes || 0}</strong> · edges <strong>${st.edges || 0}</strong></p>`;
+    const whyDemo = demo.why_own_waaree || {};
+    if (whyDemo.summary) {
+      mkgHtml += `<p class='small'><strong>Demo why-own WAAREE:</strong> ${esc(whyDemo.summary)}</p>`;
+    }
+    mkgHtml += "<div class='iip-doc-form'>";
+    mkgHtml += "<input id='iip-mkg-symbol' placeholder='Symbol e.g. WAAREE' /> ";
+    mkgHtml += "<button id='iip-mkg-why' class='btn' type='button'>Why own?</button> ";
+    mkgHtml += "<select id='iip-mkg-theme'>";
+    ["defence", "green_energy", "data_centers", "ev_battery", "ai_it", "railways", "healthcare", "power_grid"].forEach((t) => {
+      mkgHtml += `<option value='${t}'>${t}</option>`;
+    });
+    mkgHtml += "</select> ";
+    mkgHtml += "<button id='iip-mkg-benefits' class='link' type='button'>Who benefits?</button> ";
+    mkgHtml += "<button id='iip-mkg-reseed' class='link' type='button'>Reseed</button>";
+    mkgHtml += "</div>";
+    mkgHtml += "<div id='iip-mkg-result' class='small muted' style='margin-top:8px'></div>";
+    if (mkgBox) mkgBox.innerHTML = mkgHtml;
+    const whyBtn = $("#iip-mkg-why");
+    if (whyBtn) whyBtn.addEventListener("click", () => runIipMkgWhy());
+    const benBtn = $("#iip-mkg-benefits");
+    if (benBtn) benBtn.addEventListener("click", () => runIipMkgBenefits());
+    const reseedBtn = $("#iip-mkg-reseed");
+    if (reseedBtn) reseedBtn.addEventListener("click", () => runIipMkgReseed());
+
+    let srcHtml = "<div class='panel-head'><h3 class='section-h'>Websites &amp; data sources</h3></div><ul class='small'>";
+    (data.sources || []).forEach((s) => {
+      const link = s.url ? ` · <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>` : "";
+      srcHtml += `<li><strong>${esc(s.name)}</strong> <code>${esc(s.status)}</code>${link}`
+        + `<div class='muted'>${esc(s.purpose || "")}</div>`
+        + `<div class='muted'>Needs: ${esc(s.needs || "—")} · ${esc(s.operator_help || "")}</div></li>`;
+    });
+    srcHtml += "</ul>";
+    srcBox.innerHTML = srcHtml;
+
+    let capHtml = "<div class='panel-head'><h3 class='section-h'>Capabilities</h3></div><ul class='small'>";
+    (data.capabilities || []).forEach((c) => {
+      capHtml += `<li><strong>${esc(c.name)}</strong> <code>${esc(c.status)}</code> — ${esc(c.description || "")}</li>`;
+    });
+    capHtml += "</ul>";
+    capBox.innerHTML = capHtml;
+
+    const meth = data.methodology || {};
+    let methHtml = "<div class='panel-head'><h3 class='section-h'>Research methodology</h3></div>";
+    methHtml += `<p class='small'><strong>${esc(meth.product || "")}</strong> · ${esc(meth.house || "")}</p>`;
+    methHtml += "<p class='muted small'>Pipeline:</p><ol class='small'>";
+    (meth.pipeline || []).forEach((p) => { methHtml += `<li>${esc(p)}</li>`; });
+    methHtml += "</ol><p class='muted small'>Principles:</p><ul class='small'>";
+    (meth.principles || []).forEach((p) => { methHtml += `<li>${esc(p)}</li>`; });
+    methHtml += "</ul>";
+    if (meth.research) {
+      methHtml += `<p class='small'>Horizons: ${(meth.research.horizons || []).map(esc).join(", ")}</p>`;
+      const dc = meth.research.dual_confidence || {};
+      methHtml += `<p class='muted small'>Research confidence: ${esc(dc.research_confidence || "")}<br/>`
+        + `Investment confidence: ${esc(dc.investment_confidence || "")}</p>`;
+    }
+    methBox.innerHTML = methHtml;
+
+    let helpHtml = "<div class='panel-head'><h3 class='section-h'>How you can help Atlas</h3></div><ul class='small'>";
+    (data.how_to_help || []).forEach((h) => { helpHtml += `<li>${esc(h)}</li>`; });
+    helpHtml += "</ul>";
+    helpBox.innerHTML = helpHtml;
+  } catch (err) {
+    failBox.innerHTML = `<p class='error'>Failed to load catalog: ${esc(err.message || err)}</p>`;
+  }
+}
+
+async function saveIipUniverses() {
+  const enabled = [...document.querySelectorAll(".iip-uni-cb:checked")].map((el) => el.dataset.uni);
+  if (!enabled.length) {
+    toast("Select at least one universe");
+    return;
+  }
+  try {
+    await api("/v1/market/universes/enabled", {
+      method: "POST",
+      body: { enabled },
+    });
+    toast("Universes saved — next Investment Universe tick will use the union");
+    loadIip();
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function importIipFundamentals() {
+  const ta = $("#iip-fund-paste");
+  const text = (ta && ta.value || "").trim();
+  if (!text) {
+    toast("Paste CSV or JSON first");
+    return;
+  }
+  const pushIra = !!( $("#iip-fund-ira") && $("#iip-fund-ira").checked );
+  const body = { push_to_ira: pushIra, auto_refresh: false };
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      body.json = JSON.parse(text);
+    } catch (err) {
+      toast("Invalid JSON: " + (err.message || err));
+      return;
+    }
+  } else {
+    body.csv = text;
+    body.source = "screener_export";
+  }
+  try {
+    const res = await api("/v1/market/fundamentals/import", { method: "POST", body });
+    toast(`Imported ${res.imported || 0} · store ${res.store_count || 0}`
+      + (res.ira ? ` · IRA ${res.ira.pushed || 0}` : ""));
+    loadIip();
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function ingestIipFundamentalsDrop() {
+  try {
+    const res = await api("/v1/market/fundamentals/import-drop", { method: "POST", body: {} });
+    toast(`Drop ingest: ${res.imported || 0} rows from ${(res.files || []).length} file(s)`);
+    loadIip();
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function importIipDocument() {
+  const symbol = ($("#iip-doc-symbol") && $("#iip-doc-symbol").value || "").trim();
+  const kind = ($("#iip-doc-kind") && $("#iip-doc-kind").value) || "annual";
+  const path = ($("#iip-doc-path") && $("#iip-doc-path").value || "").trim();
+  const text = ($("#iip-doc-text") && $("#iip-doc-text").value || "").trim();
+  if (!symbol) {
+    toast("Symbol required");
+    return;
+  }
+  if (!path && !text) {
+    toast("Provide a host PDF path or paste text");
+    return;
+  }
+  const body = { symbol, kind, push_to_ira: true, auto_refresh: true };
+  if (path) body.path = path;
+  if (text) body.text = text;
+  try {
+    const res = await api("/v1/market/company-documents/import", { method: "POST", body });
+    toast(
+      `${res.symbol || symbol} · ${res.claims_count || 0} claims · `
+      + `coverage ${res.coverage_before ?? "?"}→${res.coverage_after ?? "?"}`
+      + (res.lifted ? " · lifted" : "")
+    );
+    loadIip();
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function ingestIipDocumentsDrop() {
+  try {
+    const res = await api("/v1/market/company-documents/import-drop", {
+      method: "POST",
+      body: { push_to_ira: true, auto_refresh: false },
+    });
+    const ira = res.ira || {};
+    toast(`Docs: ${res.imported || 0} files · IRA ${ira.pushed || 0}`);
+    loadIip();
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function runIipMkgWhy() {
+  const sym = ($("#iip-mkg-symbol") && $("#iip-mkg-symbol").value || "").trim() || "WAAREE";
+  const out = $("#iip-mkg-result");
+  try {
+    const res = await api(`/v1/market/mkg/why-own/${encodeURIComponent(sym)}`);
+    if (out) {
+      out.innerHTML = `<strong>${esc(res.symbol || sym)}</strong> <code>${esc(res.status || "")}</code><br/>`
+        + `${esc(res.summary || "")}<br/>`
+        + `themes ${(res.themes || []).length} · policies ${(res.policies || []).length}`
+        + ` · financial cites ${(res.financial_cites || []).length}`;
+    }
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function runIipMkgBenefits() {
+  const theme = ($("#iip-mkg-theme") && $("#iip-mkg-theme").value) || "defence";
+  const out = $("#iip-mkg-result");
+  try {
+    const res = await api(`/v1/market/mkg/who-benefits?theme_id=${encodeURIComponent(theme)}`);
+    const names = (res.companies || []).slice(0, 12).map((c) => c.symbol).join(", ");
+    if (out) {
+      out.innerHTML = `<strong>${esc(theme)}</strong>: ${res.count || 0} companies<br/>${esc(names)}`;
+    }
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function runIipMkgReseed() {
+  try {
+    const res = await api("/v1/market/mkg/reseed", { method: "POST", body: {} });
+    toast(`MKG reseeded · nodes ${(res.stats || {}).nodes} · edges ${(res.stats || {}).edges}`);
+    loadIip();
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
 async function loadLearner(opts = {}) {
   const quiet = !!(opts && opts.quiet);
   const summary = $("#learner-summary");
@@ -2350,6 +2742,32 @@ async function showLearnerResearch(symbol) {
       add("Fundamentals providers",
         (fund.used ? `Used: ${fund.used}` : "No live profile — hermetic/hint only")
         + (tried.length ? `\nTried: ${tried.join(", ")}` : ""));
+    }
+
+    const mkg = aw.mkg || {};
+    if (mkg.summary || (mkg.why_own && mkg.why_own.summary)) {
+      const why = mkg.why_own || {};
+      const themeN = (why.themes || []).length;
+      const polN = (why.policies || []).length;
+      add("MKG — Why own / watch",
+        (mkg.summary || why.summary || "")
+        + `\nThemes ${themeN} · policies ${polN} · status ${mkg.status || why.status || "?"}`);
+      const hood = mkg.neighborhood || {};
+      const nNodes = (hood.nodes || []).length;
+      const nEdges = (hood.edges || []).length;
+      if (nNodes || nEdges) {
+        add("MKG neighborhood", `${nNodes} nodes · ${nEdges} edges (1-hop)`);
+      }
+    }
+
+    const iscore = aw.investment_score || {};
+    if (iscore.overall != null || iscore.research_confidence) {
+      add("Investment score (IIP.6)",
+        `Overall ${iscore.overall ?? "?"} (${iscore.score_band || "?"}) · `
+        + `research conf ${iscore.research_confidence || "?"} · `
+        + `investment conf ${iscore.investment_confidence || "?"} → ${iscore.path || "?"}`
+        + (iscore.path_reason ? `\n${iscore.path_reason}` : "")
+        + "\nOverall ≠ buy. High research + low investment → watch.");
     }
 
     add("Trail", `Memories ${aw.memories_count || 0} · Outcomes ${aw.outcomes_count || 0}`
@@ -3615,6 +4033,25 @@ function init() {
   if (programsRefresh) programsRefresh.addEventListener("click", loadPrograms);
   const learnerRefresh = $("#learner-refresh");
   if (learnerRefresh) learnerRefresh.addEventListener("click", () => loadLearner());
+  const iipRefresh = $("#iip-refresh");
+  if (iipRefresh) iipRefresh.addEventListener("click", () => loadIip());
+  const iipSave = $("#iip-save-universes");
+  if (iipSave) iipSave.addEventListener("click", () => saveIipUniverses());
+  const iipRun = $("#iip-run-discovery");
+  if (iipRun) iipRun.addEventListener("click", async () => {
+    try {
+      iipRun.disabled = true;
+      iipRun.textContent = "Running…";
+      await api("/v1/market/discovery/run", { method: "POST", body: { max_scan: 80 } });
+      toast("Discovery finished — refresh list below");
+      loadIip();
+    } catch (err) {
+      toast(err.message || String(err));
+    } finally {
+      iipRun.disabled = false;
+      iipRun.textContent = "Run discovery now";
+    }
+  });
   const learnerAuto = $("#learner-auto");
   if (learnerAuto) learnerAuto.addEventListener("change", () => {
     if (learnerAuto.checked && state.view === "learner") startLearnerPoll();

@@ -170,9 +170,12 @@ FILING_KIND_LEVEL: dict[str, str] = {
     "results": "B",
     "presentation": "C",
     "investor_presentation": "C",
+    "deck": "C",
+    "slides": "C",
     "call": "D",
     "conference_call": "D",
     "earnings_call": "D",
+    "transcript": "D",
     "news": "E",
     "operator": "F",
     "note": "F",
@@ -294,6 +297,41 @@ def sections_impacted_by_filings(filings: list[dict[str, Any]] | None) -> list[s
     if kinds & {"annual", "ar", "annual_report", "quarterly", "results"}:
         if "cash_flow" not in out:
             out.append("cash_flow")
+        if "financial_health" not in out:
+            out.append("financial_health")
+    if kinds & {"deck", "presentation", "investor_presentation", "slides"}:
+        if "growth" not in out:
+            out.append("growth")
+    if kinds & {"transcript", "call", "earnings_call", "conference_call"}:
+        if "management" not in out:
+            out.append("management")
+    return out
+
+
+def sections_impacted_by_claims(claims: list[dict[str, Any]] | None) -> list[str]:
+    """IIP.4 — map extracted claim kinds onto dossier sections."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in claims or []:
+        if not isinstance(c, dict):
+            continue
+        hint = str(c.get("section_hint") or "")
+        kind = str(c.get("kind") or "")
+        targets = [hint] if hint else []
+        if kind == "guidance":
+            targets.extend(["growth", "risks"])
+        elif kind == "risk":
+            targets.extend(["risks", "management"])
+        elif kind == "kpi":
+            targets.extend(["growth", "financial_health", "profitability"])
+        elif kind == "cash":
+            targets.extend(["cash_flow"])
+        for sec in targets:
+            if sec and sec not in seen and sec != "thesis":
+                seen.add(sec)
+                out.append(sec)
+    if not out:
+        return ["growth", "management", "risks"]
     return out
 
 

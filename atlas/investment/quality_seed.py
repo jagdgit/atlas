@@ -184,12 +184,14 @@ def ratios_for_symbol(
                     "debt_equity",
                     "pe",
                     "roic",
+                    "roce",
                     "fcf",
                     "operating_margin",
                     "net_margin",
                     "revenue_cagr",
                     "earnings_cagr",
                     "promoter_holding",
+                    "pledge_pct",
                     "price",
                     "shares",
                     "share_count",
@@ -211,6 +213,47 @@ def ratios_for_symbol(
                     row["as_of"] = op["as_of"]
         except Exception:  # noqa: BLE001 - operator merge is best-effort
             pass
+        # IIP.3 durable fundamentals store (overrides screener when present)
+        try:
+            from atlas.config import get_config
+            from atlas.investment.fundamentals import get_symbol as fund_get
+
+            fund = fund_get(str(get_config().paths.data), key, program_id=program_id)
+            if isinstance(fund, dict):
+                for fld in (
+                    "roe",
+                    "roce",
+                    "roic",
+                    "debt_to_equity",
+                    "pe",
+                    "pb",
+                    "fcf",
+                    "operating_margin",
+                    "net_margin",
+                    "revenue_cagr",
+                    "earnings_cagr",
+                    "promoter_holding",
+                    "pledge_pct",
+                    "price",
+                    "shares",
+                    "sector",
+                    "as_of",
+                    "source",
+                    "method",
+                    "evidence_sufficiency",
+                    "fields_present",
+                    "strengthens_sections",
+                ):
+                    if fund.get(fld) is not None:
+                        row[fld] = fund[fld]
+                # Ranking expects fraction ROE
+                if row.get("roe") is not None and float(row["roe"]) > 1.5:
+                    row["roe"] = float(row["roe"]) / 100.0
+                if row.get("roic") is not None and float(row["roic"]) > 1.5:
+                    row["roic"] = float(row["roic"]) / 100.0
+                row.setdefault("method", "fundamentals_import")
+        except Exception:  # noqa: BLE001
+            pass
     if not row:
         return {}
     out: dict[str, Any] = {
@@ -223,12 +266,14 @@ def ratios_for_symbol(
     for fld in (
         "pe",
         "roic",
+        "roce",
         "fcf",
         "operating_margin",
         "net_margin",
         "revenue_cagr",
         "earnings_cagr",
         "promoter_holding",
+        "pledge_pct",
         "sector",
         "price",
         "shares",
@@ -238,6 +283,9 @@ def ratios_for_symbol(
         "discount_rate",
         "evidence_confidence",
         "confidence",
+        "evidence_sufficiency",
+        "fields_present",
+        "strengthens_sections",
     ):
         if row.get(fld) is not None:
             out[fld] = row.get(fld)

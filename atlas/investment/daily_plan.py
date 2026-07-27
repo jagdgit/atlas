@@ -91,6 +91,12 @@ def build_daily_plan(
             cand["mvr_satisfied"] = aw.get("mvr_satisfied")
             cand["thesis_stance"] = thesis.get("stance") or aw.get("stance")
             cand["thesis_summary"] = (thesis.get("summary") or aw.get("thesis_summary") or "")[:200]
+            # IIP.6 dual confidence / score band on plan candidates
+            score = aw.get("investment_score") if isinstance(aw.get("investment_score"), dict) else {}
+            if score:
+                from atlas.investment.scoring import attach_score_to_ranked_row
+
+                cand = attach_score_to_ranked_row(cand, score)
             if cand["thesis_summary"]:
                 researched_n += 1
                 cand["explanations"] = list(cand["explanations"]) + [
@@ -102,6 +108,18 @@ def build_daily_plan(
                 ]
                 if not cand["why"]:
                     cand["why"] = cand["thesis_summary"][:160]
+            if score.get("path"):
+                cand["explanations"] = list(cand.get("explanations") or []) + [
+                    {
+                        "sign": "·",
+                        "text": (
+                            f"Score {score.get('overall')} ({score.get('score_band')}) · "
+                            f"research={score.get('research_confidence')} · "
+                            f"investment={score.get('investment_confidence')} → {score.get('path')}"
+                        ),
+                        "component": "score",
+                    }
+                ]
         candidates.append(cand)
 
     _finalize_weights(candidates, budget)

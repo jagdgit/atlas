@@ -106,6 +106,13 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "include_defaults": True,
             "items": [],
         },
+        "opportunity_discovery": {
+            "program_id": "market_intelligence",
+            "provider": "yahoo",
+            "max_interesting": 40,
+            "max_enqueue_research": 10,
+            "include_themes": True,
+        },
         "investor_reports": {
             "program_id": "market_intelligence",
             "portfolio_key": "india_equity_learner",
@@ -182,7 +189,15 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 kind="monitoring",
                 cadence="pre-open + periodic",
                 status=MEMBER_ENABLED,
-                description="NIFTY universe → watchlist + ranked candidates (M0 / OI-IL0)",
+                description="Multi-universe → watchlist + ranked candidates (IIP.1 / M0)",
+            ),
+            ProgramMember(
+                role="Opportunity Discovery",
+                template="opportunity_discovery",
+                kind="monitoring",
+                cadence="hourly + post-close IST",
+                status=MEMBER_ENABLED,
+                description="Screen + theme hypotheses → interesting ≤40 (IIP.2)",
             ),
             ProgramMember(
                 role="Market Observer",

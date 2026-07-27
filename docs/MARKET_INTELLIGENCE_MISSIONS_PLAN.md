@@ -7,6 +7,7 @@
 > [`KNOWLEDGE_VERIFICATION_PLAN.md`](KNOWLEDGE_VERIFICATION_PLAN.md) (KV.0–KV.10 ✅) ·
 > [`MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md`](MEDIA_KNOWLEDGE_EXTRACTION_PLAN.md)  
 > **Follow-on (vision gap):** [`AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md`](AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md) — M0 Universe / Rank / Pick (India); `OI-IL0`  
+> **Stage 4 (🔒 locked):** [`INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md`](INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md) — Theme → Discover → Research → MKG → Score (`OI-IIP0`)  
 > **Open item:** `OI-MI0` · expands **OI-MP2**
 
 ---

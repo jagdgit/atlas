@@ -12,7 +12,8 @@ from typing import Any
 from atlas.investment import watchlists as wl
 from atlas.investment.quality_seed import resolve_quality_seed
 from atlas.investment.ranking import rank_universe, summarize_phase
-from atlas.investment.universe import INDEX_NIFTY50, as_instruments, membership
+from atlas.investment.universe import INDEX_NIFTY50, as_instruments
+from atlas.investment.universe_manager import resolve_members
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 EVENT_UNIVERSE_UPDATED = "InvestmentUniverseUpdated"
@@ -20,7 +21,7 @@ EVENT_UNIVERSE_UPDATED = "InvestmentUniverseUpdated"
 
 class InvestmentUniverseWorker(PersistentWorker):
     type = "investment_universe"
-    VERSION = 3
+    VERSION = 4
     journal_ticks = True
 
     def __init__(
@@ -31,6 +32,7 @@ class InvestmentUniverseWorker(PersistentWorker):
         policy_engine: Any | None = None,
         experience_os: Any | None = None,
         investment_research: Any | None = None,
+        data_dir: str | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._events = events
@@ -38,6 +40,7 @@ class InvestmentUniverseWorker(PersistentWorker):
         self._policy = policy_engine
         self._experience = experience_os
         self._research = investment_research
+        self._data_dir = data_dir
         self._logger = logger or logging.getLogger("atlas.workers.investment_universe")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -47,7 +50,11 @@ class InvestmentUniverseWorker(PersistentWorker):
         state["ticks"] = ticks
 
         index = str(cfg.get("index") or INDEX_NIFTY50).strip() or INDEX_NIFTY50
+        universes_cfg = cfg.get("universes")
+        if isinstance(universes_cfg, str):
+            universes_cfg = [u.strip() for u in universes_cfg.split(",") if u.strip()]
         max_watch = max(1, int(cfg.get("max_watchlist") or 15))
+        max_active = cfg.get("max_active_research")
         mode = str(cfg.get("mode") or "auto").strip().lower() or "auto"
         program_id = str(cfg.get("program_id") or wl.DEFAULT_PROGRAM)
         pinned = [str(s).strip() for s in (cfg.get("pinned_symbols") or []) if str(s).strip()]
@@ -65,12 +72,45 @@ class InvestmentUniverseWorker(PersistentWorker):
 
         try:
             extras = cfg.get("extra_members") or cfg.get("custom_members") or []
-            members = membership(
-                index,
-                extra_members=extras if isinstance(extras, list) else None,
-            )
+            use_enabled = cfg.get("use_enabled_universes")
+            if use_enabled is None:
+                use_enabled = True
+            if universes_cfg:
+                resolved = resolve_members(
+                    universes=list(universes_cfg),
+                    extra_members=extras if isinstance(extras, list) else None,
+                    data_dir=self._data_dir,
+                    max_members=int(max_active) if max_active else None,
+                )
+            elif use_enabled and self._data_dir:
+                resolved = resolve_members(
+                    universes=None,
+                    extra_members=extras if isinstance(extras, list) else None,
+                    data_dir=self._data_dir,
+                    max_members=int(max_active) if max_active else None,
+                )
+                # If only default NIFTY50 enabled and operator set a different index, honor index.
+                en = list(resolved.get("universes") or [])
+                if en == [INDEX_NIFTY50] and index and index != INDEX_NIFTY50:
+                    resolved = resolve_members(
+                        index=index,
+                        extra_members=extras if isinstance(extras, list) else None,
+                        max_members=int(max_active) if max_active else None,
+                    )
+            else:
+                resolved = resolve_members(
+                    index=index,
+                    extra_members=extras if isinstance(extras, list) else None,
+                    max_members=int(max_active) if max_active else None,
+                )
+            members = list(resolved.get("members") or [])
+            index_label = "+".join(resolved.get("universes") or [index]) or index
+            state["universes"] = resolved.get("universes") or []
+            state["universes_skipped"] = resolved.get("skipped") or []
         except KeyError as exc:
             return TickResult(state=state, note=f"idle: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            return TickResult(state=state, note=f"idle: universe resolve failed ({exc})")
 
         # Always allow pinned symbols into the pool (IRA.10 / on-demand names).
         if pinned and mode != "pin":
@@ -116,6 +156,7 @@ class InvestmentUniverseWorker(PersistentWorker):
             [str(m["symbol"]) for m in pool],
             lookback=lookback,
             provider=provider,
+            state=state,
         )
         # IL.8 — merge operator screener snapshot (+ optional computed) into quality
         use_screener = cfg.get("use_screener_signals")
@@ -199,24 +240,27 @@ class InvestmentUniverseWorker(PersistentWorker):
             extra={
                 "phase": phase_info["phase"],
                 "confidence": phase_info["confidence"],
-                "index": index,
+                "index": index_label,
             },
             research_by_symbol=research_by_symbol or None,
         )
 
         snap = wl.publish(
             program_id=program_id,
-            index=index,
+            index=index_label,
             watchlist=watch,
             ranked=ranked,
             mission_id=str(ctx.mission_id) if ctx.mission_id else None,
             mode=mode,
             extra={
                 "universe_size": len(members),
+                "universes": state.get("universes") or [index],
                 "max_watchlist": max_watch,
+                "max_active_research": max_active,
                 "phase": phase_info["phase"],
                 "confidence": phase_info["confidence"],
                 "bars_symbols": len(bars_by_symbol),
+                "feed_failures": int(state.get("feed_failure_count") or 0),
                 "quality_seed_count": len(quality_seed),
                 "provider": provider or "",
                 "daily_plan": daily_plan,
@@ -225,7 +269,8 @@ class InvestmentUniverseWorker(PersistentWorker):
             },
         )
 
-        state["index"] = index
+        state["index"] = index_label
+        state["primary_index"] = index
         state["program_id"] = program_id
         state["watchlist_symbols"] = [r["symbol"] for r in ranked]
         state["universe_size"] = len(members)
@@ -250,7 +295,8 @@ class InvestmentUniverseWorker(PersistentWorker):
                     {
                         "mission_id": str(ctx.mission_id) if ctx.mission_id else None,
                         "program_id": program_id,
-                        "index": index,
+                        "index": index_label,
+                        "universes": state.get("universes"),
                         "symbols": state["watchlist_symbols"],
                         "count": len(ranked),
                         "phase": phase_info["phase"],
@@ -271,12 +317,14 @@ class InvestmentUniverseWorker(PersistentWorker):
             if screener_meta.get("merged_count")
             else ""
         )
+        fail_n = int(state.get("feed_failure_count") or 0)
+        fbit = f", feed_failures={fail_n}" if fail_n else ""
         plan_bit = f"; plan={daily_plan.get('summary')}" if daily_plan.get("summary") else ""
         return TickResult(
             state=state,
             note=(
-                f"{index}: {len(members)} constituents → watchlist {len(ranked)} "
-                f"(mode={mode}, phase={phase}, confidence={conf}{qbit}{pbit}{sbit}); top={top}"
+                f"{index_label}: {len(members)} constituents → watchlist {len(ranked)} "
+                f"(mode={mode}, phase={phase}, confidence={conf}{qbit}{pbit}{sbit}{fbit}); top={top}"
                 f"{plan_bit}"
             ),
         )
@@ -287,19 +335,57 @@ class InvestmentUniverseWorker(PersistentWorker):
         *,
         lookback: int,
         provider: str | None,
+        state: dict[str, Any] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         if self._reader is None:
             return {}
+        from atlas.decision.rules import CapabilityGap
+        from atlas.investment.feed_failures import record_failure
+
         out: dict[str, list[dict[str, Any]]] = {}
+        failures = 0
         for sym in symbols:
             try:
                 result = self._reader.bars_for(sym, provider=provider, limit=lookback)
-            except Exception:  # noqa: BLE001 — CapabilityGap / network: honest empty
+            except CapabilityGap as exc:
+                failures += 1
+                record_failure(
+                    self._data_dir,
+                    provider=provider or "default",
+                    symbol=sym,
+                    reason=str(exc)[:400],
+                    capability=getattr(exc, "capability", "") or "market_data",
+                    source="investment_universe",
+                )
+                self._logger.debug("bars_for gap for %s: %s", sym, exc)
+                continue
+            except Exception as exc:  # noqa: BLE001 — network: honest empty
+                failures += 1
+                record_failure(
+                    self._data_dir,
+                    provider=provider or "default",
+                    symbol=sym,
+                    reason=f"fetch_error: {exc}"[:400],
+                    capability="market_data",
+                    source="investment_universe",
+                )
                 self._logger.debug("bars_for failed for %s", sym, exc_info=True)
                 continue
             bars = list((result or {}).get("bars") or [])
             if bars:
                 out[sym] = bars
+            else:
+                failures += 1
+                record_failure(
+                    self._data_dir,
+                    provider=(result or {}).get("provider") or provider or "default",
+                    symbol=sym,
+                    reason="empty_live_feed",
+                    capability="market_data",
+                    source="investment_universe",
+                )
+        if state is not None:
+            state["feed_failure_count"] = failures
         return out
 
     def _policy_deltas(self, members: list[dict[str, Any]]) -> dict[str, float]:

@@ -201,6 +201,16 @@ class PaperTradingConfig(BaseModel):
     universe_index: str = "NIFTY50"
     # IL.11 — Simulation Engine instrument pack (empty → resolve from asset_class / persona)
     instrument_pack: str = ""
+    # IRA research gate (optional; learner books also auto-enable via portfolio_key)
+    require_mvr: bool | None = None
+    require_thesis: bool | None = None
+    require_mos: bool | None = None
+    research_auto_mvr: bool | None = None
+    research_gate: bool = False
+    mos_mode: str = ""
+    research_min_coverage: float = Field(default=0.0, ge=0.0, le=100.0)
+    research_mode: str = "mvr"
+    min_mos_pct: float | None = None
 
 
 class ResearchWatcherConfig(BaseModel):

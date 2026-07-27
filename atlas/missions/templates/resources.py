@@ -90,6 +90,17 @@ TEMPLATE_RESOURCES: dict[str, WorkResourceProfile] = {
         network="medium",
         expected_tick_ms=30_000,
     ),
+    "opportunity_discovery": WorkResourceProfile(
+        service_class=SERVICE_NORMAL,
+        latency_tolerance_seconds=3600,
+        deadline_policy=DEADLINE_SESSION,
+        criticality="normal",
+        scheduling_policy="background",
+        cpu="medium",
+        ram_mb=512,
+        network="medium",
+        expected_tick_ms=45_000,
+    ),
     "company_intelligence": WorkResourceProfile(
         service_class=SERVICE_NORMAL,
         latency_tolerance_seconds=86400,
