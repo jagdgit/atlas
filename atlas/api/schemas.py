@@ -36,6 +36,8 @@ class StatusResponse(BaseModel):
     degraded: bool = False
     services_total: int
     severity_counts: dict[str, int]
+    degraded_services: list[str] = []
+    failed_services: list[str] = []
 
 
 class AgentsResponse(BaseModel):
@@ -727,8 +729,28 @@ class InvestmentResearchStartRequest(BaseModel):
 
     mode: str = Field(default="mvr", description="mvr | deep")
     force: bool = False
+    allow_without_identity: bool = Field(
+        default=False,
+        description="SI.1 — allow MVR when business identity is still unknown",
+    )
     program_id: str = "market_intelligence"
     trigger: str = "on_demand"
+
+
+class ResearchBusinessIdentityRequest(BaseModel):
+    """SI.1 — operator sets/confirms business identity before MVR."""
+
+    program_id: str = "market_intelligence"
+    business_type: str | None = None
+    industry: str | None = None
+    sector: str | None = None
+    subsector: str | None = None
+    capital_intensity: str | None = None
+    key_drivers: list[str] | None = None
+    revenue_model: str | None = None
+    distinctiveness_seed: str | None = None
+    pack_id: str | None = None
+    start_mvr: bool = False
 
 
 class FilingsSnapshotRequest(BaseModel):
@@ -887,6 +909,18 @@ class WorkerInputRequest(BaseModel):
     """A live operator input drained at the top of the worker's next tick (Q4)."""
 
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class OpsCleanupRequest(BaseModel):
+    """ARMF Phase B — preview or apply zombie / long no-progress cleanup."""
+
+    dry_run: bool = True
+    include_protected: bool = False
+    zombie_types: list[str] | None = None
+    min_starvation_age_seconds: float | None = Field(default=None, ge=0)
+    worker_ids: list[str] | None = None
+    mission_ids: list[str] | None = None
+    reason: str = Field(default="", max_length=2000)
 
 
 class UpdateMissionConfigRequest(BaseModel):

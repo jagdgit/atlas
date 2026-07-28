@@ -1,0 +1,72 @@
+id: saas_it
+label: IT / software services
+thesis_interest: services / software demand where deal pipeline, utilization, attrition,
+  and vertical mix determine margin durability
+primary_kpis:
+- Deal TCV / pipeline
+- Utilization
+- Attrition
+- Vertical mix
+- Margin bridge
+extra_questions:
+- Is revenue growth organic vs acquisition-led?
+- Are margins durable after wage inflation?
+- Is demand broad-based or concentrated in one vertical?
+- How sticky is the top-client revenue?
+risk_lenses:
+- Client concentration
+- Attrition
+- Deal slippage
+- Currency / geo mix
+failure_modes:
+- Wage inflation that permanently compresses margins
+- Vertical demand shock (e.g. BFSI) without diversification
+valuation_methods:
+- PE vs IT peers
+- FCF yield
+- Growth-adjusted multiples
+moat_lenses:
+- Client switching costs
+- Domain depth
+- Delivery scale
+management_behaviors:
+- Wage vs price discipline
+- Capital return vs tuck-in M&A
+falsifiers:
+- Structural margin decline
+- Large-client exit
+- Persistent deal slippage
+evidence_sources:
+- Quarterly TCV / attrition
+- Vertical commentary
+positive_drivers:
+- Digital / IT demand
+- Delivery scale
+concern_drivers:
+- Attrition / wage inflation
+- Client concentration
+unknown_drivers:
+- Organic growth durability
+- FCF after wage cycle
+bull_seed: If pipeline, utilization, and margins hold with attractive MoS, revisit
+  size.
+base_seed: 'Research posture: pipeline quality, attrition, and margin bridge — not
+  headline growth alone.'
+bear_seed: If margins compress or large clients leave, avoid even on cheap PE screens.
+catalysts:
+- Large-deal TCV
+- Attrition / utilization print
+- Vertical demand update
+distinctiveness_tokens:
+- attrition
+- utilization
+- tcv
+- pipeline
+- vertical
+- it services
+- wage
+version: si.2
+region: india
+mental_model: services / software demand where deal pipeline, utilization, attrition,
+  and vertical mix determine margin durability
+identity_patterns: []

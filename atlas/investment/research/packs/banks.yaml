@@ -1,0 +1,69 @@
+id: banks
+label: Banks / NBFCs
+thesis_interest: liability franchise and credit-cycle sensitivity where NIM, slippages,
+  and deposit quality dominate long-term returns
+primary_kpis:
+- NIM
+- Credit cost / slippages
+- CASA / deposit mix
+- Capital adequacy
+- Loan growth mix
+extra_questions:
+- Are credit costs normalised or still rising?
+- Is the liability franchise (CASA / deposits) stable?
+- Is growth coming from riskier segments?
+risk_lenses:
+- Asset quality
+- Funding cost
+- Regulatory capital
+- Concentration
+failure_modes:
+- Credit-cost spike
+- Deposit franchise erosion
+- Risky segment overgrowth
+valuation_methods:
+- P/B vs RoE
+- P/E with normalised credit cost
+moat_lenses:
+- Liability franchise
+- Distribution / brand
+management_behaviors:
+- Underwriting discipline
+- Capital return vs growth
+falsifiers:
+- Sustained credit-cost spike
+- CASA collapse
+- Capital adequacy stress
+evidence_sources:
+- Quarterly asset-quality pack
+- NIM bridge
+- RBI / regulatory notes
+positive_drivers:
+- Liability franchise
+- Credit demand
+concern_drivers:
+- Asset quality cycle
+- Funding cost
+unknown_drivers:
+- Normalised credit cost through cycle
+bull_seed: If asset quality and franchise hold with attractive valuation vs RoE, revisit
+  size.
+base_seed: 'Research posture: NIM, credit costs, and deposit quality — not loan-growth
+  headlines.'
+bear_seed: If credit costs spike or the liability franchise weakens, avoid.
+catalysts:
+- Credit-cost print
+- CASA / NIM update
+- Regulatory capital note
+distinctiveness_tokens:
+- nim
+- casa
+- slippage
+- credit cost
+- deposit
+- asset quality
+version: si.2
+region: india
+mental_model: liability franchise and credit-cycle sensitivity where NIM, slippages,
+  and deposit quality dominate long-term returns
+identity_patterns: []

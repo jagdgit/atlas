@@ -1,0 +1,88 @@
+id: consumer
+version: si.2
+region: india
+label: Consumer / staples & discretionary
+thesis_interest: brand + distribution + mix where volume, pricing power, and rural/urban
+  demand determine compounding
+mental_model: Consumer businesses compound when brand preference and distribution
+  density support pricing or mix upgrade without destroying volume. Destroyed by private-label
+  share loss, channel disruption, or commodity input spikes that cannot be passed
+  through.
+identity_patterns:
+- FMCG
+- staples
+- discretionary retail brand
+- packaged foods
+- personal care
+primary_kpis:
+- Volume growth
+- Realisation / mix
+- Gross margin
+- A&P spend
+- Distribution reach
+- Rural vs urban
+extra_questions:
+- Is growth volume-led or price/mix-led — and is mix sustainable?
+- Can the brand hold share against private label and regional players?
+- How sensitive are margins to commodity inputs vs pricing power?
+- Is distribution still expanding or saturating in core categories?
+- Does A&P efficiency support brand preference or only buy short-term volume?
+risk_lenses:
+- Private-label / share loss
+- Commodity input spike
+- Channel disruption (modern trade / e-comm)
+- Rural demand miss
+- Regulatory / tax on sin/category
+failure_modes:
+- Permanent share loss to private label
+- Gross-margin collapse without pricing power
+- Distribution saturation with rising A&P
+valuation_methods:
+- PE vs growth / ROIC
+- EV/EBITDA peer set (consumer peers, not generic)
+- FCF yield after A&P normalising
+moat_lenses:
+- Brand preference
+- Distribution density
+- Scale in A&P
+management_behaviors:
+- Pricing discipline vs volume chase
+- A&P ROI honesty
+- Portfolio pruning vs brand stretch
+falsifiers:
+- Sustained volume decline with share loss
+- Gross margin structurally impaired
+- Distribution metrics roll over
+evidence_sources:
+- Quarterly volume/mix commentary
+- Category share / Nielsen-type disclosures if any
+- Gross margin bridge
+- A&P as % of sales
+positive_drivers:
+- Brand strength
+- Distribution reach
+- Mix upgrade
+concern_drivers:
+- Commodity costs
+- Competitive intensity
+- Rural demand
+unknown_drivers:
+- Sustainable pricing power through the cycle
+bull_seed: If volume and mix hold with pricing power and attractive MoS vs consumer
+  peers, revisit size.
+base_seed: 'Research posture: volume vs mix, gross margin bridge, and brand/distribution
+  — not just EPS growth.'
+bear_seed: If share or volume erodes while A&P rises without return, avoid.
+catalysts:
+- Volume/mix print
+- Gross margin bridge
+- Category share update
+distinctiveness_tokens:
+- volume
+- mix
+- realisation
+- gross margin
+- a&p
+- distribution
+- rural
+- brand

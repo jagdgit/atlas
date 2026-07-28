@@ -19,6 +19,7 @@ STATE_WAITING_SCHEDULE = "waiting_schedule"
 STATE_WAITING_DEPENDENCY = "waiting_dependency"
 STATE_SLEEPING = "sleeping"
 STATE_PAUSED = "paused"
+STATE_AT_RISK = "at_risk"
 STATE_STARVED = "starved"
 STATE_SLOW = "slow"
 STATE_COMPLETED = "completed"
@@ -32,6 +33,7 @@ OPS_STATES = (
     STATE_WAITING_DEPENDENCY,
     STATE_SLEEPING,
     STATE_PAUSED,
+    STATE_AT_RISK,
     STATE_STARVED,
     STATE_SLOW,
     STATE_COMPLETED,
@@ -49,6 +51,9 @@ DEFAULT_EXPECTED_TICK_MS: dict[str, int] = {
 }
 
 STARVE_AFTER_SECONDS = 6 * 3600  # 6h without productive progress while eligible
+# ARMF C8 — predictive: expected cadence missed well before the 6h starved label.
+AT_RISK_AFTER_SECONDS = 30 * 60  # 30 minutes with no productive tick while eligible
+AT_RISK_EXPECTED_MULTIPLIER = 30.0  # or ≥ 30× expected_tick_ms
 SLOW_RATIO = 5.0  # last tick > expected * ratio → Slow
 RECENT_WAIT_SECONDS = 300  # host/budget deferral still "fresh" for Waiting Host
 SLEEP_AFTER_TICK_SECONDS = 30  # after a successful tick, treat as Sleeping until due again
@@ -203,8 +208,18 @@ def classify_worker(
         state = STATE_WAITING_HOST
         reason = wait_reason
     elif status in ("running", "recovering"):
-        # Eligible tickable workers: starved / slow / ready / sleeping
+        # Eligible tickable workers: starved / at_risk / slow / ready / sleeping
         is_starved = age is not None and age >= STARVE_AFTER_SECONDS
+        expected_s = max(1.0, float(expected) / 1000.0) if expected else 10.0
+        at_risk_after = max(
+            float(AT_RISK_AFTER_SECONDS),
+            expected_s * float(AT_RISK_EXPECTED_MULTIPLIER),
+        )
+        is_at_risk = (
+            age is not None
+            and age >= at_risk_after
+            and age < STARVE_AFTER_SECONDS
+        )
         is_slow = (
             last_ms is not None
             and expected > 0
@@ -213,6 +228,9 @@ def classify_worker(
         if is_starved:
             state = STATE_STARVED
             reason = f"no_progress_{int(age)}s"
+        elif is_at_risk:
+            state = STATE_AT_RISK
+            reason = f"cadence_miss_{int(age)}s"
         elif is_slow:
             state = STATE_SLOW
             reason = f"tick_{last_ms}ms_gt_{expected}ms"
@@ -250,12 +268,19 @@ def summarize_workers(
     inflight_mission_ids: set[str] | frozenset[str] | None = None,
     holding_reservation_ids: set[str] | frozenset[str] | None = None,
     notable_limit: int = 12,
+    hide_types: frozenset[str] | set[str] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate Ops breakdown + notable starved/slow/waiting rows."""
+    """Aggregate Ops breakdown + notable starved/slow/waiting rows.
+
+    ``hide_types`` (ARMF A2) excludes worker types from counts/notable but
+    reports ``filtered_out`` so inventory honesty is preserved.
+    """
     now = _aware(now) or datetime.now(timezone.utc)
     holding = holding_reservation_ids or frozenset()
+    hide = hide_types or frozenset()
     counts = empty_counts()
     classified: list[dict[str, Any]] = []
+    filtered_out = 0
     for w in workers:
         wid = getattr(w, "id", None) or (w.get("id") if isinstance(w, dict) else None)
         row = classify_worker(
@@ -264,11 +289,16 @@ def summarize_workers(
             inflight_mission_ids=inflight_mission_ids,
             holding_reservation=bool(wid and str(wid) in holding),
         )
+        wtype = str(row.get("type") or "")
+        if wtype in hide:
+            filtered_out += 1
+            continue
         counts[row["ops_state"]] = counts.get(row["ops_state"], 0) + 1
         classified.append(row)
 
     notable_states = {
         STATE_STARVED,
+        STATE_AT_RISK,
         STATE_SLOW,
         STATE_WAITING_HOST,
         STATE_WAITING_DEPENDENCY,
@@ -276,16 +306,35 @@ def summarize_workers(
         STATE_RUNNING_TICK,
     }
     notable = [r for r in classified if r["ops_state"] in notable_states]
-    # Prefer starved/slow first
+    # Prefer starved/at_risk/slow first
     order = {
         STATE_STARVED: 0,
-        STATE_SLOW: 1,
-        STATE_WAITING_HOST: 2,
-        STATE_WAITING_DEPENDENCY: 3,
-        STATE_HOLDING_RESERVATION: 4,
-        STATE_RUNNING_TICK: 5,
+        STATE_AT_RISK: 1,
+        STATE_SLOW: 2,
+        STATE_WAITING_HOST: 3,
+        STATE_WAITING_DEPENDENCY: 4,
+        STATE_HOLDING_RESERVATION: 5,
+        STATE_RUNNING_TICK: 6,
     }
     notable.sort(key=lambda r: (order.get(r["ops_state"], 9), -(r.get("starvation_age_seconds") or 0)))
+
+    by_program: dict[str, dict[str, Any]] = {}
+    for row in classified:
+        owner = row.get("owner") if isinstance(row.get("owner"), dict) else {}
+        prog = str(owner.get("program") or "unassigned")
+        bucket = by_program.setdefault(
+            prog,
+            {"program": prog, "counts": empty_counts(), "notable": []},
+        )
+        st = row["ops_state"]
+        bucket["counts"][st] = bucket["counts"].get(st, 0) + 1
+        if st in notable_states:
+            bucket["notable"].append(row)
+    for bucket in by_program.values():
+        bucket["notable"].sort(
+            key=lambda r: (order.get(r["ops_state"], 9), -(r.get("starvation_age_seconds") or 0))
+        )
+        bucket["notable"] = bucket["notable"][: max(0, notable_limit)]
 
     active = sum(
         counts[s]
@@ -302,6 +351,9 @@ def summarize_workers(
             in ("running", "recovering")
         ),
         "notable": notable[: max(0, notable_limit)],
+        "by_program": by_program,
+        "filtered_out": filtered_out,
+        "rows": classified,
     }
 
 

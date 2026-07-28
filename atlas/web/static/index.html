@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlas Console</title>
-  <link rel="stylesheet" href="./styles.css?v=dash31" />
+  <link rel="stylesheet" href="./styles.css?v=dash55" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
@@ -51,15 +51,52 @@
           <h2>Operations</h2>
           <button id="overview-refresh" class="link">refresh</button>
         </div>
+        <div id="ops-banner" class="ops-banner hidden" role="status"></div>
+        <div id="ops-program-health" class="ops-program-health"></div>
+        <div id="ops-archive-lane" class="ops-archive-lane"></div>
+        <div id="ops-research-velocity" class="ops-research-velocity"></div>
+        <div id="ops-next-tick" class="ops-next-tick"></div>
         <div id="ops-cards" class="status-cards"></div>
-        <div class="panel-head"><h3 class="section-h">Workers</h3></div>
+        <details class="ops-glossary" id="ops-glossary">
+          <summary>Ops glossary</summary>
+          <div id="ops-glossary-body" class="ops-glossary-body"></div>
+        </details>
+        <div class="panel-head">
+          <h3 class="section-h">Workers</h3>
+          <label class="ops-filter-toggle muted small">
+            <input type="checkbox" id="ops-hide-hello" checked />
+            Hide hello_watcher
+          </label>
+          <label class="ops-filter-toggle muted small">
+            <input type="checkbox" id="ops-group-program" checked />
+            Group by program
+          </label>
+        </div>
         <div id="ops-worker-states" class="ops-worker-states"></div>
         <div id="ops-worker-notable" class="ops-worker-notable health-list"></div>
         <div class="panel-head"><h3 class="section-h">Mission Queue</h3></div>
         <div id="ops-mission-queue" class="ops-worker-states"></div>
         <div id="ops-mission-queue-notable" class="ops-worker-notable health-list"></div>
+        <div class="panel-head">
+          <h3 class="section-h">Cleanup</h3>
+        </div>
+        <div class="ops-cleanup" id="ops-cleanup">
+          <p class="muted small">Retire zombie <code>hello_watcher</code> and unprotected long no-progress workers. Always Preview first. Market / Eng / Personal / Archive need the protected checkbox.</p>
+          <div class="ops-cleanup-row">
+            <label class="ops-filter-toggle muted small">
+              <input type="checkbox" id="ops-cleanup-protected" />
+              Include protected programs (Market / Eng / Personal / Archive)
+            </label>
+          </div>
+          <div class="ops-cleanup-row">
+            <button id="ops-cleanup-preview" class="btn" type="button">Preview</button>
+            <button id="ops-cleanup-apply" class="btn" type="button" disabled>Apply</button>
+            <span id="ops-cleanup-status" class="muted small"></span>
+          </div>
+          <div id="ops-cleanup-results" class="ops-cleanup-results health-list"></div>
+        </div>
         <div class="panel-head"><h3 class="section-h">Live activity</h3></div>
-        <div id="ops-activity" class="health-list"></div>
+        <div id="ops-activity" class="health-list ops-activity" aria-live="polite"></div>
       </section>
 
       <!-- Chat -->
@@ -160,6 +197,12 @@
             coverage ≠ confidence. Hermetic/hint seeds only (not live NSE filings).
             Learner paper buys require MVR + thesis (auto-runs MVR when gated).
           </p>
+          <div class="learner-compare-row panel-actions">
+            <input id="learner-compare-a" type="text" placeholder="A e.g. APOLLOHOSP" />
+            <span class="muted small">vs</span>
+            <input id="learner-compare-b" type="text" placeholder="B e.g. MTARTECH" />
+            <button id="learner-compare-go" class="btn" type="button">Why A vs B</button>
+          </div>
           <div id="learner-research-status" class="muted small">Ready — enter a symbol and click Research.</div>
           <details class="learner-research-snapshot" id="learner-research-snapshot">
             <summary>Operator evidence snapshot (F1)</summary>
@@ -221,6 +264,35 @@
                 </select>
               </label>
               <button id="learner-research-critical-go" class="btn" type="button">Raise flag</button>
+            </div>
+            <div class="learner-identity-pack">
+              <p class="muted small">Business identity (SI.1) — classify before MVR; never invent sector/KPIs.</p>
+              <div class="learner-snapshot-grid">
+                <label class="learner-snapshot-note">Business type
+                  <input id="ident-business-type" type="text" placeholder="Hospital chain…" />
+                </label>
+                <label class="learner-snapshot-note">Sector
+                  <input id="ident-sector" type="text" placeholder="Healthcare" />
+                </label>
+                <label class="learner-snapshot-note">Capital intensity
+                  <select id="ident-capital">
+                    <option value="">—</option>
+                    <option value="capital_heavy">Capital-heavy</option>
+                    <option value="asset_light">Asset-light</option>
+                    <option value="balance_sheet_heavy">Balance-sheet heavy</option>
+                    <option value="unknown">Unknown</option>
+                  </select>
+                </label>
+                <label class="learner-snapshot-note">Pack id
+                  <input id="ident-pack" type="text" placeholder="healthcare / defence / banks…" />
+                </label>
+              </div>
+              <div class="learner-snapshot-row">
+                <label class="learner-snapshot-note">Key drivers (comma-separated)
+                  <input id="ident-drivers" type="text" placeholder="occupancy, ARPOB, bed additions" />
+                </label>
+                <button id="learner-research-identity-go" class="btn" type="button">Confirm identity</button>
+              </div>
             </div>
             <div class="learner-mgmt-pack">
               <p class="muted small">Management pack (F3) — operator judgments; never invents capital-allocation history.</p>
@@ -425,6 +497,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=dash42"></script>
+  <script src="./app.js?v=dash55"></script>
 </body>
 </html>

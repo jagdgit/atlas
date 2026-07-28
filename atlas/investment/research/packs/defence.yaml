@@ -1,0 +1,89 @@
+id: defence
+label: Defence / aerospace manufacturing
+thesis_interest: long-cycle defence and aerospace demand for high-precision manufacturing
+  where order book, program stickiness, and execution quality matter more than near-term
+  multiples
+primary_kpis:
+- Order book / book-to-bill
+- Customer concentration (incl. ISRO / defence OEMs)
+- Receivables days
+- Working capital / cash conversion
+- Program execution & certification milestones
+- Defence / aerospace mix of revenue
+extra_questions:
+- How concentrated is the order book across ISRO, defence OEMs, and export customers?
+- Are receivables and inventory stretching as programs scale?
+- Does execution / certification risk delay revenue recognition?
+- Is defence spending / program continuity the real demand driver — or a single customer?
+- Does capex create multi-program capacity or chase one contract?
+risk_lenses:
+- Customer / program concentration
+- ISRO or defence program delay
+- Receivables / working-capital squeeze
+- Execution / certification failure
+- Commodity / specialty input costs
+failure_modes:
+- Single-program dependence that rolls off without replacement
+- Working-capital blowout that destroys FCF despite revenue growth
+- Quality / delivery miss that loses preferred-supplier status
+valuation_methods:
+- Order-book-aware earnings / PE (with WC haircut)
+- FCF yield after normalising receivables
+- Peer multiples vs defence/precision peers (not generic industrials)
+moat_lenses:
+- Qualification / certification barriers
+- Process know-how on precision parts
+- Sticky multi-year program relationships
+management_behaviors:
+- Capex discipline vs order visibility
+- Customer diversification progress
+- Honest disclosure on program delays and WC
+falsifiers:
+- Order book collapses or becomes one-customer dominated
+- Receivables / WC permanently impair cash conversion
+- Material execution miss on a flagship defence/aerospace program
+- Loss of key OEM / agency qualification
+evidence_sources:
+- Annual report — order book & customer mix
+- Quarterly — receivables / inventory notes
+- Defence / aerospace contract disclosures
+- Management commentary on program milestones
+positive_drivers:
+- Defence / aerospace demand
+- High-precision manufacturing capability
+- Qualification barriers
+concern_drivers:
+- Customer concentration
+- Working capital / receivables
+- Execution & program delay risk
+unknown_drivers:
+- Sustainable free cash flow through the cycle
+- True economic moat beyond current programs
+bull_seed: If diversified order book, controlled receivables, and credible FCF accompany
+  attractive MoS, revisit size — thesis is execution + demand, not a cheap multiple
+  alone.
+base_seed: 'Research posture: track order book quality, customer concentration, and
+  cash conversion. Do not size on defence narrative alone — working capital and execution
+  are the usual killers.'
+bear_seed: If concentration rises, receivables blow out, or a flagship program slips,
+  avoid — even if the stock looks optically cheap.
+catalysts:
+- Order book / customer-mix disclosure
+- Receivables and WC bridge evidence
+- Program milestone / certification update
+distinctiveness_tokens:
+- order book
+- defence
+- aerospace
+- isro
+- receivables
+- precision
+- program
+- working capital
+- customer concentration
+version: si.2
+region: india
+mental_model: long-cycle defence and aerospace demand for high-precision manufacturing
+  where order book, program stickiness, and execution quality matter more than near-term
+  multiples
+identity_patterns: []

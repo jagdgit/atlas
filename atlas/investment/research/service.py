@@ -39,10 +39,19 @@ from atlas.investment.research.valuation import (
     build_valuation_case,
     thesis_stance_from_valuation,
 )
+from atlas.investment.research.valuation_paths import (
+    apply_branching_to_valuation_case,
+    branch_valuation_paths,
+    inputs_from_ratios,
+)
 from atlas.investment.research.store import ResearchStore
 from atlas.investment.research import sector_packs as packs
 from atlas.investment.research import timing as timing_pack
 from atlas.investment.research import management_pack as mgmt_pack
+from atlas.investment.research import business_identity as identity_engine
+from atlas.investment.research import research_strategy as strategy_engine
+from atlas.investment.research import distinctiveness as distinctiveness_engine
+from atlas.investment.research import compare as compare_engine
 from atlas.investment.research.evidence import (
     critical_flags_summary,
     evidence_sufficiency,
@@ -215,6 +224,9 @@ class InvestmentResearchService:
             "top_gaps": top_gaps[:12],
             "brief": brief,
             "pack": doc.get("pack"),
+            "business_identity": doc.get("business_identity")
+            or identity_engine.empty_identity(str(doc.get("symbol") or "")),
+            "research_strategy": doc.get("research_strategy"),
             "section_confidence": section_confidence,
             "coverage_by_section": cov_detail.get("by_section"),
             "coverage_by_evidence": cov_detail.get("by_evidence"),
@@ -252,12 +264,58 @@ class InvestmentResearchService:
             "thesis_distinctiveness": (
                 thesis.get("distinctiveness") if thesis else None
             ),
+            # SI.5 — RC5 distinctiveness before MoS (also mirrored on thesis)
+            "distinctiveness": None,  # filled below
             "sector_pack": packs.pack_by_id(doc.get("pack")) if doc.get("pack") else None,
             "mkg": self._mkg_awareness(
                 str(doc.get("symbol") or symbol),
                 program_id=program_id,
             ),
         }
+        # SI.5 — prefer stamped block; else build on the fly for older dossiers
+        dist = doc.get("distinctiveness")
+        if not isinstance(dist, dict) or dist.get("version") != distinctiveness_engine.VERSION:
+            th_dist = thesis.get("distinctiveness") if thesis else None
+            if isinstance(th_dist, dict) and th_dist.get("version") == distinctiveness_engine.VERSION:
+                dist = th_dist
+            else:
+                try:
+                    dist = distinctiveness_engine.build_distinctiveness(
+                        symbol=str(doc.get("symbol") or symbol),
+                        identity=out.get("business_identity")
+                        if isinstance(out.get("business_identity"), dict)
+                        else None,
+                        pack=out.get("sector_pack")
+                        if isinstance(out.get("sector_pack"), dict)
+                        else None,
+                        thesis=thesis or None,
+                        company_name=str(biz.get("name") or ""),
+                    )
+                except Exception:  # noqa: BLE001
+                    dist = distinctiveness_engine.empty_block(
+                        str(doc.get("symbol") or symbol)
+                    )
+        out["distinctiveness"] = dist
+        if isinstance(out.get("thesis_distinctiveness"), dict) and not out[
+            "thesis_distinctiveness"
+        ].get("reason_to_exist"):
+            # Keep score UI working; merge RC5 fields when thesis only has legacy score
+            out["thesis_distinctiveness"] = {
+                **out["thesis_distinctiveness"],
+                **{
+                    k: dist.get(k)
+                    for k in (
+                        "reason_to_exist",
+                        "position",
+                        "value_drivers",
+                        "falsifiers",
+                        "gaps",
+                        "status",
+                        "version",
+                    )
+                    if dist.get(k) is not None
+                },
+            }
         # IIP.6 — dual-confidence investment score on awareness
         try:
             from atlas.investment.scoring import score_from_awareness
@@ -352,6 +410,7 @@ class InvestmentResearchService:
         mode: str = "mvr",
         force: bool = False,
         trigger: str = "on_demand",
+        allow_without_identity: bool = False,
     ) -> dict[str, Any]:
         """Run a bounded MVR research pass (hermetic seeds + gaps). Idempotent unless force."""
         sym = normalize_symbol(symbol)
@@ -360,6 +419,31 @@ class InvestmentResearchService:
             return {
                 "started": False,
                 "reason": "already_mvr_ready",
+                "awareness": self.awareness(sym, program_id=program_id),
+                "dossier": doc,
+            }
+
+        # SI.1 — resolve business identity before MVR (never invent)
+        identity = self._stamp_identity(doc)
+        gate = identity_engine.identity_gate(
+            identity,
+            force=force,
+            allow_without_identity=allow_without_identity,
+        )
+        if not gate.get("ok"):
+            doc["phase"] = PHASE_BLOCKED
+            doc["blocked_on"] = ["identity_unknown"]
+            doc["doing_now"] = "awaiting business identity"
+            doc["next"] = "set_business_identity"
+            doc["trigger"] = trigger
+            self._store.save(doc)
+            return {
+                "started": False,
+                "ok": False,
+                "reason": "identity_unknown",
+                "detail": gate.get("detail"),
+                "identity_gate": gate,
+                "business_identity": identity,
                 "awareness": self.awareness(sym, program_id=program_id),
                 "dossier": doc,
             }
@@ -386,6 +470,8 @@ class InvestmentResearchService:
                 }
         doc["mode"] = "deep" if want_deep else "mvr"
         doc["blocked_on"] = []
+        # SI.3 — research strategy (question mix + valuation paths) before MVR spine
+        doc = self._apply_research_strategy(doc, identity=identity, force=force)
         if not doc.get("questions"):
             doc["questions"] = default_mvr_questions(sym)
         if not isinstance(doc.get("management_pack"), dict):
@@ -422,6 +508,172 @@ class InvestmentResearchService:
 
     def dossier(self, symbol: str, *, program_id: str = DEFAULT_PROGRAM) -> dict[str, Any]:
         return self.get_or_create(symbol, program_id=program_id)
+
+    def _apply_research_strategy(
+        self,
+        doc: dict[str, Any],
+        *,
+        identity: dict[str, Any] | None = None,
+        profile: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """SI.3 — generate and stamp research_strategy onto dossier."""
+        sym = str(doc.get("symbol") or "")
+        ident = identity if isinstance(identity, dict) else doc.get("business_identity")
+        if not isinstance(ident, dict):
+            ident = identity_engine.empty_identity(sym)
+        pack = None
+        pack_id = ident.get("pack_id") or doc.get("pack")
+        if pack_id:
+            pack = packs.pack_by_id(str(pack_id))
+        if pack is None:
+            sector = (
+                (ident.get("sector") if isinstance(ident, dict) else None)
+                or ((profile or {}).get("sector") if isinstance(profile, dict) else None)
+            )
+            pack = packs.pack_for(sym, sector=str(sector or "") or None)
+        # Available valuation inputs from operator / quality seeds (never invent)
+        available: dict[str, Any] = {}
+        try:
+            ratios = qs.ratios_for_symbol(sym) or {}
+            if ratios.get("fcf") is not None:
+                available["fcf"] = ratios.get("fcf")
+            if ratios.get("pe") is not None:
+                available["pe"] = ratios.get("pe")
+        except Exception:  # noqa: BLE001
+            pass
+        sections = doc.get("sections") if isinstance(doc.get("sections"), dict) else {}
+        val_fields = ((sections.get("valuation") or {}).get("fields") or {})
+        if val_fields.get("fcf") is not None:
+            available["fcf"] = val_fields.get("fcf")
+        if val_fields.get("pe") is not None:
+            available["pe"] = val_fields.get("pe")
+
+        strategy = strategy_engine.generate_research_strategy(
+            sym,
+            identity=ident,
+            pack=pack,
+            available_inputs=available,
+            force=force,
+        )
+        return strategy_engine.apply_strategy_to_dossier(doc, strategy)
+
+    def _stamp_identity(
+        self,
+        doc: dict[str, Any],
+        *,
+        profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Resolve and attach business_identity (SI.1). Mutates ``doc``."""
+        sym = str(doc.get("symbol") or "")
+        ratios: dict[str, Any] = {}
+        try:
+            ratios = qs.ratios_for_symbol(sym) or {}
+        except Exception:  # noqa: BLE001
+            ratios = {}
+        prof = profile if isinstance(profile, dict) else {}
+        sector = (
+            str(prof.get("sector") or "").strip()
+            or str(ratios.get("sector") or "").strip()
+            or None
+        )
+        identity = identity_engine.resolve_identity(
+            sym,
+            dossier=doc,
+            universe_sector=sector,
+            profile=prof or ratios,
+        )
+        stamped = identity_engine.attach_identity_to_dossier(doc, identity)
+        doc.update(stamped)
+        return dict(identity)
+
+    def get_identity(
+        self,
+        symbol: str,
+        *,
+        program_id: str = DEFAULT_PROGRAM,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        """Resolve business identity (SI.1); optionally persist onto dossier."""
+        doc = self.get_or_create(symbol, program_id=program_id)
+        identity = self._stamp_identity(doc)
+        if persist:
+            self._store.save(doc)
+        gate = identity_engine.identity_gate(identity)
+        return {
+            "symbol": doc.get("symbol"),
+            "program_id": program_id,
+            "business_identity": identity,
+            "gate": gate,
+            "dossier": doc,
+        }
+
+    def compare(
+        self,
+        symbol_a: str,
+        symbol_b: str,
+        *,
+        program_id: str = DEFAULT_PROGRAM,
+        holdings: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """SI.6 — Why A vs B? (research framing; not a buy ticket)."""
+        a = normalize_symbol(symbol_a)
+        b = normalize_symbol(symbol_b)
+        if not a or not b:
+            return {
+                "ok": False,
+                "reason": "need_two_symbols",
+                "honesty": "Provide two symbols to compare.",
+            }
+        if a == b:
+            return {
+                "ok": False,
+                "reason": "same_symbol",
+                "honesty": "Compare requires two different symbols.",
+            }
+        aw_a = self.awareness(a, program_id=program_id)
+        aw_b = self.awareness(b, program_id=program_id)
+        result = compare_engine.compare_opportunities(aw_a, aw_b, holdings=holdings)
+        result["ok"] = True
+        result["program_id"] = program_id
+        return result
+
+    def set_identity(
+        self,
+        symbol: str,
+        payload: dict[str, Any],
+        *,
+        program_id: str = DEFAULT_PROGRAM,
+        start_mvr: bool = False,
+    ) -> dict[str, Any]:
+        """Operator sets/confirms business identity (SI.1)."""
+        sym = normalize_symbol(symbol)
+        doc = self.get_or_create(sym, program_id=program_id)
+        identity = identity_engine.apply_operator_identity(sym, payload, dossier=doc)
+        stamped = identity_engine.attach_identity_to_dossier(doc, identity)
+        doc.update(stamped)
+        blocked = [b for b in (doc.get("blocked_on") or []) if b != "identity_unknown"]
+        doc["blocked_on"] = blocked
+        if doc.get("phase") == PHASE_BLOCKED and not blocked:
+            doc["phase"] = PHASE_QUEUED
+            doc["doing_now"] = "identity resolved — ready for MVR"
+            doc["next"] = "start_mvr"
+        self._store.save(doc)
+        out: dict[str, Any] = {
+            "ok": True,
+            "business_identity": identity,
+            "awareness": self.awareness(sym, program_id=program_id),
+            "dossier": doc,
+        }
+        if start_mvr:
+            out["mvr"] = self.start(
+                sym,
+                program_id=program_id,
+                mode="mvr",
+                force=False,
+                trigger="identity_confirmed",
+            )
+        return out
 
     def list_researched(self, *, program_id: str = DEFAULT_PROGRAM) -> list[dict[str, Any]]:
         rows = []
@@ -1730,6 +1982,14 @@ class InvestmentResearchService:
             doc.setdefault("known_knowns", []).append(
                 f"hint:{hint_profile.get('source') or 'atlas_midcap_hint'}"
             )
+        # SI.1 — refresh identity once profile/hint sector is known
+        self._stamp_identity(doc, profile=profile)
+        # SI.3 — refresh strategy with resolved pack / available seeds
+        doc = self._apply_research_strategy(
+            doc,
+            identity=doc.get("business_identity") if isinstance(doc.get("business_identity"), dict) else None,
+            profile=profile,
+        )
         sector_pack = packs.pack_for(
             sym, sector=str(profile.get("sector") or ratios.get("sector") or "")
         )
@@ -1985,6 +2245,24 @@ class InvestmentResearchService:
             shares=ratios.get("shares") or ratios.get("share_count"),
             valuation_id=f"val-{sym}",
         )
+        # SI.4 — path branching on gaps (never pretend DCF MoS without FCF)
+        branch_inputs = inputs_from_ratios(
+            {
+                **ratios,
+                "roe": roe,
+                "fcf": fcf,
+                "pe": ratios.get("pe"),
+                "price": ratios.get("price"),
+                "shares": ratios.get("shares") or ratios.get("share_count"),
+                "sector": sector,
+            }
+        )
+        branching = branch_valuation_paths(sector_pack, inputs=branch_inputs)
+        valuation = apply_branching_to_valuation_case(valuation, branching)
+        # Keep strategy.valuation_paths in sync with post-evidence branching
+        strat = dict(doc.get("research_strategy") or {})
+        strat["valuation_paths"] = branching
+        doc["research_strategy"] = strat
         doc["valuation"] = valuation
         val_fields = dict(valuation)
         if sector_pack and sector_pack.get("valuation_methods"):
@@ -1999,15 +2277,16 @@ class InvestmentResearchService:
             if valuation.get("pe") is not None or valuation.get("fcf") is not None
             else CONF_VERY_LOW,
             gaps=list(valuation.get("gaps") or []),
-            sources=["quality_seed", "screener_optional", "ira11"]
+            sources=["quality_seed", "screener_optional", "ira11", "si.4"]
             + (["sector_pack"] if sector_pack else []),
             status="present",
         )
         mos = valuation.get("margin_of_safety_pct")
+        active_lbl = valuation.get("active_valuation_path_label") or valuation.get("method")
         self._answer_question(
             doc,
             4,
-            f"Valuation {valuation.get('method')}; MoS="
+            f"Valuation path={active_lbl}; MoS="
             + (f"{mos}%" if mos is not None else "unknown"),
             status="answered" if mos is not None else "answered_gap",
         )
@@ -2159,9 +2438,18 @@ class InvestmentResearchService:
             "linked_questions": [q.get("id") for q in doc.get("questions") or []],
             "valuation_id": valuation["id"],
         }
-        thesis["distinctiveness"] = packs.thesis_distinctiveness(
-            thesis, sector_pack, company_name=name
+        # SI.5 — distinctiveness block feeds thesis score (no boilerplate inventing)
+        dist = distinctiveness_engine.build_distinctiveness(
+            symbol=sym,
+            identity=doc.get("business_identity")
+            if isinstance(doc.get("business_identity"), dict)
+            else None,
+            pack=sector_pack,
+            thesis=thesis,
+            company_name=name,
         )
+        thesis["distinctiveness"] = dist
+        doc["distinctiveness"] = dist
         if (
             stance == "watch"
             and roe is not None

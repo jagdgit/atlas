@@ -1,0 +1,60 @@
+id: generic
+version: si.2
+region: india
+label: Generic fallback (weak lens)
+thesis_interest: unknown business type — use only until identity is resolved; do not
+  pretend sector expertise
+mental_model: This pack is an explicit CapabilityGap placeholder. It asks universal
+  questions only. Replace with a real sector pack as soon as business identity is
+  known.
+identity_patterns: []
+weak: true
+primary_kpis:
+- Revenue growth
+- Operating margin
+- ROIC / ROE
+- FCF conversion
+- Net debt
+extra_questions:
+- What does this company actually sell, and to whom?
+- What is the unit of economics (per store, per MW, per bed, per project)?
+- Which three sector KPIs would a specialist track that we are missing?
+- Is capital intensity asset-light, capital-heavy, or balance-sheet heavy?
+risk_lenses:
+- Identity unknown
+- Wrong valuation path
+- Generic thesis
+failure_modes:
+- Proceeding with MVR as if sector were known
+valuation_methods:
+- Multiples only with wide peer caution
+- Do not force DCF without FCF evidence
+moat_lenses:
+- Unknown — establish identity first
+management_behaviors:
+- Capital allocation — once business type is known
+falsifiers:
+- Any claim of sector expertise while pack=generic
+evidence_sources:
+- Company profile / filings for identity
+- Operator classification
+positive_drivers: []
+concern_drivers:
+- Business identity unresolved
+unknown_drivers:
+- Sector membership
+- Sector KPIs
+- Appropriate valuation path
+bull_seed: Do not size on a generic pack — classify the business first.
+base_seed: 'Blocked-quality posture: resolve business identity, then load a real sector
+  pack.'
+bear_seed: If identity stays unknown, keep research strategy blocked or operator-forced
+  only.
+catalysts:
+- Operator identity confirmation
+- Filing that states business model clearly
+distinctiveness_tokens:
+- identity
+- unknown
+- generic
+- classify

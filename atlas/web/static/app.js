@@ -2113,6 +2113,7 @@ async function loadLearner(opts = {}) {
   let watch = null;
   let portfolios = null;
   let missions = null;
+  let ledger = null;
 
   const results = await Promise.allSettled([
     api("/v1/learner/status"),
@@ -2120,18 +2121,20 @@ async function loadLearner(opts = {}) {
     api("/v1/market/watchlist?limit=15"),
     api("/v1/market/portfolios"),
     api("/v1/missions?limit=100"),
+    api("/v1/market/portfolios/india_equity_learner/ledger"),
   ]);
   if (results[0].status === "fulfilled") status = results[0].value;
   if (results[1].status === "fulfilled") plan = results[1].value;
   if (results[2].status === "fulfilled") watch = results[2].value;
   if (results[3].status === "fulfilled") portfolios = results[3].value;
   if (results[4].status === "fulfilled") missions = results[4].value;
+  if (results[5].status === "fulfilled") ledger = results[5].value;
 
   renderLearnerSummary(summary, { status, plan, watch });
   renderLearnerPlan(planBox, plan);
   renderLearnerWatchlist(wlBox, watch);
   renderLearnerChecklist(checkBox, status);
-  renderLearnerBook(bookBox, { status, portfolios, missions, plan });
+  renderLearnerBook(bookBox, { status, portfolios, missions, plan, ledger });
   loadInvestorEmailStatus();
   loadLearnerResearchList();
   startLearnerPoll();
@@ -2460,6 +2463,86 @@ async function loadLearnerResearchList(opts) {
   }
 }
 
+async function runLearnerCompare(symbolA, symbolB) {
+  const status = $("#learner-research-status");
+  const inputA = $("#learner-compare-a");
+  const inputB = $("#learner-compare-b");
+  const researchSym = ($("#learner-research-symbol") && $("#learner-research-symbol").value) || "";
+  const a = (symbolA || (inputA && inputA.value) || researchSym || "").trim();
+  const b = (symbolB || (inputB && inputB.value) || "").trim();
+  if (!a || !b) {
+    if (status) status.textContent = "Enter two symbols for Why A vs B (e.g. APOLLOHOSP vs MTARTECH).";
+    return;
+  }
+  if (status) status.textContent = `Comparing ${a} vs ${b}…`;
+  const box = $("#learner-research-detail") || $("#learner-research-body");
+  if (!box) return;
+  try {
+    const q = new URLSearchParams({
+      a,
+      b,
+      portfolio_ref: "india_equity_learner",
+    });
+    const data = await api(`/v1/market/research/compare?${q.toString()}`);
+    if (data && data.ok === false) {
+      if (status) status.textContent = `Compare blocked: ${data.reason || "error"}`;
+      return;
+    }
+    if (status) {
+      status.textContent = `${data.verdict || "compare"} · ${a} vs ${b}`;
+    }
+    box.innerHTML = "";
+    const add = (label, text, { force = false } = {}) => {
+      const body = (text == null || text === "") ? (force ? "(not available)" : "") : String(text);
+      if (!body && !force) return;
+      box.append(el("div", { class: "learner-research-block" },
+        label ? el("div", { class: "learner-research-label", text: label }) : null,
+        el("div", { class: "why", text: body }),
+      ));
+    };
+    box.append(el("div", {
+      class: "learner-research-verdict",
+      text: `Why A vs B (SI.6): ${(data.a && data.a.symbol) || a} vs ${(data.b && data.b.symbol) || b}`,
+    }));
+    add("Verdict", [
+      data.verdict || "?",
+      data.summary || null,
+      data.honesty || null,
+    ].filter(Boolean).join("\n"), { force: true });
+    const diffs = data.why_not_interchangeable || [];
+    if (diffs.length) {
+      add("Why not interchangeable", diffs.map((d) => `• ${d}`).join("\n"));
+    }
+    for (const axis of (data.axes || []).slice(0, 6)) {
+      add(axis.label || axis.id, [
+        `A: ${axis.a || "—"}`,
+        `B: ${axis.b || "—"}`,
+        axis.delta ? `Delta: ${axis.delta}` : null,
+        axis.note || null,
+      ].filter(Boolean).join("\n"));
+    }
+    const pref = data.prefer_deeper_research || {};
+    if (pref.symbol) {
+      add("Prefer deeper research", [
+        pref.symbol,
+        ...((pref.reasons || []).map((r) => `• ${r}`)),
+      ].join("\n"));
+    }
+    const pc = data.portfolio_context || {};
+    if (pc.note || pc.a_held || pc.b_held) {
+      add("Portfolio context", [
+        pc.note || null,
+        `A held: ${pc.a_held ? "yes" : "no"} · B held: ${pc.b_held ? "yes" : "no"}`,
+      ].filter(Boolean).join("\n"));
+    }
+    if (typeof box.scrollIntoView === "function") {
+      box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  } catch (err) {
+    if (status) status.textContent = `Compare failed: ${err && err.message ? err.message : err}`;
+  }
+}
+
 async function startLearnerResearch(symbol) {
   const status = $("#learner-research-status");
   const input = $("#learner-research-symbol");
@@ -2627,6 +2710,56 @@ async function raiseLearnerCriticalFlag() {
   }
 }
 
+async function applyLearnerBusinessIdentity() {
+  const status = $("#learner-research-status");
+  const input = $("#learner-research-symbol");
+  const sym = ((input && input.value) || "").trim();
+  if (!sym) {
+    if (status) status.textContent = "Enter a symbol before confirming identity.";
+    return;
+  }
+  const driversRaw = (($("#ident-drivers") || {}).value || "").trim();
+  const body = {
+    business_type: (($("#ident-business-type") || {}).value || "").trim() || null,
+    sector: (($("#ident-sector") || {}).value || "").trim() || null,
+    capital_intensity: (($("#ident-capital") || {}).value || "").trim() || null,
+    pack_id: (($("#ident-pack") || {}).value || "").trim() || null,
+    key_drivers: driversRaw
+      ? driversRaw.split(",").map((s) => s.trim()).filter(Boolean)
+      : null,
+    start_mvr: true,
+  };
+  const hasField = Object.entries(body).some(([k, v]) =>
+    k !== "start_mvr" && v != null && v !== "" && !(Array.isArray(v) && !v.length)
+  );
+  if (!hasField) {
+    if (status) status.textContent = "Fill at least one identity field (sector, type, pack…).";
+    return;
+  }
+  if (status) status.textContent = `Confirming business identity for ${sym}…`;
+  try {
+    const result = await api(`/v1/market/research/${encodeURIComponent(sym)}/identity`, {
+      method: "POST",
+      body,
+    });
+    const aw = (result && result.awareness) || {};
+    const ident = (result && result.business_identity) || aw.business_identity || {};
+    const mvr = (result && result.mvr) || {};
+    if (status) {
+      status.textContent = `${aw.symbol || sym}: identity ${ident.status || "?"}`
+        + (ident.pack_id ? ` · pack=${ident.pack_id}` : "")
+        + (mvr.ok === false ? ` · MVR blocked: ${mvr.reason || "?"}` : (mvr.ok ? " · MVR started" : ""));
+    }
+    await showLearnerResearch(aw.symbol || sym);
+    await loadLearnerResearchList({ quiet: true });
+  } catch (err) {
+    if (status) {
+      status.textContent = "Identity failed: "
+        + (err && err.message ? err.message : String(err));
+    }
+  }
+}
+
 async function applyLearnerManagementPack() {
   const status = $("#learner-research-status");
   const input = $("#learner-research-symbol");
@@ -2762,6 +2895,81 @@ async function showLearnerResearch(symbol) {
     add("Honesty", brief.honesty
       || "Hermetic / hint-based MVR — not live NSE filings. Coverage ≠ confidence.",
       { force: true });
+    const ident = aw.business_identity || {};
+    if (ident.status || ident.business_type || ident.sector) {
+      add("Business identity (SI.1)", [
+        `Status: ${ident.status || "?"}`
+          + (ident.operator_confirmed ? " · operator-confirmed" : ""),
+        ident.business_type || null,
+        ident.sector
+          ? `Sector: ${ident.sector}${ident.subsector ? ` / ${ident.subsector}` : ""}`
+          : null,
+        ident.capital_intensity && ident.capital_intensity !== "unknown"
+          ? `Capital: ${ident.capital_intensity}`
+          : null,
+        ident.pack_id ? `Pack: ${ident.pack_id}` : null,
+        (ident.key_drivers || []).length
+          ? `Drivers: ${(ident.key_drivers || []).slice(0, 6).join(", ")}`
+          : null,
+        ident.confidence
+          ? `Conf identity=${ident.confidence.business_identity || "?"} · sector=${ident.confidence.sector_membership || "?"}`
+          : null,
+        ident.blocked_reason ? `Blocked: ${ident.blocked_reason}` : null,
+      ].filter(Boolean).join("\n"), { force: true });
+    }
+    // SI.5 — distinctiveness before MoS / valuation deep-dive
+    const distBlock = aw.distinctiveness || aw.thesis_distinctiveness || thesis.distinctiveness || {};
+    if (distBlock.version === "si.5" || distBlock.reason_to_exist || distBlock.status) {
+      const gaps = distBlock.gaps || [];
+      add("Distinctiveness (SI.5)", [
+        `Status: ${distBlock.status || "?"}`
+          + (distBlock.hypothesis ? " · hypothesis (not proven)" : ""),
+        distBlock.score_pct != null
+          ? `Score: ${distBlock.score_pct}%`
+            + (distBlock.identifiable_without_name
+              ? " — identifiable without name"
+              : " — still too generic")
+          : null,
+        distBlock.reason_to_exist
+          ? `Why exist: ${distBlock.reason_to_exist}`
+          : null,
+        distBlock.position ? `Position: ${distBlock.position}` : null,
+        (distBlock.value_drivers || []).length
+          ? `Value drivers: ${(distBlock.value_drivers || []).slice(0, 6).join("; ")}`
+          : (gaps.includes("value_drivers") ? "Value drivers: (gap)" : null),
+        (distBlock.falsifiers || []).length
+          ? `Falsifiers: ${(distBlock.falsifiers || []).slice(0, 5).join("; ")}`
+          : (gaps.includes("falsifiers") ? "Falsifiers: (gap)" : null),
+        gaps.length ? `Gaps: ${gaps.join(", ")}` : null,
+        distBlock.pack_id ? `Pack: ${distBlock.pack_id}` : null,
+      ].filter(Boolean).join("\n"), { force: true });
+    }
+    const strat = aw.research_strategy || {};
+    if (strat.strategy_id || strat.sector_pack_id) {
+      const mix = strat.mix || {};
+      const vp = strat.valuation_paths || {};
+      const active = vp.active || {};
+      add("Research strategy (SI.3/4)", [
+        `Strategy: ${strat.strategy_id || "?"}`,
+        strat.pack_label || strat.sector_pack_id
+          ? `Pack: ${strat.pack_label || strat.sector_pack_id}`
+          : null,
+        mix.universal != null
+          ? `Questions: universal ${mix.universal} (${Math.round((mix.universal_share || 0) * 100)}%) · sector ${mix.sector} (${Math.round((mix.sector_share || 0) * 100)}%)`
+          : null,
+        active.kind
+          ? `Active valuation path: ${active.label || active.kind}`
+          : (vp.primary ? `Valuation primary: ${vp.primary}` : null),
+        (vp.fallbacks || []).length
+          ? `Fallbacks: ${(vp.fallbacks || []).slice(0, 2).map((f) => (typeof f === "string" ? f : (f.label || f.kind))).join("; ")}`
+          : null,
+        (vp.next_evidence || []).length
+          ? `Next evidence: ${(vp.next_evidence || []).slice(0, 3).map((e) => e.need || e.detail).join(", ")}`
+          : null,
+        vp.note || null,
+        (strat.blockers || []).length ? `Blockers: ${(strat.blockers || []).join(", ")}` : null,
+      ].filter(Boolean).join("\n"), { force: true });
+    }
     add("Business",
       [biz.name, biz.sector, biz.summary].filter(Boolean).join(" · ") || brief.business || "(no business sketch)",
       { force: true });
@@ -2782,7 +2990,8 @@ async function showLearnerResearch(symbol) {
       ].filter(Boolean).join("\n\n"), { force: true });
     }
     const dist = aw.thesis_distinctiveness || thesis.distinctiveness || {};
-    if (dist.score_pct != null) {
+    // Prefer SI.5 block above; keep legacy score-only card only if SI.5 not shown
+    if (dist.score_pct != null && !(aw.distinctiveness && aw.distinctiveness.version === "si.5")) {
       add("Thesis distinctiveness", [
         `${dist.score_pct}%`
           + (dist.identifiable_without_name ? " — identifiable without company name" : " — still too generic"),
@@ -3027,12 +3236,71 @@ function renderLearnerChecklist(box, status) {
   }
 }
 
-function renderLearnerBook(box, { status, portfolios, missions, plan }) {
+function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) {
   box.innerHTML = "";
+  const st = (ledger && ledger.statement) || (ledger && ledger.snapshot) || null;
+  if (st) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-bottom:6px",
+      text: "Paper ledger · india_equity_learner",
+    }));
+    const cash = st.cash != null ? Number(st.cash) : null;
+    const equity = st.equity != null ? Number(st.equity) : null;
+    const trades = st.trade_count != null ? st.trade_count : (st.recent_trades || []).length;
+    const pos = (st.positions || []).length;
+    box.append(el("div", { class: "learner-row" },
+      el("div", { class: "rank", text: "₹" }),
+      el("div", {},
+        el("div", { class: "sym", text: `Cash ${cash != null ? cash.toLocaleString("en-IN") : "—"}` }),
+        el("div", {
+          class: "why",
+          text: `Equity ${equity != null ? equity.toLocaleString("en-IN") : "—"} · ${pos} position(s) · ${trades} trade(s)`,
+        }),
+      ),
+    ));
+    if (!trades && !pos) {
+      const note = (ledger && ledger.session_note) || {};
+      const reasons = note.no_fill_reasons || [];
+      const counts = note.reason_counts || {};
+      const strategyHolds = Number(counts.strategy_hold || 0);
+      const researchHolds = Number(counts.research_hold || 0);
+      const markOnly = Number(counts.mark_only || 0);
+      let msg = "Sim is live (holds/marks) but no buys yet.";
+      if (strategyHolds && !researchHolds) {
+        msg = "No buys yet — strategy has not fired a buy signal (MA/RSI hold). Not a research gate block.";
+      } else if (researchHolds) {
+        msg = "No buys yet — research gate held buys (MVR / thesis / MoS). Check dossier.";
+      } else if (markOnly && !strategyHolds) {
+        msg = "No new bars yet — mark-to-market only between live ticks.";
+      }
+      box.append(el("div", {
+        class: "muted small",
+        style: "margin:6px 0 10px",
+        text: msg + " Check mission journal “trade simulation”.",
+      }));
+      if (reasons.length) {
+        box.append(el("div", {
+          class: "muted small",
+          style: "margin:0 0 10px",
+          text: `Today’s reasons: ${reasons.slice(0, 4).join(" · ")}`,
+        }));
+      }
+    }
+    const recent = st.recent_trades || [];
+    for (const t of recent.slice(0, 5)) {
+      box.append(el("div", {
+        class: "small",
+        style: "padding:2px 0",
+        text: `${t.side || t.action || "?"} ${t.symbol || ""} × ${t.qty || t.quantity || "?"} @ ${t.price || "?"}`,
+      }));
+    }
+  }
+
   const books = (portfolios && (portfolios.portfolios || portfolios.items || portfolios)) || [];
   const list = Array.isArray(books) ? books : [];
   if (list.length) {
-    box.append(el("div", { class: "muted small", style: "margin-bottom:6px", text: "Virtual portfolios" }));
+    box.append(el("div", { class: "muted small", style: "margin:10px 0 6px", text: "Virtual portfolios" }));
     for (const p of list.slice(0, 8)) {
       const key = p.portfolio_key || p.name || p.id || "?";
       const cap = p.persona && p.persona.capital != null ? p.persona.capital : p.capital;
@@ -3049,7 +3317,7 @@ function renderLearnerBook(box, { status, portfolios, missions, plan }) {
         }),
       ));
     }
-  } else {
+  } else if (!st) {
     box.append(el("div", {
       class: "learner-empty",
       text: "No virtual portfolio registry entries yet (India learner creates india_equity_learner).",
@@ -3062,6 +3330,7 @@ function renderLearnerBook(box, { status, portfolios, missions, plan }) {
     const tpl = (m.template || m.mission_type || "").toLowerCase();
     return t.includes("market") || t.includes("investment") || t.includes("decision")
       || t.includes("portfolio") || t.includes("company") || t.includes("news")
+      || t.includes("trade simulation") || t.includes("paper")
       || ["investment_universe", "decision_simulation", "paper_trading", "market_observer",
           "company_intelligence", "news_intelligence", "portfolio_ledger", "investment_mentor",
           "event_research"].includes(tpl);
@@ -3091,7 +3360,7 @@ function renderLearnerBook(box, { status, portfolios, missions, plan }) {
   box.append(el("div", {
     class: "muted small",
     style: "margin-top:14px",
-    text: `Tip: Decision Simulation is a separate mission from Investment Universe. Open it above, or chat “learner status”. Book key: ${pkey}.`,
+    text: `API: GET /v1/market/portfolios/${pkey}/ledger · Book key: ${pkey}`,
   }));
 }
 
@@ -3841,15 +4110,66 @@ function pctSeverity(p) { return p == null ? "" : p >= 92 ? "fail" : p >= 80 ? "
 async function loadOverview() {
   startOpsStream();
   startOpsPoll();
-  await refreshOps();
+  await refreshOps({ preferSummary: true });
 }
 
-async function refreshOps() {
+async function refreshOps(opts) {
+  const preferSummary = !!(opts && opts.preferSummary);
+  const banner = $("#ops-banner");
   try {
-    const snap = await api("/v1/ops");
+    if (preferSummary) {
+      try {
+        const summary = await api("/v1/ops/summary");
+        renderOpsSummaryFirstPaint(summary);
+      } catch (_) { /* fall through to full */ }
+    }
+    const snap = await apiWithRetry("/v1/ops", { retries: 2, delayMs: 600 });
     if (snap.atlas) applyStatus(snap.atlas);
     renderOps(snap);
-  } catch (err) { toast(err.message); }
+  } catch (err) {
+    if (banner) {
+      banner.textContent = `Ops load failed — retrying… (${err.message || err})`;
+      banner.classList.remove("hidden");
+    }
+    toast(err.message);
+  }
+}
+
+async function apiWithRetry(path, { retries = 2, delayMs = 500, method = "GET", body } = {}) {
+  let lastErr = null;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await api(path, { method, body });
+    } catch (err) {
+      lastErr = err;
+      if (i < retries) {
+        await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+      }
+    }
+  }
+  throw lastErr || new Error("request failed");
+}
+
+function renderOpsSummaryFirstPaint(summary) {
+  if (!summary) return;
+  renderOpsBanner({
+    capacity_signal: summary.capacity_signal,
+    startup: summary.startup,
+  });
+  renderOpsProgramHealth(summary.program_health || {});
+  renderOpsArchiveLane(summary.archive_lane || summary.host_guard || {});
+  const a = summary.atlas || {};
+  const cards = $("#ops-cards");
+  if (cards && !cards.childElementCount) {
+    cards.append(opsCard(
+      "atlas",
+      a.healthy ? (a.degraded ? "degraded" : "healthy") : "warming…",
+      a.healthy ? (a.degraded ? "warn" : "") : "warn",
+    ));
+    if (a.uptime_seconds != null) {
+      cards.append(opsCard("uptime", fmtUptime(a.uptime_seconds)));
+    }
+  }
 }
 
 function opsCard(k, v, sev) {
@@ -3865,8 +4185,21 @@ function renderOps(snap) {
   const inet = host.internet || {}, temp = host.temperature || {}, ups = host.ups || {};
   const backup = snap.backup || {};
 
+  renderOpsBanner(snap);
+  renderOpsProgramHealth(snap.program_health || {});
+  renderOpsArchiveLane(snap.archive_lane || snap.host_guard || {});
+  renderOpsResearchVelocity(snap.research_velocity || {});
+  renderOpsNextTick(snap.next_tick || {});
+  renderOpsGlossary(snap.glossary || {});
+
   const sc = a.severity_counts || { ok: 0, degraded: 0, failed: 0 };
-  cards.append(opsCard("atlas", a.healthy ? (a.degraded ? "degraded" : "healthy") : "down",
+  const degNames = (a.degraded_services || []).join(", ");
+  const failNames = (a.failed_services || []).join(", ");
+  let atlasLabel = a.healthy ? (a.degraded ? "degraded" : "healthy") : "down";
+  if (a.degraded && degNames) atlasLabel = `degraded · ${degNames}`;
+  if (!a.healthy && failNames) atlasLabel = `down · ${failNames}`;
+  else if (!a.healthy && degNames) atlasLabel = `down · ${degNames}`;
+  cards.append(opsCard("atlas", atlasLabel,
     a.healthy ? (a.degraded ? "warn" : "") : "fail"));
   cards.append(opsCard("version", a.version || "—"));
   cards.append(opsCard("uptime", fmtUptime(a.uptime_seconds)));
@@ -3987,8 +4320,136 @@ function renderOps(snap) {
   cards.append(opsCard("last backup", backup.last || "none"));
   cards.append(opsCard("live clients", snap.sse_subscribers || 0));
 
+  window.__opsLastSnap = snap;
   renderOpsWorkerStates(ws);
   renderOpsMissionQueue(snap.mission_queue || {});
+}
+
+function renderOpsBanner(snap) {
+  const banner = $("#ops-banner");
+  if (!banner) return;
+  const startup = snap.startup || {};
+  const sig = snap.capacity_signal || {};
+  if (startup.warming && startup.message) {
+    banner.textContent = startup.message;
+    banner.classList.remove("hidden");
+  } else if (sig.active && sig.message) {
+    banner.textContent = sig.message;
+    banner.classList.remove("hidden");
+  } else {
+    banner.textContent = "";
+    banner.classList.add("hidden");
+  }
+}
+
+function renderOpsProgramHealth(ph) {
+  const box = $("#ops-program-health");
+  if (!box) return;
+  box.innerHTML = "";
+  const programs = (ph && ph.programs) || [];
+  if (!programs.length) {
+    box.append(el("div", { class: "muted small", text: "Program health unavailable." }));
+    return;
+  }
+  for (const p of programs) {
+    const st = p.status || "idle";
+    let sev = "";
+    if (st === "at_risk" || st === "congested") sev = st === "congested" ? "fail" : "warn";
+    else if (st === "healthy") sev = "ok";
+    box.append(el("div", { class: "ops-prog-chip" + (sev ? " " + sev : "") },
+      el("div", { class: "k", text: p.label || p.program || "?" }),
+      el("div", { class: "v", text: String(st).replace(/_/g, " ") }),
+      el("div", { class: "d", text: p.detail || "" })));
+  }
+}
+
+function renderOpsArchiveLane(al) {
+  const box = $("#ops-archive-lane");
+  if (!box) return;
+  box.innerHTML = "";
+  const maxSlots = al.max_slots != null ? al.max_slots : al.max_archive_workers;
+  const running = al.running != null ? al.running : al.archive_workers_running;
+  const free = al.free != null
+    ? al.free
+    : (maxSlots != null && running != null ? Math.max(0, Number(maxSlots) - Number(running)) : null);
+  box.append(el("div", {
+    class: "muted small",
+    text: "Archive lane · CPU idle ≠ archive free",
+  }));
+  const row = el("div", { class: "row" });
+  row.append(el("div", { class: "ops-rv-chip" },
+    el("div", { class: "k", text: "Slots" }),
+    el("div", { class: "v", text: `${running != null ? running : "—"} / ${maxSlots != null ? maxSlots : "—"} running` })));
+  row.append(el("div", { class: "ops-rv-chip" },
+    el("div", { class: "k", text: "Free" }),
+    el("div", { class: "v", text: free != null ? String(free) : "—" })));
+  row.append(el("div", { class: "ops-rv-chip" },
+    el("div", { class: "k", text: "2nd slot" }),
+    el("div", { class: "v", text: al.opt_in_second_slot ? "opt-in on" : "gated off" })));
+  box.append(row);
+  box.append(el("div", {
+    class: "muted small",
+    style: "margin-top:4px",
+    text: (al.second_slot_note || al.note || "Archive is capped separately from Market ticks."),
+  }));
+}
+
+function renderOpsResearchVelocity(rv) {
+  const box = $("#ops-research-velocity");
+  if (!box) return;
+  box.innerHTML = "";
+  const programs = (rv && rv.programs) || {};
+  const day = (rv && rv.as_of_day) || "";
+  box.append(el("div", {
+    class: "muted small",
+    text: day ? `Research velocity · ${day}` : "Research velocity",
+  }));
+  const row = el("div", { class: "row" });
+  const market = programs.market_intelligence || {};
+  row.append(el("div", { class: "ops-rv-chip" },
+    el("div", { class: "k", text: "Market dossiers advanced" }),
+    el("div", { class: "v", text: String(market.dossiers_advanced_today != null ? market.dossiers_advanced_today : "—") })));
+  row.append(el("div", { class: "ops-rv-chip" },
+    el("div", { class: "k", text: "Session buys today" }),
+    el("div", { class: "v", text: String(market.session_buys_today != null ? market.session_buys_today : "—") })));
+  box.append(row);
+}
+
+function renderOpsNextTick(nt) {
+  const box = $("#ops-next-tick");
+  if (!box) return;
+  box.innerHTML = "";
+  const free = nt.free_tick_slots;
+  const next = (nt && nt.next) || [];
+  box.append(el("div", {
+    class: "muted small",
+    text: free != null
+      ? `Next tick preview · ${free} free slot(s)`
+      : "Next tick preview",
+  }));
+  if (!next.length) {
+    box.append(el("div", { class: "muted small", text: "No READY / at-risk / waiting candidates." }));
+    return;
+  }
+  const row = el("div", { class: "row" });
+  for (const c of next.slice(0, 6)) {
+    row.append(el("div", { class: "ops-nt-chip" },
+      el("div", { class: "k", text: `${c.label || c.program || "?"} · ${c.ops_state || ""}` }),
+      el("div", { class: "v", text: c.type || c.mission_id || "?" })));
+  }
+  box.append(row);
+}
+
+function renderOpsGlossary(gl) {
+  const body = $("#ops-glossary-body");
+  if (!body) return;
+  body.innerHTML = "";
+  const entries = (gl && gl.entries) || [];
+  for (const e of entries) {
+    body.append(el("div", { class: "ops-glossary-entry" },
+      el("div", { class: "term", text: e.term || e.id || "" }),
+      el("div", { class: "def", text: e.definition || "" })));
+  }
 }
 
 const OPS_STATE_LABELS = [
@@ -4000,15 +4461,37 @@ const OPS_STATE_LABELS = [
   ["waiting_dependency", "Waiting Dependency"],
   ["sleeping", "Sleeping"],
   ["paused", "Paused"],
+  ["at_risk", "At risk"],
   ["starved", "Starved"],
   ["slow", "Slow"],
   ["completed", "Completed"],
 ];
 
+const OPS_PROGRAM_LABELS = {
+  market_intelligence: "Market",
+  engineering_intelligence: "Engineering",
+  personal_intelligence: "Personal",
+  archive: "Archive",
+  knowledge: "Knowledge",
+  unassigned: "Unassigned",
+};
+
+function opsHideHello() {
+  const box = $("#ops-hide-hello");
+  if (box) return !!box.checked;
+  try { return localStorage.getItem("ops_hide_hello") !== "0"; } catch (_) { return true; }
+}
+
+function opsGroupByProgram() {
+  const box = $("#ops-group-program");
+  if (box) return !!box.checked;
+  try { return localStorage.getItem("ops_group_program") !== "0"; } catch (_) { return true; }
+}
+
 function opsStateSeverity(key, n) {
   if (!n) return "";
   if (key === "starved" || key === "slow") return "fail";
-  if (key === "waiting_host" || key === "waiting_dependency" || key === "holding_reservation") return "warn";
+  if (key === "at_risk" || key === "waiting_host" || key === "waiting_dependency" || key === "holding_reservation") return "warn";
   if (key === "running_ticks") return "ok";
   return "";
 }
@@ -4028,26 +4511,69 @@ function renderOpsWorkerStates(ws) {
   }
   if (!notableBox) return;
   notableBox.innerHTML = "";
-  const notable = (ws && ws.notable) || [];
+  let notable = (ws && ws.notable) || [];
+  const hideHello = opsHideHello();
+  let hidden = 0;
+  if (hideHello) {
+    const kept = [];
+    for (const row of notable) {
+      if (row.type === "hello_watcher") hidden += 1;
+      else kept.push(row);
+    }
+    notable = kept;
+  }
+  if (hidden) {
+    notableBox.append(el("div", {
+      class: "muted small",
+      text: `Hiding ${hidden} hello_watcher from notable (inventory chips still include them until Phase B cleanup).`,
+    }));
+  }
   if (!notable.length) {
     notableBox.append(el("div", { class: "muted small", text: "No starved, slow, or waiting-host workers." }));
     return;
   }
-  for (const row of notable) {
-    const title = row.mission_title || row.type || row.id || "worker";
-    const age = row.starvation_age_seconds != null
-      ? ` · age ${fmtUptime(row.starvation_age_seconds)}`
-      : "";
-    const tick = row.last_tick_ms != null
-      ? ` · last tick ${Math.round(row.last_tick_ms)}ms (avg ${Math.round(row.avg_tick_ms || 0)}ms)`
-      : "";
-    const wait = row.wait_reason ? ` · ${row.wait_reason}` : "";
-    const sev = opsStateSeverity(row.ops_state, 1) || "ok";
-    notableBox.append(el("div", { class: "health-row" },
-      el("span", { class: "badge " + sev, text: row.ops_state || "?" }),
-      el("span", { class: "name", text: title }),
-      el("span", { class: "detail", text: `${row.type || ""}${wait}${tick}${age}` })));
+  if (opsGroupByProgram()) {
+    const groups = {};
+    for (const row of notable) {
+      const prog = (row.owner && row.owner.program) || "unassigned";
+      (groups[prog] || (groups[prog] = [])).push(row);
+    }
+    const order = Object.keys(groups).sort((a, b) => {
+      const la = OPS_PROGRAM_LABELS[a] || a;
+      const lb = OPS_PROGRAM_LABELS[b] || b;
+      return la.localeCompare(lb);
+    });
+    for (const prog of order) {
+      const wrap = el("div", { class: "ops-program-group" });
+      wrap.append(el("div", {
+        class: "ops-program-group-title",
+        text: OPS_PROGRAM_LABELS[prog] || prog,
+      }));
+      for (const row of groups[prog]) wrap.append(opsWorkerNotableRow(row));
+      notableBox.append(wrap);
+    }
+  } else {
+    for (const row of notable) notableBox.append(opsWorkerNotableRow(row));
   }
+}
+
+function opsWorkerNotableRow(row) {
+  const title = row.mission_title || row.type || row.id || "worker";
+  const age = row.starvation_age_seconds != null
+    ? ` · age ${fmtUptime(row.starvation_age_seconds)}`
+    : "";
+  const tick = row.last_tick_ms != null
+    ? ` · last tick ${Math.round(row.last_tick_ms)}ms (avg ${Math.round(row.avg_tick_ms || 0)}ms)`
+    : "";
+  const wait = row.wait_reason ? ` · ${row.wait_reason}` : "";
+  const prog = (row.owner && row.owner.program)
+    ? ` · ${OPS_PROGRAM_LABELS[row.owner.program] || row.owner.program}`
+    : "";
+  const sev = opsStateSeverity(row.ops_state, 1) || "ok";
+  return el("div", { class: "health-row" },
+    el("span", { class: "badge " + sev, text: row.ops_state || "?" }),
+    el("span", { class: "name", text: title }),
+    el("span", { class: "detail", text: `${row.type || ""}${prog}${wait}${tick}${age}` }));
 }
 
 const QUEUE_STATE_LABELS = [
@@ -4105,20 +4631,148 @@ function renderOpsMissionQueue(mq) {
   }
 }
 
+let __opsCleanupPreview = null;
+
+async function opsCleanupPreview() {
+  const status = $("#ops-cleanup-status");
+  const applyBtn = $("#ops-cleanup-apply");
+  const protectedBox = $("#ops-cleanup-protected");
+  if (status) status.textContent = "Previewing…";
+  if (applyBtn) applyBtn.disabled = true;
+  try {
+    const result = await api("/v1/ops/cleanup", {
+      method: "POST",
+      body: {
+        dry_run: true,
+        include_protected: !!(protectedBox && protectedBox.checked),
+      },
+    });
+    __opsCleanupPreview = result;
+    renderOpsCleanupResults(result);
+    const n = (result.counts && result.counts.candidates) || 0;
+    if (status) status.textContent = result.message || `Preview: ${n} candidate(s)`;
+    if (applyBtn) applyBtn.disabled = n === 0;
+  } catch (err) {
+    __opsCleanupPreview = null;
+    if (status) status.textContent = err.message || "Preview failed";
+    toast(err.message);
+  }
+}
+
+async function opsCleanupApply() {
+  const status = $("#ops-cleanup-status");
+  const applyBtn = $("#ops-cleanup-apply");
+  const protectedBox = $("#ops-cleanup-protected");
+  if (!__opsCleanupPreview || !((__opsCleanupPreview.counts || {}).candidates)) {
+    if (status) status.textContent = "Run Preview first.";
+    return;
+  }
+  const n = __opsCleanupPreview.counts.candidates;
+  if (!window.confirm(`Archive ${n} zombie / long no-progress worker mission(s)? Non-destructive.`)) {
+    return;
+  }
+  if (status) status.textContent = "Applying…";
+  if (applyBtn) applyBtn.disabled = true;
+  const missionIds = [];
+  const seen = {};
+  for (const c of __opsCleanupPreview.candidates || []) {
+    if (c.mission_id && !seen[c.mission_id]) {
+      seen[c.mission_id] = true;
+      missionIds.push(c.mission_id);
+    }
+  }
+  try {
+    const result = await api("/v1/ops/cleanup", {
+      method: "POST",
+      body: {
+        dry_run: false,
+        include_protected: !!(protectedBox && protectedBox.checked),
+        mission_ids: missionIds.length ? missionIds : undefined,
+        reason: "ops_cleanup:ui",
+      },
+    });
+    __opsCleanupPreview = null;
+    renderOpsCleanupResults(result);
+    if (status) status.textContent = result.message || "Applied.";
+    toast(result.message || "Cleanup applied");
+    await refreshOps();
+  } catch (err) {
+    if (status) status.textContent = err.message || "Apply failed";
+    if (applyBtn) applyBtn.disabled = false;
+    toast(err.message);
+  }
+}
+
+function renderOpsCleanupResults(result) {
+  const box = $("#ops-cleanup-results");
+  if (!box) return;
+  box.innerHTML = "";
+  const rows = result.dry_run ? (result.candidates || []) : (result.applied || []);
+  if (!rows.length) {
+    const skipped = (result.counts && result.counts.protected_skipped) || 0;
+    box.append(el("div", {
+      class: "muted small",
+      text: skipped
+        ? `No candidates. ${skipped} protected worker(s) skipped (enable checkbox to include).`
+        : "No cleanup candidates.",
+    }));
+    return;
+  }
+  for (const row of rows) {
+    const title = row.mission_title || row.type || row.worker_id || row.mission_id || "?";
+    const detail = [
+      row.action || "",
+      row.reason || "",
+      row.note || "",
+      row.program ? `program:${row.program}` : "",
+      row.starvation_age_seconds != null ? `age ${fmtUptime(row.starvation_age_seconds)}` : "",
+      row.error || "",
+    ].filter(Boolean).join(" · ");
+    const sev = result.dry_run ? "warn" : (row.error ? "fail" : "ok");
+    box.append(el("div", { class: "health-row" },
+      el("span", { class: "badge " + sev, text: result.dry_run ? "preview" : (row.action || "done") }),
+      el("span", { class: "name", text: title }),
+      el("span", { class: "detail", text: detail })));
+  }
+  if (!result.dry_run && (result.errors || []).length) {
+    box.append(el("div", {
+      class: "muted small",
+      text: `Errors: ${(result.errors || []).slice(0, 5).map((e) => e.error || JSON.stringify(e)).join("; ")}`,
+    }));
+  }
+  if (result.dry_run && (result.counts || {}).protected_skipped) {
+    box.append(el("div", {
+      class: "muted small",
+      text: `${result.counts.protected_skipped} protected worker(s) skipped — enable checkbox to include Market/Eng/Personal/Archive.`,
+    }));
+  }
+}
+
 function pushActivity(type, payload) {
   const feed = $("#ops-activity");
   if (!feed) return;
   const hint = feed.querySelector(".empty-hint");
   if (hint) hint.remove();
   const when = new Date().toLocaleTimeString();
-  const sev = /\.(failed|error)$/.test(type) ? "failed"
-    : /\.(completed|done)$/.test(type) ? "ok" : "";
+  const sev = /\.(failed|error)$/i.test(type) || /failed|error/i.test(type) ? "failed"
+    : /\.(completed|done)$/i.test(type) || /completed|done/i.test(type) ? "ok" : "";
+  let detail = when;
+  if (payload && typeof payload === "object") {
+    const bits = [
+      payload.mission_id ? `mission ${String(payload.mission_id).slice(0, 8)}` : null,
+      payload.worker_id ? `worker ${String(payload.worker_id).slice(0, 8)}` : null,
+      payload.task_id ? `task ${String(payload.task_id).slice(0, 8)}` : null,
+      payload.reason || payload.message || payload.summary || null,
+      payload.worker_type || payload.type || null,
+    ].filter(Boolean);
+    if (bits.length) detail = `${when} · ${bits.slice(0, 3).join(" · ")}`;
+  }
   const row = el("div", { class: "health-row" },
     el("span", { class: "badge " + (sev || "ok"), text: sev || "event" }),
     el("span", { class: "name", text: type }),
-    el("span", { class: "detail", text: when }));
+    el("span", { class: "detail", text: detail }));
   feed.prepend(row);
-  while (feed.children.length > 50) feed.lastChild.remove();
+  while (feed.children.length > 80) feed.lastChild.remove();
 }
 
 function startOpsPoll() {
@@ -4279,12 +4933,16 @@ function _wireUi() {
   if (emailSendWeek) emailSendWeek.addEventListener("click", () => sendInvestorEmail("weekly"));
   const researchGo = $("#learner-research-go");
   if (researchGo) researchGo.addEventListener("click", () => startLearnerResearch());
+  const compareGo = $("#learner-compare-go");
+  if (compareGo) compareGo.addEventListener("click", () => runLearnerCompare());
   const snapGo = $("#learner-research-snapshot-go");
   if (snapGo) snapGo.addEventListener("click", () => applyLearnerResearchSnapshot());
   const filingsGo = $("#learner-research-filings-go");
   if (filingsGo) filingsGo.addEventListener("click", () => applyLearnerFilingRefs());
   const critGo = $("#learner-research-critical-go");
   if (critGo) critGo.addEventListener("click", () => raiseLearnerCriticalFlag());
+  const identGo = $("#learner-research-identity-go");
+  if (identGo) identGo.addEventListener("click", () => applyLearnerBusinessIdentity());
   const mgmtGo = $("#learner-research-mgmt-go");
   if (mgmtGo) mgmtGo.addEventListener("click", () => applyLearnerManagementPack());
   const researchInput = $("#learner-research-symbol");
@@ -4314,6 +4972,32 @@ function _wireUi() {
   if (systemRefresh) systemRefresh.addEventListener("click", loadSystem);
   const overviewRefresh = $("#overview-refresh");
   if (overviewRefresh) overviewRefresh.addEventListener("click", refreshOps);
+  $("#ops-cleanup-preview")?.addEventListener("click", opsCleanupPreview);
+  $("#ops-cleanup-apply")?.addEventListener("click", opsCleanupApply);
+  const hideHello = $("#ops-hide-hello");
+  if (hideHello) {
+    try {
+      const saved = localStorage.getItem("ops_hide_hello");
+      if (saved === "0") hideHello.checked = false;
+      else if (saved === "1") hideHello.checked = true;
+    } catch (_) { /* ignore */ }
+    hideHello.addEventListener("change", () => {
+      try { localStorage.setItem("ops_hide_hello", hideHello.checked ? "1" : "0"); } catch (_) { /* ignore */ }
+      if (window.__opsLastSnap) renderOpsWorkerStates(window.__opsLastSnap.worker_states || {});
+    });
+  }
+  const groupProg = $("#ops-group-program");
+  if (groupProg) {
+    try {
+      const saved = localStorage.getItem("ops_group_program");
+      if (saved === "0") groupProg.checked = false;
+      else if (saved === "1") groupProg.checked = true;
+    } catch (_) { /* ignore */ }
+    groupProg.addEventListener("change", () => {
+      try { localStorage.setItem("ops_group_program", groupProg.checked ? "1" : "0"); } catch (_) { /* ignore */ }
+      if (window.__opsLastSnap) renderOpsWorkerStates(window.__opsLastSnap.worker_states || {});
+    });
+  }
   $("#personal-refresh")?.addEventListener("click", loadPersonal);
   $("#personal-infer")?.addEventListener("click", personalInfer);
   $("#personal-draft")?.addEventListener("click", personalDraft);

@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-27 (IIP Stage-4 plan locked).
+> **Last updated:** 2026-07-28 — Research & Execution Roadmap finalized (Evidence → ARMF A/B → ARMF C → SI).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -92,7 +92,10 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-MP1 | 🟢 | P1 | **Experience journal** — Experience OS first-class (`GET /v1/experience/shape`, `POST /v1/experience/journal`). | EX.1 |
 | OI-MI0 | 🟢 | P1 | **Market Intelligence Program** — MI→KG→MCA + platform PA gaps ✅. **Next:** governance / ops polish. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
 | OI-IL0 | 🟢 | P1 | **Autonomous Investment Learner** — IL.1–11 + OX ✅; F&O packs, holidays, **filings refs**. Optional: live ToS filing clients. | `docs/AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md` §14–20 | filings 2026-07-26 |
-| OI-IIP0 | 🟢 | P1 | **Investment Intelligence Platform** — IIP.1–9 ✅ (Universe→…→Thesis Tracker→News/policy/vendors). Operate & deepen evidence. | `docs/INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md` |
+| OI-IIP0 | 🟢 | P1 | **Investment Intelligence Platform** — IIP.1–9 ✅. | `docs/INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md` |
+| OI-EVID0 | 🟢 | P1 | **IRA Evidence Plan** — **frozen/shipped** (F0–F5). Snapshots, incremental refresh, hierarchy, sufficiency, valuation path, claim→evidence. | `docs/IRA_NEXT_LEAP_EVIDENCE_PLAN.md` |
+| OI-OPS1 | 🟢 | P1 | **ARMF** — A–E frozen (C10 soft-focus deferred; Phase F goals deferred). Capacity, cleanup idempotent, archive lane, Ops summary first paint. | `docs/OPS_STARVATION_CLEANUP_AND_MARKET_FOCUS_PLAN.md` |
+| OI-SI0 | 🟢 | P1 | **Sector Intelligence** — SI.1–6 frozen (identity → packs → strategy → path branch → distinctiveness → Why A vs B). Operate under paper trading; deepen compare later if needed. | `docs/SECTOR_INTELLIGENCE_AND_RESEARCH_STRATEGY_PLAN.md` · [`ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md`](ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md) |
 | OI-IL-OX | 🟢 | P1 | **Orchestration / UX** — OX.1–4 ✅ (preview/start now/API; `system.goals`; `GET /v1/goals/{id}/progress` + `GET /v1/learner/status`). | §14.4–14.6 | OX.4 shipped |
 | OI-MP2 | 🟢 | P1 | **Split paper trading** — `decision_simulation` is primary; `paper_trading` remains compat alias. | `OI-MI0` |
 | OI-MP3 | 🟢 | P1 | **Daily Learning Governance Report** — `GET /v1/governance/daily` + `learning_governance` mission. | MP3 |

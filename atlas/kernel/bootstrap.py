@@ -612,12 +612,19 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         clock=clock,
         logger=get_logger("atlas.resources.admission_policy"),
     )
+    from atlas.core.resources.capacity_shares import policy_from_config
+
     mission_arbiter = MissionArbiter(
         clock=clock,
         global_max_concurrent=_tick_hard,
         budget_controller=budget_controller,
+        capacity_policy=policy_from_config(getattr(cfg.resources, "program_shares", None) or {}),
+        llm_max_slots=max(0, int(getattr(cfg.resources, "llm_tick_slots", 1) or 1)),
         logger=get_logger("atlas.arbiter"),
     )
+    # When no REALTIME work is ready, allow BATCH/NORMAL to use the reserved slot
+    # so paper/market are not starved by an empty reserve under conservative caps.
+    mission_arbiter.enable_dynamic_realtime_reserve(True)
     from atlas.core.resources.scheduler import ResourceScheduler
 
     resource_scheduler = ResourceScheduler(

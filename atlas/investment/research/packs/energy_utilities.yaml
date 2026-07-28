@@ -1,0 +1,87 @@
+id: energy_utilities
+version: si.2
+region: india
+label: Energy / utilities / power
+thesis_interest: regulated or commodity-linked cash flows where capacity utilisation,
+  tariffs, fuel cost pass-through, and leverage dominate
+mental_model: Utilities and energy compound when regulated returns or contracted cash
+  flows are durable and leverage is matched to asset life. Destroyed by fuel-cost
+  mismatch, DISCOM receivables, regulatory tariff cuts, or stranded thermal capacity.
+identity_patterns:
+- power generation
+- transmission
+- gas utility
+- oil refining/marketing
+- renewables IPP
+primary_kpis:
+- PLF / utilisation
+- Tariff / realisation
+- Fuel cost pass-through
+- Receivables (DISCOM)
+- Net debt / EBITDA
+- Regulated RoE
+extra_questions:
+- Are cash flows contracted / regulated or merchant-exposed?
+- Is fuel cost fully passed through, or is there basis risk?
+- How healthy are DISCOM / counterparty receivables?
+- Is leverage matched to asset life and PPA tenure?
+- What is stranded-asset or renewable transition risk?
+risk_lenses:
+- Tariff cut
+- Fuel cost mismatch
+- DISCOM receivables
+- Regulatory change
+- Merchant price volatility
+failure_modes:
+- Receivables blowout vs DISCOMs
+- Under-recoveries that never true-up
+- Leverage spike with utilisation miss
+valuation_methods:
+- P/B vs regulated RoE
+- DCF only with contracted cash flows
+- EV/EBITDA vs utility peers
+moat_lenses:
+- Regulated asset base
+- Long PPAs
+- Transmission exclusivity
+management_behaviors:
+- Capex vs regulated returns
+- Receivables collection
+- Leverage discipline
+falsifiers:
+- Sustained under-recovery
+- Material DISCOM receivable spiral
+- Tariff order that breaks return thesis
+evidence_sources:
+- Tariff orders / PPA summaries
+- Receivables notes
+- PLF and fuel cost bridge
+- Debt schedule
+positive_drivers:
+- Contracted / regulated cash flows
+- Capacity additions with returns
+concern_drivers:
+- Receivables
+- Fuel / merchant risk
+- Leverage
+unknown_drivers:
+- True regulated return durability
+bull_seed: If contracted cash flows and receivables are healthy with MoS vs utility
+  peers, revisit size.
+base_seed: 'Research posture: tariff, fuel pass-through, receivables, leverage — not
+  generic industrials PE.'
+bear_seed: If receivables or under-recoveries dominate, avoid even if capacity looks
+  cheap.
+catalysts:
+- Tariff order
+- Receivables print
+- PPA / PLF update
+distinctiveness_tokens:
+- plf
+- tariff
+- ppa
+- discom
+- receivables
+- regulated
+- fuel
+- merchant

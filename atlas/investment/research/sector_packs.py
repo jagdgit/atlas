@@ -570,6 +570,16 @@ PACKS: dict[str, dict[str, Any]] = {
     ),
 }
 
+# Hermetic builtins (tests / offline). SI.2 YAML overlays via pack_loader.
+BUILTIN_PACKS: dict[str, dict[str, Any]] = PACKS
+
+
+def all_packs(*, data_dir: str | None = None) -> dict[str, dict[str, Any]]:
+    """Builtin Python packs merged with SI.2 YAML (package + optional data_dir)."""
+    from atlas.investment.research.pack_loader import load_pack_files
+
+    return load_pack_files(data_dir=data_dir, builtins=BUILTIN_PACKS)
+
 
 def hint_for(symbol: str) -> dict[str, Any] | None:
     sym = normalize_symbol(symbol)
@@ -577,14 +587,20 @@ def hint_for(symbol: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def pack_by_id(pack_id: str | None) -> dict[str, Any] | None:
+def pack_by_id(pack_id: str | None, *, data_dir: str | None = None) -> dict[str, Any] | None:
     if not pack_id:
         return None
-    pack = PACKS.get(str(pack_id))
+    pack = all_packs(data_dir=data_dir).get(str(pack_id))
     return dict(pack) if pack else None
 
 
-def pack_for(symbol: str, *, sector: str | None = None) -> dict[str, Any] | None:
+def pack_for(
+    symbol: str,
+    *,
+    sector: str | None = None,
+    data_dir: str | None = None,
+    allow_generic: bool = False,
+) -> dict[str, Any] | None:
     hint = hint_for(symbol)
     pack_id = None
     if hint:
@@ -593,21 +609,48 @@ def pack_for(symbol: str, *, sector: str | None = None) -> dict[str, Any] | None
         s = sector.lower()
         if any(x in s for x in ("bank", "financial", "nbfc")):
             pack_id = "banks"
-        elif any(x in s for x in ("information technology", "software", "it ")):
+        elif any(x in s for x in ("information technology", "software", "it services", "it ")):
             pack_id = "saas_it"
+        elif any(x in s for x in ("pharma", "pharmaceutical", "drug")):
+            pack_id = "pharma"
         elif any(
             x in s
             for x in (
                 "healthcare",
                 "hospital",
-                "pharma",
-                "pharmaceutical",
                 "health care",
+                "diagnostic",
             )
         ):
             pack_id = "healthcare"
         elif any(x in s for x in ("defence", "defense", "aerospace")):
             pack_id = "defence"
+        elif any(
+            x in s
+            for x in (
+                "consumer",
+                "fmcg",
+                "staples",
+                "beverage",
+                "personal care",
+                "retail",
+            )
+        ):
+            pack_id = "consumer"
+        elif any(
+            x in s
+            for x in (
+                "energy",
+                "utilit",
+                "power",
+                "oil",
+                "gas",
+                "refiner",
+                "petroleum",
+                "renewable",
+            )
+        ):
+            pack_id = "energy_utilities"
         elif any(
             x in s
             for x in (
@@ -619,9 +662,11 @@ def pack_for(symbol: str, *, sector: str | None = None) -> dict[str, Any] | None
             )
         ):
             pack_id = "manufacturing"
+    if not pack_id and allow_generic:
+        pack_id = "generic"
     if not pack_id:
         return None
-    return pack_by_id(str(pack_id))
+    return pack_by_id(str(pack_id), data_dir=data_dir)
 
 
 def enrich_profile_from_hint(symbol: str) -> dict[str, Any]:

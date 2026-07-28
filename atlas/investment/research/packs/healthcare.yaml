@@ -1,0 +1,89 @@
+id: healthcare
+label: Hospitals / healthcare services
+thesis_interest: structural healthcare demand served through a branded hospital network
+  where occupancy, ARPOB, doctor retention, and bed-expansion ROIC determine compounding
+primary_kpis:
+- Hospital occupancy
+- ARPOB (avg revenue per occupied bed)
+- Doctor retention / utilization
+- Bed expansion & ROIC on new capacity
+- Payer mix / insurance reimbursement
+- Same-store growth vs new-bed ramp
+extra_questions:
+- Is occupancy durable across the network, or concentrated in a few flagship hospitals?
+- What drives ARPOB — case mix, pricing power, or length of stay?
+- Are doctor retention and clinical capacity keeping up with bed expansion?
+- Does insurance / reimbursement mix support margins as volumes grow?
+- Is new-bed ROIC attractive after ramp costs and medical inflation?
+risk_lenses:
+- Healthcare reimbursement / payer mix shift
+- Doctor attrition or utilization miss
+- Medical inflation vs pricing power
+- Occupancy miss on new capacity
+- Regulatory / clinical quality events
+- Competition in key clusters
+failure_modes:
+- Expansion that dilutes ROIC for years
+- Payer squeeze that cuts ARPOB without volume offset
+- Key doctor / specialty attrition in a cluster
+valuation_methods:
+- EV/EBITDA vs hospital peers (occupancy-normalised)
+- ROIC on incremental beds vs WACC
+- FCF after maintenance + growth capex for network
+moat_lenses:
+- Brand / referral network
+- Cluster density / network effects
+- Clinical specialty depth
+management_behaviors:
+- Capital allocation between expansion vs existing-hospital ROI
+- Honesty on occupancy and ARPOB trends
+- Payer-mix and case-mix disclosure quality
+falsifiers:
+- Sustained occupancy or ARPOB decline
+- Expansion ROIC clearly below cost of capital
+- Material doctor attrition in core specialties
+- Adverse reimbursement / regulatory shock
+evidence_sources:
+- Annual / quarterly — occupancy, ARPOB, beds
+- Payer mix disclosures
+- Capex / new hospital ROIC commentary
+- Clinical quality / regulatory filings
+positive_drivers:
+- Healthcare demand
+- Brand / network effects
+- Pricing / case-mix leverage (ARPOB)
+concern_drivers:
+- Expansion execution
+- Valuation vs growth
+- Reimbursement / medical inflation
+unknown_drivers:
+- Capital allocation quality across the bed pipeline
+- Sustainable FCF after growth capex
+bull_seed: If occupancy and ARPOB hold while expansion ROIC stays attractive and MoS
+  appears, revisit size — thesis is operating leverage on healthcare demand, not a
+  hospital PE screen.
+base_seed: 'Research posture: occupancy, ARPOB, doctor retention, and bed-expansion
+  ROIC. Do not size on brand narrative alone — reimbursement and expansion execution
+  usually decide outcomes.'
+bear_seed: If occupancy slips, ARPOB compresses under payer pressure, or new beds
+  destroy ROIC, avoid — even if the franchise looks high-quality on paper.
+catalysts:
+- Occupancy / ARPOB disclosure
+- Bed expansion ROIC update
+- Payer / insurance mix evidence
+distinctiveness_tokens:
+- occupancy
+- arpob
+- hospital
+- doctor
+- bed
+- reimbursement
+- healthcare
+- payer
+- insurance
+- case mix
+version: si.2
+region: india
+mental_model: structural healthcare demand served through a branded hospital network
+  where occupancy, ARPOB, doctor retention, and bed-expansion ROIC determine compounding
+identity_patterns: []

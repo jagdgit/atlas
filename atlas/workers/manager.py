@@ -59,6 +59,21 @@ if TYPE_CHECKING:
 _CHECKPOINT_OWNER = "worker"
 
 
+def _llm_pair_from_profile(raw: Any) -> tuple[bool, int]:
+    text = str(raw or "").strip().lower()
+    if text in ("", "no", "false", "0", "none"):
+        return False, 0
+    if text in ("yes", "true", "light", "1"):
+        return True, 1
+    if text in ("heavy", "2"):
+        return True, 2
+    try:
+        w = int(raw)
+        return (w > 0), max(0, min(2, w))
+    except (TypeError, ValueError):
+        return True, 1
+
+
 class WorkerError(AtlasError):
     """A worker operation was invalid (unknown type/worker)."""
 
@@ -182,6 +197,7 @@ class WorkerManager:
 
     def pause(self, worker_id: UUID | str, reason: str = "") -> Worker:
         worker = self._require(worker_id)
+        self._release_arbiter_slot(worker)
         self._repo.set_status(worker.id, WORKER_PAUSED)
         self._toggle_schedule(worker, enabled=False)
         self._journal(worker.mission_id, "worker_paused", reason, {"worker_id": worker.id})
@@ -211,12 +227,24 @@ class WorkerManager:
     def stop_worker(self, worker_id: UUID | str, reason: str = "") -> Worker:
         """Operator stop of a worker (distinct from the service-lifecycle ``stop``)."""
         worker = self._require(worker_id)
+        self._release_arbiter_slot(worker)
         self._repo.set_status(worker.id, WORKER_STOPPED)
         self._toggle_schedule(worker, enabled=False)
         self._journal(worker.mission_id, "worker_stopped", reason, {"worker_id": worker.id})
         updated = self._require(worker.id)
         self._emit("WorkerStopped", updated, reason=reason)
         return updated
+
+    def _release_arbiter_slot(self, worker: Worker) -> None:
+        """Free a leaked / mid-tick admission slot when operator stops or pauses."""
+        if self._arbiter is None:
+            return
+        try:
+            meta = worker.metadata if isinstance(worker.metadata, dict) else {}
+            prog = meta.get("program_id") or meta.get("program")
+            self._arbiter.release(str(worker.mission_id), program_id=str(prog) if prog else None)
+        except Exception:  # noqa: BLE001 - lifecycle must not fail on arbiter bugs
+            self._logger.debug("arbiter release on stop/pause failed", exc_info=True)
 
     def enqueue_input(self, worker_id: UUID | str, payload: dict[str, Any]) -> None:
         """Queue a live operator input the worker drains at the top of its next tick (Q4)."""
@@ -475,7 +503,7 @@ class WorkerManager:
 
         # Cross-mission admission (A7/§D.4): defer this tick if the mission is over its concurrency cap
         # or loses arbitration for a scarce global slot. Deferral is temporary + aged (never starved).
-        demand = self._demand_for(worker.mission_id)
+        demand = self._demand_for(worker.mission_id, worker=worker)
 
         # IR-RO10: Should run *now*? (timing policy — Complements Host Guard Can?).
         if self._work_admission is not None:
@@ -716,12 +744,16 @@ class WorkerManager:
             )
         return dict(active.document), active.version
 
-    def _demand_for(self, mission_id: str) -> MissionDemand:
+    def _demand_for(self, mission_id: str, *, worker: Any | None = None) -> MissionDemand:
         """Project the mission's arbitration inputs (priority/deadline/importance/caps) for admission.
 
         A missing mission (or repo) yields an unconstrained demand, so non-mission/uncapped work is
         admitted exactly as before (back-compatible with the Phase-A per-mission-cap behaviour).
         Default ``ram_mb`` from host-respect config applies when the mission has no budget reserve.
+
+        When mission metadata lacks ``service_class`` / ``program_id`` (older missions), fall back
+        to the worker type's :class:`WorkResourceProfile` and worker/config metadata so Market
+        realtime work (paper_trading) is not misclassified as BATCH.
         """
         host_ram: int | None = None
         if self._resources is not None:
@@ -733,6 +765,7 @@ class WorkerManager:
                     host_ram = int(snap.mem_available_kb) // 1024
             except Exception:  # noqa: BLE001 - host snapshot is advisory
                 host_ram = None
+        demand: MissionDemand | None = None
         if self._missions is not None:
             try:
                 mission = self._missions.get(mission_id)
@@ -741,7 +774,7 @@ class WorkerManager:
             if mission is not None:
                 demand = demand_from_mission(mission, host_available_ram_mb=host_ram)
                 if demand.ram_mb is None and self._default_tick_ram_mb:
-                    return MissionDemand(
+                    demand = MissionDemand(
                         mission_id=demand.mission_id,
                         effective_priority=demand.effective_priority,
                         deadline=demand.deadline,
@@ -755,9 +788,13 @@ class WorkerManager:
                         service_class=demand.service_class,
                         wait_since=demand.wait_since,
                         confidence_score=demand.confidence_score,
+                        program_id=demand.program_id,
+                        uses_llm=demand.uses_llm,
+                        llm_weight=demand.llm_weight,
+                        research_progress=demand.research_progress,
                     )
-                if demand.max_concurrent_tasks is None:
-                    return MissionDemand(
+                elif demand.max_concurrent_tasks is None:
+                    demand = MissionDemand(
                         mission_id=demand.mission_id,
                         effective_priority=demand.effective_priority,
                         deadline=demand.deadline,
@@ -771,13 +808,78 @@ class WorkerManager:
                         service_class=demand.service_class,
                         wait_since=demand.wait_since,
                         confidence_score=demand.confidence_score,
+                        program_id=demand.program_id,
+                        uses_llm=demand.uses_llm,
+                        llm_weight=demand.llm_weight,
+                        research_progress=demand.research_progress,
                     )
-                return demand
+        if demand is None:
+            demand = MissionDemand(
+                mission_id=str(mission_id),
+                max_concurrent_tasks=1,
+                ram_mb=self._default_tick_ram_mb,
+                host_available_ram_mb=host_ram,
+            )
+        return self._enrich_demand_from_worker(demand, worker)
+
+    def _enrich_demand_from_worker(
+        self, demand: MissionDemand, worker: Any | None
+    ) -> MissionDemand:
+        """Fill service_class / program_id from worker type profile when mission meta is thin."""
+        if worker is None:
+            return demand
+        wtype = getattr(worker, "type", None) or ""
+        meta = getattr(worker, "metadata", None)
+        meta = meta if isinstance(meta, dict) else {}
+        sc = demand.service_class
+        prog = demand.program_id
+        uses_llm = demand.uses_llm
+        llm_weight = demand.llm_weight
+        if not sc and wtype:
+            try:
+                from atlas.missions.templates.resources import resources_for
+
+                prof = resources_for(str(wtype))
+                sc = prof.service_class
+                if not uses_llm:
+                    uses_llm, llm_weight = _llm_pair_from_profile(prof.llm)
+            except Exception:  # noqa: BLE001
+                pass
+        if not prog:
+            prog = meta.get("program_id") or meta.get("program")
+        if not prog and self._config_repo is not None:
+            try:
+                active = self._config_repo.get_active(getattr(worker, "mission_id", None))
+                doc = getattr(active, "document", None) if active is not None else None
+                if isinstance(doc, dict) and doc.get("program_id"):
+                    prog = doc.get("program_id")
+            except Exception:  # noqa: BLE001
+                pass
+        if (
+            sc == demand.service_class
+            and prog == demand.program_id
+            and uses_llm == demand.uses_llm
+            and llm_weight == demand.llm_weight
+        ):
+            return demand
         return MissionDemand(
-            mission_id=str(mission_id),
-            max_concurrent_tasks=1,
-            ram_mb=self._default_tick_ram_mb,
-            host_available_ram_mb=host_ram,
+            mission_id=demand.mission_id,
+            effective_priority=demand.effective_priority,
+            deadline=demand.deadline,
+            importance=demand.importance,
+            max_concurrent_tasks=demand.max_concurrent_tasks,
+            llm_units_per_window=demand.llm_units_per_window,
+            llm_window_seconds=demand.llm_window_seconds,
+            estimated_llm_units=demand.estimated_llm_units,
+            ram_mb=demand.ram_mb,
+            host_available_ram_mb=demand.host_available_ram_mb,
+            service_class=str(sc) if sc else demand.service_class,
+            wait_since=demand.wait_since,
+            confidence_score=demand.confidence_score,
+            program_id=str(prog) if prog else demand.program_id,
+            uses_llm=uses_llm,
+            llm_weight=llm_weight,
+            research_progress=demand.research_progress,
         )
 
     def _in_backoff(self, worker: Worker) -> bool:

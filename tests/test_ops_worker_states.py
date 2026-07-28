@@ -126,6 +126,20 @@ def test_summarize_counts():
     assert summary["counts"][STATE_COMPLETED] == 1
     assert summary["counts"][STATE_STARVED] == 1
     assert any(r["ops_state"] == STATE_STARVED for r in summary["notable"])
+    assert "by_program" in summary
+    assert "rows" in summary
+
+
+def test_summarize_hide_types():
+    now = datetime.now(timezone.utc)
+    workers = [
+        _w(id="a", type="hello_watcher", last_tick_at=now - timedelta(days=8)),
+        _w(id="b", type="market_observer", last_tick_at=now - timedelta(hours=8)),
+    ]
+    summary = summarize_workers(workers, now=now, hide_types={"hello_watcher"})
+    assert summary["filtered_out"] == 1
+    assert summary["counts"][STATE_STARVED] == 1
+    assert all(r["type"] != "hello_watcher" for r in summary["notable"])
 
 
 def test_update_timing_ops_averages():

@@ -70,6 +70,8 @@ class WorkResourceProfile:
     disk_io: str = "low"  # low | medium | high
     storage_growth: str = "low"  # low | medium | high
     network: str = "low"
+    llm: str = "no"  # no | yes | heavy — ARMF C4/C5
+    embedding: str = "no"  # no | yes
     checkpointability: str = CHECKPOINT_PER_TICK
     expected_tick_ms: int | None = None
 
@@ -94,6 +96,8 @@ class WorkResourceProfile:
                 "disk_io": self.disk_io,
                 "storage_growth": self.storage_growth,
                 "network": self.network,
+                "llm": self.llm,
+                "embedding": self.embedding,
                 "checkpointability": self.checkpointability,
                 "expected_tick_ms": self.expected_tick_ms,
             },

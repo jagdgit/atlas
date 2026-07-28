@@ -547,8 +547,8 @@ class ResourcesConfig(BaseModel):
     headroom — under pressure Atlas defers ticks, never drops the job.
     """
 
-    profile: str = "balanced"  # conservative | balanced | maximum | overnight
-    max_worker_threads: int = 4
+    profile: str = "maximum"  # conservative | balanced | maximum | overnight
+    max_worker_threads: int = 5
     max_concurrent_ticks: int = 0  # 0 ⇒ use max_worker_threads
     max_download_workers: int = 4
     max_reader_workers: int = 4
@@ -558,7 +558,7 @@ class ResourcesConfig(BaseModel):
     host_ram_reserve_mb: int = 2048  # keep free for OS / desktop / Ollama
     tick_ram_mb: int = 512  # default projected RAM for one worker tick
     # IR-RO11 Layer 2: soft ceiling for the whole Atlas process (keep below systemd MemoryMax).
-    process_rss_soft_mb: int = 6144
+    process_rss_soft_mb: int = 5120
     memory_soft_ratio: float = 0.85  # yield tick at this fraction of per-worker budget
     ram_used_high: float = 0.85  # defer ticks when used fraction ≥ this
     load_pressure_high: float = 0.90
@@ -570,6 +570,9 @@ class ResourcesConfig(BaseModel):
     ocr_max_pages: int = 50
     ocr_max_minutes: float = 15.0
     ocr_dpi: int = 300
+    # ARMF Phase C
+    program_shares: dict[str, Any] = Field(default_factory=dict)
+    llm_tick_slots: int = 1  # concurrent LLM-weight admits in MissionArbiter
     costs: ResourceCostsConfig = Field(default_factory=ResourceCostsConfig)
     budgets: ResourceBudgetsConfig = Field(default_factory=ResourceBudgetsConfig)
 

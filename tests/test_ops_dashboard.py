@@ -53,7 +53,8 @@ def test_host_internet_reports_disconnected():
 
 
 def test_host_ups_not_present():
-    assert HostMetrics().ups() == {"present": False}
+    ups = HostMetrics().ups()
+    assert ups.get("present") is False
 
 
 def test_host_bad_metric_degrades_to_empty():
@@ -158,8 +159,15 @@ def test_dashboard_snapshot_shape():
     snap = _dashboard().snapshot()
     for key in ("atlas", "counts", "host", "backup", "storage", "capabilities",
                 "sse_subscribers", "recovery", "last_checkpoint", "self_improvement",
+                "glossary", "program_health", "capacity_signal",
+                "next_tick", "research_progress", "research_velocity",
                 "generated_at"):
         assert key in snap
+    assert snap["glossary"]["entries"]
+    assert "programs" in snap["program_health"]
+    assert "active" in snap["capacity_signal"]
+    # classified rows must not leak onto the wire
+    assert "rows" not in (snap.get("worker_states") or {})
 
 
 def test_dashboard_self_improvement_board(tmp_path):

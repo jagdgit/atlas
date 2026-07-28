@@ -466,13 +466,13 @@ class FakeWorkers:
     def __init__(self, state):
         self.state = state
 
-    def list_workers(self, *, mission_id=None, status=None):
+    def list_workers(self, *, mission_id=None, status=None, limit=200):
         ws = list(self.state.workers.values())
         if mission_id:
             ws = [w for w in ws if w.mission_id == mission_id]
         if status:
             ws = [w for w in ws if w.status == status]
-        return ws
+        return ws[: max(1, int(limit or 200))]
 
     def get_worker(self, wid):
         return self.state.workers.get(wid)
@@ -955,8 +955,14 @@ class FakeApplication:
     def status(self):
         report = self.health()
         counts = {"ok": 0, "degraded": 0, "failed": 0}
-        for s in report.values():
+        degraded_services = []
+        failed_services = []
+        for name, s in report.items():
             counts[s.level] += 1
+            if s.level == "degraded":
+                degraded_services.append(name)
+            elif s.level == "failed":
+                failed_services.append(name)
         return {
             "version": self.config.system.version,
             "uptime_seconds": 1.5,
@@ -964,6 +970,8 @@ class FakeApplication:
             "degraded": counts["degraded"] > 0,
             "services_total": len(report),
             "severity_counts": counts,
+            "degraded_services": sorted(degraded_services),
+            "failed_services": sorted(failed_services),
         }
 
 
@@ -1030,6 +1038,47 @@ def test_ops_dashboard_snapshot():
     assert snap["host"]["disk"]["percent"] == 71.0
     assert snap["backup"]["last"] == "atlas_2026.dump"
     assert snap["last_checkpoint"] is None
+
+
+def test_ops_cleanup_dry_run_and_apply():
+    client = _client()
+    # Seed a hello_watcher mission/worker via instantiate
+    created = client.post(
+        "/v1/missions/instantiate",
+        headers=AUTH,
+        json={"template": "hello_watcher", "title": "zombie hello"},
+    )
+    assert created.status_code == 200
+    mid = created.json()["mission"]["id"]
+
+    preview = client.post(
+        "/v1/ops/cleanup",
+        headers=AUTH,
+        json={"dry_run": True},
+    )
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["dry_run"] is True
+    assert body["counts"]["candidates"] >= 1
+    assert any(c.get("type") == "hello_watcher" for c in body["candidates"])
+
+    applied = client.post(
+        "/v1/ops/cleanup",
+        headers=AUTH,
+        json={"dry_run": False, "mission_ids": [mid], "reason": "test"},
+    )
+    assert applied.status_code == 200
+    out = applied.json()
+    assert out["dry_run"] is False
+    assert out["counts"]["applied"] >= 1
+    # Mission should now be archived
+    view = client.get(f"/v1/missions/{mid}", headers=AUTH)
+    assert view.status_code == 200
+    assert view.json()["mission"]["status"] == "archived"
+
+
+def test_ops_cleanup_requires_auth():
+    assert _client().post("/v1/ops/cleanup", json={"dry_run": True}).status_code == 401
 
 
 def test_run_agent_returns_answer_and_citations():
@@ -1938,6 +1987,7 @@ def test_status_endpoint_summary():
     assert body["version"]
     assert body["degraded"] is True
     assert body["severity_counts"] == {"ok": 1, "degraded": 1, "failed": 0}
+    assert "llm" in body.get("degraded_services", [])
 
 
 def test_status_requires_auth():

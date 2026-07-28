@@ -102,8 +102,19 @@ button { cursor: pointer; font: inherit; }
 .newchat:hover { border-color: var(--accent); }
 
 /* --- main --- */
-.main { overflow: hidden; display: flex; flex-direction: column; }
-.view { display: flex; flex-direction: column; height: 100%; padding: 0; overflow: hidden; }
+.main { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.view { display: flex; flex-direction: column; height: 100%; padding: 0; overflow: hidden; min-height: 0; }
+/* Overview is tall — constrain to main and scroll the whole page (flex min-height trap) */
+#view-overview {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 40px;
+  -webkit-overflow-scrolling: touch;
+}
 .panel-head { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-bottom: 1px solid var(--border); }
 .panel-head h2 { margin: 0; font-size: 17px; }
 .panel-head .link { margin-left: auto; }
@@ -398,8 +409,82 @@ button { cursor: pointer; font: inherit; }
 .ops-state-chip.warn { border-color: #b7791f; }
 .ops-state-chip.fail { border-color: #c53030; }
 .ops-state-chip.ok { border-color: #2f855a33; }
-.ops-worker-notable { padding: 0 22px 16px; max-height: 220px; overflow-y: auto; }
+.ops-worker-notable { padding: 0 22px 16px; max-height: 360px; overflow-y: auto; }
 .ops-worker-notable .name { width: auto; min-width: 140px; flex: 1 1 140px; }
+.ops-banner {
+  margin: 8px 22px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #b7791f;
+  background: #b7791f18;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.ops-banner.hidden { display: none; }
+.ops-program-health {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  padding: 12px 22px 0;
+}
+.ops-research-velocity, .ops-next-tick, .ops-archive-lane {
+  padding: 8px 22px 0;
+  font-size: 13px;
+}
+.ops-research-velocity .row, .ops-next-tick .row, .ops-archive-lane .row {
+  display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px;
+}
+.ops-rv-chip, .ops-nt-chip {
+  min-width: 110px; padding: 8px 10px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px;
+}
+.ops-rv-chip .k, .ops-nt-chip .k { font-size: 11px; color: var(--muted); }
+.ops-rv-chip .v, .ops-nt-chip .v { font-size: 14px; font-weight: 700; margin-top: 2px; }
+.ops-prog-chip {
+  min-width: 120px; padding: 10px 12px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px;
+}
+.ops-prog-chip .k { font-size: 11px; color: var(--muted); }
+.ops-prog-chip .v { font-size: 14px; font-weight: 700; margin-top: 2px; text-transform: capitalize; }
+.ops-prog-chip .d { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.ops-prog-chip.warn { border-color: #b7791f; }
+.ops-prog-chip.fail { border-color: #c53030; }
+.ops-prog-chip.ok { border-color: #2f855a55; }
+.ops-glossary {
+  margin: 4px 22px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  font-size: 13px;
+}
+.ops-glossary summary { cursor: pointer; color: var(--muted); }
+.ops-glossary-body { margin-top: 10px; display: grid; gap: 8px; }
+.ops-glossary-entry .term { font-weight: 600; }
+.ops-glossary-entry .def { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.ops-filter-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 12px; cursor: pointer; user-select: none;
+}
+.ops-cleanup {
+  padding: 4px 22px 16px;
+}
+.ops-cleanup-row {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin: 8px 0;
+}
+.ops-cleanup-results {
+  max-height: 220px; overflow-y: auto; margin-top: 4px;
+}
+.ops-program-group {
+  margin: 8px 0 12px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+}
+.ops-program-group:first-child { border-top: none; padding-top: 0; }
+.ops-program-group-title {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  margin: 0 0 6px;
+}
 .archive-confirm-bar {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
   padding: 8px 22px 4px;
@@ -409,6 +494,18 @@ button { cursor: pointer; font: inherit; }
 .health-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .health-row .name { font-weight: 600; width: 150px; }
 .health-row .detail { color: var(--muted); font-size: 13px; }
+/* Ops live activity — dedicated scroll region at bottom of Overview */
+#ops-activity {
+  flex: 0 0 auto;
+  min-height: 220px;
+  max-height: 42vh;
+  overflow-y: auto;
+  margin: 0 0 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+#ops-activity .health-row .name { width: auto; min-width: 120px; flex: 0 1 220px; }
+#ops-activity .health-row .detail { flex: 1; word-break: break-word; }
 
 /* Personal / Owner console (OI-C12) */
 .panel-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }

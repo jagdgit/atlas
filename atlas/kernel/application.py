@@ -92,11 +92,23 @@ class Application:
     def status(self) -> dict:
         """A one-shot operability summary (S22): version, uptime, and a severity
         roll-up over all services (ok / degraded / failed) — used by ``/v1/status``
-        and ``atlas status``."""
+        and ``atlas status``.
+
+        ARMF A4: includes ``degraded_services`` / ``failed_services`` name lists so
+        Ops can show *which* service is yellow without a second health fetch.
+        """
         report = self.health()
         by_severity: dict[str, int] = {"ok": 0, "degraded": 0, "failed": 0}
-        for status in report.values():
+        degraded_services: list[str] = []
+        failed_services: list[str] = []
+        for name, status in report.items():
             by_severity[status.level] = by_severity.get(status.level, 0) + 1
+            if status.level == "degraded":
+                degraded_services.append(name)
+            elif status.level == "failed":
+                failed_services.append(name)
+        degraded_services.sort()
+        failed_services.sort()
         return {
             "version": self.config.system.version,
             "uptime_seconds": self.uptime_seconds(),
@@ -104,6 +116,8 @@ class Application:
             "degraded": by_severity["degraded"] > 0,
             "services_total": len(report),
             "severity_counts": by_severity,
+            "degraded_services": degraded_services,
+            "failed_services": failed_services,
         }
 
     # --- Blocking run ----------------------------------------------------

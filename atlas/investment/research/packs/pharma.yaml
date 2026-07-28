@@ -1,0 +1,89 @@
+id: pharma
+version: si.2
+region: india
+label: Pharmaceuticals (India)
+thesis_interest: regulated product engine where ANDA/pipeline, USFDA/compliance, and
+  therapy mix drive returns — not hospital occupancy
+mental_model: Pharma value is created by a pipeline of approved products, compliant
+  manufacturing, and therapy/geography mix. Destroyed by FDA warning letters, price
+  erosion in generics, or concentration in a single molecule/market. Do not analyse
+  like a hospital chain.
+identity_patterns:
+- formulations
+- API
+- generics
+- ANDA
+- USFDA plant
+- therapy-focused pharma
+primary_kpis:
+- USFDA / regulatory status
+- ANDA / pipeline
+- US vs India vs EM mix
+- Price erosion
+- Gross margin by geography
+- R&D / filing cadence
+extra_questions:
+- What is plant-level regulatory status (USFDA / warning letters / import alerts)?
+- How concentrated is revenue in a few molecules or the US generics basket?
+- Is price erosion normalised or still accelerating in key markets?
+- Does the pipeline (ANDAs / complex generics / specialty) replace rolling-off products?
+- Is India acute/chronic mix improving quality of earnings?
+risk_lenses:
+- Regulatory action
+- US price erosion
+- Single-molecule concentration
+- API supply
+- Litigation / opioid or product liability
+failure_modes:
+- Import alert that idles a key plant
+- Pipeline that fails to offset US erosion
+- Compliance culture failure
+valuation_methods:
+- PE vs pipeline-adjusted growth
+- EV/EBITDA vs India pharma peers
+- Sum-of-parts (US / India / API) when disclosed
+moat_lenses:
+- Complex generics capability
+- Compliant capacity
+- Therapy franchise
+management_behaviors:
+- Compliance investment vs short-term margin
+- Pipeline disclosure honesty
+- Capital allocation to R&D vs buybacks
+falsifiers:
+- New warning letter / import alert on a material plant
+- Pipeline barren relative to erosion
+- Chronic miss on US guidance
+evidence_sources:
+- USFDA / company regulatory updates
+- Geography mix in results
+- ANDA / filing commentary
+- Gross margin by market
+positive_drivers:
+- Pipeline depth
+- Compliant manufacturing
+- Chronic / specialty mix
+concern_drivers:
+- US price erosion
+- Regulatory risk
+- Concentration
+unknown_drivers:
+- True pipeline NPV vs Street optimism
+bull_seed: If compliance is clean, pipeline replaces erosion, and MoS is attractive
+  vs pharma peers, revisit size.
+base_seed: 'Research posture: regulatory status + pipeline + price erosion — never
+  hospital KPIs.'
+bear_seed: If a material plant is under regulatory cloud or pipeline is empty, avoid.
+catalysts:
+- USFDA outcome
+- ANDA approval
+- US price commentary
+distinctiveness_tokens:
+- anda
+- usfda
+- generics
+- price erosion
+- pipeline
+- api
+- import alert
+- therapy

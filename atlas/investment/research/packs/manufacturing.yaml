@@ -1,0 +1,72 @@
+id: manufacturing
+label: Manufacturing / capital goods / EMS
+thesis_interest: industrial / EMS manufacturing demand where customer concentration,
+  gross-margin durability, and working-capital control decide cash returns
+primary_kpis:
+- Customer concentration
+- Gross margin durability
+- Working capital cycle
+- Capacity utilization
+- Capex vs FCF
+extra_questions:
+- Is the order book / customer base diversified enough vs a few large customers?
+- Does working capital (inventory + receivables) stay under control through the cycle?
+- Is capex creating durable capacity or just keeping pace with one program/customer?
+- Are gross margins durable after input-cost and wage inflation?
+risk_lenses:
+- Customer concentration
+- Program / certification delay
+- Commodity / input cost pass-through
+- Working-capital squeeze
+failure_modes:
+- Customer loss that idles specialised capacity
+- WC blowout that turns growth cash-negative
+- Margin compression without pricing power
+valuation_methods:
+- PE / EV-EBITDA vs manufacturing peers
+- FCF yield after normalising WC
+moat_lenses:
+- Process / scale advantages
+- Customer switching costs on qualified lines
+management_behaviors:
+- Capex discipline vs demand visibility
+- Customer diversification
+falsifiers:
+- Major customer exit
+- Persistent FCF gap despite revenue growth
+- Gross margin structural decline
+evidence_sources:
+- Annual report — customer mix & WC notes
+- Quarterly margin bridges
+positive_drivers:
+- Manufacturing / EMS demand
+- Scale / process capability
+concern_drivers:
+- Customer concentration
+- Working capital
+- Margin durability
+unknown_drivers:
+- Sustainable free cash flow
+- True pricing power
+bull_seed: If diversified demand, controlled WC, and attractive MoS arrive with credible
+  capital-allocation evidence, revisit buy sizing.
+base_seed: 'Research posture: customer mix, margins, and cash conversion. Biggest
+  open risk is often working capital / execution — not the headline multiple.'
+bear_seed: If leverage rises, FCF stays opaque, or a key customer exits, avoid — even
+  if price looks cheap without inputs.
+catalysts:
+- Customer / order disclosure
+- WC and margin bridge evidence
+- Deeper research mode
+distinctiveness_tokens:
+- customer concentration
+- working capital
+- gross margin
+- ems
+- capacity
+- manufacturing
+version: si.2
+region: india
+mental_model: industrial / EMS manufacturing demand where customer concentration,
+  gross-margin durability, and working-capital control decide cash returns
+identity_patterns: []

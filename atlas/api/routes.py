@@ -44,6 +44,7 @@ from atlas.api.schemas import (
     ScreenerComputeRequest,
     FilingsSnapshotRequest,
     InvestmentResearchStartRequest,
+    ResearchBusinessIdentityRequest,
     ResearchOperatorSnapshotRequest,
     ResearchFilingRefsRequest,
     ResearchCriticalFlagRequest,
@@ -65,6 +66,7 @@ from atlas.api.schemas import (
     UpdateMissionConfigRequest,
     WorkerActionRequest,
     WorkerInputRequest,
+    OpsCleanupRequest,
     JobDetailResponse,
     JobInputRequest,
     JobOut,
@@ -218,6 +220,64 @@ def recent_events(
 def ops_dashboard(request: Request) -> dict:
     """Operations Dashboard snapshot (§5.11): the single-screen operator view."""
     return _app(request).container.resolve("ops_dashboard").snapshot()
+
+
+@v1_router.get("/ops/summary", tags=["ops"])
+def ops_summary(request: Request) -> dict:
+    """ARMF Phase E — lightweight Ops first paint (program health + archive + startup)."""
+    dash = _app(request).container.resolve("ops_dashboard")
+    if hasattr(dash, "summary"):
+        return dash.summary()
+    # Backward compatible if an older dashboard is loaded
+    snap = dash.snapshot()
+    return {
+        "version": "armf.e1",
+        "atlas": snap.get("atlas"),
+        "program_health": snap.get("program_health"),
+        "capacity_signal": snap.get("capacity_signal"),
+        "archive_lane": snap.get("archive_lane"),
+        "startup": snap.get("startup"),
+        "generated_at": snap.get("generated_at"),
+    }
+
+
+@v1_router.post("/ops/cleanup", tags=["ops"])
+def ops_cleanup(body: OpsCleanupRequest, request: Request) -> dict:
+    """ARMF Phase B — dry-run or apply zombie / long no-progress cleanup.
+
+    Default targets ``hello_watcher`` and unprotected long no-progress workers.
+    Market / Engineering / Personal / Archive require ``include_protected=true``.
+    Apply archives missions (non-destructive). Always prefer dry-run first.
+    """
+    from atlas.ops.cleanup import (
+        DEFAULT_MIN_STARVATION_AGE_SECONDS,
+        OpsCleanupService,
+    )
+
+    clock = None
+    try:
+        clock = _app(request).container.resolve("clock")
+    except Exception:  # noqa: BLE001
+        clock = None
+    svc = OpsCleanupService(
+        workers=_workers(request),
+        missions=_missions(request),
+        clock=clock,
+    )
+    min_age = (
+        DEFAULT_MIN_STARVATION_AGE_SECONDS
+        if body.min_starvation_age_seconds is None
+        else float(body.min_starvation_age_seconds)
+    )
+    return svc.run(
+        dry_run=bool(body.dry_run),
+        include_protected=bool(body.include_protected),
+        zombie_types=body.zombie_types,
+        min_starvation_age_seconds=min_age,
+        worker_ids=body.worker_ids,
+        mission_ids=body.mission_ids,
+        reason=body.reason or "",
+    )
 
 
 @v1_router.get("/resources/guard", tags=["resources"])
@@ -2317,6 +2377,50 @@ def market_research_list(
     return {"program_id": program_id, "count": len(rows), "items": rows, "digest": digest}
 
 
+@v1_router.get("/market/research/compare", tags=["programs"])
+def market_research_compare(
+    request: Request,
+    a: str,
+    b: str,
+    program_id: str = "market_intelligence",
+    portfolio_ref: str | None = None,
+) -> dict:
+    """SI.6 — Why A vs B? Opportunity comparison (research framing, not a buy ticket)."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    holdings: dict | None = None
+    if portfolio_ref:
+        try:
+            from atlas.investment import portfolios as vp
+
+            row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+            mid = (row or {}).get("mission_id") or (row or {}).get("ledger_mission_id")
+            if mid:
+                portfolio_svc = _app(request).container.resolve("portfolio")
+                ensured = portfolio_svc.ensure_portfolio(
+                    mission_id=mid,
+                    name=(row or {}).get("portfolio_key") or "default",
+                    starting_cash=float(((row or {}).get("persona") or {}).get("capital") or 0),
+                )
+                snap = portfolio_svc.snapshot(ensured["id"]) if hasattr(portfolio_svc, "snapshot") else None
+                if snap is None and hasattr(portfolio_svc, "get_snapshot"):
+                    snap = portfolio_svc.get_snapshot(ensured["id"])
+                positions = (snap or {}).get("positions") or (snap or {}).get("holdings") or []
+                holdings = {}
+                for p in positions:
+                    if not isinstance(p, dict):
+                        continue
+                    sym = p.get("symbol") or p.get("ticker")
+                    qty = p.get("qty") if p.get("qty") is not None else p.get("quantity")
+                    if sym:
+                        holdings[str(sym)] = qty if qty is not None else 1
+        except Exception:  # noqa: BLE001
+            holdings = None
+    return research.compare(a, b, program_id=program_id, holdings=holdings)
+
+
 @v1_router.get("/market/research/{symbol}", tags=["programs"])
 def market_research_get(
     request: Request,
@@ -2353,7 +2457,67 @@ def market_research_start(
         program_id=body.program_id,
         mode=body.mode,
         force=bool(body.force),
+        allow_without_identity=bool(body.allow_without_identity),
         trigger=body.trigger or "on_demand",
+    )
+
+
+@v1_router.get("/market/research/{symbol}/identity", tags=["programs"])
+def market_research_identity_get(
+    request: Request,
+    symbol: str,
+    program_id: str = "market_intelligence",
+) -> dict:
+    """SI.1 — business identity for a symbol (resolve-on-read, no MVR)."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    out = research.get_identity(symbol, program_id=program_id)
+    return {
+        "symbol": out.get("symbol"),
+        "program_id": program_id,
+        "business_identity": out.get("business_identity"),
+        "gate": out.get("gate"),
+    }
+
+
+@v1_router.post("/market/research/{symbol}/identity", tags=["programs"])
+def market_research_identity_set(
+    request: Request,
+    symbol: str,
+    body: ResearchBusinessIdentityRequest,
+) -> dict:
+    """SI.1 — operator sets/confirms business identity (mandatory before MVR)."""
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"investment research unavailable: {exc}") from exc
+    payload = {
+        k: getattr(body, k)
+        for k in (
+            "business_type",
+            "industry",
+            "sector",
+            "subsector",
+            "capital_intensity",
+            "key_drivers",
+            "revenue_model",
+            "distinctiveness_seed",
+            "pack_id",
+        )
+        if getattr(body, k, None) is not None
+    }
+    if not payload:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one identity field (sector, business_type, pack_id, …)",
+        )
+    return research.set_identity(
+        symbol,
+        payload,
+        program_id=body.program_id,
+        start_mvr=bool(body.start_mvr),
     )
 
 
@@ -3692,7 +3856,37 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
         ensured["id"],
         broker_profile=str(row.get("broker_profile") or "") or None,
     )
-    return {"portfolio": row, "statement": stmt, "version": "il.7"}
+    # Attach today's session note so Learner can explain zero fills honestly.
+    session_note = None
+    try:
+        from datetime import datetime, timezone, timedelta
+
+        from atlas.config import get_config
+        from atlas.investment.session_notes import format_no_fill_reasons, load_day_notes
+
+        data_dir = str(get_config().paths.data)
+        ist = timezone(timedelta(hours=5, minutes=30))
+        ist_date = datetime.now(ist).date().isoformat()
+        notes = load_day_notes(
+            data_dir,
+            portfolio_key=str(row.get("portfolio_key") or portfolio_ref),
+            ist_date=ist_date,
+        )
+        if notes:
+            session_note = {
+                "ist_date": ist_date,
+                "reason_counts": notes.get("reason_counts") or {},
+                "no_fill_reasons": format_no_fill_reasons(notes),
+                "samples": list(notes.get("samples") or [])[:8],
+            }
+    except Exception:  # noqa: BLE001
+        session_note = None
+    return {
+        "portfolio": row,
+        "statement": stmt,
+        "session_note": session_note,
+        "version": "il.7",
+    }
 
 
 @v1_router.post("/market/portfolios/{portfolio_ref}/withdraw", tags=["programs"])

@@ -1,9 +1,12 @@
 # IRA Next Leap — Evidence Quality Plan
 
-> **Status:** 🔒 **LOCKED for implementation** (operator lock 2026-07-26)  
+> **Status:** ✅ **FROZEN / SHIPPED** (operator freeze 2026-07-28) — Sprint 1 complete  
 > **Parent:** [`INVESTING_RESEARCH_AGENT_PLAN.md`](INVESTING_RESEARCH_AGENT_PLAN.md) (Phases A–E shipped)  
 > **Goal:** Raise **investment usefulness** and **research maturity** by feeding the existing reasoning spine with **progressively richer, trustworthy evidence** — not by making Atlas “sound smarter.”  
-> **Non-negotiables (unchanged):** P10 · MI4/MI5 · CapabilityGap honesty · coverage ≠ confidence ≠ research quality · timing ≠ thesis · MVR ≠ buy · no ToS scraping · never invent line items · IR-RO11 host-first · **Evidence before eloquence**
+> **Non-negotiables (unchanged):** P10 · MI4/MI5 · CapabilityGap honesty · coverage ≠ confidence ≠ research quality · timing ≠ thesis · MVR ≠ buy · no ToS scraping · never invent line items · IR-RO11 host-first · **Evidence before eloquence**  
+> **Next stream (do not reopen this plan):** [`OPS_STARVATION_CLEANUP_AND_MARKET_FOCUS_PLAN.md`](OPS_STARVATION_CLEANUP_AND_MARKET_FOCUS_PLAN.md) / ARMF Phase A (`OI-OPS1`)  
+> **Later:** [`SECTOR_INTELLIGENCE_AND_RESEARCH_STRATEGY_PLAN.md`](SECTOR_INTELLIGENCE_AND_RESEARCH_STRATEGY_PLAN.md) (`OI-SI0`) after ARMF C  
+> **Master sprint order:** [`ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md`](ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md)
 
 ---
 
@@ -208,4 +211,4 @@ Scraping · inventing IV · prompt-only senior tone · Research OS · rushing li
 
 ---
 
-*Locked. Implement F0 → F1 next.*
+*Frozen 2026-07-28. F0–F5 + F1 ladder shipped. Next: ARMF Phase A (`OI-OPS1`).*

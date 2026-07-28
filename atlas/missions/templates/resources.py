@@ -56,6 +56,7 @@ TEMPLATE_RESOURCES: dict[str, WorkResourceProfile] = {
         cpu="low",
         ram_mb=256,
         network="medium",
+        llm="no",
         expected_tick_ms=3_000,
     ),
     "decision_simulation": WorkResourceProfile(
@@ -67,6 +68,7 @@ TEMPLATE_RESOURCES: dict[str, WorkResourceProfile] = {
         cpu="low",
         ram_mb=256,
         network="medium",
+        llm="no",
         expected_tick_ms=5_000,
     ),
     "portfolio_ledger": WorkResourceProfile(
@@ -77,6 +79,7 @@ TEMPLATE_RESOURCES: dict[str, WorkResourceProfile] = {
         scheduling_policy="background",
         cpu="low",
         ram_mb=256,
+        llm="no",
         expected_tick_ms=5_000,
     ),
     "investment_universe": WorkResourceProfile(
@@ -111,6 +114,7 @@ TEMPLATE_RESOURCES: dict[str, WorkResourceProfile] = {
         disk_io="medium",
         storage_growth="medium",
         network="medium",
+        llm="yes",
         expected_tick_ms=60_000,
     ),
     "news_intelligence": WorkResourceProfile(

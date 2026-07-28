@@ -171,9 +171,11 @@ class TemplateService:
             worker_meta: dict[str, Any] = {
                 "service_class": profile.service_class,
                 "program_id": mission_meta.get("program_id"),
+                "resource_profile": profile.metadata_fields().get("resource_profile"),
                 "ops": {
                     "expected_tick_ms": profile.expected_tick_ms,
                     "service_class": profile.service_class,
+                    "program_id": mission_meta.get("program_id"),
                 },
             }
             if mission_meta.get("queued_for_capacity"):

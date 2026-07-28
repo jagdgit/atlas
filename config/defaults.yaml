@@ -192,8 +192,8 @@ resources:
   # Host-respect: Atlas accepts work, queues/defers under pressure, never drops jobs.
   # Env: ATLAS_RESOURCES_MAX_WORKER_THREADS, ATLAS_RESOURCES_MAX_CONCURRENT_TICKS,
   # ATLAS_RESOURCES_HOST_RAM_RESERVE_MB, ATLAS_RESOURCES_MAX_ARCHIVE_WORKERS, …
-  profile: balanced
-  max_worker_threads: 4
+  profile: maximum              # ARMF C2 — preferred ticks 4 on this host
+  max_worker_threads: 5         # ARMF C2 — hard tick ceiling 5
   max_concurrent_ticks: 0       # 0 = same as max_worker_threads (global tick slots)
   max_download_workers: 4
   max_reader_workers: 4
@@ -202,10 +202,21 @@ resources:
   max_archive_workers: 1        # one Owner Knowledge archive ingest at a time
   host_ram_reserve_mb: 2048     # keep ~2 GiB free for OS/desktop
   tick_ram_mb: 512
-  process_rss_soft_mb: 6144     # IR-RO11 Layer 2 process soft ceiling (below systemd MemoryMax)
+  process_rss_soft_mb: 5120     # yield before systemd OOM (MemoryMax often 8–10G)
   memory_soft_ratio: 0.85       # yield tick at 85% of per-worker ram_mb budget
   ram_used_high: 0.85
   load_pressure_high: 0.90
+  # ARMF Phase C — program capacity shares (% of effective tick budget)
+  program_shares:
+    enabled: true
+    shares:
+      market_intelligence: 0.25
+      engineering_intelligence: 0.25
+      personal_intelligence: 0.15
+      knowledge: 0.15
+      archive: 0.10
+      emergency: 0.10
+  llm_tick_slots: 1             # ARMF C5 — concurrent LLM-weight tick admits
   ocr_max_pages: 50
   ocr_max_minutes: 15
   ocr_dpi: 300

@@ -584,6 +584,8 @@ Adjust for host load; discovery/MKG builds never block the desktop.
 |------|----------------|
 | IL | Parent — M0 Universe Manager expands here |
 | IRA / Evidence leap | Dossier + confidence spine; IIP feeds evidence + MKG |
+| Sector Intelligence (`OI-SI0`) | **Next research lens** — identity → sector pack → strategy **before** MVR (do not mix into Evidence sprint) |
+| ARMF (`OI-OPS1`) | Execution capacity so Market research ticks are not starved |
 | Market Intelligence Missions | House for all new workers |
 | Knowledge Verification | Graph/verification substrate for MKG |
 | Host resilience | Assumes Atlas stays up |
@@ -607,4 +609,4 @@ IIP: **Theme + Universe + Discovery + MKG + Thesis Tracker** inside that house.
 - [x] No ToS scraping; Screener via export; TradingView non-primary  
 - [x] India cash equity first  
 
-**Next action:** operate IIP.1–9 on paper trading; deepen evidence (fundamentals / docs / enabled official RSS).
+**Next action:** finish **Evidence Plan** (Sprint 1); then ARMF A→C; then SI.1+. Master: [`ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md`](ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md).

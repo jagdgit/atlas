@@ -32,8 +32,9 @@ TimeoutStopSec=45
 KillMode=mixed
 
 # Cap process memory so Atlas cannot eat the whole 16 GiB desktop.
-# MemoryMax = hard kill; avoid a low MemoryHigh that thrash-swaps during boot recovery.
-MemoryMax=8G
+# MemoryMax = hard kill; keep above process_rss_soft_mb (~5G) so Layer-2 can yield first.
+# Raised from 8G → 10G after recurring OOM-kill loops (~7min) blocked paper trading.
+MemoryMax=10G
 OOMPolicy=stop
 OOMScoreAdjust=200
 TimeoutStartSec=120

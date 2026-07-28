@@ -56,6 +56,12 @@ class MissionDemand:
     wait_since: datetime | None = None
     # IR-M3 — research confidence 0..1 (None = unknown → no boost)
     confidence_score: float | None = None
+    # ARMF Phase C — program capacity shares + LLM lane hint + research progress
+    program_id: str | None = None
+    uses_llm: bool = False
+    llm_weight: int = 0  # 0=none, 1=light, 2=heavy (counts toward LLM slots)
+    # 0..1 coverage; low → more scheduler attention (C11). None = unknown.
+    research_progress: float | None = None
 
     def importance_rank(self) -> int:
         return _IMPORTANCE_RANK.get((self.importance or "").strip().lower(), 0)
@@ -79,7 +85,7 @@ class ArbitrationVerdict:
 
 class MissionArbiter:
     name = "mission_arbiter"
-    VERSION = "1.5.0"  # IR-M2 wait-time aging + IR-M3 confidence boost
+    VERSION = "1.6.0"  # ARMF C1 program floors + C5 LLM slot soft gate
 
     def __init__(
         self,
@@ -98,8 +104,13 @@ class MissionArbiter:
         # IR-M3: low confidence → more attention (capped; cannot outrank REALTIME class)
         confidence_boost_max: float = 8.0,
         confidence_low_threshold: float = 0.55,
+        # ARMF C11 — prefer advancing low-coverage research
+        research_progress_boost_max: float = 12.0,
         realtime_reserve_slots: int | None = None,
         budget_controller: Any | None = None,
+        capacity_policy: Any | None = None,
+        llm_max_slots: int = 1,
+        program_demand_ttl_seconds: float = 180.0,
         clock: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -115,6 +126,7 @@ class MissionArbiter:
         self._wait_max = max(0.0, float(wait_aging_boost_max))
         self._conf_boost_max = max(0.0, float(confidence_boost_max))
         self._conf_low = max(0.0, min(1.0, float(confidence_low_threshold)))
+        self._research_boost_max = max(0.0, float(research_progress_boost_max))
         # IR-RO5: with ≥2 tick slots, reserve ≥1 for REALTIME (static floor).
         if realtime_reserve_slots is None:
             if self._global_max is not None and self._global_max >= 2:
@@ -124,6 +136,13 @@ class MissionArbiter:
         else:
             self._realtime_reserve = max(0, int(realtime_reserve_slots))
         self._budget_controller = budget_controller  # IR-RO4 dynamic effective max
+        if capacity_policy is None:
+            from atlas.core.resources.capacity_shares import ProgramCapacityPolicy
+
+            capacity_policy = ProgramCapacityPolicy()
+        self._capacity_policy = capacity_policy
+        self._llm_max_slots = max(0, int(llm_max_slots))
+        self._program_demand_ttl = max(30.0, float(program_demand_ttl_seconds))
         self._clock = clock
         self._logger = logger or logging.getLogger("atlas.arbiter")
         self._lock = threading.RLock()
@@ -131,6 +150,11 @@ class MissionArbiter:
         self._total = 0
         self._realtime_inflight = 0
         self._realtime_holds: dict[str, int] = {}  # mission_id → realtime slots held
+        self._program_inflight: dict[str, int] = {}
+        self._program_demand_until: dict[str, float] = {}  # program → unix ts
+        self._mission_program: dict[str, str] = {}  # mission_id → program_id while held
+        self._llm_inflight = 0
+        self._llm_holds: dict[str, int] = {}  # mission_id → llm weight held
         self._deferrals: dict[str, int] = {}  # mission → consecutive deferrals (anti-starvation aging)
         # OI-A3: per-mission sliding window of (unix_ts, units) admissions.
         self._llm_ledger: dict[str, deque[tuple[float, int]]] = {}
@@ -165,6 +189,7 @@ class MissionArbiter:
             + aging
             + self._wait_aging_boost(demand.wait_since, now)
             + self._confidence_boost(demand.confidence_score)
+            + self._research_progress_boost(demand.research_progress)
             - self._fair_share_penalty(demand.mission_id, now)
         )
 
@@ -191,6 +216,19 @@ class MissionArbiter:
         # Linear: 0.0 → full boost, threshold → 0
         gap = self._conf_low - max(0.0, min(1.0, score))
         return self._conf_boost_max * (gap / self._conf_low) if self._conf_low > 0 else 0.0
+
+    def _research_progress_boost(self, research_progress: float | None) -> float:
+        """ARMF C11 — low dossier coverage gets more attention than near-complete names."""
+        if research_progress is None or self._research_boost_max <= 0:
+            return 0.0
+        try:
+            prog = float(research_progress)
+        except (TypeError, ValueError):
+            return 0.0
+        if prog > 1.0:
+            prog = prog / 100.0
+        prog = max(0.0, min(1.0, prog))
+        return self._research_boost_max * (1.0 - prog)
 
     def _fair_share_penalty(self, mission_id: str, now: datetime) -> float:
         """Bounded soft penalty for recent admits (OI-D2). Zero when fair-share is disabled."""
@@ -298,10 +336,15 @@ class MissionArbiter:
         """Reserve a slot for one mission, or defer it. Never raises."""
         now = now or self._now()
         with self._lock:
+            from atlas.core.resources.capacity_shares import normalize_program_id
+
+            prog = normalize_program_id(demand.program_id)
+            self._mark_program_demand_locked(prog, now)
             current = self._inflight.get(demand.mission_id, 0)
             cap = demand.max_concurrent_tasks
             score = self.score(demand, now=now)
             is_rt = self._is_realtime(demand)
+            llm_w = max(0, int(demand.llm_weight or (2 if demand.uses_llm else 0)))
             if cap is not None and cap > 0 and current >= cap:
                 self._defer_locked(demand.mission_id)
                 return ArbitrationVerdict(demand.mission_id, False, f"mission budget cap {current}/{cap}", score)
@@ -329,6 +372,30 @@ class MissionArbiter:
                     f"realtime_reserve {self._realtime_inflight}/{reserve} held",
                     score,
                 )
+            # ARMF C1 — program capacity floors + borrowing.
+            if eff_max is not None and self._capacity_policy is not None:
+                demanding = self._programs_with_demand_locked(now)
+                block = self._capacity_policy.blocks_admit(
+                    admit_program=prog,
+                    effective_slots=int(eff_max),
+                    total_inflight=self._total,
+                    program_inflight=self._program_inflight,
+                    programs_with_demand=demanding,
+                )
+                if block:
+                    self._defer_locked(demand.mission_id)
+                    return ArbitrationVerdict(demand.mission_id, False, block, score)
+            # ARMF C5 — soft LLM slot gate: heavy LLM cannot fill all slots when lane busy;
+            # non-LLM work still admits (Host Guard may still deny).
+            if llm_w > 0 and self._llm_max_slots > 0:
+                if self._llm_inflight + llm_w > self._llm_max_slots:
+                    self._defer_locked(demand.mission_id)
+                    return ArbitrationVerdict(
+                        demand.mission_id,
+                        False,
+                        f"llm_slots {self._llm_inflight}/{self._llm_max_slots}",
+                        score,
+                    )
             # OI-A3 — host RAM reserve (soft): deny when machine available < mission reserve.
             ram_need = demand.ram_mb
             host_ram = demand.host_available_ram_mb
@@ -357,23 +424,45 @@ class MissionArbiter:
                 self._llm_record_locked(demand.mission_id, now=now, units=units, window_seconds=window)
             self._inflight[demand.mission_id] = current + 1
             self._total += 1
+            self._program_inflight[prog] = self._program_inflight.get(prog, 0) + 1
+            self._mission_program[demand.mission_id] = prog
             if is_rt:
                 self._realtime_holds[demand.mission_id] = (
                     self._realtime_holds.get(demand.mission_id, 0) + 1
                 )
                 self._realtime_inflight += 1
+            if llm_w > 0:
+                self._llm_holds[demand.mission_id] = (
+                    self._llm_holds.get(demand.mission_id, 0) + llm_w
+                )
+                self._llm_inflight += llm_w
             self._deferrals.pop(demand.mission_id, None)  # admitted → reset aging (fairness)
             self._record_admit_locked(demand.mission_id, now)  # OI-D2 fair-share usage
             return ArbitrationVerdict(demand.mission_id, True, "admitted", score)
 
-    def release(self, mission_id: str) -> None:
+    def release(self, mission_id: str, *, program_id: str | None = None) -> None:
         with self._lock:
+            from atlas.core.resources.capacity_shares import normalize_program_id
+
             current = self._inflight.get(mission_id, 0)
+            if current <= 0:
+                return
             if current <= 1:
                 self._inflight.pop(mission_id, None)
             else:
                 self._inflight[mission_id] = current - 1
             self._total = max(0, self._total - 1)
+
+            prog = program_id or self._mission_program.get(mission_id)
+            prog = normalize_program_id(prog)
+            pin = self._program_inflight.get(prog, 0)
+            if pin <= 1:
+                self._program_inflight.pop(prog, None)
+            elif pin > 0:
+                self._program_inflight[prog] = pin - 1
+            if current <= 1:
+                self._mission_program.pop(mission_id, None)
+
             rt_holds = self._realtime_holds.get(mission_id, 0)
             if rt_holds > 0:
                 if rt_holds <= 1:
@@ -382,9 +471,31 @@ class MissionArbiter:
                     self._realtime_holds[mission_id] = rt_holds - 1
                 self._realtime_inflight = max(0, self._realtime_inflight - 1)
 
+            llm_h = self._llm_holds.get(mission_id, 0)
+            if llm_h > 0:
+                # Release full weight on last hold for this mission_id.
+                release_w = llm_h if current <= 1 else min(llm_h, 1)
+                if current <= 1:
+                    self._llm_holds.pop(mission_id, None)
+                else:
+                    self._llm_holds[mission_id] = max(0, llm_h - release_w)
+                self._llm_inflight = max(0, self._llm_inflight - release_w)
+
+    def _mark_program_demand_locked(self, program_id: str, now: datetime) -> None:
+        self._program_demand_until[program_id] = now.timestamp() + self._program_demand_ttl
+
+    def _programs_with_demand_locked(self, now: datetime) -> set[str]:
+        ts = now.timestamp()
+        expired = [p for p, until in self._program_demand_until.items() if until < ts]
+        for p in expired:
+            self._program_demand_until.pop(p, None)
+        demanding = {p for p, until in self._program_demand_until.items() if until >= ts}
+        demanding.update(p for p, n in self._program_inflight.items() if n > 0)
+        return demanding
+
     def release_demand(self, demand: MissionDemand) -> None:
         """Alias for release — REALTIME tracking uses admit-time holds."""
-        self.release(demand.mission_id)
+        self.release(demand.mission_id, program_id=demand.program_id)
 
     def _defer_locked(self, mission_id: str) -> None:
         self._deferrals[mission_id] = self._deferrals.get(mission_id, 0) + 1
@@ -472,6 +583,14 @@ class MissionArbiter:
                 "realtime_reserve_slots": self._realtime_reserve,
                 "realtime_inflight": self._realtime_inflight,
                 "inflight": dict(self._inflight),
+                "program_inflight": dict(self._program_inflight),
+                "llm_slots_inflight": self._llm_inflight,
+                "llm_slots_max": self._llm_max_slots,
+                "capacity_policy": (
+                    self._capacity_policy.as_dict(effective_slots=eff)
+                    if self._capacity_policy is not None and hasattr(self._capacity_policy, "as_dict")
+                    else None
+                ),
                 "deferrals": dict(self._deferrals),
                 "llm_units_in_window": llm_used,
                 "admits_in_fair_share_window": admits,
@@ -505,6 +624,10 @@ def demand_from_mission(
             service_class = sc.get("service_class")
     wait_since = _parse_wait_since(meta)
     confidence_score = _parse_confidence(meta)
+    program_id = meta.get("program_id") or meta.get("program")
+    rp = meta.get("resource_profile")
+    uses_llm, llm_weight = _llm_from_profile(rp, meta)
+    research_progress = _parse_research_progress(meta)
     return MissionDemand(
         mission_id=str(getattr(mission, "id", "")),
         effective_priority=int(getattr(mission, "effective_priority", 0) or 0),
@@ -521,7 +644,34 @@ def demand_from_mission(
         service_class=str(service_class) if service_class else None,
         wait_since=wait_since,
         confidence_score=confidence_score,
+        program_id=str(program_id) if program_id else None,
+        uses_llm=uses_llm,
+        llm_weight=llm_weight,
+        research_progress=research_progress,
     )
+
+
+def _llm_from_profile(rp: Any, meta: dict[str, Any]) -> tuple[bool, int]:
+    """ARMF C5 — derive LLM lane weight from resource_profile / metadata."""
+    raw = None
+    if isinstance(rp, dict):
+        raw = rp.get("llm")
+    if raw is None:
+        raw = meta.get("llm")
+    if raw is None:
+        return False, 0
+    text = str(raw).strip().lower()
+    if text in ("", "no", "false", "0", "none"):
+        return False, 0
+    if text in ("yes", "true", "light", "1"):
+        return True, 1
+    if text in ("heavy", "2"):
+        return True, 2
+    try:
+        w = int(raw)
+        return (w > 0), max(0, min(2, w))
+    except (TypeError, ValueError):
+        return True, 1
 
 
 def _parse_wait_since(meta: dict[str, Any]) -> datetime | None:
@@ -552,3 +702,23 @@ def _parse_confidence(meta: dict[str, Any]) -> float | None:
         return max(0.0, min(1.0, float(raw)))
     except (TypeError, ValueError):
         return None
+
+
+def _parse_research_progress(meta: dict[str, Any]) -> float | None:
+    """Coverage 0..1 from mission metadata (IRA / research worker stamps)."""
+    raw = meta.get("research_progress")
+    if raw is None:
+        research = meta.get("research")
+        if isinstance(research, dict):
+            raw = research.get("coverage")
+            if raw is None:
+                raw = research.get("coverage_pct")
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if val > 1.0:
+        val = val / 100.0
+    return max(0.0, min(1.0, val))

@@ -1,0 +1,134 @@
+"""ARMF Phase B — Ops cleanup toolkit."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from atlas.ops.cleanup import (
+    OpsCleanupService,
+    is_protected_worker,
+    select_cleanup_candidates,
+)
+
+
+def _w(**kwargs):
+    now = datetime.now(timezone.utc)
+    base = {
+        "id": "w1",
+        "mission_id": "m1",
+        "type": "hello_watcher",
+        "status": "running",
+        "metadata": {},
+        "last_tick_at": now - timedelta(days=8),
+        "created_at": now - timedelta(days=9),
+    }
+    base.update(kwargs)
+    return SimpleNamespace(**base)
+
+
+def test_hello_watcher_is_candidate():
+    out = select_cleanup_candidates([_w()])
+    assert out["counts"]["candidates"] == 1
+    assert out["candidates"][0]["reason"].startswith("zombie_type:")
+
+
+def test_protected_market_long_noprogress_skipped_without_checkbox():
+    now = datetime.now(timezone.utc)
+    w = _w(
+        id="w2",
+        type="investment_universe",
+        mission_id="m2",
+        last_tick_at=now - timedelta(days=2),
+        metadata={"program_id": "market_intelligence"},
+    )
+    out = select_cleanup_candidates([w], include_protected=False)
+    assert out["counts"]["candidates"] == 0
+    assert out["counts"]["protected_skipped"] >= 1
+
+
+def test_protected_included_with_checkbox():
+    now = datetime.now(timezone.utc)
+    w = _w(
+        id="w2",
+        type="investment_universe",
+        mission_id="m2",
+        last_tick_at=now - timedelta(days=2),
+        metadata={"program_id": "market_intelligence"},
+    )
+    out = select_cleanup_candidates([w], include_protected=True)
+    assert out["counts"]["candidates"] == 1
+    assert out["candidates"][0]["protected"] is True
+
+
+def test_archive_worker_is_protected():
+    row = {
+        "type": "owner_knowledge",
+        "owner": {},
+        "service_class": "archive",
+    }
+    assert is_protected_worker(row) is True
+
+
+def test_fresh_worker_not_candidate():
+    now = datetime.now(timezone.utc)
+    w = _w(
+        type="personal_observer",
+        last_tick_at=now - timedelta(minutes=5),
+        metadata={},
+    )
+    out = select_cleanup_candidates([w])
+    assert out["counts"]["candidates"] == 0
+
+
+def test_dry_run_does_not_archive():
+    now = datetime.now(timezone.utc)
+    archived = []
+
+    class FakeWorkers:
+        def list_workers(self, limit=500):
+            return [_w(last_tick_at=now - timedelta(days=8))]
+
+        def stop_worker(self, wid, reason=""):
+            raise AssertionError("should not stop on dry-run")
+
+    class FakeMissions:
+        def archive(self, mid, reason=""):
+            archived.append(mid)
+            return SimpleNamespace(id=mid, status="archived")
+
+        def get(self, mid):
+            return SimpleNamespace(id=mid, title="Hello zombie")
+
+    svc = OpsCleanupService(workers=FakeWorkers(), missions=FakeMissions())
+    out = svc.run(dry_run=True)
+    assert out["dry_run"] is True
+    assert out["counts"]["candidates"] == 1
+    assert archived == []
+    assert out["candidates"][0].get("mission_title") == "Hello zombie"
+
+
+def test_apply_already_archived_is_idempotent():
+    now = datetime.now(timezone.utc)
+    stopped = []
+
+    class FakeWorkers:
+        def list_workers(self, limit=500):
+            return [_w(id="z1", mission_id="m-old", last_tick_at=now - timedelta(days=8))]
+
+        def stop_worker(self, wid, reason=""):
+            stopped.append((wid, reason))
+
+    class FakeMissions:
+        def archive(self, mid, reason=""):
+            raise RuntimeError("illegal transition archived → archived")
+
+        def get(self, mid):
+            return SimpleNamespace(id=mid, title="Old zombie", status="archived")
+
+    svc = OpsCleanupService(workers=FakeWorkers(), missions=FakeMissions())
+    out = svc.run(dry_run=False, reason="retry cleanup")
+    assert out["ok"] is True
+    assert out["counts"]["errors"] == 0
+    assert any(a["action"] == "already_archived" for a in out["applied"])
+    assert stopped and stopped[0][0] == "z1"
