@@ -419,6 +419,58 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "thesis_outcome"),
     },
     {
+        "name": "decision_evolution",
+        "template_version": 1,
+        "description": (
+            "DI.2 — Decision evolution revisits (Day1→Week1→Month1→Quarter). "
+            "Appends timeline revisit events with what_changed diffs; never rewrites packets."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Decision Evolution",
+            "roadmap": "DI.2",
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "max_revisits": 20,
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [
+            {"type": "decision_evolution", "interval_seconds": 86400},
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "decision_evolution"),
+    },
+    {
+        "name": "decision_meta_learning",
+        "template_version": 1,
+        "description": (
+            "DI.6 — Weekly meta-learning / Intelligence Dashboard digest. "
+            "Answers Appendix B; proposes playbook change-log rows — never silent strategy edits."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Decision Meta-Learning",
+            "roadmap": "DI.6",
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "lookback_days": 14,
+            "force": False,
+            "tick_interval_seconds": 604800,
+        },
+        "worker_specs": [
+            {"type": "decision_meta_learning", "interval_seconds": 604800},
+            {
+                "type": "decision_meta_learning",
+                "cron": "30 13 * * 0",
+                "interval_seconds": 604800,
+            },
+        ],
+        "knowledge_domains": ["finance", "markets", "experience"],
+        "success_criteria": with_philosophy({}, "decision_meta_learning"),
+    },
+    {
         "name": "event_research",
         "template_version": 3,
         "description": (
@@ -571,9 +623,55 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "system_introspection"),
     },
     {
+        "name": "career_observer",
+        "template_version": 1,
+        "description": (
+            "Career Observer (CI.1) — LinkedIn export / job feeds → career knowledge "
+            "(discover only; never recommends or applies)."
+        ),
+        "config_schema_type": "career_observer",
+        "config_schema_version": 1,
+        "default_config": {
+            "linkedin_export_paths": [],
+            "job_feed_paths": [],
+            "job_feed_sources": [],
+            "register_job_assets": True,
+            "wire_advisor_sources": False,
+            "seed_watchlist": True,
+            "max_candidates_per_tick": 40,
+            "tick_interval_seconds": 3600,
+        },
+        "worker_specs": [{"type": "career_observer", "interval_seconds": 3600}],
+        "knowledge_domains": ["career", "personal"],
+        "success_criteria": with_philosophy({}, "career_observer"),
+    },
+    {
+        "name": "career_research",
+        "template_version": 1,
+        "description": (
+            "Career Research (CI.2.5) — deepen companies on the shared Company entity "
+            "(research only; never recommends or applies)."
+        ),
+        "config_schema_type": "career_research",
+        "config_schema_version": 1,
+        "default_config": {
+            "company_names": [],
+            "company_ids": [],
+            "from_watchlist": True,
+            "max_companies_per_tick": 8,
+            "tick_interval_seconds": 86400,
+        },
+        "worker_specs": [{"type": "career_research", "interval_seconds": 86400}],
+        "knowledge_domains": ["career"],
+        "success_criteria": with_philosophy({}, "career_research"),
+    },
+    {
         "name": "job_hunting",
-        "template_version": 4,
-        "description": "Continuous job search against operator constraints (Phase D — recommend-only, P14).",
+        "template_version": 5,
+        "description": (
+            "Career Advisor (CI.1.3) — rank job feeds against Personal + Policy "
+            "(recommend-only, P14). Discovery is career_observer."
+        ),
         "config_schema_type": "job_watcher",
         "config_schema_version": 1,
         "default_config": {
@@ -585,6 +683,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "min_skill_overlap": 0,
             "include_inferred_skills": True,
             "max_recommendations": 5,
+            "use_career_watchlist": True,
             "tick_interval_seconds": 86400,
         },
         "worker_specs": [{"type": "job_watcher", "interval_seconds": 86400}],

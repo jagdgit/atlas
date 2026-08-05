@@ -49,6 +49,50 @@ def test_evening_report_explains_zero_fills():
     assert "session closed" in body.lower() or "Market session closed" in body
 
 
+def test_evening_report_shows_portfolio_delta_and_total():
+    _, body = format_evening_report(
+        plan={"as_of": "2026-08-05", "summary": "one fill", "candidates": []},
+        portfolio={
+            "cash": 34158,
+            "holdings_value": 16000,
+            "equity": 50158,
+            "day_pnl": 158,
+            "day_return_pct": 0.316,
+            "total_pnl": 158,
+            "total_return_pct": 0.316,
+            "net_contributed_capital": 50000,
+            "valuation_basis": "latest daily market bars",
+            "positions": [],
+            "recent_trades": [],
+            "kpis": {
+                "cash": 34158,
+                "equity": 50158,
+                "day_pnl": 158,
+                "candidates_planned": 5,
+                "candidates_filled": 1,
+                "plan_fill_rate": 0.2,
+                "buys_today": 1,
+                "sells_today": 0,
+                "open_positions": 0,
+                "portfolio_gate_blocks": 2,
+                "size_trims": 0,
+                "phase": "learning",
+                "confidence": "very_low",
+                "research_studied": 1,
+                "lessons_count": 0,
+                "top_no_fill_reasons": [{"reason": "research_hold", "count": 3}],
+            },
+        },
+    )
+    assert "Today's market P&L" in body
+    assert "Trading KPIs" in body
+    assert "Plan→fill" in body
+    assert "Total portfolio equity: ₹50,158.00" in body
+    assert "Today's market P&L: ₹+158.00 (+0.32%)" in body
+    assert "Total P&L after cash flows: ₹+158.00 (+0.32%)" in body
+    assert "Net contributed capital: ₹50,000.00" in body
+
+
 def test_session_notes_merge_and_format(tmp_path):
     merge_day_notes(
         tmp_path,
@@ -157,3 +201,93 @@ def test_investor_worker_catch_up_outside_window(monkeypatch, tmp_path):
     assert "morning sent" in (result.note or "")
     assert "(catch-up)" in (result.note or "")
     assert mail.sent
+
+
+def test_investor_worker_resolves_live_book_after_restart(monkeypatch, tmp_path):
+    from atlas.investment import portfolios as pf
+
+    monkeypatch.setenv(
+        "ATLAS_VIRTUAL_PORTFOLIOS", str(tmp_path / "virtual_portfolios.json")
+    )
+    pf.clear()
+    pf.register(
+        label="India learner",
+        portfolio_key="india_equity_learner",
+        persona={"capital": 50000, "currency": "INR"},
+        mission_id="mission-paper",
+    )
+
+    class _Portfolio:
+        def __init__(self):
+            self._repo = self
+
+        def ensure_portfolio(self, **kwargs):
+            assert kwargs["mission_id"] == "mission-paper"
+            assert kwargs["name"] == "india_equity_learner"
+            return {
+                "id": "sim-1",
+                "cash": 34158,
+                "starting_cash": 10000,
+            }
+
+        def list_positions(self, _pid):
+            return [
+                {
+                    "symbol": "EICHERMOT.NS",
+                    "quantity": 2,
+                    "avg_price": 7921,
+                }
+            ]
+
+        def snapshot(self, _pid, prices=None):
+            mark = (prices or {}).get("EICHERMOT.NS", 7921)
+            return {
+                "cash": 34158,
+                "starting_cash": 10000,
+                "holdings_value": 2 * mark,
+                "equity": 34158 + 2 * mark,
+                "positions": [
+                    {
+                        "symbol": "EICHERMOT.NS",
+                        "quantity": 2,
+                        "avg_price": 7921,
+                        "mark": mark,
+                        "unrealized_pnl": 2 * (mark - 7921),
+                    }
+                ],
+            }
+
+        def trades(self, _pid, limit=50):
+            return [
+                {
+                    "symbol": "EICHERMOT.NS",
+                    "side": "buy",
+                    "quantity": 2,
+                    "price": 7921,
+                    "created_at": "2026-08-05T03:48:25+00:00",
+                }
+            ]
+
+        def list_cash_movements(self, _pid, limit=200):
+            return [{"kind": "deposit", "amount": 40000}]
+
+    class _Market:
+        def bars_for(self, symbol, **_kwargs):
+            assert symbol == "EICHERMOT.NS"
+            return {"bars": [{"close": 7900}, {"close": 8000}]}
+
+    worker = InvestorReportsWorker(
+        mailer=None,
+        portfolio=_Portfolio(),
+        market_reader=_Market(),
+        data_dir=str(tmp_path),
+    )
+    doc = worker._portfolio_doc("india_equity_learner", ist_date="2026-08-05")
+    assert doc is not None
+    assert doc["sim_portfolio_id"] == "sim-1"
+    assert doc["cash"] == 34158
+    assert doc["equity"] == 50158
+    assert doc["recent_trades"][0]["ist_day_match"] is True
+    assert doc["net_contributed_capital"] == 50000
+    assert doc["total_pnl"] == 158
+    assert doc["day_pnl"] == 158

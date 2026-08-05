@@ -18,6 +18,7 @@ DOMAIN_EXPERIENCE = "experience"
 DOMAIN_CODE = "code"
 DOMAIN_PERSONAL = "personal"
 DOMAIN_PROFESSIONAL = "professional"
+DOMAIN_CAREER = "career"
 
 ALL_DOMAINS = (
     DOMAIN_EXTERNAL,
@@ -26,6 +27,7 @@ ALL_DOMAINS = (
     DOMAIN_CODE,
     DOMAIN_PERSONAL,
     DOMAIN_PROFESSIONAL,
+    DOMAIN_CAREER,
 )
 
 # Default retrieval universe for the Researcher (A3).

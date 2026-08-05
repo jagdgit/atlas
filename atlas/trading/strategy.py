@@ -105,6 +105,13 @@ class StrategyDecisionRule:
                         payload={"kind": "buy", "symbol": symbol, "quantity": qty, "price": price},
                     )
                 )
+            else:
+                # Surfaced as strategy_hold's cousin size_block in session notes — do not
+                # look like "no signal" when the tape wants a buy but whole-share size fails.
+                hold.rationale = (
+                    f"buy signal but cannot size 1 whole share @ {price:.2f} "
+                    f"(cash {cash:.2f}; trade budget / exposure / max qty forbids a min lot)"
+                )
 
         # --- SELL: fast MA below slow MA (exit) while holding -----------------
         if margin < 0 and rsi_ok_sell and held > 0:
@@ -136,8 +143,20 @@ class StrategyDecisionRule:
         max_qty = _as_float(ctx.get("max_position_qty"), default=0.0)
         # Target notional per trade from the risk budget (fraction of equity), default a fixed size.
         trade_pct = _as_float(ctx.get("trade_fraction"), default=0.1)
+        # Persona per-name budget keeps room for the rest of the day's candidates;
+        # max_exposure_pct below is the hard ceiling, not the target.
+        name_target = _as_float(ctx.get("name_target_pct"), default=0.0)
+        if name_target > 0:
+            trade_pct = min(trade_pct, name_target)
         budget = min(cash, equity * trade_pct) if equity > 0 else cash
+        # Cash equity (India etc.) is whole shares only — int(budget/price) is often 0 on
+        # ₹10k books with NIFTY names at ₹1k–₹3k when trade_fraction is 0.1 (budget ₹1k).
         qty = float(int(budget / price)) if price > 0 else 0.0
+        if qty < 1.0 and cash >= price:
+            # Minimum lot: 1 share when cash can pay, unless operator force-disable.
+            allow_min = ctx.get("allow_min_lot")
+            if allow_min is None or bool(allow_min):
+                qty = 1.0
         if max_qty and max_qty > 0:
             room = max_qty - held
             if room <= 0:
@@ -152,6 +171,9 @@ class StrategyDecisionRule:
             if room_notional <= 0:
                 return 0.0
             qty = min(qty, float(int(room_notional / price)))
+        # Final cash / whole-share check after caps.
+        if qty >= 1.0 and cash < price * qty:
+            qty = float(int(cash / price)) if price > 0 else 0.0
         return max(qty, 0.0)
 
     def _sell_quantity(self, ctx: dict[str, Any], *, held: float) -> float:

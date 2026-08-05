@@ -130,3 +130,101 @@ def test_warming_up_holds():
 
 def test_no_symbol_returns_empty():
     assert RULE.score(_request(), CTX) == []
+
+
+def test_india_small_book_min_lot_buys_expensive_name():
+    """₹10k learner + 10% trade budget used to floor qty to 0 on ~₹3k NIFTY names."""
+    opts = RULE.score(
+        _request(
+            symbol="ADANIENT.NS",
+            price=3050.0,
+            equity=10000.0,
+            cash=10000.0,
+            position_qty=0.0,
+            trade_fraction=0.1,
+            indicators={
+                "sma_fast": 3100.0,
+                "sma_slow": 3000.0,
+                "rsi": 55.0,
+                "bars": 40,
+                "params": {"sma_fast": 10, "sma_slow": 30},
+            },
+        ),
+        CTX,
+    )
+    assert "buy" in _keys(opts)
+    buy = next(o for o in opts if o.key.startswith("buy"))
+    assert buy.payload["quantity"] == 1.0
+
+
+def test_name_target_leaves_room_for_other_candidates():
+    """trade_fraction 1.0 used to sink the whole book into the first signal."""
+    opts = RULE.score(
+        _request(
+            symbol="EICHERMOT.NS",
+            price=1000.0,
+            equity=50000.0,
+            cash=50000.0,
+            position_qty=0.0,
+            trade_fraction=1.0,
+            max_exposure_pct=40.0,
+            name_target_pct=0.18,
+            indicators={
+                "sma_fast": 1050.0,
+                "sma_slow": 1000.0,
+                "rsi": 55.0,
+                "bars": 40,
+                "params": {},
+            },
+        ),
+        CTX,
+    )
+    buy = next(o for o in opts if o.key.startswith("buy"))
+    assert buy.payload["quantity"] == 9.0  # 18% of 50k, not the 40% ceiling
+
+
+def test_name_target_still_allows_min_lot_on_small_books():
+    opts = RULE.score(
+        _request(
+            symbol="ADANIENT.NS",
+            price=3050.0,
+            equity=10000.0,
+            cash=10000.0,
+            position_qty=0.0,
+            trade_fraction=1.0,
+            name_target_pct=0.18,
+            indicators={
+                "sma_fast": 3100.0,
+                "sma_slow": 3000.0,
+                "rsi": 55.0,
+                "bars": 40,
+                "params": {},
+            },
+        ),
+        CTX,
+    )
+    buy = next(o for o in opts if o.key.startswith("buy"))
+    assert buy.payload["quantity"] == 1.0
+
+
+def test_min_lot_withheld_when_share_costs_more_than_cash():
+    opts = RULE.score(
+        _request(
+            symbol="MRF.NS",
+            price=120000.0,
+            equity=10000.0,
+            cash=10000.0,
+            position_qty=0.0,
+            trade_fraction=1.0,
+            indicators={
+                "sma_fast": 121000.0,
+                "sma_slow": 119000.0,
+                "rsi": 50.0,
+                "bars": 40,
+                "params": {},
+            },
+        ),
+        CTX,
+    )
+    assert "buy" not in _keys(opts)
+    assert "cannot size" in opts[0].rationale.lower()

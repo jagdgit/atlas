@@ -128,7 +128,7 @@ def domains_for_role(role: str, domains: Sequence[str] | None = None) -> list[st
     if role_key == ROLE_ENGINEERING:
         return ["code", "research", "external"]
     if role_key == ROLE_PERSONAL:
-        return ["personal", "professional", "experience"]
+        return ["personal", "professional", "experience", "career"]
     # chat / unknown → no domain filter (search all)
     return None
 

@@ -30,12 +30,14 @@ class NewsIntelligenceWorker(PersistentWorker):
         extractor: Any | None = None,
         knowledge_verification: Any | None = None,
         events: Any | None = None,
+        observations: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._candidates = candidates
         self._extractor = extractor or MediaKnowledgeExtractor(max_claims=8)
         self._verify = knowledge_verification
         self._events = events
+        self._observations = observations
         self._logger = logger or logging.getLogger("atlas.workers.news_intelligence")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -161,6 +163,16 @@ class NewsIntelligenceWorker(PersistentWorker):
                     emitted += 1
                 except Exception as exc:  # noqa: BLE001
                     self._logger.warning("candidate emit failed: %s", exc)
+            if self._observations is not None:
+                try:
+                    self._observations.record_news_event(
+                        text=text,
+                        symbol=symbol or None,
+                        source=source,
+                        extra={"digest": digest},
+                    )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("DI.Obs news_event skipped", exc_info=True)
             seen.add(digest)
             new_hashes.append(digest)
 

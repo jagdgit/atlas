@@ -46,6 +46,116 @@ def _limits_for_persona(persona: dict[str, Any] | None) -> dict[str, float]:
     return dict(RISK_LIMITS.get(risk) or RISK_LIMITS["medium"])
 
 
+def resolve_limits(
+    persona: dict[str, Any] | None, cfg: dict[str, Any] | None = None
+) -> dict[str, float]:
+    """Persona limits with operator overrides, kept internally consistent.
+
+    A sector cap below the single-name cap is contradictory: the first buy of a
+    name would breach its own sector before any second name exists. Raising
+    ``max_name_pct`` (e.g. via ``max_exposure_pct``) therefore lifts the sector
+    floor to match instead of silently blocking every buy.
+    """
+    cfg = cfg or {}
+    limits = _limits_for_persona(persona)
+    for key in ("max_names", "max_name_pct", "sector_cap_pct", "min_cash_pct"):
+        if cfg.get(key) is not None:
+            try:
+                limits[key] = float(cfg[key])
+            except (TypeError, ValueError):
+                continue
+    if cfg.get("sector_cap_pct") is None:
+        limits["sector_cap_pct"] = max(
+            float(limits["sector_cap_pct"]), float(limits["max_name_pct"])
+        )
+    return limits
+
+
+def target_name_pct(
+    persona: dict[str, Any] | None = None, cfg: dict[str, Any] | None = None
+) -> float:
+    """Per-name sizing *target* (not the ceiling).
+
+    Operator caps like ``max_exposure_pct`` are the most a single name may ever
+    reach; sizing every buy at that ceiling fills the book with one or two names
+    and starves the rest of the day's candidates. Target the persona risk budget
+    instead, clamped by whatever ceiling is configured.
+    """
+    base = float(_limits_for_persona(persona)["max_name_pct"])
+    ceiling = float(resolve_limits(persona, cfg)["max_name_pct"])
+    return max(0.0, min(base, ceiling))
+
+
+# Gate failures that a smaller order can satisfy (vs. hard vetoes like research).
+TRIMMABLE_REASONS = (
+    "insufficient_cash",
+    "cash_buffer",
+    "concentration_name",
+    "concentration_sector",
+)
+
+
+def max_allowed_quantity(
+    *,
+    symbol: str,
+    price: float,
+    snapshot: dict[str, Any] | None = None,
+    persona: dict[str, Any] | None = None,
+    index: str = "NIFTY50",
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Largest whole-share buy that satisfies cash buffer + name + sector caps."""
+    limits = resolve_limits(persona, cfg)
+    snap = snapshot if isinstance(snapshot, dict) else {}
+    px = _f(price)
+    cash = _f(snap.get("cash"))
+    equity = _f(snap.get("equity")) or cash
+    sym = (symbol or "").strip().upper()
+    if sym and not sym.endswith(".NS") and "." not in sym:
+        sym = f"{sym}.NS"
+    if px <= 0:
+        return {"quantity": 0, "notional": 0.0, "binding": "invalid_price", "limits": limits}
+
+    positions = open_positions(snap)
+    existing_name = 0.0
+    for p in positions:
+        if p["symbol"] == sym:
+            existing_name = _f(p.get("qty")) * _f(
+                p.get("price") or p.get("mark") or p.get("avg_price") or px
+            )
+            break
+
+    sector = sector_for_symbol(sym, index=index)
+    existing_sector = 0.0
+    if sector != "Unknown":
+        for p in positions:
+            if sector_for_symbol(str(p.get("symbol")), index=index) == sector:
+                existing_sector += _f(p.get("qty")) * _f(
+                    p.get("price") or p.get("mark") or p.get("avg_price") or 0
+                )
+
+    rooms: dict[str, float] = {
+        "cash_buffer": max(0.0, cash - equity * float(limits["min_cash_pct"])),
+        "concentration_name": max(
+            0.0, equity * float(limits["max_name_pct"]) - existing_name
+        ),
+    }
+    if equity > 0 and sector != "Unknown":
+        rooms["concentration_sector"] = max(
+            0.0, equity * float(limits["sector_cap_pct"]) - existing_sector
+        )
+    binding = min(rooms, key=lambda k: rooms[k])
+    qty = int(rooms[binding] // px)
+    return {
+        "quantity": max(0, qty),
+        "notional": round(max(0, qty) * px, 2),
+        "binding": binding,
+        "rooms": {k: round(v, 2) for k, v in rooms.items()},
+        "sector": sector,
+        "limits": limits,
+    }
+
+
 def sector_for_symbol(symbol: str, *, index: str = "NIFTY50") -> str:
     """Best-effort sector from universe membership."""
     try:
@@ -172,16 +282,7 @@ def pre_trade_check(
     if equity <= 0:
         equity = cash
     persona = persona if isinstance(persona, dict) else {}
-    limits = _limits_for_persona(persona)
-    # Config overrides
-    if cfg.get("max_names") is not None:
-        limits["max_names"] = float(cfg["max_names"])
-    if cfg.get("max_name_pct") is not None:
-        limits["max_name_pct"] = float(cfg["max_name_pct"])
-    if cfg.get("sector_cap_pct") is not None:
-        limits["sector_cap_pct"] = float(cfg["sector_cap_pct"])
-    if cfg.get("min_cash_pct") is not None:
-        limits["min_cash_pct"] = float(cfg["min_cash_pct"])
+    limits = resolve_limits(persona, cfg)
 
     reasons: list[str] = []
     checks: list[dict[str, Any]] = []
@@ -229,19 +330,36 @@ def pre_trade_check(
 
     # 2) Score / investment confidence
     if require_score:
-        path = str(score.get("path") or "")
-        if path == "avoid":
-            _fail("score_path_avoid", str(score.get("path_reason") or ""))
-        elif path == "watch" and score.get("path_reason") == "high_research_low_investment":
-            _fail("score_watch", "high_research_low_investment")
+        # Empty score must not invent "very_low" — that blocked every hermetic /
+        # pre-research buy. Missing score = not_supplied (research gate still applies).
+        has_score = bool(score) and any(
+            score.get(k) is not None
+            for k in (
+                "path",
+                "investment_confidence",
+                "investment_confidence_score",
+                "horizon",
+            )
+        )
+        if not has_score:
+            _ok("score_path", "not_supplied")
+            _ok("investment_confidence", "not_supplied")
         else:
-            _ok("score_path", path or "n/a")
-        inv_label = str(score.get("investment_confidence") or "very_low")
-        floor = str(min_investment_confidence or cfg.get("min_investment_confidence") or "low")
-        if CONF_FLOOR_RANK.get(inv_label, 0) < CONF_FLOOR_RANK.get(floor, 1):
-            _fail("investment_confidence_floor", f"{inv_label}<{floor}")
-        else:
-            _ok("investment_confidence", inv_label)
+            path = str(score.get("path") or "")
+            if path == "avoid":
+                _fail("score_path_avoid", str(score.get("path_reason") or ""))
+            elif path == "watch" and score.get("path_reason") == "high_research_low_investment":
+                _fail("score_watch", "high_research_low_investment")
+            else:
+                _ok("score_path", path or "n/a")
+            inv_label = str(score.get("investment_confidence") or "very_low")
+            floor = str(
+                min_investment_confidence or cfg.get("min_investment_confidence") or "low"
+            )
+            if CONF_FLOOR_RANK.get(inv_label, 0) < CONF_FLOOR_RANK.get(floor, 1):
+                _fail("investment_confidence_floor", f"{inv_label}<{floor}")
+            else:
+                _ok("investment_confidence", inv_label)
 
     # 3) Persona asset class
     allowed_assets = persona.get("allowed_assets") or ["cash_equity"]
@@ -323,7 +441,25 @@ def pre_trade_check(
 
     allowed = not reasons
     action = "buy_ok" if allowed else "hold_portfolio"
-    return _result(allowed, action, reasons, checks, sizing, limits, sector=sector)
+    trim = max_allowed_quantity(
+        symbol=sym,
+        price=px,
+        snapshot=snap,
+        persona=persona,
+        index=index,
+        cfg=cfg,
+    )
+    return _result(
+        allowed,
+        action,
+        reasons,
+        checks,
+        sizing,
+        limits,
+        sector=sector,
+        max_quantity=int(trim.get("quantity") or 0),
+        trim=trim,
+    )
 
 
 def _result(
@@ -335,7 +471,10 @@ def _result(
     limits: dict[str, float],
     *,
     sector: str = "",
+    max_quantity: int | None = None,
+    trim: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    codes = {str(r).split(":", 1)[0] for r in reasons}
     return {
         "version": VERSION,
         "allowed": allowed,
@@ -345,6 +484,10 @@ def _result(
         "sizing": sizing,
         "limits": limits,
         "sector": sector,
+        "max_quantity": max_quantity,
+        "trim": trim,
+        # True when every failure is a size problem a smaller order can fix.
+        "trimmable": bool(codes) and codes.issubset(set(TRIMMABLE_REASONS)),
         "note": (
             "Portfolio gate (IIP.7): concentration · cash · persona · max names · "
             "investment confidence. Score + research gates also required for buys."

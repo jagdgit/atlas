@@ -81,6 +81,8 @@ from atlas.workers.learning_governance import LearningGovernanceWorker
 from atlas.workers.system_introspection import SystemIntrospectionWorker
 from atlas.workers.research_watcher import ResearchWatcher
 from atlas.workers.job_watcher import JobWatcher
+from atlas.workers.career_observer import CareerObserverWorker
+from atlas.workers.career_research import CareerResearchWorker
 from atlas.workers.tech_security import TechSecurityWatcher
 from atlas.workers.self_improvement import SelfImprovementWatcher
 from atlas.engineering.ingest import RepoAcquirer
@@ -1550,6 +1552,50 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     if hasattr(investor_mailer, "bind_research"):
         investor_mailer.bind_research(investment_research)
 
+    # DI.1/DI.2 — Decision Packets + Market Timeline (Postgres + JSON mirrors).
+    from atlas.investment.decision_packets import DecisionPacketStore
+    from atlas.investment.decision_timeline import DecisionTimelineStore
+    from atlas.repositories.decision_packet_repo import DecisionPacketRepository
+    from atlas.repositories.decision_timeline_repo import DecisionTimelineRepository
+
+    decision_packet_store = DecisionPacketStore(
+        data_dir=str(cfg.paths.data),
+        repo=DecisionPacketRepository(db_manager),
+        logger=get_logger("atlas.investment.decision_packets"),
+    )
+    decision_timeline_store = DecisionTimelineStore(
+        data_dir=str(cfg.paths.data),
+        repo=DecisionTimelineRepository(db_manager),
+        packet_store=decision_packet_store,
+        logger=get_logger("atlas.investment.decision_timeline"),
+    )
+    decision_packet_store.bind_timeline(decision_timeline_store)
+    from atlas.investment.observations import DecisionObservationStore
+    from atlas.repositories.decision_observation_repo import DecisionObservationRepository
+
+    decision_observation_store = DecisionObservationStore(
+        data_dir=str(cfg.paths.data),
+        repo=DecisionObservationRepository(db_manager),
+        timeline=decision_timeline_store,
+        logger=get_logger("atlas.investment.observations"),
+    )
+    container.register_instance("decision_packets", decision_packet_store)
+    container.register_instance("decision_timeline", decision_timeline_store)
+    container.register_instance("decision_observations", decision_observation_store)
+    from atlas.investment.decision_attribution import DecisionAttributionStore
+    from atlas.repositories.decision_attribution_repo import DecisionAttributionRepository
+
+    decision_attribution_store = DecisionAttributionStore(
+        data_dir=str(cfg.paths.data),
+        repo=DecisionAttributionRepository(db_manager),
+        packet_store=decision_packet_store,
+        timeline=decision_timeline_store,
+        logger=get_logger("atlas.investment.decision_attribution"),
+    )
+    container.register_instance("decision_attributions", decision_attribution_store)
+    if hasattr(investment_research, "bind_observations"):
+        investment_research.bind_observations(decision_observation_store)
+
     # Learning Governance Report (OI-MP3 / Layer 2) — after portfolio exists.
     governance_service = GovernanceReportService(
         knowledge=knowledge_service,
@@ -1574,6 +1620,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             live_market=market_reader_service,
             investor_mailer=investor_mailer,
             investment_research=investment_research,
+            decision_packets=decision_packet_store,
+            observations=decision_observation_store,
+            attributions=decision_attribution_store,
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )
@@ -1584,6 +1633,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             events=events,
             jobs=job_service,
             capabilities=capabilities,
+            observations=decision_observation_store,
             logger=get_logger("atlas.workers.market_observer"),
         )
     )
@@ -1596,6 +1646,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             experience_os=experience_os,
             investment_research=investment_research,
             data_dir=str(cfg.paths.data),
+            decision_packets=decision_packet_store,
             logger=get_logger("atlas.workers.investment_universe"),
         )
     )
@@ -1616,6 +1667,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     worker_manager.register_worker_type(
         ResearchFreshnessWorker(
             research=investment_research,
+            observations=decision_observation_store,
             logger=get_logger("atlas.workers.research_freshness"),
         )
     )
@@ -1629,10 +1681,31 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.thesis_outcome"),
         )
     )
+    from atlas.workers.decision_evolution import DecisionEvolutionWorker
+
+    worker_manager.register_worker_type(
+        DecisionEvolutionWorker(
+            timeline=decision_timeline_store,
+            decision_packets=decision_packet_store,
+            investment_research=investment_research,
+            market_reader=market_reader_service,
+            attributions=decision_attribution_store,
+            logger=get_logger("atlas.workers.decision_evolution"),
+        )
+    )
+    from atlas.workers.decision_meta_learning import DecisionMetaLearningWorker
+
+    worker_manager.register_worker_type(
+        DecisionMetaLearningWorker(
+            data_dir=str(cfg.paths.data),
+            logger=get_logger("atlas.workers.decision_meta_learning"),
+        )
+    )
     worker_manager.register_worker_type(
         GovernmentIntelligenceWorker(
             data_dir=str(cfg.paths.data),
             events=events,
+            observations=decision_observation_store,
             logger=get_logger("atlas.workers.government_intelligence"),
         )
     )
@@ -1640,6 +1713,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         InvestorReportsWorker(
             mailer=investor_mailer,
             portfolio=portfolio_service,
+            market_reader=market_reader_service,
             data_dir=str(cfg.paths.data),
             logger=get_logger("atlas.workers.investor_reports"),
         )
@@ -1683,6 +1757,27 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             learning=learning_service,
             events=events,
             logger=get_logger("atlas.workers.job_watcher"),
+        )
+    )
+    # Career Observer (CI.1.2) — discover-only → domain=career candidates; never recommends.
+    worker_manager.register_worker_type(
+        CareerObserverWorker(
+            candidates=candidate_consumer,
+            assets=asset_store,
+            postings_reader=job_postings_reader,
+            configuration=configuration_service,
+            missions=mission_service,
+            events=events,
+            logger=get_logger("atlas.workers.career_observer"),
+        )
+    )
+    # Career Research (CI.2.5) — deepen companies on shared Company entity; never recommends.
+    worker_manager.register_worker_type(
+        CareerResearchWorker(
+            candidates=candidate_consumer,
+            company_data=company_data_service,
+            events=events,
+            logger=get_logger("atlas.workers.career_research"),
         )
     )
 
@@ -1847,6 +1942,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             candidates=candidate_consumer,
             knowledge_verification=knowledge_verification,
             events=events,
+            observations=decision_observation_store,
             logger=get_logger("atlas.workers.news_intelligence"),
         )
     )

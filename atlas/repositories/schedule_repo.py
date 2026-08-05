@@ -205,6 +205,45 @@ class ScheduleRepository(BaseRepository):
             > 0
         )
 
+    def set_next_run_at(
+        self,
+        schedule_id: UUID | str,
+        next_run_at: datetime,
+        *,
+        only_if_later: bool = True,
+    ) -> bool:
+        """Move ``next_run_at`` (operator catch-up / deferral retry).
+
+        When ``only_if_later`` is true (default), never push the run further into the
+        future — only pull a distant schedule forward so deferred work is not lost.
+        """
+        nxt = next_run_at
+        if nxt.tzinfo is None:
+            nxt = nxt.replace(tzinfo=timezone.utc)
+        if only_if_later:
+            return (
+                self.execute(
+                    """
+                    UPDATE scheduler.schedules
+                    SET next_run_at = %s, updated_at = now()
+                    WHERE id = %s AND next_run_at > %s
+                    """,
+                    (nxt, str(schedule_id), nxt),
+                )
+                > 0
+            )
+        return (
+            self.execute(
+                """
+                UPDATE scheduler.schedules
+                SET next_run_at = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (nxt, str(schedule_id)),
+            )
+            > 0
+        )
+
     def set_cron(self, schedule_id: UUID | str, cron_expr: str) -> bool:
         expr = validate_cron(cron_expr)
         nxt = next_run_after(expr)

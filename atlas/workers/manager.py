@@ -489,6 +489,7 @@ class WorkerManager:
                 ok, reason = True, "host_guard_error"
             if not ok:
                 self._record_wait(worker, "host_pressure")
+                self._reschedule_after_deferral(worker, reason=reason)
                 self._emit(
                     "WorkerDeferred",
                     worker,
@@ -516,6 +517,12 @@ class WorkerManager:
                 timing = None
             if timing is not None and not timing.allowed:
                 self._record_wait(worker, "schedule")
+                # Use hint if far; otherwise short retry. Do not waste full interval.
+                self._reschedule_after_deferral(
+                    worker,
+                    reason=str(timing.reason or "schedule_window"),
+                    delay_seconds=300.0,
+                )
                 self._emit(
                     "WorkerDeferred",
                     worker,
@@ -538,6 +545,7 @@ class WorkerManager:
                 except Exception:  # noqa: BLE001
                     pass
             self._record_wait(worker, "budget")
+            self._reschedule_after_deferral(worker, reason=verdict.reason)
             self._emit("WorkerThrottled", worker, reason=verdict.reason, score=round(verdict.score, 4))
             return {"skipped": "budget", "reason": verdict.reason, "worker_id": worker.id}
 
@@ -550,6 +558,7 @@ class WorkerManager:
                 if not decision.allowed:
                     self._arbiter.release(worker.mission_id)
                     self._record_wait(worker, "reservation")
+                    self._reschedule_after_deferral(worker, reason=decision.reason)
                     self._emit(
                         "WorkerThrottled",
                         worker,
@@ -897,6 +906,35 @@ class WorkerManager:
                 self._schedules.disable(worker.schedule_id)
         except Exception:  # noqa: BLE001 - schedule toggle must not fail a lifecycle op
             self._logger.exception("failed to toggle schedule for worker %s", worker.id)
+
+    def _reschedule_after_deferral(
+        self,
+        worker: Worker,
+        *,
+        reason: str = "",
+        delay_seconds: float = 120.0,
+    ) -> None:
+        """Host Respect: do not turn one capacity miss into a full interval wait.
+
+        Schedule claim advances ``next_run_at`` when firing; if the tick is then
+        deferred (budget/host), pull the schedule forward so Program work retries soon.
+        Never stops or pauses the worker.
+        """
+        if self._schedules is None or not worker.schedule_id:
+            return
+        try:
+            if hasattr(self._schedules, "bump_next_run"):
+                self._schedules.bump_next_run(
+                    worker.schedule_id, delay_seconds=delay_seconds
+                )
+                self._logger.info(
+                    "deferred tick rescheduled worker=%s delay=%.0fs reason=%s",
+                    worker.id,
+                    delay_seconds,
+                    (reason or "")[:120],
+                )
+        except Exception:  # noqa: BLE001 - never break deferred path
+            self._logger.debug("deferral reschedule failed", exc_info=True)
 
     def _active_config_version(self, mission_id: str) -> int | None:
         if self._config_repo is None:

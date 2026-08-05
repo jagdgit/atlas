@@ -30,12 +30,14 @@ class MarketObserverWorker(PersistentWorker):
         events: Any | None = None,
         jobs: Any | None = None,
         capabilities: Any | None = None,
+        observations: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._reader = market_reader
         self._events = events
         self._jobs = jobs
         self._capabilities = capabilities
+        self._observations = observations
         self._logger = logger or logging.getLogger("atlas.workers.market_observer")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -123,6 +125,14 @@ class MarketObserverWorker(PersistentWorker):
             if event is None:
                 continue
             interesting.append(event.as_dict())
+            if self._observations is not None:
+                try:
+                    self._observations.record_market_event(
+                        symbol=target["symbol"],
+                        event=event.as_dict(),
+                    )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("DI.Obs market_event skipped", exc_info=True)
             if (
                 spawn_research
                 and self._jobs is not None

@@ -197,26 +197,9 @@ def linkedin_suggestions(
 
 
 def _clean_skills(facts: list[dict[str, Any]]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for f in facts:
-        if f.get("state") == "rejected":
-            continue
-        val = f.get("value") or {}
-        name = str(val.get("skill") or f.get("key") or "").strip()
-        if not name or len(name) < 2:
-            continue
-        # Drop hash-noise labels from test fixtures.
-        if re.search(r"-[a-f0-9]{6,}$", name, re.I):
-            continue
-        if name.lower() in {"original", "skill"}:
-            continue
-        low = name.lower()
-        if low in seen:
-            continue
-        seen.add(low)
-        out.append(name)
-    return out
+    from atlas.personal.skill_hygiene import skill_names_from_facts
+
+    return skill_names_from_facts(facts, include_inferred=True)
 
 
 def _fact_value(facts: list[dict[str, Any]], key: str, field: str) -> str | None:

@@ -41,7 +41,7 @@ function el(tag, attrs = {}, ...children) {
 const $ = (sel) => document.querySelector(sel);
 
 /* ---------- API ---------- */
-async function api(path, { method = "GET", body } = {}) {
+async function api(path, { method = "GET", body, skipAuthKick = false } = {}) {
   const res = await fetch(path, {
     method,
     headers: {
@@ -51,7 +51,10 @@ async function api(path, { method = "GET", body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) {
-    signOut("Session rejected — please re-enter your API key.");
+    // During login we surface the auth error; do not wipe state via signOut first.
+    if (!skipAuthKick) {
+      signOut("Session rejected — please re-enter your API key.");
+    }
     throw new Error("unauthorized");
   }
   let data = null;
@@ -99,27 +102,64 @@ function signOut(msg) {
 }
 function showLoginError(msg) {
   const e = $("#login-error");
-  e.textContent = msg;
+  if (!e) {
+    if (msg) console.error("login:", msg);
+    return;
+  }
+  e.textContent = msg || "";
   e.classList.toggle("hidden", !msg);
 }
 
 async function tryConnect(key) {
   const prev = state.key;
-  state.key = key;
+  const clean = String(key || "").trim();
+  if (!clean) {
+    showLoginError("Enter your API key from ATLAS_API_KEYS (or /etc/atlas/atlas.env).");
+    return false;
+  }
+  state.key = clean;
+  showLoginError("Connecting…");
   try {
-    const status = await api("/v1/status");
-    localStorage.setItem(KEY_STORE, key);
-    $("#login").classList.add("hidden");
-    $("#app").classList.remove("hidden");
+    // Dedicated login call: never signOut mid-attempt (that cleared state before).
+    const status = await api("/v1/status", { skipAuthKick: true });
+    try {
+      localStorage.setItem(KEY_STORE, clean);
+    } catch (_) { /* private mode */ }
+    const loginEl = $("#login");
+    const appEl = $("#app");
+    if (loginEl) loginEl.classList.add("hidden");
+    if (appEl) appEl.classList.remove("hidden");
     showLoginError("");
-    applyStatus(status);
-    switchView(state.view);
-    loadSessions();
+    try {
+      applyStatus(status);
+    } catch (statusErr) {
+      console.warn("applyStatus", statusErr);
+      const label = $("#conn-label");
+      if (label) label.textContent = `v${(status && status.version) || "?"} · connected`;
+    }
+    try {
+      switchView(state.view || "overview");
+    } catch (viewErr) {
+      console.warn("switchView after login", viewErr);
+    }
+    try {
+      loadSessions();
+    } catch (_) { /* non-fatal */ }
     return true;
   } catch (err) {
     state.key = prev;
-    if (err.message !== "unauthorized") showLoginError("Could not connect: " + err.message);
-    else showLoginError("Invalid API key.");
+    const login = $("#login");
+    const app = $("#app");
+    if (login) login.classList.remove("hidden");
+    if (app) app.classList.add("hidden");
+    const msg = (err && err.message) ? String(err.message) : String(err);
+    if (msg === "unauthorized" || /invalid api key/i.test(msg)) {
+      showLoginError("Invalid API key — paste the value of ATLAS_API_KEYS from /etc/atlas/atlas.env (same as repo .env if kept in sync).");
+    } else if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+      showLoginError("Cannot reach Atlas API. Open http://127.0.0.1:8000/ui/ on this machine (server binds localhost only).");
+    } else {
+      showLoginError("Could not connect: " + msg);
+    }
     return false;
   }
 }
@@ -127,10 +167,29 @@ async function tryConnect(key) {
 function applyStatus(status) {
   const dot = $("#conn-dot");
   const label = $("#conn-label");
-  dot.className = "dot " + (status.degraded ? "warn" : status.healthy ? "ok" : "fail");
-  label.textContent = `v${status.version} · ${status.severity_counts.ok} ok`
-    + (status.severity_counts.degraded ? ` · ${status.severity_counts.degraded} degraded` : "")
-    + (status.severity_counts.failed ? ` · ${status.severity_counts.failed} down` : "");
+  if (!dot || !label) return;
+  status = status || {};
+  // Prefer severity_counts (current API); keep older keys as fall-back.
+  const counts =
+    status.severity_counts || status.subsystem_counts || status.service_counts || {};
+  let ok = counts.ok;
+  let degraded = counts.degraded;
+  let failed = counts.failed;
+  if (ok == null) {
+    const total = Number(status.services_total || 0);
+    const degList = status.degraded_services || [];
+    const failList = status.failed_services || [];
+    degraded = Array.isArray(degList) ? degList.length : Number(degraded || 0);
+    failed = Array.isArray(failList) ? failList.length : Number(failed || 0);
+    ok = Math.max(0, total - Number(degraded || 0) - Number(failed || 0));
+  }
+  const isDegraded = !!(status.degraded || Number(degraded || 0));
+  const isHealthy = status.healthy !== false && !Number(failed || 0);
+  dot.className = "dot " + (isDegraded ? "warn" : isHealthy ? "ok" : "fail");
+  let text = `v${status.version || "?"} · ${ok} ok`;
+  if (degraded) text += ` · ${degraded} degraded`;
+  if (failed) text += ` · ${failed} down`;
+  label.textContent = text;
 }
 
 /* ---------- navigation ---------- */
@@ -421,17 +480,17 @@ function renderCareerPanel(career) {
   const wrap = el("div", { class: "career-panel personal-section" });
   wrap.append(el("h3", { class: "section-h", text: "Career (suggestions only)" }));
   wrap.append(el("p", { class: "muted small", style: "padding:0 22px 8px;margin:0",
-    text: "Atlas never edits LinkedIn or applies to jobs. You copy tips / apply yourself. Confirm CV facts first for better matches." }));
+    text: "Career Intelligence: one Ingest wires Observer automatically. Observer discovers → Research deepens → Advisor ranks. Never edits LinkedIn or applies." }));
 
   const li = career.linkedin || {};
   const liBox = el("div", { class: "career-block" });
   liBox.append(el("h4", { class: "section-h", text: "LinkedIn improvements" }));
   liBox.append(el("div", { class: "muted small", style: "padding:0 22px 6px",
-    text: li.note || "Suggestions only — Atlas will not write to LinkedIn." }));
+    text: li.note || "When your LinkedIn data export arrives (~24h), put the .zip path below and ingest — Atlas coaches only, never writes." }));
   const tips = li.suggestions || [];
   if (!tips.length) {
     liBox.append(el("div", { class: "muted", style: "padding:4px 22px",
-      text: li.error || "No suggestions yet — share resume + LinkedIn export path." }));
+      text: li.error || "Waiting for LinkedIn export, or refresh tips from profile-only facts." }));
   } else {
     for (const t of tips.slice(0, 12)) {
       const row = el("div", { class: "career-tip" });
@@ -447,23 +506,34 @@ function renderCareerPanel(career) {
     liBox.append(el("pre", { class: "career-draft", text: li.draft_about }));
   }
   const liRow = el("div", { class: "program-context-row", style: "padding:8px 22px" });
-  const liPath = el("input", { placeholder: "LinkedIn export path or leave blank for profile-only tips", style: "flex:1" });
+  const liPath = el("input", {
+    placeholder: "LinkedIn export .zip / folder / Profile.html (when download ready)",
+    style: "flex:1",
+  });
   const liBtn = el("button", {
     onclick: async () => {
       liBtn.disabled = true;
       try {
-        const body = { include_inferred: true };
         const p = (liPath.value || "").trim();
-        if (p.startsWith("http")) body.linkedin_url = p;
-        else if (p) body.linkedin_path = p;
-        const out = await api("/v1/personal/linkedin/suggestions", { method: "POST", body });
+        let out;
+        if (p && !p.startsWith("http")) {
+          out = await api("/v1/personal/linkedin/ingest-export", {
+            method: "POST",
+            body: { path: p, include_inferred: true },
+          });
+          out = out.suggestions || out;
+        } else {
+          const body = { include_inferred: true };
+          if (p.startsWith("http")) body.linkedin_url = p;
+          out = await api("/v1/personal/linkedin/suggestions", { method: "POST", body });
+        }
         if (personalCache) personalCache.career = { ...(personalCache.career || {}), linkedin: out };
         setPersonalTab("career");
-        toast("LinkedIn suggestions refreshed");
+        toast(p ? "LinkedIn export coached" : "LinkedIn suggestions refreshed");
       } catch (err) { toast(err.message); }
       finally { liBtn.disabled = false; }
     },
-  }, "Refresh tips");
+  }, "Ingest export / refresh tips");
   liRow.append(liPath, liBtn);
   liBox.append(liRow);
   wrap.append(liBox);
@@ -475,7 +545,7 @@ function renderCareerPanel(career) {
     text: (career.jobs && career.jobs.note) || "Recommend-only — you apply yourself." }));
   if (!jobs.length) {
     jobsBox.append(el("div", { class: "muted", style: "padding:4px 22px",
-      text: "No ranked jobs yet. Add a job_postings asset or share a jobs JSON export path below." }));
+      text: "No ranked jobs yet. Import the sample feed or share a jobs JSON path below." }));
   } else {
     for (const j of jobs) {
       const row = el("div", { class: "career-job" });
@@ -489,7 +559,7 @@ function renderCareerPanel(career) {
     }
   }
   const feedRow = el("div", { class: "program-context-row", style: "padding:8px 22px" });
-  const feedPath = el("input", { placeholder: "Optional jobs JSON export path", style: "flex:1" });
+  const feedPath = el("input", { placeholder: "Jobs JSON path (optional)", style: "flex:1" });
   const feedBtn = el("button", {
     onclick: async () => {
       feedBtn.disabled = true;
@@ -505,9 +575,81 @@ function renderCareerPanel(career) {
       finally { feedBtn.disabled = false; }
     },
   }, "Rank jobs");
-  feedRow.append(feedPath, feedBtn);
+  const sampleBtn = el("button", {
+    class: "ghost",
+    onclick: async () => {
+      sampleBtn.disabled = true;
+      try {
+        const p = (feedPath.value || "").trim();
+        const body = { wire_career_advisor: true };
+        if (p) body.path = p;
+        const imported = await api("/v1/personal/career/import-feed", { method: "POST", body });
+        const out = await api("/v1/personal/jobs", {
+          method: "POST",
+          body: { limit: 10, include_inferred_skills: true, feed_path: imported.path || undefined },
+        });
+        if (personalCache) personalCache.career = { ...(personalCache.career || {}), jobs: out };
+        setPersonalTab("career");
+        toast(
+          imported.ok
+            ? `Feed imported (${imported.posting_count || "?"} jobs) — ranked ${(out.jobs || []).length}`
+            : "Import finished"
+        );
+      } catch (err) { toast(err.message); }
+      finally { sampleBtn.disabled = false; }
+    },
+  }, "Import sample / path → Advisor");
+  feedRow.append(feedPath, feedBtn, sampleBtn);
   jobsBox.append(feedRow);
   wrap.append(jobsBox);
+
+  const memBox = el("div", { class: "career-block" });
+  memBox.append(el("h4", { class: "section-h", text: "Career Memory + morning brief" }));
+  memBox.append(el("div", { class: "muted small", style: "padding:0 22px 6px",
+    text: "CI.1.4/1.5 — mark companies you care about; brief summarizes watchlist + Advisor ranks." }));
+  const memRow = el("div", { class: "program-context-row", style: "padding:8px 22px" });
+  const memLabel = el("input", { placeholder: "Company or role label", style: "flex:1" });
+  const memStatus = el("select", {});
+  for (const s of ["watching", "interested", "applied", "passed", "hired", "archived"]) {
+    memStatus.append(el("option", { value: s, text: s }));
+  }
+  const memBtn = el("button", {
+    onclick: async () => {
+      memBtn.disabled = true;
+      try {
+        const label = (memLabel.value || "").trim();
+        if (!label) { toast("Enter a label"); return; }
+        await api("/v1/personal/career/watchlist", {
+          method: "POST",
+          body: { label, kind: "company", operator_status: memStatus.value || "watching" },
+        });
+        toast("Watchlist updated");
+      } catch (err) { toast(err.message); }
+      finally { memBtn.disabled = false; }
+    },
+  }, "Save status");
+  const briefBtn = el("button", {
+    class: "ghost",
+    onclick: async () => {
+      briefBtn.disabled = true;
+      try {
+        const brief = await api("/v1/personal/career/brief");
+        const lines = (brief.highlights || []).join(" · ") || "No highlights";
+        toast(lines.slice(0, 180));
+        if (personalCache) personalCache.career = { ...(personalCache.career || {}), brief };
+        setPersonalTab("career");
+      } catch (err) { toast(err.message); }
+      finally { briefBtn.disabled = false; }
+    },
+  }, "Morning brief");
+  memRow.append(memLabel, memStatus, memBtn, briefBtn);
+  memBox.append(memRow);
+  if (career.brief && (career.brief.highlights || []).length) {
+    for (const h of career.brief.highlights.slice(0, 6)) {
+      memBox.append(el("div", { class: "muted small", style: "padding:2px 22px", text: "• " + h }));
+    }
+  }
+  wrap.append(memBox);
   return wrap;
 }
 
@@ -1658,7 +1800,9 @@ async function loadIip() {
           + `<code>${esc(r.evidence_sufficiency || "?")}</code> `
           + `ROE ${r.roe != null ? esc(String(r.roe)) : "—"} · `
           + `ROCE ${r.roce != null ? esc(String(r.roce)) : "—"} · `
-          + `D/E ${r.debt_to_equity != null ? esc(String(r.debt_to_equity)) : "—"} `
+          + `D/E ${r.debt_to_equity != null ? esc(String(r.debt_to_equity)) : "—"} · `
+          + `PE ${r.pe != null ? esc(String(r.pe)) : "—"} · `
+          + `FCF ${r.fcf != null ? esc(String(r.fcf)) : "—"} `
           + `<span class='muted'>${esc(r.source || "")} ${esc(r.as_of || "")}</span></li>`;
       });
       fundHtml += "</ul>";
@@ -1671,13 +1815,35 @@ async function loadIip() {
     fundHtml += "<div class='panel-actions' style='margin-top:8px'>";
     fundHtml += "<button id='iip-fund-import' class='btn' type='button'>Import paste</button> ";
     fundHtml += "<button id='iip-fund-drop' class='link' type='button'>Ingest drop folder</button>";
+    fundHtml += "<button id='iip-fund-template' class='link' type='button'>Learner gap template</button>";
     fundHtml += "<label class='small' style='margin-left:12px'><input type='checkbox' id='iip-fund-ira' /> push to IRA</label>";
     fundHtml += "</div>";
+    const cov = fund.coverage || {};
+    fundHtml += `<p class='small muted'>Coverage · PE ${cov.with_pe || 0}/${cov.symbols || 0}`
+      + ` · FCF ${cov.with_fcf || 0}`
+      + ` · industry PE median ${cov.with_industry_pe_median || 0}`
+      + (cov.note ? ` · ${esc(cov.note)}` : "")
+      + "</p>";
+    const gaps = fund.learner_gaps || {};
+    if (gaps.symbols_with_gaps) {
+      fundHtml += `<p class='small warn'>Watchlist gaps: ${gaps.symbols_with_gaps}/`
+        + `${gaps.symbols_checked || "?"} missing PE/FCF/ROE `
+        + `(PE holes ${gaps.missing_pe || 0} · FCF holes ${gaps.missing_fcf || 0}) `
+        + "— never invent; use Learner gap template.</p>";
+      fundHtml += "<ul class='small'>";
+      (gaps.gaps || []).slice(0, 8).forEach((g) => {
+        fundHtml += `<li><strong>${esc(g.symbol || "")}</strong> missing `
+          + `${esc((g.missing || []).join(", "))}</li>`;
+      });
+      fundHtml += "</ul>";
+    }
     if (fundBox) fundBox.innerHTML = fundHtml;
     const fundImportBtn = $("#iip-fund-import");
     if (fundImportBtn) fundImportBtn.addEventListener("click", () => importIipFundamentals());
     const fundDropBtn = $("#iip-fund-drop");
     if (fundDropBtn) fundDropBtn.addEventListener("click", () => ingestIipFundamentalsDrop());
+    const fundTplBtn = $("#iip-fund-template");
+    if (fundTplBtn) fundTplBtn.addEventListener("click", () => loadLearnerFundTemplate());
 
     const docsBox = $("#iip-documents");
     const docs = live.company_documents || {};
@@ -1929,6 +2095,27 @@ async function ingestIipFundamentalsDrop() {
   }
 }
 
+async function loadLearnerFundTemplate() {
+  const paste = $("#iip-fund-paste");
+  try {
+    const res = await api("/v1/market/fundamentals/learner-template?only_gaps=true");
+    const csv = (res && res.csv) || "";
+    if (paste) {
+      paste.value = csv;
+      paste.focus();
+    }
+    const n = (res && res.row_count) || 0;
+    const gaps = (res && res.gaps && res.gaps.symbols_with_gaps) || 0;
+    toast(
+      n
+        ? `Gap template: ${n} row(s) · ${gaps} watchlist hole(s) — fill PE/FCF then Import paste`
+        : "No watchlist gaps — store already has critical fields (or empty watchlist)",
+    );
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
 async function importIipDocument() {
   const symbol = ($("#iip-doc-symbol") && $("#iip-doc-symbol").value || "").trim();
   const kind = ($("#iip-doc-kind") && $("#iip-doc-kind").value) || "annual";
@@ -2115,29 +2302,189 @@ async function loadLearner(opts = {}) {
   let missions = null;
   let ledger = null;
 
-  const results = await Promise.allSettled([
+  // Ledger first: plan/sizing capital must follow sim book cash, not registry persona.
+  const early = await Promise.allSettled([
     api("/v1/learner/status"),
-    api("/v1/market/daily-plan?portfolio_key=india_equity_learner&capital=10000"),
     api("/v1/market/watchlist?limit=15"),
     api("/v1/market/portfolios"),
     api("/v1/missions?limit=100"),
     api("/v1/market/portfolios/india_equity_learner/ledger"),
   ]);
-  if (results[0].status === "fulfilled") status = results[0].value;
-  if (results[1].status === "fulfilled") plan = results[1].value;
-  if (results[2].status === "fulfilled") watch = results[2].value;
-  if (results[3].status === "fulfilled") portfolios = results[3].value;
-  if (results[4].status === "fulfilled") missions = results[4].value;
-  if (results[5].status === "fulfilled") ledger = results[5].value;
+  if (early[0].status === "fulfilled") status = early[0].value;
+  if (early[1].status === "fulfilled") watch = early[1].value;
+  if (early[2].status === "fulfilled") portfolios = early[2].value;
+  if (early[3].status === "fulfilled") missions = early[3].value;
+  if (early[4].status === "fulfilled") ledger = early[4].value;
 
-  renderLearnerSummary(summary, { status, plan, watch });
+  const ledgerStmt = (ledger && (ledger.statement || ledger.snapshot)) || null;
+  let sizingCash = null;
+  if (ledgerStmt && ledgerStmt.cash != null) {
+    sizingCash = Number(ledgerStmt.cash);
+  } else {
+    const books = (portfolios && (portfolios.portfolios || portfolios.items || portfolios)) || [];
+    const book = (Array.isArray(books) ? books : []).find(
+      (p) => (p.portfolio_key || p.name) === "india_equity_learner",
+    ) || (ledger && ledger.portfolio) || null;
+    const cap = book && book.persona && book.persona.capital;
+    if (cap != null) sizingCash = Number(cap);
+  }
+  if (!(sizingCash > 0)) sizingCash = 10000;
+  try {
+    plan = await api(
+      `/v1/market/daily-plan?portfolio_key=india_equity_learner&capital=${encodeURIComponent(sizingCash)}`,
+    );
+  } catch (_) { /* plan optional */ }
+
+  renderLearnerSummary(summary, { status, plan, watch, ledger });
   renderLearnerPlan(planBox, plan);
   renderLearnerWatchlist(wlBox, watch);
   renderLearnerChecklist(checkBox, status);
   renderLearnerBook(bookBox, { status, portfolios, missions, plan, ledger });
+  loadLearnerDiDashboards();
   loadInvestorEmailStatus();
   loadLearnerResearchList();
   startLearnerPoll();
+}
+
+async function loadLearnerDiDashboards() {
+  const box = $("#learner-di-dashboards");
+  if (!box) return;
+  box.textContent = "Loading DI dashboards…";
+  try {
+    const doc = await api(
+      "/v1/market/di-dashboards?portfolio_key=india_equity_learner",
+    );
+    renderLearnerDiDashboards(box, doc);
+  } catch (err) {
+    box.textContent =
+      "DI dashboards unavailable — " +
+      (err && err.message ? err.message : String(err));
+  }
+}
+
+function renderLearnerDiDashboards(box, doc) {
+  box.innerHTML = "";
+  if (!doc || !doc.dashboards) {
+    box.append(el("div", { class: "muted small", text: "No dashboard payload yet." }));
+    return;
+  }
+  const d3 = (doc.dashboards.D3 && doc.dashboards.D3.metrics) || {};
+  const d6 = (doc.dashboards.D6 && doc.dashboards.D6.metrics) || {};
+  const d5 = (doc.dashboards.D5 && doc.dashboards.D5.metrics) || {};
+  box.append(el("div", {
+    class: "muted small",
+    text: `Gates ${JSON.stringify(doc.sample_gates || {}).slice(0, 80)}… · ${doc.ist_date || ""}`,
+  }));
+  box.append(el("div", {
+    class: "learner-row",
+  },
+    el("div", { class: "rank", text: "D3" }),
+    el("div", {},
+      el("div", { class: "sym", text: "Book health" }),
+      el("div", {
+        class: "why",
+        text: `equity ${d3.equity != null ? d3.equity : "—"}`
+          + ` · cash ${d3.cash != null ? d3.cash : "—"}`
+          + ` · day_pnl ${d3.day_pnl != null ? d3.day_pnl : "—"}`
+          + ` · open ${d3.open_positions != null ? d3.open_positions : "—"}`,
+      }),
+    ),
+  ));
+  box.append(el("div", {
+    class: "learner-row",
+  },
+    el("div", { class: "rank", text: "D6" }),
+    el("div", {},
+      el("div", { class: "sym", text: "Intelligence (Atlas)" }),
+      el("div", {
+        class: "why",
+        text: `completeness ${d6.avg_packet_completeness != null ? d6.avg_packet_completeness : "—"}`
+          + ` · obs_cite ${d6.observation_citation_rate != null ? d6.observation_citation_rate : "—"}`
+          + ` · revisits ${d6.pending_revisits ?? "—"}/${d6.done_revisits ?? "—"}`
+          + ` · priors_blocked ${d6.priors_blocked_exits ?? 0}`
+          + (d6.intelligence_score != null
+            ? ` · intel ${d6.intelligence_score}`
+            : ""),
+      }),
+    ),
+  ));
+  if (d6.intelligence_score != null || d6.incomplete_packets_pct != null) {
+    box.append(el("div", {
+      class: "muted small",
+      text: `D6 Stage-2 · incomplete ${d6.incomplete_packets_pct ?? "—"}%`
+        + ` · process ${d6.process_score ?? "—"}`
+        + ` · overconf ${d6.overconfidence_rate != null ? d6.overconfidence_rate : "—"}`
+        + ` · proposals ${d6.proposal_count ?? 0}`,
+    }));
+  }
+  const lanes = doc.strategy_lane_summary || {};
+  const tags = Object.keys(lanes);
+  if (!tags.length) {
+    box.append(el("div", {
+      class: "muted small",
+      text: "D2 lanes: no closed exits yet — edge metrics hidden (<30).",
+    }));
+  } else {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-top:6px",
+      text: "D2 strategy lanes (never mixed):",
+    }));
+    for (const tag of tags.slice(0, 8)) {
+      const row = lanes[tag] || {};
+      const wr = row.win_rate != null ? `${Math.round(Number(row.win_rate) * 100)}%` : "—";
+      box.append(el("div", {
+        class: "learner-row",
+      },
+        el("div", { class: "rank", text: "↳" }),
+        el("div", {},
+          el("div", { class: "sym", text: tag }),
+          el("div", {
+            class: "why",
+            text: `n=${row.n_closed ?? 0} · ${row.tier || "—"} · edge ${row.edge_visible ? "visible" : "hidden"} · win ${wr}`,
+          }),
+        ),
+      ));
+    }
+  }
+  if (d5.watchlist_gaps) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-top:6px",
+      text: `D5 research holes: ${d5.watchlist_gaps}/${d5.watchlist_checked || "?"} missing PE/FCF`,
+    }));
+  }
+  // DI.5 process proxies (loaded alongside)
+  loadLearnerProcessProxies(box);
+}
+
+async function loadLearnerProcessProxies(afterBox) {
+  try {
+    const doc = await api(
+      "/v1/market/process-proxies?portfolio_key=india_equity_learner",
+    );
+    const host = afterBox || $("#learner-di-dashboards");
+    if (!host || !doc) return;
+    const counts = doc.counts || {};
+    const bits = Object.keys(counts)
+      .filter((k) => counts[k])
+      .map((k) => `${k}=${counts[k]}`);
+    host.append(el("div", {
+      class: "learner-row",
+      style: "margin-top:8px",
+    },
+      el("div", { class: "rank", text: "P" }),
+      el("div", {},
+        el("div", { class: "sym", text: "Process proxies (DI.5)" }),
+        el("div", {
+          class: "why",
+          text: `score ${doc.process_score != null ? doc.process_score : "—"}/10`
+            + ` · journal ${doc.journal_completion_pct != null ? doc.journal_completion_pct + "%" : "—"}`
+            + (bits.length ? ` · ${bits.join(" · ")}` : " · clean / no flags"),
+        }),
+      ),
+    ));
+  } catch (_) { /* optional */ }
 }
 
 async function loadInvestorEmailStatus() {
@@ -2256,13 +2603,21 @@ async function sendInvestorEmail(kind) {
   }
 }
 
-function renderLearnerSummary(box, { status, plan, watch }) {
+function renderLearnerSummary(box, { status, plan, watch, ledger }) {
   box.innerHTML = "";
   const phase = (plan && plan.phase) || (watch && watch.extra && watch.extra.phase) || "—";
   const conf = (plan && plan.confidence) || "—";
   const nRanked = (watch && watch.count) || 0;
   const nCand = (plan && plan.candidates && plan.candidates.length) || 0;
-  const capital = (plan && plan.capital) != null ? plan.capital : 10000;
+  // Truth is the sim ledger (cash/equity). plan.capital used to show registry persona
+  // which can drift after deposits/overrides and looked like "book capital" wrongly.
+  const stmt = (ledger && (ledger.statement || ledger.snapshot)) || null;
+  const simCash = stmt && stmt.cash != null ? Number(stmt.cash) : null;
+  const simEquity = stmt && stmt.equity != null ? Number(stmt.equity) : null;
+  const regCap = (ledger && ledger.portfolio && ledger.portfolio.persona
+    && ledger.portfolio.persona.capital != null)
+    ? Number(ledger.portfolio.persona.capital)
+    : ((plan && plan.capital) != null ? Number(plan.capital) : null);
   const learning = String(phase).toLowerCase() === "learning"
     || String(conf).toLowerCase().includes("very_low");
 
@@ -2272,13 +2627,34 @@ function renderLearnerSummary(box, { status, plan, watch }) {
     { lbl: "Today's candidates", val: String(nCand), cls: nCand ? "ok" : "" },
     { lbl: "Phase", val: String(phase), cls: learning ? "warn" : "ok" },
     { lbl: "Confidence", val: String(conf), cls: learning ? "warn" : "" },
-    { lbl: "Book capital", val: `₹${Number(capital).toLocaleString("en-IN")}` },
+    {
+      lbl: "Sim cash",
+      val: simCash != null ? `₹${simCash.toLocaleString("en-IN")}` : "—",
+      cls: "ok",
+    },
   ];
+  if (simEquity != null && (simCash == null || Math.abs(simEquity - simCash) > 0.5)) {
+    chips.push({
+      lbl: "Sim equity",
+      val: `₹${simEquity.toLocaleString("en-IN")}`,
+    });
+  }
   for (const c of chips) {
     box.append(el("div", { class: "learner-chip" + (c.cls ? " " + c.cls : "") },
       el("span", { class: "lbl", text: c.lbl }),
       el("span", { class: "val", text: c.val }),
     ));
+  }
+  if (
+    simCash != null && regCap != null
+    && Math.abs(simCash - regCap) > 1
+  ) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "flex:1 1 100%;padding:4px 2px 0",
+      text: `Registry capital ₹${regCap.toLocaleString("en-IN")} is a label only — `
+        + "trades use sim book cash above (use Add cash / Withdraw to change it).",
+    }));
   }
   if (plan && plan.summary) {
     box.append(el("div", {
@@ -2414,7 +2790,10 @@ async function loadLearnerResearchList(opts) {
   const status = $("#learner-research-status");
   if (!box) return;
   try {
-    const data = await api("/v1/market/research");
+    const [data, fundamentals] = await Promise.all([
+      api("/v1/market/research"),
+      api("/v1/market/fundamentals").catch(() => null),
+    ]);
     const items = (data && data.items) || [];
     if (status && !quiet) {
       const detail = $("#learner-research-detail");
@@ -2432,6 +2811,41 @@ async function loadLearnerResearchList(opts) {
       }));
       return;
     }
+    const digest = (data && data.digest) || {};
+    const memories = items.reduce((n, aw) => n + Number(aw.memories_count || 0), 0);
+    const outcomes = items.reduce((n, aw) => n + Number(aw.outcomes_count || 0), 0);
+    const lessons = (digest.lessons || []).filter(Boolean);
+    const fundamentalRows = (fundamentals && fundamentals.rows) || [];
+    const importedFields = [...new Set(
+      fundamentalRows.flatMap((row) => row.fields_present || []),
+    )].sort();
+    box.append(el("div", {
+      class: "learner-research-block",
+    },
+    el("div", { class: "learner-research-label", text: "What Atlas has learned" }),
+    el("div", {
+      class: "why",
+      text: `${items.length} dossiers · ${memories} research memories · ${outcomes} outcomes`
+        + ` · ${lessons.length} recent lesson(s)`,
+    }),
+    el("div", {
+      class: "why",
+      style: "margin-top:4px",
+      text: `Imported fundamentals: ${(fundamentals && fundamentals.count) || 0} symbol(s)`
+        + (importedFields.length
+          ? ` · fields ${importedFields.join(", ")}`
+          : " · PE/industry averages and other fundamentals are not populated yet"),
+    }),
+    lessons.length
+      ? el("div", {
+        class: "why",
+        style: "white-space:pre-wrap;margin-top:5px",
+        text: lessons.slice(-8).map((x) => `• ${x}`).join("\n"),
+      })
+      : el("div", {
+        class: "why",
+        text: "No proven exit lesson yet. A buy is only an observation until exit / falsifier review.",
+      })));
     for (const aw of items.slice(0, 12)) {
       const mvr = aw.mvr_satisfied ? "MVR✓" : "MVR…";
       const thesis = (aw.thesis && aw.thesis.summary) || (aw.brief && aw.brief.thesis) || "";
@@ -3239,14 +3653,18 @@ function renderLearnerChecklist(box, status) {
 function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) {
   box.innerHTML = "";
   const st = (ledger && ledger.statement) || (ledger && ledger.snapshot) || null;
+  const pkey = (plan && plan.portfolio_key) || "india_equity_learner";
   if (st) {
     box.append(el("div", {
       class: "muted small",
       style: "margin-bottom:6px",
-      text: "Paper ledger · india_equity_learner",
+      text: `Paper ledger · ${pkey}`,
     }));
     const cash = st.cash != null ? Number(st.cash) : null;
     const equity = st.equity != null ? Number(st.equity) : null;
+    const holdings = st.holdings_value != null ? Number(st.holdings_value) : null;
+    const totalPnl = st.total_pnl != null ? Number(st.total_pnl) : null;
+    const dayPnl = st.day_pnl != null ? Number(st.day_pnl) : null;
     const trades = st.trade_count != null ? st.trade_count : (st.recent_trades || []).length;
     const pos = (st.positions || []).length;
     box.append(el("div", { class: "learner-row" },
@@ -3255,14 +3673,120 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
         el("div", { class: "sym", text: `Cash ${cash != null ? cash.toLocaleString("en-IN") : "—"}` }),
         el("div", {
           class: "why",
-          text: `Equity ${equity != null ? equity.toLocaleString("en-IN") : "—"} · ${pos} position(s) · ${trades} trade(s)`,
+          text: `Total ₹${equity != null ? equity.toLocaleString("en-IN") : "—"}`
+            + ` · holdings ₹${holdings != null ? holdings.toLocaleString("en-IN") : "—"}`
+            + ` · ${pos} position(s) · ${trades} trade(s)`,
         }),
       ),
     ));
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin:4px 0 8px",
+      text: `Today ${dayPnl != null ? (dayPnl >= 0 ? "+" : "") + "₹" + dayPnl.toLocaleString("en-IN") : "P&L unavailable"}`
+        + ` · total after cash flows ${totalPnl != null ? (totalPnl >= 0 ? "+" : "") + "₹" + totalPnl.toLocaleString("en-IN") : "unavailable"}`
+        + ` · ${st.valuation_basis || "average-cost marks"}`,
+    }));
+    const kpis = (st && st.kpis) || (ledger && ledger.kpis) || null;
+    if (kpis) {
+      const rate = kpis.plan_fill_rate != null
+        ? `${Math.round(Number(kpis.plan_fill_rate) * 100)}%`
+        : "—";
+      box.append(el("div", {
+        class: "muted small",
+        style: "margin:0 0 8px",
+        text: `KPIs · plan→fill ${kpis.candidates_filled ?? 0}/${kpis.candidates_planned ?? 0} (${rate})`
+          + ` · buys ${kpis.buys_today ?? 0} · sells ${kpis.sells_today ?? 0}`
+          + ` · gate blocks ${kpis.portfolio_gate_blocks ?? 0} · trims ${kpis.size_trims ?? 0}`
+          + ` · phase ${kpis.phase || "—"}/${kpis.confidence || "—"}`,
+      }));
+    }
+    for (const p of (st.positions || []).slice(0, 10)) {
+      const pnl = Number(p.unrealized_pnl || 0);
+      box.append(el("div", {
+        class: "learner-row",
+      },
+      el("div", { class: "rank", text: "↳" }),
+      el("div", {},
+        el("div", { class: "sym", text: `${p.symbol} × ${p.quantity}` }),
+        el("div", {
+          class: "why",
+          text: `avg ₹${Number(p.avg_price || 0).toLocaleString("en-IN")}`
+            + ` · mark ₹${Number(p.mark || 0).toLocaleString("en-IN")}`,
+        }),
+      ),
+      el("div", {
+        class: "notional",
+        text: `${pnl >= 0 ? "+" : ""}₹${pnl.toLocaleString("en-IN")}`,
+      })));
+    }
+
+    const cashRow = el("div", { class: "learner-deposit-row" });
+    const amtInput = el("input", {
+      type: "number",
+      min: "1",
+      step: "1000",
+      value: "50000",
+      title: "Amount (INR)",
+      "aria-label": "Cash amount",
+    });
+    const depBtn = el("button", {
+      type: "button",
+      class: "btn",
+      text: "Add cash",
+    });
+    const wdrBtn = el("button", {
+      type: "button",
+      class: "btn btn-secondary",
+      text: "Withdraw",
+    });
+    const note = el("span", {
+      class: "muted small",
+      text: "Sim only — changes ledger cash (not real money)",
+    });
+    async function moneyMove(kind) {
+      const amount = Number(amtInput.value || 0);
+      if (!amount || amount <= 0) {
+        toast("Enter a positive amount");
+        return;
+      }
+      depBtn.disabled = true;
+      wdrBtn.disabled = true;
+      try {
+        const body = {
+          amount,
+          note: kind === "withdraw"
+            ? "operator withdrawal from Market page"
+            : "operator deposit from Market page",
+        };
+        if (st.mission_id) body.mission_id = st.mission_id;
+        // Flat sim withdraw: principal only (no TDS surprise on the practice book).
+        if (kind === "withdraw") body.tds_pct = 0;
+        await api(
+          `/v1/market/portfolios/${encodeURIComponent(pkey)}/${kind}`,
+          { method: "POST", body },
+        );
+        toast(
+          kind === "withdraw"
+            ? `Withdrew ₹${amount.toLocaleString("en-IN")}`
+            : `Deposited ₹${amount.toLocaleString("en-IN")}`,
+        );
+        await loadLearner({ quiet: true });
+      } catch (e) {
+        toast(e.message || String(e));
+      } finally {
+        depBtn.disabled = false;
+        wdrBtn.disabled = false;
+      }
+    }
+    depBtn.addEventListener("click", () => { moneyMove("deposit"); });
+    wdrBtn.addEventListener("click", () => { moneyMove("withdraw"); });
+    cashRow.append(amtInput, depBtn, wdrBtn, note);
+    box.append(cashRow);
+
+    const noteSn = (ledger && ledger.session_note) || {};
+    const reasons = noteSn.no_fill_reasons || [];
+    const counts = noteSn.reason_counts || {};
     if (!trades && !pos) {
-      const note = (ledger && ledger.session_note) || {};
-      const reasons = note.no_fill_reasons || [];
-      const counts = note.reason_counts || {};
       const strategyHolds = Number(counts.strategy_hold || 0);
       const researchHolds = Number(counts.research_hold || 0);
       const markOnly = Number(counts.mark_only || 0);
@@ -3279,29 +3803,62 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
         style: "margin:6px 0 10px",
         text: msg + " Check mission journal “trade simulation”.",
       }));
-      if (reasons.length) {
-        box.append(el("div", {
-          class: "muted small",
-          style: "margin:0 0 10px",
-          text: `Today’s reasons: ${reasons.slice(0, 4).join(" · ")}`,
-        }));
-      }
+    }
+    if (reasons.length) {
+      box.append(el("div", {
+        class: "muted small",
+        style: "margin:0 0 10px",
+        text: `${trades ? "Why there were no more fills" : "Today’s reasons"}: ${reasons.slice(0, 5).join(" · ")}`,
+      }));
     }
     const recent = st.recent_trades || [];
     for (const t of recent.slice(0, 5)) {
-      box.append(el("div", {
+      const tradeRow = el("div", {
         class: "small",
         style: "padding:2px 0",
         text: `${t.side || t.action || "?"} ${t.symbol || ""} × ${t.qty || t.quantity || "?"} @ ${t.price || "?"}`,
-      }));
+      });
+      const decision = t.decision || {};
+      const rationale = decision.rationale || decision.reason
+        || (decision.explanation && decision.explanation.summary);
+      if (rationale) {
+        tradeRow.append(el("div", {
+          class: "muted small",
+          style: "padding:2px 0 4px 12px",
+          text: `Why: ${typeof rationale === "string" ? rationale : JSON.stringify(rationale)}`,
+        }));
+      }
+      if (t.decision_id) {
+        tradeRow.append(el("a", {
+          href: "#",
+          class: "link",
+          style: "margin-left:12px",
+          onclick: async (e) => {
+            e.preventDefault();
+            try {
+              const full = await api(`/v1/decision/decisions/${encodeURIComponent(t.decision_id)}`);
+              tradeRow.append(el("pre", {
+                class: "small",
+                style: "white-space:pre-wrap;margin:6px 0 6px 12px",
+                text: JSON.stringify(full, null, 2),
+              }));
+              e.currentTarget.remove();
+            } catch (err) {
+              toast(err.message || String(err));
+            }
+          },
+        }, `Explain decision ${String(t.decision_id).slice(0, 8)}…`));
+      }
+      box.append(tradeRow);
     }
   }
 
   const books = (portfolios && (portfolios.portfolios || portfolios.items || portfolios)) || [];
   const list = Array.isArray(books) ? books : [];
-  if (list.length) {
+  const currentBooks = list.filter((p) => (p.portfolio_key || p.name) !== "default");
+  if (currentBooks.length) {
     box.append(el("div", { class: "muted small", style: "margin:10px 0 6px", text: "Virtual portfolios" }));
-    for (const p of list.slice(0, 8)) {
+    for (const p of currentBooks.slice(0, 8)) {
       const key = p.portfolio_key || p.name || p.id || "?";
       const cap = p.persona && p.persona.capital != null ? p.persona.capital : p.capital;
       const ac = p.asset_class || (p.persona && (p.persona.allowed_assets || [])[0]) || "";
@@ -3316,6 +3873,13 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
           text: cap != null ? Number(cap).toLocaleString("en-IN") : "",
         }),
       ));
+    }
+    if (list.length !== currentBooks.length) {
+      box.append(el("div", {
+        class: "muted small",
+        style: "margin-top:4px",
+        text: "Legacy “default” ₹1,00,000 template book hidden — it is not the India learner portfolio.",
+      }));
     }
   } else if (!st) {
     box.append(el("div", {
@@ -3356,7 +3920,6 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
     }
   }
 
-  const pkey = (plan && plan.portfolio_key) || "india_equity_learner";
   box.append(el("div", {
     class: "muted small",
     style: "margin-top:14px",
@@ -4070,9 +4633,9 @@ function renderSystem(status, health) {
     ["version", status.version],
     ["uptime", uptStr],
     ["services", status.services_total],
-    ["ok", status.severity_counts.ok],
-    ["degraded", status.severity_counts.degraded],
-    ["failed", status.severity_counts.failed],
+    ["ok", (status.severity_counts || status.subsystem_counts || {}).ok],
+    ["degraded", (status.severity_counts || status.subsystem_counts || {}).degraded],
+    ["failed", (status.severity_counts || status.subsystem_counts || {}).failed],
   ];
   for (const [k, v] of items) cards.append(el("div", { class: "card" }, el("div", { class: "k", text: k }), el("div", { class: "v", text: v })));
 
@@ -4831,7 +5394,11 @@ function stopOpsStream() {
 }
 
 /* ---------- wiring ---------- */
+let _uiInited = false;
+
 function init() {
+  if (_uiInited) return;
+  _uiInited = true;
   try {
     _wireUi();
   } catch (err) {
@@ -4847,12 +5414,19 @@ function init() {
 }
 
 function _wireUi() {
-  $("#login-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const key = $("#login-key").value.trim();
-    if (key) tryConnect(key);
-  });
-  $("#logout").addEventListener("click", () => signOut());
+  const loginForm = $("#login-form");
+  // Prefer the HTML bootstrap binding; only attach here if bootstrap was skipped.
+  if (loginForm && loginForm.dataset.bound !== "1") {
+    loginForm.dataset.bound = "1";
+    loginForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const key = ($("#login-key") && $("#login-key").value.trim()) || "";
+      if (key) tryConnect(key);
+      else showLoginError("Enter your API key.");
+    });
+  }
+  const logout = $("#logout");
+  if (logout) logout.addEventListener("click", () => signOut());
 
   document.querySelectorAll(".nav-btn").forEach((b) =>
     b.addEventListener("click", () => switchView(b.dataset.view)));
@@ -4895,6 +5469,8 @@ function _wireUi() {
   if (programsRefresh) programsRefresh.addEventListener("click", loadPrograms);
   const learnerRefresh = $("#learner-refresh");
   if (learnerRefresh) learnerRefresh.addEventListener("click", () => loadLearner());
+  const learnerDiRefresh = $("#learner-di-refresh");
+  if (learnerDiRefresh) learnerDiRefresh.addEventListener("click", () => loadLearnerDiDashboards());
   const iipRefresh = $("#iip-refresh");
   if (iipRefresh) iipRefresh.addEventListener("click", () => loadIip());
   const iipSave = $("#iip-save-universes");
@@ -5047,3 +5623,12 @@ function _wireUi() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+// If this script loads after DOMContentLoaded already fired, init still runs.
+if (document.readyState !== "loading") {
+  try { init(); } catch (_) { /* init already ran or failed once */ }
+}
+
+// Expose for the tiny HTML bootstrap + browser console debugging.
+window.tryConnect = tryConnect;
+window.signOut = signOut;
+window.showLoginError = showLoginError;

@@ -84,7 +84,12 @@ class InvestmentResearchService:
         self._store = ResearchStore(data_dir, logger=logger)
         self._companies = company_data
         self._market = market_reader
+        self._observations = None
         self._logger = logger or logging.getLogger("atlas.investment.research")
+
+    def bind_observations(self, store: Any) -> None:
+        """DI.Obs — attach observation store for awareness + refresh consumers."""
+        self._observations = store
 
     # --- public API -----------------------------------------------------
 
@@ -271,7 +276,32 @@ class InvestmentResearchService:
                 str(doc.get("symbol") or symbol),
                 program_id=program_id,
             ),
+            "recent_observations": [],
         }
+        # DI.Obs — cite recent observations for research consumers / packets
+        if self._observations is not None:
+            try:
+                rows = self._observations.list_symbol(
+                    symbol=str(doc.get("symbol") or symbol),
+                    limit=8,
+                    since_hours=72.0,
+                )
+                out["recent_observations"] = [
+                    {
+                        "id": r.get("id"),
+                        "kind": r.get("kind"),
+                        "source": r.get("source"),
+                        "confidence": r.get("confidence"),
+                        "created_at": r.get("created_at"),
+                        "summary": (r.get("payload") or {}).get("text")
+                        or (r.get("payload") or {}).get("title")
+                        or (r.get("payload") or {}).get("reason")
+                        or r.get("kind"),
+                    }
+                    for r in rows
+                ]
+            except Exception:  # noqa: BLE001
+                out["recent_observations"] = []
         # SI.5 — prefer stamped block; else build on the fly for older dossiers
         dist = doc.get("distinctiveness")
         if not isinstance(dist, dict) or dist.get("version") != distinctiveness_engine.VERSION:
@@ -722,6 +752,7 @@ class InvestmentResearchService:
         result: str,
         note: str = "",
         trade: dict[str, Any] | None = None,
+        di_grades: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Daily/trade learning hook — ThesisOutcome stub."""
         doc = self.get_or_create(symbol, program_id=program_id)
@@ -732,6 +763,7 @@ class InvestmentResearchService:
             "note": note,
             "trade": trade or {},
             "thesis_id": (doc.get("thesis") or {}).get("id"),
+            "di_grades": di_grades or None,
         }
         outs = list(doc.get("outcomes") or [])
         outs.append(outcome)
@@ -781,6 +813,7 @@ class InvestmentResearchService:
                     pnl=pnl,
                     note=note,
                     trade=trade,
+                    di_grades=di_grades,
                 )
             elif res_l in {"fill", "observed"}:
                 existing = tt.load_tracker(data_dir, symbol, program_id)

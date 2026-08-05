@@ -119,7 +119,14 @@ def classify_action(action: str) -> str | None:
         return "mark_only"
     if "gap (" in a or ": gap" in a:
         return "capability_gap"
+    if "next_alt" in a:
+        return "next_alternatives"
+    if "cannot size" in a or "size_block" in a or "min lot" in a:
+        return "size_block"
     if ": hold @" in a:
+        # Paper trading journals engine holds as "SYM: hold @ price (why…)".
+        if "cannot size" in a or "min lot" in a:
+            return "size_block"
         return "strategy_hold"
     if "feed_exhausted" in a:
         return "feed_exhausted"
@@ -137,6 +144,8 @@ REASON_LABELS = {
     "mark_only": "Same bar already decided — mark-to-market only (no new decision)",
     "capability_gap": "Capability gap (missing feed / pack capability)",
     "strategy_hold": "Strategy decided hold (no buy/sell signal)",
+    "size_block": "Buy signal existed but portfolio cash/budget cannot size 1 whole share",
+    "next_alternatives": "Primary names idle — tried next ranked alternatives",
     "feed_exhausted": "Replay feed exhausted",
     "other_idle": "Other idle / skip reasons",
 }

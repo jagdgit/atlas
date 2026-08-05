@@ -1,7 +1,6 @@
-"""Career mission building blocks (Phase D · §D.8) — recommend-only job matching.
+"""Career mission building blocks — Observer / Research / Advisor (recommend-only).
 
-The Job Watcher's DecisionRule lives here (parallel to ``atlas.research`` / ``atlas.trading``).
-Nothing here applies to a job — Atlas ranks and notifies, the operator decides (P14).
+Nothing here applies to LinkedIn or job boards by default (P14 / L-P14).
 """
 
 from atlas.career.decision_rule import JobDecisionRule, MISSION_TYPE_JOB_HUNTING

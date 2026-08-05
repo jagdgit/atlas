@@ -37,7 +37,7 @@ JSON:
 
 Optional: `"push_to_ira": true`, `"evidence_confidence": "estimated"`.
 
-Status: `GET /v1/market/fundamentals`
+Status: `GET /v1/market/fundamentals` (includes `coverage` PE/FCF/industry-median counts and optional `learner_gaps` for the current watchlist — **missing fields stay missing**; never invent industry averages). Gap-fill CSV: `GET /v1/market/fundamentals/learner-template`.
 
 ### 3. Drop folder
 
@@ -60,3 +60,15 @@ Ratios may be percent (28) or fraction (0.28); Atlas normalizes to percent in th
 - Import ≠ verified filings — treat as convenience evidence (`estimated` when pushed to IRA)
 - Coverage of imported fields ≠ investment confidence
 - Prefer annual/quarterly PDFs (IIP.4) for stronger dossier sections
+- **Never invent** PE, FCF, or industry averages. `fair_pe` on valuation is a quality heuristic — not industry average.
+- Optional columns `industry_pe_median` / `industry_pb_median` / `industry_roe_median` are operator evidence only. Atlas may say “PE below industry median” **only** when those fields were imported.
+
+## DI.4 — Learner watchlist gap fill
+
+1. `GET /v1/market/fundamentals/learner-template?only_gaps=true` — CSV of watchlist names still missing PE/FCF/ROE/D/E (known fields prefilled; holes left empty)
+2. Or click **Learner gap template** on Invest intel (loads CSV into the paste box)
+3. Fill PE/FCF (and optional industry medians) from a ToS-safe Screener export
+4. `POST /v1/market/fundamentals/import` with the filled CSV — response includes residual `learner_gaps`
+5. Evening mail lists remaining holes + template hint
+
+Sample fixture: `tests/fixtures/investment/learner_fundamentals_sample.csv`

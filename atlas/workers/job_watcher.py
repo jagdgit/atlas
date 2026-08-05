@@ -1,13 +1,15 @@
-"""JobWatcher — continuous job-search mission worker (Phase D · §D.8).
+"""JobWatcher — Career Advisor worker (Phase D · §D.8 / CI.1.3).
 
 Each tick drives the D-Core decision path over configured posting sources:
 
     Asset → JobPostingsReader → postings → DecisionEngine.decide
     (JobDecisionRule: match Personal + Policy + constraints) → journal (P9) → notify
 
-Recommend-only (P14): Atlas ranks and notifies; it never applies to a job. The worker owns no
-knowledge (P11). Bounded + checkpointed: state carries a sources fingerprint and seen posting
-ids so an unchanged feed is a cheap no-op and the loop resumes after a reboot. Never completes.
+**Advisor-only (L-SPLIT / CI.1.3):** Discovery belongs to ``career_observer``. This worker
+ranks and notifies; it never scrapes and never applies (P14). Optional Career Memory
+watchlist companies merge into the company filter when ``use_career_watchlist`` is true.
+Bounded + checkpointed: state carries a sources fingerprint and seen posting ids.
+Never completes.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ ASSET_KIND_JOB_POSTINGS = "job_postings"
 
 class JobWatcher(PersistentWorker):
     type = "job_watcher"
-    VERSION = 1
+    VERSION = 2
     journal_ticks = True
 
     def __init__(
@@ -78,58 +80,96 @@ class JobWatcher(PersistentWorker):
         personal_skills = self._personal_skill_names(
             include_inferred=bool(cfg.get("include_inferred_skills", True))
         )
+        max_recs = max(1, int(cfg.get("max_recommendations") or 5))
+        companies = self._merge_companies(cfg)
 
+        decision_ctx = {
+            "postings": postings,
+            "locations": list(cfg.get("locations") or []),
+            "companies": companies,
+            "skills": list(cfg.get("skills") or []),
+            "min_salary": cfg.get("min_salary", 0),
+            "min_skill_overlap": int(cfg.get("min_skill_overlap") or 0),
+            "personal_skills": sorted(personal_skills),
+            "include_inferred_skills": bool(cfg.get("include_inferred_skills", True)),
+            "use_opportunity_score": bool(cfg.get("use_opportunity_score", True)),
+            "watchlist_companies": companies,
+            "research_by_company": dict(cfg.get("research_by_company") or {}),
+        }
         decision = self._engine.decide(
             DecisionRequest(
                 mission_id=ctx.mission_id,
                 mission_type=MISSION_TYPE_JOB_HUNTING,
                 config_version=ctx.config_version,
-                context={
-                    "postings": postings,
-                    "locations": list(cfg.get("locations") or []),
-                    "companies": list(cfg.get("companies") or []),
-                    "skills": list(cfg.get("skills") or []),
-                    "min_salary": cfg.get("min_salary", 0),
-                    "min_skill_overlap": int(cfg.get("min_skill_overlap") or 0),
-                    "personal_skills": sorted(personal_skills),
-                    "include_inferred_skills": bool(cfg.get("include_inferred_skills", True)),
-                },
+                context=decision_ctx,
             )
         )
         state["last_decision_id"] = str(decision.id) if decision.id else None
         state["ticks"] = int(state.get("ticks", 0)) + 1
         state["sources_fingerprint"] = fingerprint
         state["last_posting_count"] = len(postings)
+        state["last_company_filter"] = companies
 
-        # Notify only on *new* top recommendations (seen-id checkpoint → reboot-safe).
-        seen = list(state.get("seen_posting_ids") or [])
-        seen_set = set(seen)
-        new_recs: list[dict[str, Any]] = []
+        # CI.0.3 — notify up to max_recommendations *new* matches (seen-id checkpoint).
+        # Only fan out when the journaled decision is a real recommend_match (respect policy hold).
+        ranked_postings: list[dict[str, Any]] = []
         if decision.action_kind == ACTION_RECOMMEND:
             payload = (decision.action or {}).get("payload") or {}
             if payload.get("kind") == "recommend_match":
-                posting = payload.get("posting") or {}
-                pid = str(posting.get("id") or "")
-                if pid and pid not in seen_set:
-                    new_recs.append(posting)
-                    seen.append(pid)
-                    self._emit("JobMatchRecommended", {
-                        "mission_id": str(ctx.mission_id),
-                        "decision_id": str(decision.id) if decision.id else None,
-                        "posting": posting,
-                        "why": decision.why,
-                    })
+                ranked_postings = self._ranked_match_postings(
+                    decision, decision_ctx, limit=max_recs
+                )
+        seen = list(state.get("seen_posting_ids") or [])
+        seen_set = set(seen)
+        new_recs: list[dict[str, Any]] = []
+        for posting in ranked_postings:
+            pid = str(posting.get("id") or "")
+            if not pid or pid in seen_set:
+                continue
+            new_recs.append(posting)
+            seen.append(pid)
+            seen_set.add(pid)
+            self._emit("JobMatchRecommended", {
+                "mission_id": str(ctx.mission_id),
+                "decision_id": str(decision.id) if decision.id else None,
+                "posting": posting,
+                "why": decision.why,
+            })
+            if len(new_recs) >= max_recs:
+                break
 
         state["seen_posting_ids"] = seen[-500:]
         state["last_recommended"] = new_recs[0] if new_recs else state.get("last_recommended")
+        state["last_recommended_count"] = len(new_recs)
 
+        titles = ", ".join((r.get("title") or "")[:40] for r in new_recs[:3])
         note = (
             f"{config_note}job watch: {len(postings)} posting(s)"
             + (f", {load_errors} source error(s)" if load_errors else "")
-            + (f"; recommended {new_recs[0].get('title', '')[:50]}" if new_recs else "; hold")
+            + (
+                f"; recommended {len(new_recs)}/{max_recs}"
+                + (f" ({titles})" if titles else "")
+                if new_recs
+                else "; hold"
+            )
             + (f"; feedback={feedback_n}" if feedback_n else "")
         ).strip()
         return TickResult(state=state, note=note)
+
+    def _merge_companies(self, cfg: dict[str, Any]) -> list[str]:
+        """CI.1.3 — config companies ∪ Career Memory watchlist (when enabled)."""
+        companies = [str(c).strip() for c in (cfg.get("companies") or []) if str(c).strip()]
+        if not bool(cfg.get("use_career_watchlist", True)):
+            return companies
+        try:
+            from atlas.career import watchlist as wl
+
+            for name in wl.companies_for_filter():
+                if name not in companies:
+                    companies.append(name)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("career watchlist merge skipped: %s", exc)
+        return companies
 
     def _process_outcome_feedback(
         self,
@@ -219,7 +259,62 @@ class JobWatcher(PersistentWorker):
             raise RuntimeError(f"postings unreadable: {artifact.get('reason', 'unknown')}")
         return list(artifact.get("postings") or [])
 
+    def _ranked_match_postings(
+        self,
+        decision: Any,
+        decision_ctx: dict[str, Any],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Ordered recommend_match postings for notification fan-out (CI.0.3)."""
+        from atlas.career.decision_rule import JobDecisionRule
+        from atlas.decision.contracts import DecisionRequest
+
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def _add(posting: dict[str, Any] | None) -> None:
+            if not isinstance(posting, dict):
+                return
+            pid = str(posting.get("id") or "")
+            if not pid or pid in seen:
+                return
+            seen.add(pid)
+            out.append(posting)
+
+        # Prefer primary decision payload first when it is a match.
+        if getattr(decision, "action_kind", None) == ACTION_RECOMMEND:
+            payload = (getattr(decision, "action", None) or {}).get("payload") or {}
+            if payload.get("kind") == "recommend_match":
+                _add(payload.get("posting") or {})
+
+        try:
+            rule = JobDecisionRule()
+            options = rule.score(
+                DecisionRequest(
+                    mission_id=getattr(decision, "mission_id", None) or "job_watcher",
+                    mission_type=MISSION_TYPE_JOB_HUNTING,
+                    context=decision_ctx,
+                ),
+                context=_EmptyIntel(),
+            )
+            ranked = [
+                o
+                for o in options
+                if (o.payload or {}).get("kind") == "recommend_match"
+            ]
+            ranked.sort(key=lambda o: float(getattr(o, "final_score", None) or o.score or 0), reverse=True)
+            for o in ranked:
+                if len(out) >= limit:
+                    break
+                _add((o.payload or {}).get("posting") or {})
+        except Exception as exc:  # noqa: BLE001 - fan-out is best-effort
+            self._logger.warning("job match fan-out ranking failed: %s", exc)
+        return out[:limit]
+
     def _personal_skill_names(self, *, include_inferred: bool) -> set[str]:
+        from atlas.personal.skill_hygiene import skill_names_from_facts
+
         if self._personal is None:
             return set()
         try:
@@ -227,16 +322,7 @@ class JobWatcher(PersistentWorker):
         except Exception as exc:  # noqa: BLE001 - personal is advisory for matching
             self._logger.warning("personal skills lookup failed: %s", exc)
             return set()
-        names: set[str] = set()
-        for fact in facts:
-            if not isinstance(fact, dict):
-                continue
-            value = fact.get("value")
-            if isinstance(value, dict) and value.get("skill"):
-                names.add(str(value["skill"]).strip().lower())
-            if fact.get("key"):
-                names.add(str(fact["key"]).strip().lower())
-        return {n for n in names if n}
+        return {n.lower() for n in skill_names_from_facts(facts, include_inferred=include_inferred)}
 
     @staticmethod
     def _fingerprint(sources: list[str], postings: list[dict[str, Any]], cfg: dict[str, Any]) -> str:
@@ -258,3 +344,10 @@ class JobWatcher(PersistentWorker):
             self._events.emit(event_type, payload, source=self.type)
         except Exception:  # noqa: BLE001
             self._logger.exception("failed to emit %s", event_type)
+
+
+class _EmptyIntel:
+    """Minimal IntelligenceContext stand-in for JobDecisionRule fan-out."""
+
+    def has(self, name: str) -> bool:  # noqa: ARG002
+        return False

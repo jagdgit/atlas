@@ -49,6 +49,9 @@ class PaperTradingWorker(PersistentWorker):
         live_market: Any | None = None,
         investor_mailer: Any | None = None,
         investment_research: Any | None = None,
+        decision_packets: Any | None = None,
+        observations: Any | None = None,
+        attributions: Any | None = None,
         clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -64,6 +67,9 @@ class PaperTradingWorker(PersistentWorker):
         self._live_market = live_market
         self._investor_mailer = investor_mailer
         self._investment_research = investment_research
+        self._decision_packets = decision_packets
+        self._observations = observations
+        self._attributions = attributions
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._logger = logger or logging.getLogger("atlas.workers.paper_trading")
 
@@ -76,7 +82,7 @@ class PaperTradingWorker(PersistentWorker):
             # IL.2 / IL-Q3: empty instruments → auto-load M0 watchlist (or NIFTY50 seed).
             from atlas.workers.investment_universe import auto_instruments
 
-            max_auto = max(1, int(cfg.get("auto_max_instruments") or 10))
+            max_auto = max(1, int(cfg.get("auto_max_instruments") or 20))
             program_id = str(cfg.get("program_id") or "market_intelligence")
             index = str(cfg.get("universe_index") or "NIFTY50")
             instruments = auto_instruments(
@@ -174,6 +180,19 @@ class PaperTradingWorker(PersistentWorker):
         )
         portfolio_id = portfolio["id"]
         state["portfolio_id"] = str(portfolio_id)
+        # Keep durable registry capital in lockstep with live sim cash (survives restart).
+        try:
+            live_cash = float(portfolio.get("cash") if portfolio.get("cash") is not None else persona.get("capital") or 0)
+            synced = vp.sync_live_cash(
+                portfolio_key,
+                live_cash,
+                mission_id=str(ctx.mission_id) if ctx.mission_id else None,
+            )
+            if synced and isinstance(synced.get("persona"), dict):
+                persona = vp.normalize_persona(synced.get("persona"))
+                state["persona"] = persona
+        except Exception:  # noqa: BLE001
+            pass
         config_note = f"book={portfolio_key}; pack={pack.id}; " + config_note
 
         feed_mode = str(cfg.get("feed_mode") or "asset_replay").strip().lower()
@@ -195,8 +214,25 @@ class PaperTradingWorker(PersistentWorker):
         cursors: dict[str, int] = dict(state.get("cursors") or {})
         last_bar_keys: dict[str, str] = dict(state.get("last_bar_keys") or {})
         bars_per_tick = max(1, int(cfg.get("bars_per_tick", 1)))
-        strategy = cfg.get("strategy") or {}
+        strategy = dict(cfg.get("strategy") or {})
+        # Learner / small India books: never default to a crippling 10% budget.
+        pk_for_strat = str(state.get("portfolio_key") or cfg.get("portfolio_key") or "").lower()
+        if strategy.get("trade_fraction") is None:
+            if "learner" in pk_for_strat or float(cfg.get("starting_cash") or 0) <= 100_000:
+                strategy["trade_fraction"] = 1.0
+            else:
+                strategy["trade_fraction"] = 0.1
+        if strategy.get("allow_min_lot") is None:
+            strategy["allow_min_lot"] = True
         allowed = [str(i.get("symbol")) for i in instruments if i.get("symbol")]
+
+        # Prefer ranked + affordable names; leave headroom for next-best alternatives.
+        cash_hint = float(portfolio.get("cash") or 0)
+        prev_marks = dict(state.get("last_marks") or {})
+        instruments = self._order_tradeable_first(
+            instruments, cash=cash_hint, marks=prev_marks
+        )
+        primary_count = len(instruments)
 
         totals = {
             "decisions": 0,
@@ -207,7 +243,7 @@ class PaperTradingWorker(PersistentWorker):
             "errors": 0,
             "session_skips": 0,
         }
-        marks: dict[str, float] = {}
+        marks: dict[str, float] = dict(prev_marks)
         exhausted = 0
         last_actions: list[str] = []
         reason_counts: dict[str, int] = {}
@@ -222,138 +258,191 @@ class PaperTradingWorker(PersistentWorker):
             if bucket:
                 reason_counts[bucket] = int(reason_counts.get(bucket, 0)) + 1
 
-        for inst in instruments:
-            symbol = str(inst.get("symbol") or "").strip()
-            asset_name = str(inst.get("asset") or symbol).strip()
-            if not symbol:
-                continue
-            try:
-                if feed_mode == "live":
-                    bars = self._load_live_bars(symbol, cfg)
-                else:
-                    bars = self._load_bars(asset_name)
-            except CapabilityGap as exc:
-                totals["gaps"] += 1
-                _record_action(f"{symbol}: gap ({exc.capability})")
-                self._record_feed_failure(
-                    provider=str(cfg.get("live_provider") or "yahoo"),
-                    symbol=symbol,
-                    reason=str(exc)[:400],
-                    capability=str(getattr(exc, "capability", "") or "market_data"),
-                )
-                continue
-            except Exception as exc:  # noqa: BLE001 - a bad feed must not stop the others
-                totals["errors"] += 1
-                self._logger.warning("feed load failed for %s (%s): %s", symbol, asset_name, exc)
-                _record_action(f"{symbol}: feed_error")
-                self._record_feed_failure(
-                    provider=str(cfg.get("live_provider") or feed_mode),
-                    symbol=symbol,
-                    reason=f"feed_error: {exc}"[:400],
-                )
-                continue
-            if not bars:
-                if feed_mode == "live":
-                    _record_action(f"{symbol}: empty_live_feed")
+        def _process_batch(batch: list[dict[str, Any]], *, as_alt: bool = False) -> None:
+            nonlocal exhausted, feed_gap_days, allowed
+            allowed = sorted(
+                {
+                    *allowed,
+                    *[str(i.get("symbol")) for i in batch if i.get("symbol")],
+                }
+            )
+            for inst in batch:
+                symbol = str(inst.get("symbol") or "").strip()
+                asset_name = str(inst.get("asset") or symbol).strip()
+                if not symbol:
+                    continue
+                try:
+                    if feed_mode == "live":
+                        bars = self._load_live_bars(symbol, cfg)
+                    else:
+                        bars = self._load_bars(asset_name)
+                except CapabilityGap as exc:
+                    totals["gaps"] += 1
+                    _record_action(f"{symbol}: gap ({exc.capability})")
                     self._record_feed_failure(
                         provider=str(cfg.get("live_provider") or "yahoo"),
                         symbol=symbol,
-                        reason="empty_live_feed",
+                        reason=str(exc)[:400],
+                        capability=str(getattr(exc, "capability", "") or "market_data"),
                     )
-                else:
-                    exhausted += 1
-                    _record_action(f"{symbol}: empty_feed")
-                continue
+                    continue
+                except Exception as exc:  # noqa: BLE001 - a bad feed must not stop the others
+                    totals["errors"] += 1
+                    self._logger.warning("feed load failed for %s (%s): %s", symbol, asset_name, exc)
+                    _record_action(f"{symbol}: feed_error")
+                    self._record_feed_failure(
+                        provider=str(cfg.get("live_provider") or feed_mode),
+                        symbol=symbol,
+                        reason=f"feed_error: {exc}"[:400],
+                    )
+                    continue
+                if not bars:
+                    if feed_mode == "live":
+                        _record_action(f"{symbol}: empty_live_feed")
+                        self._record_feed_failure(
+                            provider=str(cfg.get("live_provider") or "yahoo"),
+                            symbol=symbol,
+                            reason="empty_live_feed",
+                        )
+                    else:
+                        exhausted += 1
+                        _record_action(f"{symbol}: empty_feed")
+                    continue
 
-            if feed_mode == "live":
-                gap = self._detect_feed_gap(state, symbol, bars)
-                if gap is not None and (feed_gap_days is None or gap > feed_gap_days):
-                    feed_gap_days = gap
-                cursor = len(bars) - 1
-                price = float(bars[cursor]["close"])
-                marks[symbol] = price
-                bar_key = str(bars[cursor].get("t") if bars[cursor].get("t") is not None else cursor)
+                if feed_mode == "live":
+                    gap = self._detect_feed_gap(state, symbol, bars)
+                    if gap is not None and (feed_gap_days is None or gap > feed_gap_days):
+                        feed_gap_days = gap
+                    cursor = len(bars) - 1
+                    price = float(bars[cursor]["close"])
+                    marks[symbol] = price
+                    bar_key = str(
+                        bars[cursor].get("t") if bars[cursor].get("t") is not None else cursor
+                    )
+                    if not session_open:
+                        totals["session_skips"] += 1
+                        _record_action(
+                            f"{symbol}: session_closed ({sess.reason}) mark @ {price:.2f}"
+                        )
+                        continue
+                    if last_bar_keys.get(symbol) == bar_key and not as_alt:
+                        _record_action(f"{symbol}: mark_only @ {price:.2f} (same bar)")
+                        continue
+                    # Alternatives always get one decision attempt even if bar was marked,
+                    # so "next better name" can still fire when the primary book was quiet.
+                    if as_alt and last_bar_keys.get(symbol) == bar_key:
+                        # still evaluate once per session via alt-cooldown in state
+                        alt_done = set(state.get("alt_decided_bars") or [])
+                        alt_key = f"{symbol}:{bar_key}"
+                        if alt_key in alt_done:
+                            _record_action(f"{symbol}: mark_only @ {price:.2f} (alt same bar)")
+                            continue
+                        alt_done.add(alt_key)
+                        state["alt_decided_bars"] = list(alt_done)[-200:]
+                    action = self._decide_bar(
+                        symbol=symbol,
+                        bars=bars,
+                        cursor=cursor,
+                        cfg=cfg,
+                        strategy=strategy,
+                        allowed=allowed,
+                        blocked=sorted(blocked),
+                        portfolio_id=portfolio_id,
+                        mission_id=ctx.mission_id,
+                        config_version=ctx.config_version,
+                        totals=totals,
+                        marks=marks,
+                        state=state,
+                        pack=pack,
+                        instrument=inst,
+                    )
+                    last_bar_keys[symbol] = bar_key
+                    if as_alt and action and ": hold @" not in action and "mark_only" not in action:
+                        action = f"{action} [alt]"
+                    _record_action(action)
+                    bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
+                    self._check_drawdown(state, bar_snapshot, cfg, ctx.mission_id)
+                    continue
+
+                # --- asset_replay path ---
+                cursor = int(cursors.get(symbol, 0))
+                if cursor >= len(bars):
+                    exhausted += 1
+                    _record_action(f"{symbol}: feed_exhausted ({len(bars)} bars)")
+                    continue
+
                 if not session_open:
+                    price = float(bars[min(cursor, len(bars) - 1)]["close"])
+                    marks[symbol] = price
                     totals["session_skips"] += 1
                     _record_action(
                         f"{symbol}: session_closed ({sess.reason}) mark @ {price:.2f}"
                     )
                     continue
-                if last_bar_keys.get(symbol) == bar_key:
-                    _record_action(f"{symbol}: mark_only @ {price:.2f} (same bar)")
-                    continue
-                action = self._decide_bar(
-                    symbol=symbol,
-                    bars=bars,
-                    cursor=cursor,
-                    cfg=cfg,
-                    strategy=strategy,
-                    allowed=allowed,
-                    blocked=sorted(blocked),
-                    portfolio_id=portfolio_id,
-                    mission_id=ctx.mission_id,
-                    config_version=ctx.config_version,
-                    totals=totals,
-                    marks=marks,
-                    state=state,
-                    pack=pack,
-                    instrument=inst,
-                )
-                last_bar_keys[symbol] = bar_key
-                _record_action(action)
-                bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
-                self._check_drawdown(state, bar_snapshot, cfg, ctx.mission_id)
-                continue
 
-            # --- asset_replay path ---
-            cursor = int(cursors.get(symbol, 0))
-            if cursor >= len(bars):
-                exhausted += 1
-                _record_action(f"{symbol}: feed_exhausted ({len(bars)} bars)")
-                continue
+                processed = 0
+                while cursor < len(bars) and processed < bars_per_tick:
+                    action = self._decide_bar(
+                        symbol=symbol,
+                        bars=bars,
+                        cursor=cursor,
+                        cfg=cfg,
+                        strategy=strategy,
+                        allowed=allowed,
+                        blocked=sorted(blocked),
+                        portfolio_id=portfolio_id,
+                        mission_id=ctx.mission_id,
+                        config_version=ctx.config_version,
+                        totals=totals,
+                        marks=marks,
+                        state=state,
+                        pack=pack,
+                        instrument=inst,
+                    )
+                    _record_action(action)
+                    bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
+                    self._check_drawdown(state, bar_snapshot, cfg, ctx.mission_id)
+                    cursor += 1
+                    processed += 1
+                cursors[symbol] = cursor
+                if cursor >= len(bars):
+                    exhausted += 1
 
-            if not session_open:
-                # Still advance marks from the next bar so equity reflects the feed, but no trades.
-                price = float(bars[min(cursor, len(bars) - 1)]["close"])
-                marks[symbol] = price
-                totals["session_skips"] += 1
+        _process_batch(instruments, as_alt=False)
+
+        # No fill yet → try next ranked alternatives (cheaper / next in watchlist).
+        prefer_alt = cfg.get("prefer_next_alternatives")
+        if prefer_alt is None:
+            prefer_alt = True
+        if (
+            session_open
+            and prefer_alt
+            and int(totals.get("buys") or 0) == 0
+            and feed_mode == "live"
+        ):
+            alts = self._next_alternative_instruments(
+                have={str(i.get("symbol") or "") for i in instruments},
+                program_id=str(cfg.get("program_id") or "market_intelligence"),
+                cash=float(self._portfolio.snapshot(portfolio_id, prices=marks).get("cash") or cash_hint),
+                marks=marks,
+                max_n=max(1, int(cfg.get("max_next_alternatives") or 12)),
+                fallback_index=str(cfg.get("universe_index") or "NIFTY50"),
+            )
+            if alts:
                 _record_action(
-                    f"{symbol}: session_closed ({sess.reason}) mark @ {price:.2f}"
+                    f"next_alt: trying {len(alts)} alternative(s) after primary "
+                    f"({primary_count}) held/untradeable"
                 )
-                continue
-
-            processed = 0
-            while cursor < len(bars) and processed < bars_per_tick:
-                action = self._decide_bar(
-                    symbol=symbol,
-                    bars=bars,
-                    cursor=cursor,
-                    cfg=cfg,
-                    strategy=strategy,
-                    allowed=allowed,
-                    blocked=sorted(blocked),
-                    portfolio_id=portfolio_id,
-                    mission_id=ctx.mission_id,
-                    config_version=ctx.config_version,
-                    totals=totals,
-                    marks=marks,
-                    state=state,
-                    pack=pack,
-                    instrument=inst,
-                )
-                _record_action(action)
-                # Track equity peak + drawdown per bar so an intra-replay drawdown is caught (not
-                # just the end-of-tick value) — reboot-safe via the persisted peak in state.
-                bar_snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
-                self._check_drawdown(state, bar_snapshot, cfg, ctx.mission_id)
-                cursor += 1
-                processed += 1
-            cursors[symbol] = cursor
-            if cursor >= len(bars):
-                exhausted += 1
+                _process_batch(alts, as_alt=True)
+                state["last_alternatives"] = [a.get("symbol") for a in alts]
+            else:
+                state["last_alternatives"] = []
+        else:
+            state.setdefault("last_alternatives", [])
 
         state["cursors"] = cursors
         state["last_bar_keys"] = last_bar_keys
+        state["last_marks"] = {k: float(v) for k, v in marks.items() if v is not None}
         state["ticks"] = int(state.get("ticks", 0)) + 1
         state["feed_mode"] = feed_mode
         if feed_gap_days is not None:
@@ -413,6 +502,266 @@ class PaperTradingWorker(PersistentWorker):
             + (" | DONE: all feeds exhausted (fixture replay complete)" if done else "")
         ).strip()
         return TickResult(state=state, done=done, note=note)
+
+    # --- instrument ordering / next-best alternatives --------------------
+    @staticmethod
+    def _order_tradeable_first(
+        instruments: list[dict[str, Any]],
+        *,
+        cash: float,
+        marks: dict[str, float],
+    ) -> list[dict[str, Any]]:
+        """Prefer ranked names we can actually buy a whole share of with cash."""
+
+        def key(inst: dict[str, Any]) -> tuple[int, float, int]:
+            sym = str(inst.get("symbol") or "")
+            px = marks.get(sym)
+            try:
+                price = float(px) if px is not None else None
+            except (TypeError, ValueError):
+                price = None
+            # 0 = affordable / unknown, 1 = too expensive for 1 share
+            unaffordable = 0
+            if price is not None and cash > 0 and price > cash:
+                unaffordable = 1
+            rank = inst.get("rank")
+            try:
+                rank_i = int(rank) if rank is not None else 999
+            except (TypeError, ValueError):
+                rank_i = 999
+            score = inst.get("score")
+            try:
+                score_f = -float(score) if score is not None else 0.0
+            except (TypeError, ValueError):
+                score_f = 0.0
+            return (unaffordable, score_f, rank_i)
+
+        return sorted(list(instruments), key=key)
+
+    def _name_target_pct(
+        self, cfg: dict[str, Any], persona: dict[str, Any] | None
+    ) -> float | None:
+        """Per-name sizing target so one fill cannot absorb the whole book."""
+        try:
+            from atlas.investment.portfolio_optimizer import target_name_pct
+
+            ceiling = cfg.get("max_name_pct") or cfg.get("max_exposure_pct")
+            if ceiling is not None:
+                ceiling = float(ceiling)
+                if ceiling > 1.0:
+                    ceiling /= 100.0
+            return target_name_pct(persona, {"max_name_pct": ceiling})
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("name target sizing skipped: %s", exc)
+            return None
+
+    def _next_alternative_instruments(
+        self,
+        *,
+        have: set[str],
+        program_id: str,
+        cash: float,
+        marks: dict[str, float],
+        max_n: int = 12,
+        fallback_index: str = "NIFTY50",
+    ) -> list[dict[str, Any]]:
+        """Pull next ranked watchlist names not already in the primary batch."""
+        from atlas.investment import watchlists as wl
+        from atlas.investment.universe import as_instruments
+
+        have_l = {str(s).strip().upper() for s in have if s}
+        pool: list[dict[str, Any]] = []
+        try:
+            rows = wl.ranked_rows(program_id, max_n=max(40, max_n * 3))
+        except Exception:  # noqa: BLE001
+            rows = []
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            sym = str(row.get("symbol") or "").strip()
+            if not sym or sym.upper() in have_l:
+                continue
+            pool.append(
+                {
+                    "symbol": sym,
+                    "asset": str(row.get("asset") or "").strip(),
+                    "rank": row.get("rank", idx + 1),
+                    "score": row.get("score"),
+                    "alt": True,
+                }
+            )
+        if not pool:
+            for inst in as_instruments(fallback_index, limit=40):
+                sym = str(inst.get("symbol") or "").strip()
+                if not sym or sym.upper() in have_l:
+                    continue
+                pool.append({**inst, "alt": True})
+        ordered = self._order_tradeable_first(pool, cash=cash, marks=marks)
+        return ordered[: max(1, int(max_n))]
+
+    def _record_di_packet(
+        self,
+        *,
+        action: str,
+        symbol: str,
+        strategy_tag: str,
+        portfolio_key: str,
+        mission_id: Any,
+        price: float,
+        cfg: dict[str, Any],
+        indicators: dict[str, Any] | None = None,
+        reasons_for: list[str] | None = None,
+        reasons_against: list[str] | None = None,
+        engine_decision_id: Any = None,
+        fill_trade_id: Any = None,
+        qty: float | None = None,
+        filled_qty: float | None = None,
+        fill_price: float | None = None,
+        fees: float | None = None,
+        research_gate: dict[str, Any] | None = None,
+        portfolio_gate: dict[str, Any] | None = None,
+        as_alt: bool = False,
+        sector: str | None = None,
+        plan_link: dict[str, Any] | None = None,
+        gap_pct: float | None = None,
+        bars: list[dict[str, Any]] | None = None,
+        cursor: int | None = None,
+    ) -> None:
+        """DI.1 — freeze a Decision Packet (best-effort; never raises)."""
+        store = self._decision_packets
+        if store is None:
+            return
+        try:
+            from atlas.investment.decision_packets import (
+                empty_market_snapshot,
+                infer_strategy_tag,
+            )
+
+            tag = strategy_tag or infer_strategy_tag(kind=action, as_alt=as_alt)
+            score = None
+            valuation = None
+            fundamentals = None
+            coverage = None
+            if self._investment_research is not None:
+                try:
+                    aw = self._investment_research.awareness(
+                        symbol,
+                        program_id=str(cfg.get("program_id") or "market_intelligence"),
+                    )
+                    if isinstance(aw, dict):
+                        score = aw.get("investment_score")
+                        valuation = aw.get("valuation") if isinstance(aw.get("valuation"), dict) else None
+                        coverage = aw.get("coverage")
+                        if isinstance(coverage, dict):
+                            coverage = coverage.get("ratio") or coverage.get("score")
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                from atlas.config import get_config
+                from atlas.investment.fundamentals import get_symbol as fund_get
+
+                fundamentals = fund_get(
+                    str(get_config().paths.data),
+                    symbol,
+                    program_id=str(cfg.get("program_id") or "market_intelligence"),
+                )
+            except Exception:  # noqa: BLE001
+                fundamentals = None
+            session = str(cfg.get("market_session") or "nse_equity")
+            obs_ids: list[str] = []
+            if self._observations is not None:
+                try:
+                    obs_ids = self._observations.ids_for_symbol(
+                        symbol, limit=8, since_hours=72.0
+                    )
+                except Exception:  # noqa: BLE001
+                    obs_ids = []
+
+            # DI.5 — process proxy context
+            from atlas.investment.process_proxies import (
+                gap_pct_from_bars,
+                plan_index,
+            )
+
+            gap = gap_pct
+            if gap is None and bars:
+                gap = gap_pct_from_bars(bars, cursor)
+            plan_doc = None
+            plink = dict(plan_link) if isinstance(plan_link, dict) else None
+            try:
+                from atlas.investment import watchlists as wl
+
+                snap = wl.latest(
+                    str(cfg.get("program_id") or "market_intelligence")
+                )
+                if isinstance(snap, dict):
+                    plan_doc = (snap.get("extra") or {}).get("daily_plan") or snap.get(
+                        "daily_plan"
+                    )
+                if plink is None and isinstance(plan_doc, dict):
+                    cand = plan_index(plan_doc).get(str(symbol).upper())
+                    if cand:
+                        plink = {
+                            "rank": cand.get("rank"),
+                            "suggested_notional": cand.get("suggested_notional"),
+                            "in_daily_plan": True,
+                            "as_alt": as_alt,
+                        }
+                    else:
+                        plink = {
+                            "rank": None,
+                            "suggested_notional": None,
+                            "in_daily_plan": False,
+                            "as_alt": as_alt,
+                        }
+            except Exception:  # noqa: BLE001
+                if plink is None:
+                    plink = {
+                        "rank": None,
+                        "suggested_notional": None,
+                        "in_daily_plan": False,
+                        "as_alt": as_alt,
+                    }
+
+            prices_doc = {
+                "mark": price,
+                "suggested_qty": qty,
+                "filled_qty": filled_qty,
+                "fill_price": fill_price,
+                "fees": fees,
+            }
+            if gap is not None:
+                prices_doc["gap_pct"] = gap
+
+            store.record(
+                action=action,
+                symbol=symbol,
+                portfolio_key=portfolio_key or "india_equity_learner",
+                strategy_tag=tag,
+                mission_id=str(mission_id) if mission_id else None,
+                engine_decision_id=str(engine_decision_id) if engine_decision_id else None,
+                fill_trade_id=str(fill_trade_id) if fill_trade_id else None,
+                market_snapshot=empty_market_snapshot(session=session, sector=sector),
+                prices=prices_doc,
+                investment_score=score if isinstance(score, dict) else None,
+                indicators=indicators,
+                valuation=valuation,
+                fundamentals=fundamentals,
+                reasons_for=reasons_for or [],
+                reasons_against=reasons_against or [],
+                observation_ids=obs_ids,
+                research_gate=research_gate,
+                portfolio_gate=portfolio_gate,
+                research_coverage=float(coverage) if coverage is not None else None,
+                plan_link=plink,
+                process_context={
+                    "plan": plan_doc if isinstance(plan_doc, dict) else None,
+                    "recent_losses": set(),
+                    "gap_pct": gap,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("DI.1 packet write skipped", exc_info=True)
 
     # --- per-bar decision ------------------------------------------------
     def _decide_bar(
@@ -534,8 +883,13 @@ class PaperTradingWorker(PersistentWorker):
                 "allowed_symbols": allowed,
                 "blocked_symbols": blocked,
                 "max_position_qty": cfg.get("max_position_qty", 0),
-                "max_exposure_pct": cfg.get("max_exposure_pct", 0),
+                "max_exposure_pct": cfg.get("max_exposure_pct", 0)
+                or strategy.get("max_exposure_pct", 0),
                 "trade_fraction": strategy.get("trade_fraction", 0.1),
+                "name_target_pct": self._name_target_pct(cfg, persona),
+                "allow_min_lot": strategy.get(
+                    "allow_min_lot", cfg.get("allow_min_lot", True)
+                ),
                 "rsi_overbought": strategy.get("rsi_overbought", 70.0),
                 "rsi_oversold": strategy.get("rsi_oversold", 30.0),
                 "mentor_advice": mentor_advice,
@@ -557,24 +911,74 @@ class PaperTradingWorker(PersistentWorker):
         totals["decisions"] += 1
         why = (decision.why or "").strip()
         why_short = (why[:80] + "…") if len(why) > 80 else why
+        as_alt = bool((inst_row or {}).get("alt"))
+        sector = str((inst_row or {}).get("sector") or "") or None
+
+        def _pkt(
+            action: str,
+            *,
+            strategy_tag: str,
+            line: str,
+            qty_v: float | None = None,
+            filled: float | None = None,
+            fill_px: float | None = None,
+            fee_v: float | None = None,
+            trade_id: Any = None,
+            rg: dict[str, Any] | None = None,
+            pg: dict[str, Any] | None = None,
+            against: list[str] | None = None,
+        ) -> None:
+            self._record_di_packet(
+                action=action,
+                symbol=symbol,
+                strategy_tag=strategy_tag,
+                portfolio_key=portfolio_key,
+                mission_id=mission_id,
+                price=price,
+                cfg=cfg,
+                indicators=indicators,
+                reasons_for=[why_short or line, line] if why_short else [line],
+                reasons_against=against,
+                engine_decision_id=getattr(decision, "id", None),
+                fill_trade_id=trade_id,
+                qty=qty_v,
+                filled_qty=filled,
+                fill_price=fill_px,
+                fees=fee_v,
+                research_gate=rg,
+                portfolio_gate=pg,
+                as_alt=as_alt,
+                sector=sector,
+                bars=bars,
+                cursor=cursor,
+            )
+
         if decision.action_kind != ACTION_RECOMMEND:
             if decision.action_kind == "capability_gap":
                 totals["gaps"] += 1
-                return f"{symbol}: gap ({why_short or 'missing capability'})"
+                line = f"{symbol}: gap ({why_short or 'missing capability'})"
+                _pkt("hold", strategy_tag="capability_gap", line=line)
+                return line
             totals["holds"] += 1
-            return f"{symbol}: hold @ {price:.2f}"
+            line = f"{symbol}: hold @ {price:.2f}"
+            _pkt("hold", strategy_tag="engine_hold", line=line)
+            return line
 
         # The engine wraps the chosen option under action["payload"] (action["kind"] == "recommend").
         payload = (decision.action or {}).get("payload") or {}
         kind = payload.get("kind")
         if kind not in ("buy", "sell"):
             totals["holds"] += 1
-            return f"{symbol}: hold @ {price:.2f}"
+            line = f"{symbol}: hold @ {price:.2f}"
+            _pkt("hold", strategy_tag="engine_hold", line=line)
+            return line
 
         qty = float(payload.get("quantity") or 0.0)
         if qty <= 0:
             totals["holds"] += 1
-            return f"{symbol}: hold @ {price:.2f}"
+            line = f"{symbol}: hold @ {price:.2f}"
+            _pkt("hold", strategy_tag="engine_hold", line=line)
+            return line
 
         if self._policy_engine is not None:
             try:
@@ -598,12 +1002,20 @@ class PaperTradingWorker(PersistentWorker):
                     viols = verdict.get("hard_violations") or []
                     if viols:
                         detail = str(viols[0].get("detail") or "")
-                    return f"{symbol}: policy_block ({detail or 'hard constraint'})"
+                    line = f"{symbol}: policy_block ({detail or 'hard constraint'})"
+                    _pkt(
+                        "hold",
+                        strategy_tag="policy_block",
+                        line=line,
+                        against=[detail or "hard constraint"],
+                    )
+                    return line
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("policy_engine evaluate skipped: %s", exc)
 
         # IRA — research-based buy gate (learner books default on).
         research_gate_result: dict[str, Any] | None = None
+        portfolio_gate_result: dict[str, Any] | None = None
         if kind == "buy" and self._investment_research is not None:
             gate_note = self._research_buy_gate(
                 symbol=symbol,
@@ -612,6 +1024,12 @@ class PaperTradingWorker(PersistentWorker):
             )
             if gate_note:
                 totals["holds"] += 1
+                _pkt(
+                    "hold",
+                    strategy_tag="research_forced_hold",
+                    line=gate_note,
+                    against=[gate_note],
+                )
                 return gate_note
             # Capture last gate for portfolio optimizer (best-effort)
             try:
@@ -686,6 +1104,44 @@ class PaperTradingWorker(PersistentWorker):
                     require_score=bool(cfg.get("portfolio_require_score", True)),
                     cfg=port_cfg,
                 )
+                # Size caps should shrink an order, not veto it: a 40% target in a
+                # 35%-capped sector used to block every name after the first fill.
+                trimmed_from = None
+                if (
+                    not pcheck.get("allowed")
+                    and pcheck.get("trimmable")
+                    and cfg.get("portfolio_trim_to_fit", True)
+                ):
+                    room_qty = float(pcheck.get("max_quantity") or 0)
+                    if room_qty >= 1.0 and room_qty < qty:
+                        retry = pre_trade_check(
+                            side="buy",
+                            symbol=symbol,
+                            quantity=room_qty,
+                            price=price,
+                            snapshot=snapshot,
+                            persona=persona,
+                            investment_score=score if isinstance(score, dict) else {},
+                            research_gate=research_gate_result or {"allowed": True},
+                            asset_class=str(
+                                cfg.get("asset_class")
+                                or getattr(pack, "id", None)
+                                or "cash_equity"
+                            ),
+                            require_research=bool(
+                                cfg.get("portfolio_require_research", True)
+                            ),
+                            require_score=bool(cfg.get("portfolio_require_score", True)),
+                            cfg=port_cfg,
+                        )
+                        if retry.get("allowed"):
+                            trimmed_from = qty
+                            qty = room_qty
+                            pcheck = retry
+                portfolio_gate_result = pcheck
+                if trimmed_from is not None:
+                    portfolio_gate_result = dict(pcheck)
+                    portfolio_gate_result["trimmed_from"] = trimmed_from
                 state.setdefault("portfolio_gate_log", [])
                 log = list(state.get("portfolio_gate_log") or [])
                 log.append(
@@ -695,6 +1151,8 @@ class PaperTradingWorker(PersistentWorker):
                         "action": pcheck.get("action"),
                         "reasons": pcheck.get("reasons"),
                         "qty": qty,
+                        "trimmed_from": trimmed_from,
+                        "binding": (pcheck.get("trim") or {}).get("binding"),
                         "price": price,
                     }
                 )
@@ -702,7 +1160,21 @@ class PaperTradingWorker(PersistentWorker):
                 if not pcheck.get("allowed"):
                     totals["holds"] += 1
                     reasons = ",".join(pcheck.get("reasons") or []) or "portfolio_block"
-                    return f"{symbol}: portfolio_hold ({reasons})"
+                    line = f"{symbol}: portfolio_hold ({reasons})"
+                    _pkt(
+                        "hold",
+                        strategy_tag="portfolio_trim",
+                        line=line,
+                        rg=research_gate_result,
+                        pg=portfolio_gate_result,
+                        against=list(pcheck.get("reasons") or []) or [reasons],
+                    )
+                    return line
+                if trimmed_from:
+                    why_short = (
+                        f"{why_short} [size trimmed {trimmed_from:g}→{qty:g} by "
+                        f"{(pcheck.get('trim') or {}).get('binding') or 'portfolio cap'}]"
+                    )
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("portfolio gate skipped: %s", exc)
 
@@ -736,9 +1208,13 @@ class PaperTradingWorker(PersistentWorker):
         if not validation.ok:
             if validation.capability_gap:
                 totals["gaps"] += 1
-                return f"{symbol}: gap ({validation.reason})"
+                line = f"{symbol}: gap ({validation.reason})"
+                _pkt("hold", strategy_tag="capability_gap", line=line, against=[str(validation.reason)])
+                return line
             totals["holds"] += 1
-            return f"{symbol}: pack_block ({validation.reason})"
+            line = f"{symbol}: pack_block ({validation.reason})"
+            _pkt("hold", strategy_tag="pack_block", line=line, against=[str(validation.reason)])
+            return line
 
         fee = 0.0
         fees_doc: dict[str, Any] = {}
@@ -775,7 +1251,17 @@ class PaperTradingWorker(PersistentWorker):
         except Exception as exc:  # noqa: BLE001 - a rejected sim fill is reported, never fatal
             totals["errors"] += 1
             self._logger.warning("sim fill rejected (%s %s %s): %s", kind, qty, symbol, exc)
-            return f"{symbol}: fill_rejected ({exc})"
+            line = f"{symbol}: fill_rejected ({exc})"
+            _pkt(
+                "hold",
+                strategy_tag="fill_rejected",
+                line=line,
+                qty_v=qty,
+                against=[str(exc)],
+                rg=research_gate_result,
+                pg=portfolio_gate_result,
+            )
+            return line
 
         totals["buys" if kind == "buy" else "sells"] += 1
         fill_payload = {
@@ -794,6 +1280,21 @@ class PaperTradingWorker(PersistentWorker):
             why=why_short or "",
             cfg=cfg,
             portfolio_key=portfolio_key,
+            engine_decision_id=getattr(decision, "id", None),
+        )
+        trade_id = trade.get("id") or trade.get("trade_id")
+        line = f"{symbol}: {kind} {qty:g} @ {price:.2f} ({why_short or 'signal'})"
+        _pkt(
+            kind,
+            strategy_tag="next_alternative" if as_alt else "sma_cross_rsi",
+            line=line,
+            qty_v=qty,
+            filled=qty,
+            fill_px=price,
+            fee_v=fee,
+            trade_id=trade_id,
+            rg=research_gate_result,
+            pg=portfolio_gate_result,
         )
         if self._investor_mailer is not None:
             try:
@@ -813,6 +1314,8 @@ class PaperTradingWorker(PersistentWorker):
                             decision_doc = {**decision_doc, **(decision.as_dict() or {})}
                         except Exception:  # noqa: BLE001
                             pass
+                decision_doc["research_gate"] = research_gate_result
+                decision_doc["portfolio_gate"] = portfolio_gate_result
                 self._investor_mailer.send_trade(
                     side=kind,
                     symbol=symbol,
@@ -835,7 +1338,7 @@ class PaperTradingWorker(PersistentWorker):
             self._remember_outcome(
                 symbol, trade, decision, indicators=indicators, cfg=learn_cfg
             )
-        return f"{symbol}: {kind} {qty:g} @ {price:.2f} ({why_short or 'signal'})"
+        return line
 
     # --- IRA research gate + daily learning ------------------------------
     def _research_buy_gate(
@@ -911,9 +1414,11 @@ class PaperTradingWorker(PersistentWorker):
         why: str,
         cfg: dict[str, Any],
         portfolio_key: str,
+        engine_decision_id: Any = None,
+        packet_decision_id: str | None = None,
     ) -> None:
         research = self._investment_research
-        if research is None:
+        if research is None and self._attributions is None:
             return
         program_id = str(cfg.get("program_id") or "market_intelligence")
         pnl = float(trade.get("realized_pnl") or 0.0)
@@ -929,6 +1434,54 @@ class PaperTradingWorker(PersistentWorker):
         else:
             result = "observed"
             note = f"Sim sell flat — {why or 'exit'}"
+
+        di_grades = None
+        if kind == "sell" and self._attributions is not None:
+            try:
+                did = packet_decision_id or (
+                    str(engine_decision_id) if engine_decision_id else None
+                )
+                # Prefer DI packet id when we can find a recent buy packet for symbol
+                packet = None
+                if self._decision_packets is not None and did:
+                    packet = self._decision_packets.get(str(did))
+                if packet is None and self._decision_packets is not None:
+                    recent = self._decision_packets.list_symbol(
+                        symbol=symbol, limit=5, portfolio_key=portfolio_key or None
+                    )
+                    for p in recent:
+                        if p.get("action") == "buy":
+                            packet = p
+                            did = str(p.get("decision_id") or did)
+                            break
+                fill_px = float(trade.get("price") or 0) or None
+                entry = None
+                if packet:
+                    prices = packet.get("prices") or {}
+                    entry = prices.get("fill_price") or prices.get("mark")
+                chg = None
+                try:
+                    if entry is not None and fill_px is not None and float(entry) != 0:
+                        chg = 100.0 * (float(fill_px) - float(entry)) / abs(float(entry))
+                except (TypeError, ValueError):
+                    chg = None
+                attr = self._attributions.record(
+                    decision_id=did,
+                    symbol=symbol,
+                    portfolio_key=portfolio_key or "india_equity_learner",
+                    trigger="exit",
+                    checkpoint="exit",
+                    packet=packet,
+                    pnl=pnl,
+                    price_change_pct=chg,
+                    extra={"why": why, "engine_decision_id": str(engine_decision_id) if engine_decision_id else None},
+                )
+                di_grades = (attr.get("attribution") or {}).get("grades")
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.Attr record failed", exc_info=True)
+
+        if research is None:
+            return
         try:
             research.record_outcome(
                 symbol,
@@ -942,6 +1495,7 @@ class PaperTradingWorker(PersistentWorker):
                     "realized_pnl": pnl,
                     "portfolio_key": portfolio_key,
                 },
+                di_grades=di_grades,
             )
         except Exception:  # noqa: BLE001
             self._logger.debug("research outcome record failed", exc_info=True)

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from atlas.investment.portfolio_optimizer import (
+    max_allowed_quantity,
     optimize_candidate,
     pre_trade_check,
+    resolve_limits,
     suggest_notional,
 )
 from atlas.investment.portfolios import india_equity_learner_persona
@@ -118,6 +120,103 @@ def test_buys_require_research_and_score_and_portfolio():
     assert "research_gate" in ids
     assert "score_path" in ids
     assert "cash" in ids
+
+
+def test_sector_cap_never_below_single_name_cap():
+    """max_exposure_pct=40 must not leave a 35% sector cap that blocks every buy."""
+    persona = india_equity_learner_persona(capital=50000)
+    limits = resolve_limits(persona, {"max_name_pct": 0.40})
+    assert limits["sector_cap_pct"] >= limits["max_name_pct"]
+    # An explicit operator sector cap still wins.
+    tight = resolve_limits(persona, {"max_name_pct": 0.40, "sector_cap_pct": 0.20})
+    assert tight["sector_cap_pct"] == 0.20
+
+
+def test_blocked_buy_reports_trimmable_room():
+    persona = india_equity_learner_persona(capital=10000)
+    snap = {"cash": 9000, "equity": 10000, "positions": []}
+    check = pre_trade_check(
+        side="buy",
+        symbol="INFY.NS",
+        quantity=50,
+        price=100,  # 5000 = 50% of equity vs 18% name cap
+        snapshot=snap,
+        persona=persona,
+        investment_score={
+            "path": "buy_eligible",
+            "investment_confidence": "medium",
+            "investment_confidence_score": 0.6,
+            "horizon": "long_term",
+        },
+        research_gate={"allowed": True, "action": "buy_ok"},
+    )
+    assert check["allowed"] is False
+    assert check["trimmable"] is True
+    assert 0 < check["max_quantity"] < 50
+
+    retry = pre_trade_check(
+        side="buy",
+        symbol="INFY.NS",
+        quantity=check["max_quantity"],
+        price=100,
+        snapshot=snap,
+        persona=persona,
+        investment_score={
+            "path": "buy_eligible",
+            "investment_confidence": "medium",
+            "investment_confidence_score": 0.6,
+            "horizon": "long_term",
+        },
+        research_gate={"allowed": True, "action": "buy_ok"},
+    )
+    assert retry["allowed"] is True
+
+
+def test_research_block_is_not_trimmable():
+    persona = india_equity_learner_persona(capital=10000)
+    check = pre_trade_check(
+        side="buy",
+        symbol="INFY.NS",
+        quantity=5,
+        price=100,
+        snapshot={"cash": 9000, "equity": 10000, "positions": []},
+        persona=persona,
+        investment_score={"path": "buy_eligible", "investment_confidence": "medium"},
+        research_gate={"allowed": False, "reasons": ["mvr_incomplete"]},
+    )
+    assert check["trimmable"] is False
+
+
+def test_max_allowed_quantity_respects_cash_buffer():
+    persona = india_equity_learner_persona(capital=10000)
+    room = max_allowed_quantity(
+        symbol="INFY.NS",
+        price=100,
+        snapshot={"cash": 2000, "equity": 10000, "positions": []},
+        persona=persona,
+    )
+    # Medium risk keeps a 15% cash buffer → only 500 of the 2000 cash is spendable.
+    assert room["quantity"] == 5
+    assert room["binding"] == "cash_buffer"
+
+
+def test_empty_score_is_not_invented_very_low():
+    """Missing research score must not invent investment_confidence=very_low."""
+    persona = india_equity_learner_persona(capital=10000)
+    check = pre_trade_check(
+        side="buy",
+        symbol="INFY.NS",
+        quantity=5,
+        price=100,
+        snapshot={"cash": 9000, "equity": 10000, "positions": []},
+        persona=persona,
+        investment_score={},
+        research_gate={"allowed": True, "action": "buy_ok"},
+        require_score=True,
+        min_investment_confidence="low",
+    )
+    assert check["allowed"] is True
+    assert not any("investment_confidence_floor" in r for r in check["reasons"])
 
 
 def test_optimize_candidate_sizes():

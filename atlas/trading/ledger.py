@@ -181,13 +181,20 @@ class PortfolioLedgerService:
         list_mv = getattr(self._portfolio._repo, "list_cash_movements", None)
         if callable(list_mv):
             try:
-                movements = list_mv(portfolio_id, limit=20)
+                # Cash-flow-adjusted returns need the full movement history, not
+                # only the latest page. The response still exposes just 10 rows.
+                movements = list_mv(portfolio_id, limit=10_000)
             except Exception:  # noqa: BLE001
                 movements = []
         withdrawn = sum(
             abs(float(m.get("amount") or 0.0))
             for m in movements
             if str(m.get("kind") or "") == "withdraw"
+        )
+        deposited = sum(
+            float(m.get("amount") or 0.0)
+            for m in movements
+            if str(m.get("kind") or "") == "deposit"
         )
         withdrawal_tds = sum(
             float(m.get("tds") or 0.0)
@@ -202,6 +209,7 @@ class PortfolioLedgerService:
             "trade_count": len(trades),
             "recent_trades": trades[:10],
             "cash_movements": movements[:10],
+            "deposited": round(deposited, 4),
             "withdrawn": round(withdrawn, 4),
             "withdrawal_tds": round(withdrawal_tds, 4),
             "broker_profile_id": profile.id if profile else None,

@@ -62,23 +62,47 @@ def test_filter_journals_isolates_books():
     assert only_b[0]["advice"] == "from B"
 
 
-def test_ensure_from_config_and_decision_overrides():
+def test_ensure_from_config_preserves_higher_capital():
     vp.clear()
+    vp.register(
+        label="Learner",
+        portfolio_key="india_equity_learner",
+        persona={"objective": "Wealth", "capital": 75000},
+        mission_id="m-old",
+    )
     row = vp.ensure_from_config(
         {
-            "portfolio_key": "swing_25k",
-            "portfolio_label": "₹25k Swing",
-            "starting_cash": 25000,
-            "persona": {"objective": "Growth", "risk": "high", "time_horizon": "3m"},
-            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "starting_cash": 10000,
+            "persona": {"objective": "Wealth", "capital": 10000},
         },
-        mission_id="m-swing",
+        mission_id="m-new",
     )
-    assert row["mission_id"] == "m-swing"
-    cfg = vp.default_decision_config(row)
-    assert cfg["portfolio_key"] == "swing_25k"
-    assert cfg["starting_cash"] == 25000.0
-    assert cfg["persona"]["objective"] == "Growth"
+    assert row["persona"]["capital"] == 75000.0
+    assert row["mission_id"] == "m-new"
+
+
+def test_registry_survives_reload_via_disk(tmp_path, monkeypatch):
+    path = tmp_path / "virtual_portfolios.json"
+    monkeypatch.setenv("ATLAS_VIRTUAL_PORTFOLIOS", str(path))
+    # Force unload so next access re-reads disk
+    vp.clear()
+    vp.register(
+        label="Persist Me",
+        portfolio_key="persist_me",
+        persona={"objective": "Wealth", "capital": 42000},
+        mission_id="m-persist",
+    )
+    assert path.is_file()
+    # Simulate process restart: wipe memory, keep disk
+    with vp._LOCK:  # noqa: SLF001
+        vp._STORE.clear()
+        vp._LOADED = False
+    row = vp.get("persist_me")
+    assert row is not None
+    assert row["persona"]["capital"] == 42000.0
+    assert row["mission_id"] == "m-persist"
+    assert vp.sync_live_cash("persist_me", 99000)["persona"]["capital"] == 99000.0
 
 
 def test_create_book_without_templates():

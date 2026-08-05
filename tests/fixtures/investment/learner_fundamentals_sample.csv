@@ -1,0 +1,4 @@
+symbol,pe,fcf,roe,roce,debt_to_equity,operating_margin,promoter_holding,pb,price,shares,sector,industry_pe_median,industry_pb_median,as_of,source,note
+INFY,24.5,18000,28,32,0.08,24,15,7.2,,,IT,28,6.5,2026-08-05,screener_export,sample row with industry median
+TCS,28,22000,25,30,0.05,22,72,,,,,IT,28,,2026-08-05,screener_export,sample
+APOLLOHOSP,,,,,,,,,,,,,Healthcare,,,fill: pe,fcf,roe,debt_to_equity

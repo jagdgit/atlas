@@ -29,10 +29,12 @@ class GovernmentIntelligenceWorker(PersistentWorker):
         *,
         data_dir: str,
         events: Any | None = None,
+        observations: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._data_dir = data_dir
         self._events = events
+        self._observations = observations
         self._logger = logger or logging.getLogger("atlas.workers.government_intelligence")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -110,6 +112,21 @@ class GovernmentIntelligenceWorker(PersistentWorker):
         state["sector_deltas"] = dict(snap.get("sector_deltas") or {})
         state["updated_at"] = snap.get("updated_at")
         state["brief"] = format_policy_brief(snap, limit=5)
+
+        # DI.Obs — one policy_event per tick summarizing catalog (dedupe via source stamp)
+        if self._observations is not None and int(state["item_count"] or 0) > 0:
+            try:
+                prev = state.get("obs_item_count")
+                if prev != state["item_count"]:
+                    self._observations.record_policy_event(
+                        title=f"policy catalog items={state['item_count']}",
+                        sectors=list(state["sector_deltas"])[:20],
+                        source="government_intelligence",
+                        extra={"updated_at": state.get("updated_at")},
+                    )
+                    state["obs_item_count"] = state["item_count"]
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.Obs policy_event skipped", exc_info=True)
 
         if self._events is not None:
             try:

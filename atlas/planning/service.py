@@ -226,7 +226,7 @@ class PlanningService:
         self,
         *,
         program_id: str = "market_intelligence",
-        capital: float = 10_000.0,
+        capital: float | None = None,
         portfolio_key: str | None = None,
         max_candidates: int = 5,
         deploy_fraction: float = 0.40,
@@ -238,8 +238,9 @@ class PlanningService:
 
         pid = (program_id or "market_intelligence").strip() or "market_intelligence"
         snap = wl.latest(pid)
-        cash = capital
         pkey = (portfolio_key or "").strip() or None
+        # Sizing base: explicit capital (from UI ledger cash) wins; else persona; else 10k.
+        cash = 10_000.0
         if pkey:
             book = vp.get(pkey)
             if book and isinstance(book.get("persona"), dict):
@@ -247,6 +248,11 @@ class PlanningService:
                     cash = float(book["persona"].get("capital") or cash)
                 except (TypeError, ValueError):
                     pass
+        if capital is not None:
+            try:
+                cash = float(capital)
+            except (TypeError, ValueError):
+                pass
         plan = plan_from_watchlist(
             snap,
             capital=cash,

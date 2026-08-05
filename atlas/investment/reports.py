@@ -40,6 +40,45 @@ def resolve_investor_recipients(
     return list(config_to or [])
 
 
+def _portfolio_planning_capital(portfolio: dict[str, Any] | None) -> float | None:
+    """Use marked book equity for plan sizing; registry/default capital is not cash truth."""
+    if not isinstance(portfolio, dict):
+        return None
+    for key in ("equity", "equity_value"):
+        value = portfolio.get(key)
+        if value is not None:
+            try:
+                amount = float(value)
+                if amount > 0:
+                    return amount
+            except (TypeError, ValueError):
+                pass
+    value = portfolio.get("cash")
+    try:
+        amount = float(value) if value is not None else 0.0
+        return amount if amount > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _money(value: Any) -> str:
+    if value is None:
+        return "unavailable"
+    try:
+        return f"₹{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _signed_money(value: Any) -> str:
+    if value is None:
+        return "unavailable (market close marks missing)"
+    try:
+        return f"{float(value):+,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def format_morning_report(
     *,
     plan: dict[str, Any] | None,
@@ -110,8 +149,15 @@ def format_morning_report(
     if portfolio:
         lines.append("")
         lines.append("Current portfolio snapshot:")
-        lines.append(f"  Cash: {portfolio.get('cash')}")
-        lines.append(f"  Equity value: {portfolio.get('equity_value') or portfolio.get('positions_value')}")
+        equity = portfolio.get("equity")
+        if equity is None:
+            equity = portfolio.get("equity_value")
+        lines.append(f"  Cash available: {_money(portfolio.get('cash'))}")
+        lines.append(f"  Holdings value: {_money(portfolio.get('holdings_value'))}")
+        lines.append(f"  Total portfolio equity: {_money(equity)}")
+        lines.append(
+            f"  Total P&L after deposits/withdrawals: {_money(portfolio.get('total_pnl'))}"
+        )
         pos = portfolio.get("positions") or portfolio.get("holdings") or []
         if isinstance(pos, dict):
             pos = [{"symbol": k, **(v if isinstance(v, dict) else {})} for k, v in pos.items()]
@@ -120,8 +166,17 @@ def format_morning_report(
                 continue
             lines.append(
                 f"  · {p.get('symbol')}: qty={p.get('quantity') or p.get('qty')} "
-                f"avg={p.get('avg_price') or p.get('avg_cost')}"
+                f"avg={p.get('avg_price') or p.get('avg_cost')} "
+                f"mark={p.get('mark')} unrealized={_signed_money(p.get('unrealized_pnl'))}"
             )
+        if pos:
+            lines.append(
+                "  Learning status: open observation only — no strategy outcome "
+                "is proven until exit/review against thesis falsifiers."
+            )
+        from atlas.investment.trading_kpis import format_kpi_section
+
+        lines.extend(format_kpi_section(portfolio.get("kpis")))
 
     if policy_snap:
         lines.append("")
@@ -144,6 +199,7 @@ def format_evening_report(
     research_digest: dict[str, Any] | None = None,
     no_fill_reasons: list[str] | None = None,
     catch_up: bool = False,
+    decisions: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     """Post-NSE close digest: what we planned, what filled, portfolio end state."""
     plan = plan or {}
@@ -221,17 +277,187 @@ def format_evening_report(
             if t.get(key):
                 lines.append(f"     {t.get(key)}")
 
+    # DI.1 — Decisions today (packets), not only fills.
+    decision_rows = list(decisions or [])
+    if not decision_rows and isinstance(portfolio, dict):
+        decision_rows = list(portfolio.get("decisions") or [])
+    try:
+        from atlas.investment.decision_packets import format_decisions_section
+
+        lines.extend(format_decisions_section(decision_rows))
+    except Exception:  # noqa: BLE001
+        lines.append("")
+        lines.append(f"Decisions today ({len(decision_rows)}):")
+        if not decision_rows:
+            lines.append("  (no decision packets recorded)")
+
+    # DI.2 — evolution open/closed counts
+    try:
+        from atlas.investment.decision_timeline import format_evolution_section
+
+        evo = None
+        if isinstance(portfolio, dict):
+            evo = portfolio.get("evolution")
+        if evo:
+            lines.extend(format_evolution_section(evo))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DI.4 — fundamentals honesty (empty PE theater)
+    try:
+        cov = None
+        if isinstance(portfolio, dict):
+            cov = portfolio.get("fundamentals_coverage")
+        if isinstance(cov, dict):
+            lines.append("")
+            lines.append("Fundamentals coverage (DI.4):")
+            lines.append(
+                f"  Store symbols={cov.get('symbols', 0)} "
+                f"with_pe={cov.get('with_pe', 0)} with_fcf={cov.get('with_fcf', 0)}"
+            )
+            if cov.get("note"):
+                lines.append(f"  Note: {cov.get('note')}")
+            gaps = cov.get("learner_gaps") or {}
+            if gaps.get("symbols_with_gaps"):
+                lines.append(
+                    f"  Watchlist gaps: {gaps.get('symbols_with_gaps')}/"
+                    f"{gaps.get('symbols_checked')} names missing PE/FCF/ROE "
+                    "(import required — never invent)"
+                )
+                if gaps.get("missing_pe") is not None:
+                    lines.append(
+                        f"  Missing PE={gaps.get('missing_pe')} "
+                        f"FCF={gaps.get('missing_fcf')} · "
+                        f"industry_pe_median present={gaps.get('with_industry_pe_median', 0)}"
+                    )
+                for g in (gaps.get("gaps") or [])[:5]:
+                    if isinstance(g, dict):
+                        lines.append(
+                            f"    · {g.get('symbol')}: missing "
+                            f"{', '.join(g.get('missing') or [])}"
+                        )
+                lines.append(
+                    "  Fill: GET /v1/market/fundamentals/learner-template"
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DI.Obs — recent observations
+    try:
+        from atlas.investment.observations import format_observations_section
+
+        obs_rows = None
+        if isinstance(portfolio, dict):
+            obs_rows = portfolio.get("observations")
+        if obs_rows is not None:
+            lines.extend(format_observations_section(obs_rows))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DI.Attr — outcome grades
+    try:
+        from atlas.investment.decision_attribution import format_attribution_section
+
+        attrs = None
+        if isinstance(portfolio, dict):
+            attrs = portfolio.get("attributions")
+        if attrs is not None:
+            lines.extend(format_attribution_section(attrs))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DI.3 — staged dashboards
+    try:
+        from atlas.investment.di_dashboards import format_di_dashboard_section
+
+        dash = None
+        if isinstance(portfolio, dict):
+            dash = portfolio.get("di_dashboards")
+        if dash:
+            lines.extend(format_di_dashboard_section(dash))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DI.5 — process proxies
+    try:
+        from atlas.investment.process_proxies import format_process_proxies_section
+
+        prox = None
+        if isinstance(portfolio, dict):
+            prox = portfolio.get("process_proxies")
+        if prox:
+            lines.extend(format_process_proxies_section(prox))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DI.6 — meta-learning
+    try:
+        from atlas.investment.meta_learning import format_meta_learning_section
+
+        meta = None
+        if isinstance(portfolio, dict):
+            meta = portfolio.get("meta_learning")
+        if meta:
+            lines.extend(format_meta_learning_section(meta))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DI.7 — ML export gate (never live NN)
+    try:
+        ml = None
+        if isinstance(portfolio, dict):
+            ml = portfolio.get("ml_export")
+        if isinstance(ml, dict) and ml.get("gate"):
+            g = ml["gate"]
+            lines.append("")
+            lines.append("ML export gate (DI.7):")
+            lines.append(
+                f"  allowed={g.get('allowed')} · total_closed={g.get('total_closed')} "
+                f"· trusted_tags={g.get('trusted_strategy_tags') or []}"
+            )
+            lines.append(
+                "  live_nn_trading=False — walk-forward must beat rules first"
+            )
+            if not g.get("allowed"):
+                lines.append(f"  blocked: {(g.get('reason') or '')[:140]}")
+    except Exception:  # noqa: BLE001
+        pass
+
     if portfolio:
         lines.append("")
         lines.append("End-of-day portfolio snapshot:")
-        equity_val = (
-            portfolio.get("equity_value")
-            or portfolio.get("positions_value")
-            or portfolio.get("holdings_value")
-            or portfolio.get("equity")
+        equity_val = portfolio.get("equity")
+        if equity_val is None:
+            equity_val = portfolio.get("equity_value")
+        day_pnl = portfolio.get("day_pnl")
+        total_pnl = portfolio.get("total_pnl")
+        lines.append(f"  Cash available: {_money(portfolio.get('cash'))}")
+        lines.append(f"  Holdings at latest close: {_money(portfolio.get('holdings_value'))}")
+        lines.append(f"  Total portfolio equity: {_money(equity_val)}")
+        lines.append(
+            "  Today's market P&L: ₹"
+            + _signed_money(day_pnl)
+            + (
+                f" ({float(portfolio.get('day_return_pct')):+.2f}%)"
+                if portfolio.get("day_return_pct") is not None
+                else ""
+            )
         )
-        lines.append(f"  Cash: {portfolio.get('cash')}")
-        lines.append(f"  Equity value: {equity_val}")
+        lines.append(
+            "  Total P&L after cash flows: ₹"
+            + _signed_money(total_pnl)
+            + (
+                f" ({float(portfolio.get('total_return_pct')):+.2f}%)"
+                if portfolio.get("total_return_pct") is not None
+                else ""
+            )
+        )
+        lines.append(
+            f"  Net contributed capital: {_money(portfolio.get('net_contributed_capital'))}"
+        )
+        lines.append(
+            f"  Valuation basis: {portfolio.get('valuation_basis') or 'average cost'}"
+        )
         if portfolio.get("trade_count") is not None:
             lines.append(f"  Trade count (ledger): {portfolio.get('trade_count')}")
         if portfolio.get("fees_paid") is not None:
@@ -248,8 +474,17 @@ def format_evening_report(
                 continue
             lines.append(
                 f"  · {p.get('symbol')}: qty={p.get('quantity') or p.get('qty')} "
-                f"avg={p.get('avg_price') or p.get('avg_cost')}"
+                f"avg={p.get('avg_price') or p.get('avg_cost')} "
+                f"mark={p.get('mark')} unrealized={_signed_money(p.get('unrealized_pnl'))}"
             )
+        if pos:
+            lines.append(
+                "  Learning status: open observation only — no strategy outcome "
+                "is proven until exit/review against thesis falsifiers."
+            )
+        from atlas.investment.trading_kpis import format_kpi_section
+
+        lines.extend(format_kpi_section(portfolio.get("kpis")))
 
     if policy_snap:
         lines.append("")
@@ -343,6 +578,15 @@ def format_weekly_research_report(
         lines.append("Open gaps (fact ≠ estimate ≠ gap):")
         for g in gaps[:10]:
             lines.append(f"  · {g}")
+    # DI.6 — attach meta-learning if caller embedded it on digest
+    meta = digest.get("meta_learning")
+    if isinstance(meta, dict) and meta.get("version"):
+        try:
+            from atlas.investment.meta_learning import format_meta_learning_section
+
+            lines.extend(format_meta_learning_section(meta))
+        except Exception:  # noqa: BLE001
+            pass
     lines.append("")
     lines.append("— Atlas Resource OS / Market Program · P10 simulation only")
     return subject, "\n".join(lines)
@@ -398,6 +642,29 @@ def format_trade_report(
         elif isinstance(expl, list):
             for e in expl[:8]:
                 lines.append(f"  · {e}")
+        research_gate = decision.get("research_gate")
+        if isinstance(research_gate, dict):
+            lines.append(
+                "  research gate: "
+                + ("allowed" if research_gate.get("allowed") else "blocked")
+                + f" · action={research_gate.get('action')}"
+                + (
+                    f" · reasons={research_gate.get('reasons')}"
+                    if research_gate.get("reasons")
+                    else ""
+                )
+            )
+        portfolio_gate = decision.get("portfolio_gate")
+        if isinstance(portfolio_gate, dict):
+            lines.append(
+                "  portfolio gate: "
+                + ("allowed" if portfolio_gate.get("allowed") else "blocked")
+                + (
+                    f" · reasons={portfolio_gate.get('reasons')}"
+                    if portfolio_gate.get("reasons")
+                    else ""
+                )
+            )
     if thesis and isinstance(thesis, dict):
         lines.append("")
         lines.append(f"Linked thesis: {thesis.get('id') or '(none)'}")
@@ -586,8 +853,13 @@ class InvestorReportMailer:
         plan = None
         if isinstance(snap, dict):
             plan = (snap.get("extra") or {}).get("daily_plan") or snap.get("daily_plan")
-            if not plan:
-                plan = plan_from_watchlist(snap)
+            capital = _portfolio_planning_capital(portfolio)
+            if not plan or capital is not None:
+                plan = plan_from_watchlist(
+                    snap,
+                    capital=capital if capital is not None else 10_000.0,
+                    portfolio_key=(portfolio or {}).get("portfolio_key"),
+                )
         policy = load_snapshot(self._data_dir) if self._data_dir else None
         subject, body = format_morning_report(
             plan=plan,
@@ -660,8 +932,13 @@ class InvestorReportMailer:
         plan = None
         if isinstance(snap, dict):
             plan = (snap.get("extra") or {}).get("daily_plan") or snap.get("daily_plan")
-            if not plan:
-                plan = plan_from_watchlist(snap)
+            capital = _portfolio_planning_capital(portfolio)
+            if not plan or capital is not None:
+                plan = plan_from_watchlist(
+                    snap,
+                    capital=capital if capital is not None else 10_000.0,
+                    portfolio_key=(portfolio or {}).get("portfolio_key"),
+                )
         policy = load_snapshot(self._data_dir) if self._data_dir else None
         no_fill = None
         if isinstance(portfolio, dict):
@@ -675,6 +952,7 @@ class InvestorReportMailer:
             research_digest=self._research_digest(program_id),
             no_fill_reasons=list(no_fill) if no_fill else None,
             catch_up=catch_up,
+            decisions=(portfolio or {}).get("decisions") if isinstance(portfolio, dict) else None,
         )
         return {
             "subject": subject,
@@ -758,6 +1036,20 @@ class InvestorReportMailer:
             except Exception:  # noqa: BLE001
                 self._logger.debug("weekly digest failed", exc_info=True)
                 digest = None
+        if not isinstance(digest, dict):
+            digest = {}
+        # DI.6 — embed meta-learning into weekly body
+        try:
+            from atlas.config import get_config
+            from atlas.investment.meta_learning import collect_meta_learning_inputs
+
+            data_dir = str(get_config().paths.data)
+            digest["meta_learning"] = collect_meta_learning_inputs(
+                data_dir=data_dir,
+                portfolio_key="india_equity_learner",
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("DI.6 weekly meta-learning skipped", exc_info=True)
         subject, body = format_weekly_research_report(digest=digest, program_id=program_id)
         return {
             "subject": subject,

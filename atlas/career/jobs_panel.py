@@ -164,32 +164,26 @@ class _EmptyContext:
 
 
 def _skill_names(personal: Any, *, include_inferred: bool) -> set[str]:
-    names: set[str] = set()
+    from atlas.personal.skill_hygiene import skill_names_from_facts
+
     try:
         facts = personal.list_facts(category="skill", limit=500) or []
     except Exception:  # noqa: BLE001
-        return names
-    for f in facts:
-        state = str(f.get("state") or "")
-        if state == "rejected":
-            continue
-        if state == "inferred" and not include_inferred:
-            continue
-        val = f.get("value") or {}
-        skill = str(val.get("skill") or f.get("key") or "").strip()
-        if not skill or re_noise(skill):
-            continue
-        names.add(skill.lower())
-    return names
+        try:
+            facts = personal.skills(include_inferred=include_inferred) or []
+        except Exception:  # noqa: BLE001
+            return set()
+    return {
+        n.lower()
+        for n in skill_names_from_facts(facts, include_inferred=include_inferred)
+    }
 
 
 def re_noise(skill: str) -> bool:
-    import re
+    """Backward-compatible alias for CI.0.1 hygiene."""
+    from atlas.personal.skill_hygiene import is_noise_skill
 
-    s = skill.strip()
-    if s.lower() in {"original", "skill"}:
-        return True
-    return bool(re.search(r"-[a-f0-9]{6,}$", s, re.I))
+    return is_noise_skill(skill)
 
 
 def _load_feed_path(path: str) -> tuple[list[dict[str, Any]], str | None]:

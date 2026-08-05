@@ -18,7 +18,7 @@ from typing import Any
 
 _log = logging.getLogger("atlas.investment.fundamentals")
 
-VERSION = "iip.3.fundamentals"
+VERSION = "di.4.fundamentals"
 STORE_REL = Path("investment") / "fundamentals"
 IMPORT_DROP_REL = Path("imports") / "fundamentals"
 DEFAULT_PROGRAM = "market_intelligence"
@@ -26,6 +26,7 @@ SOURCE_OPERATOR = "operator_import"
 SOURCE_SCREENER_EXPORT = "screener_export"
 
 # Schema v2 — importable fields (never invent missing ones).
+# Industry/peer medians are optional operator evidence only — never computed.
 SCHEMA_FIELDS: tuple[str, ...] = (
     "roe",
     "roce",
@@ -46,6 +47,30 @@ SCHEMA_FIELDS: tuple[str, ...] = (
     "shares",
     "market_cap",
     "sector",
+    "industry_pe_median",
+    "industry_pb_median",
+    "industry_roe_median",
+)
+
+# Columns for learner gap-fill CSV (operator paste/Screener export target).
+LEARNER_TEMPLATE_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "pe",
+    "fcf",
+    "roe",
+    "roce",
+    "debt_to_equity",
+    "operating_margin",
+    "promoter_holding",
+    "pb",
+    "price",
+    "shares",
+    "sector",
+    "industry_pe_median",
+    "industry_pb_median",
+    "as_of",
+    "source",
+    "note",
 )
 
 # CSV / export header aliases → canonical field
@@ -71,6 +96,18 @@ _ALIASES: dict[str, str] = {
     "p/b": "pb",
     "fcf": "fcf",
     "free cash flow": "fcf",
+    "industry pe median": "industry_pe_median",
+    "industry_pe_median": "industry_pe_median",
+    "industry average pe": "industry_pe_median",
+    "industry_avg_pe": "industry_pe_median",
+    "peer pe median": "industry_pe_median",
+    "peer_pe_median": "industry_pe_median",
+    "industry pb median": "industry_pb_median",
+    "industry_pb_median": "industry_pb_median",
+    "industry average pb": "industry_pb_median",
+    "peer pb median": "industry_pb_median",
+    "industry roe median": "industry_roe_median",
+    "industry_roe_median": "industry_roe_median",
     "operating margin": "operating_margin",
     "opm": "operating_margin",
     "net margin": "net_margin",
@@ -120,6 +157,9 @@ FIELD_TO_SECTIONS: dict[str, tuple[str, ...]] = {
     "earnings_cagr": ("growth",),
     "promoter_holding": ("management", "governance"),
     "pledge_pct": ("management", "risks", "governance"),
+    "industry_pe_median": ("valuation", "mos"),
+    "industry_pb_median": ("valuation",),
+    "industry_roe_median": ("financial_health", "profitability"),
 }
 
 
@@ -526,17 +566,234 @@ def as_quality_map(
     return out
 
 
+def learner_fundamentals_gaps(
+    data_dir: str | Path | None,
+    symbols: list[str],
+    *,
+    program_id: str = DEFAULT_PROGRAM,
+    critical_fields: tuple[str, ...] = ("pe", "fcf", "roe", "debt_to_equity"),
+) -> dict[str, Any]:
+    """DI.4 honesty — which learner symbols still lack PE/FCF/etc. Never invent."""
+    want = [str(s).strip() for s in symbols if str(s).strip()]
+    gaps: list[dict[str, Any]] = []
+    present = 0
+    missing_pe = 0
+    missing_fcf = 0
+    with_industry_pe = 0
+    for sym in want:
+        row = get_symbol(data_dir, sym, program_id=program_id) or {}
+        missing = [f for f in critical_fields if row.get(f) is None]
+        # fcf alias
+        if "fcf" in missing and row.get("free_cash_flow") is not None:
+            missing = [f for f in missing if f != "fcf"]
+        if row.get("industry_pe_median") is not None:
+            with_industry_pe += 1
+        if not row:
+            missing_pe += 1
+            missing_fcf += 1
+            gaps.append(
+                {
+                    "symbol": sym,
+                    "missing": list(critical_fields),
+                    "status": "no_row",
+                    "evidence_sufficiency": "missing",
+                }
+            )
+            continue
+        present += 1
+        if row.get("pe") is None:
+            missing_pe += 1
+        if row.get("fcf") is None and row.get("free_cash_flow") is None:
+            missing_fcf += 1
+        if missing:
+            gaps.append(
+                {
+                    "symbol": sym,
+                    "missing": missing,
+                    "status": "partial",
+                    "evidence_sufficiency": row.get("evidence_sufficiency") or "weak",
+                    "fields_present": row.get("fields_present") or [],
+                }
+            )
+    return {
+        "program_id": program_id,
+        "symbols_checked": len(want),
+        "symbols_with_row": present,
+        "symbols_with_gaps": len(gaps),
+        "missing_pe": missing_pe,
+        "missing_fcf": missing_fcf,
+        "with_industry_pe_median": with_industry_pe,
+        "critical_fields": list(critical_fields),
+        "gaps": gaps[:80],
+        "honesty": (
+            "Missing PE/FCF are real gaps — Atlas must not invent industry averages. "
+            "Import Screener CSV or drop into imports/fundamentals/. "
+            "Optional industry_*_median columns are operator evidence only."
+        ),
+        "import_hint": (
+            "GET /v1/market/fundamentals/learner-template → fill → "
+            "POST /v1/market/fundamentals/import (or import-drop)"
+        ),
+    }
+
+
+def peer_context(row: dict[str, Any] | None) -> dict[str, Any]:
+    """Honest PE/peer lens — never invent industry medians."""
+    fund = row if isinstance(row, dict) else {}
+    pe = _to_float(fund.get("pe"))
+    ind_pe = _to_float(fund.get("industry_pe_median"))
+    pb = _to_float(fund.get("pb"))
+    ind_pb = _to_float(fund.get("industry_pb_median"))
+    out: dict[str, Any] = {
+        "pe": pe,
+        "industry_pe_median": ind_pe,
+        "pb": pb,
+        "industry_pb_median": ind_pb,
+        "pe_vs_industry_median_pct": None,
+        "may_claim_below_industry_pe": False,
+        "fair_pe_is_not_industry_average": True,
+        "honesty": (
+            "fair_pe (when present on valuation) is a quality heuristic — "
+            "not an industry average. Only imported industry_*_median counts "
+            "as peer/industry evidence."
+        ),
+    }
+    if pe is not None and ind_pe is not None and ind_pe > 0:
+        vs = round(100.0 * (ind_pe - pe) / pe, 2)
+        out["pe_vs_industry_median_pct"] = vs
+        out["may_claim_below_industry_pe"] = pe < ind_pe
+        out["honesty"] = (
+            f"PE {pe} vs imported industry median {ind_pe} "
+            f"({'below' if pe < ind_pe else 'at/above'} median)."
+        )
+    elif pe is not None and ind_pe is None:
+        out["honesty"] = (
+            f"PE {pe} present but industry_pe_median missing — "
+            "do not claim 'below industry average'."
+        )
+    elif pe is None:
+        out["honesty"] = "PE missing — valuation peer lens unavailable."
+    return out
+
+
+def learner_gap_fill_template(
+    data_dir: str | Path | None,
+    symbols: list[str],
+    *,
+    program_id: str = DEFAULT_PROGRAM,
+    only_gaps: bool = True,
+) -> dict[str, Any]:
+    """Build CSV + rows for operator to fill learner PE/FCF gaps (DI.4 deepen).
+
+    Prefills known fields; leaves missing critical cells empty. Never invents.
+    """
+    want = [normalize_symbol(s) for s in symbols if str(s).strip()]
+    want = [s for s in want if s]
+    # de-dupe preserve order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for s in want:
+        if s not in seen:
+            seen.add(s)
+            ordered.append(s)
+
+    gaps_doc = learner_fundamentals_gaps(
+        data_dir, ordered, program_id=program_id
+    )
+    gap_syms = {g["symbol"] for g in gaps_doc.get("gaps") or []}
+    # normalize gap symbols
+    gap_syms = {normalize_symbol(s) for s in gap_syms}
+
+    rows_out: list[dict[str, Any]] = []
+    for sym in ordered:
+        if only_gaps and sym not in gap_syms:
+            # still include if completely missing pe/fcf check via gap set
+            continue
+        row = get_symbol(data_dir, sym, program_id=program_id) or {}
+        line: dict[str, Any] = {"symbol": sym}
+        for col in LEARNER_TEMPLATE_COLUMNS:
+            if col == "symbol":
+                continue
+            val = row.get(col)
+            if col == "fcf" and val is None:
+                val = row.get("free_cash_flow")
+            if col == "source":
+                line[col] = val or SOURCE_OPERATOR
+            elif col == "as_of":
+                line[col] = val or ""
+            elif col == "note":
+                missing = [
+                    f
+                    for f in ("pe", "fcf", "roe", "debt_to_equity")
+                    if row.get(f) is None
+                    and not (f == "fcf" and row.get("free_cash_flow") is not None)
+                ]
+                line[col] = (
+                    f"fill: {','.join(missing)}" if missing else (val or "")
+                )
+            else:
+                line[col] = val if val is not None else ""
+        rows_out.append(line)
+
+    # If only_gaps filtered everything but symbols exist without gaps, return empty
+    # template header still useful — include all when only_gaps and no gap rows
+    if only_gaps and not rows_out and ordered:
+        # all covered — return empty with note
+        pass
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(LEARNER_TEMPLATE_COLUMNS))
+    writer.writeheader()
+    for line in rows_out:
+        writer.writerow({k: line.get(k, "") for k in LEARNER_TEMPLATE_COLUMNS})
+    csv_text = buf.getvalue()
+
+    return {
+        "version": VERSION,
+        "program_id": program_id,
+        "only_gaps": only_gaps,
+        "symbols_requested": len(ordered),
+        "rows": rows_out,
+        "row_count": len(rows_out),
+        "csv": csv_text,
+        "columns": list(LEARNER_TEMPLATE_COLUMNS),
+        "gaps": gaps_doc,
+        "drop_dir": str(import_drop_dir(data_dir)) if data_dir else None,
+        "help": (
+            "1) Download/copy csv  2) Fill empty pe/fcf/… from Screener export "
+            "3) Optional: add industry_pe_median for peer honesty "
+            "4) POST /v1/market/fundamentals/import {\"csv\": \"...\"} "
+            "or drop file into imports/fundamentals/"
+        ),
+        "honesty": (
+            "Empty cells stay empty until you import — Atlas never invents "
+            "PE, FCF, or industry medians."
+        ),
+    }
+
+
 def fundamentals_view(
     data_dir: str | Path | None,
     *,
     program_id: str = DEFAULT_PROGRAM,
     limit: int = 40,
+    gap_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     doc = load_store(data_dir, program_id)
     symbols = doc.get("symbols") or {}
     rows = []
+    pe_count = 0
+    fcf_count = 0
+    industry_pe_count = 0
     for sym, row in list(symbols.items())[: max(1, int(limit))]:
         if isinstance(row, dict):
+            if row.get("pe") is not None:
+                pe_count += 1
+            if row.get("fcf") is not None or row.get("free_cash_flow") is not None:
+                fcf_count += 1
+            if row.get("industry_pe_median") is not None:
+                industry_pe_count += 1
+            peer = peer_context(row)
             rows.append(
                 {
                     "symbol": sym,
@@ -548,13 +805,55 @@ def fundamentals_view(
                     "roce": row.get("roce"),
                     "debt_to_equity": row.get("debt_to_equity"),
                     "pe": row.get("pe"),
+                    "fcf": row.get("fcf") or row.get("free_cash_flow"),
+                    "industry_pe_median": row.get("industry_pe_median"),
+                    "peer_context": peer,
                 }
             )
+    # full-store coverage (not just limited rows)
+    all_pe = sum(
+        1
+        for r in symbols.values()
+        if isinstance(r, dict) and r.get("pe") is not None
+    )
+    all_fcf = sum(
+        1
+        for r in symbols.values()
+        if isinstance(r, dict)
+        and (r.get("fcf") is not None or r.get("free_cash_flow") is not None)
+    )
+    all_ind = sum(
+        1
+        for r in symbols.values()
+        if isinstance(r, dict) and r.get("industry_pe_median") is not None
+    )
     drop = import_drop_dir(data_dir) if data_dir else None
-    return {
+    out: dict[str, Any] = {
         "count": len(symbols),
         "rows": rows,
+        "coverage": {
+            "symbols": len(symbols),
+            "with_pe": all_pe,
+            "with_fcf": all_fcf,
+            "with_industry_pe_median": all_ind,
+            "pe_coverage_pct": round(100.0 * all_pe / max(1, len(symbols)), 1)
+            if symbols
+            else 0.0,
+            "note": (
+                "Empty PE/FCF is honest incomplete evidence — not a valuation signal."
+                if all_pe == 0
+                else (
+                    None
+                    if all_ind
+                    else (
+                        "PE present but industry_pe_median mostly missing — "
+                        "do not claim 'below industry average'."
+                    )
+                )
+            ),
+        },
         "schema_fields": list(SCHEMA_FIELDS),
+        "learner_template_columns": list(LEARNER_TEMPLATE_COLUMNS),
         "field_to_sections": {k: list(v) for k, v in FIELD_TO_SECTIONS.items()},
         "drop_dir": str(drop) if drop else None,
         "path": str(store_path(data_dir, program_id)) if data_dir else None,
@@ -562,6 +861,13 @@ def fundamentals_view(
         "guide": (
             "Export from Screener.in (ToS-safe CSV) or paste JSON. "
             "Required: symbol column. Useful: ROE, ROCE, Debt to equity, "
-            "Operating margin, Promoter holding, Sales growth, PE, FCF."
+            "Operating margin, Promoter holding, Sales growth, PE, FCF. "
+            "Optional peer honesty: industry_pe_median / industry_pb_median. "
+            "GET /v1/market/fundamentals/learner-template for gap-fill CSV."
         ),
     }
+    if gap_symbols:
+        out["learner_gaps"] = learner_fundamentals_gaps(
+            data_dir, gap_symbols, program_id=program_id
+        )
+    return out

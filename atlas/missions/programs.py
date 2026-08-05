@@ -40,29 +40,44 @@ LIFECYCLE_LABELS: dict[str, str] = {
 
 
 def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
-    """OX.1 / IL-Q5 preset: ₹10k India cash-equity learner (auto universe, live feed)."""
+    """OX.1 / IL-Q5 preset: India cash-equity learner (auto universe, live feed).
+
+    Default book starts at ₹50k; operators can deposit more cash any time.
+    """
     from atlas.investment.portfolios import india_equity_learner_persona
 
-    persona = india_equity_learner_persona(capital=10000.0)
+    persona = india_equity_learner_persona(capital=50000.0)
     sim = {
         "instruments": [],
-        "starting_cash": 10000.0,
+        # Starting capital is a bootstrap; deposit cash anytime via Market → Sim book
+        # or POST /v1/market/portfolios/{key}/deposit.
+        "starting_cash": 50000.0,
         "feed_mode": "live",
         "live_provider": "yahoo",
         "market_session": "nse_equity",
         "respect_market_hours": True,
         "universe_index": "NIFTY50",
-        "auto_max_instruments": 10,
+        "auto_max_instruments": 20,
+        # When top names are untradeable (price, hold, research), try next ranked names.
+        "prefer_next_alternatives": True,
+        "max_next_alternatives": 12,
         "program_id": "market_intelligence",
         "broker_profile": "zerodha",
         "portfolio_key": "india_equity_learner",
-        "portfolio_label": "₹10k India Equity Learner",
-        "persona": persona,
+        "portfolio_label": "India Equity Learner",
+        "persona": {**persona, "capital": float(persona.get("capital") or 50000.0)},
         "asset_class": "cash_equity",
         "require_mvr": True,
         "require_thesis": True,
         "research_auto_mvr": True,
         "mos_mode": "soft",
+        # Hard ceiling for one name. Each buy targets the persona per-name budget
+        # (~18% for medium risk) so a day's other candidates still have room.
+        "max_exposure_pct": 40.0,
+        "strategy": {
+            "trade_fraction": 1.0,
+            "allow_min_lot": True,
+        },
     }
     return {
         "investment_universe": {
@@ -77,7 +92,7 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
         "decision_simulation": dict(sim),
         "paper_trading": dict(sim),
         "portfolio_ledger": {
-            "starting_cash": 10000.0,
+            "starting_cash": 50000.0,
             "broker_profile": "zerodha",
             "portfolio_key": "india_equity_learner",
         },
@@ -129,6 +144,11 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "mentor_writeback": True,
             "send_weekly": True,
             "max_symbols": 10,
+        },
+        "decision_evolution": {
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "max_revisits": 20,
         },
     }
 
@@ -256,6 +276,22 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 description="ThesisOutcomes → Mentor lessons + weekly research learning email",
             ),
             ProgramMember(
+                role="Decision Evolution",
+                template="decision_evolution",
+                kind="maintenance",
+                cadence="daily IST",
+                status=MEMBER_ENABLED,
+                description="DI.2 timeline revisits Day1→Week1→Month1→Quarter (what_changed)",
+            ),
+            ProgramMember(
+                role="Decision Meta-Learning",
+                template="decision_meta_learning",
+                kind="learning",
+                cadence="weekly",
+                status=MEMBER_ENABLED,
+                description="DI.6 Intelligence digest + playbook proposals (never auto-edit strategy)",
+            ),
+            ProgramMember(
                 role="Event Research",
                 template="event_research",
                 kind="research",
@@ -343,8 +379,8 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
         id="personal_intelligence",
         title="Personal Intelligence",
         description=(
-            "Owner archive → personal knowledge; career and life advisors. "
-            "Observer + Career Advisor + Personal Mentor."
+            "Owner archive → personal knowledge; career observe → research → advise. "
+            "Personal Observer + Career Observer + Career Research + Career Advisor + Mentor."
         ),
         members=(
             ProgramMember(
@@ -356,12 +392,28 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 description="Docs / chats / notes → personal knowledge",
             ),
             ProgramMember(
+                role="Career Observer",
+                template="career_observer",
+                kind="career",
+                cadence="daily",
+                status=MEMBER_ENABLED,
+                description="LinkedIn export / feeds → career knowledge (discover only)",
+            ),
+            ProgramMember(
+                role="Career Research",
+                template="career_research",
+                kind="research",
+                cadence="daily",
+                status=MEMBER_ENABLED,
+                description="Deepen companies on shared Company entity (research only)",
+            ),
+            ProgramMember(
                 role="Career Advisor",
                 template="job_hunting",
                 kind="career",
                 cadence="daily",
                 status=MEMBER_ENABLED,
-                description="Job hunt simulation / coaching",
+                description="Rank jobs for the owner (recommend-only; never apply)",
             ),
             ProgramMember(
                 role="Personal Mentor",

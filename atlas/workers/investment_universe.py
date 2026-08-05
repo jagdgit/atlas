@@ -33,6 +33,7 @@ class InvestmentUniverseWorker(PersistentWorker):
         experience_os: Any | None = None,
         investment_research: Any | None = None,
         data_dir: str | None = None,
+        decision_packets: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._events = events
@@ -41,6 +42,7 @@ class InvestmentUniverseWorker(PersistentWorker):
         self._experience = experience_os
         self._research = investment_research
         self._data_dir = data_dir
+        self._decision_packets = decision_packets
         self._logger = logger or logging.getLogger("atlas.workers.investment_universe")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -224,8 +226,20 @@ class InvestmentUniverseWorker(PersistentWorker):
         phase_info = summarize_phase(ranked)
 
         from atlas.investment.daily_plan import build_daily_plan
+        from atlas.investment import portfolios as vp
 
+        portfolio_key = str(cfg.get("portfolio_key") or "").strip() or None
         persona_capital = cfg.get("starting_cash") or cfg.get("capital")
+        # Prefer live learner book capital when registered (avoids stale ₹10k plan).
+        if portfolio_key:
+            book = vp.get(portfolio_key)
+            if book and isinstance(book.get("persona"), dict):
+                try:
+                    live = float((book.get("persona") or {}).get("capital") or 0)
+                    if live > 0:
+                        persona_capital = live
+                except (TypeError, ValueError):
+                    pass
         try:
             plan_capital = float(persona_capital) if persona_capital is not None else 10_000.0
         except (TypeError, ValueError):
@@ -234,7 +248,7 @@ class InvestmentUniverseWorker(PersistentWorker):
             ranked,
             capital=plan_capital,
             program_id=program_id,
-            portfolio_key=str(cfg.get("portfolio_key") or "").strip() or None,
+            portfolio_key=portfolio_key,
             index=index,
             max_candidates=min(5, max_watch),
             extra={
@@ -287,6 +301,23 @@ class InvestmentUniverseWorker(PersistentWorker):
             {"symbol": r["symbol"], "reason": r.get("reason", ""), "score": r.get("score")}
             for r in ranked[:5]
         ]
+
+        # DI.1 — once-per-day plan_watch packets for plan candidates (idempotent).
+        if self._decision_packets is not None and portfolio_key:
+            try:
+                from atlas.investment.decision_packets import emit_plan_watch_packets
+
+                written = emit_plan_watch_packets(
+                    self._decision_packets,
+                    daily_plan=daily_plan,
+                    portfolio_key=portfolio_key,
+                    mission_id=str(ctx.mission_id) if ctx.mission_id else None,
+                    ts_ist=str(daily_plan.get("as_of") or ""),
+                    session=str(cfg.get("market_session") or "nse_equity"),
+                )
+                state["plan_watch_packets"] = len(written)
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.1 plan_watch emit skipped", exc_info=True)
 
         if self._events is not None:
             try:

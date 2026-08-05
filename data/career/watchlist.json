@@ -1,0 +1,1990 @@
+{
+  "items": [
+    {
+      "id": "2117f7e3-2e98-49de-8f2d-01fe3729a538",
+      "kind": "company",
+      "label": "ROHM Semiconductor",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.7931747,
+      "updated_at": 1785803604.7931747
+    },
+    {
+      "id": "212de94c-0fd0-4d61-8d59-cf026b621b17",
+      "kind": "company",
+      "label": "LTM",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.7936811,
+      "updated_at": 1785803604.7936811
+    },
+    {
+      "id": "af2ecbbe-bfcf-45a1-8878-095de8c65456",
+      "kind": "company",
+      "label": "Geekonik",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.7942436,
+      "updated_at": 1785803604.7942436
+    },
+    {
+      "id": "9dc5daf9-dfa6-4fa2-aca0-52478dbe4f3b",
+      "kind": "company",
+      "label": "Mini Sudoku, a puzzle by LinkedIn",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.795412,
+      "updated_at": 1785803604.795412
+    },
+    {
+      "id": "998d5a5e-9a2f-4aae-81b3-381d5dc26ae6",
+      "kind": "company",
+      "label": "Zip, a puzzle by LinkedIn",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.7960727,
+      "updated_at": 1785803604.7960727
+    },
+    {
+      "id": "3fe2311c-b0c4-4e16-9c8c-5192a1192683",
+      "kind": "company",
+      "label": "Linnk Academy India",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.7966201,
+      "updated_at": 1785803604.7966201
+    },
+    {
+      "id": "0dedb708-cc70-449f-9be5-15b161f9884e",
+      "kind": "company",
+      "label": "Peak Energy",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.7971587,
+      "updated_at": 1785803604.7971587
+    },
+    {
+      "id": "1eaf4a8d-9617-4f06-bb37-34528f94377a",
+      "kind": "company",
+      "label": "GE Vernova's Power segment",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.7978413,
+      "updated_at": 1785803604.7978413
+    },
+    {
+      "id": "e7900458-f0c4-4774-bb14-ac0aba087ab0",
+      "kind": "company",
+      "label": "GE Vernova",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8002095,
+      "updated_at": 1785803604.8002095
+    },
+    {
+      "id": "b682f20e-b292-4852-af98-225270c3abe5",
+      "kind": "company",
+      "label": "GE Vernova's Wind segment",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.800843,
+      "updated_at": 1785803604.800843
+    },
+    {
+      "id": "262114d9-7e0d-4176-8fa5-a905c3a660c8",
+      "kind": "company",
+      "label": "TotalEnergies Renewable Solutions",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.801467,
+      "updated_at": 1785803604.801467
+    },
+    {
+      "id": "d4a652d9-b964-40b9-8ada-151ca5a9cc0d",
+      "kind": "company",
+      "label": "Earthinators Climate School",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8020787,
+      "updated_at": 1785803604.8020787
+    },
+    {
+      "id": "9f58fa27-7928-4e26-9550-5cc0389f9b00",
+      "kind": "company",
+      "label": "LTIMindtree",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.802744,
+      "updated_at": 1785803604.802744
+    },
+    {
+      "id": "31759242-f1f2-4ee5-8f4f-1781d70aa0fb",
+      "kind": "company",
+      "label": "CableCommunity",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8034077,
+      "updated_at": 1785803604.8034077
+    },
+    {
+      "id": "517e75d7-1b6a-4fe9-834d-0b61ba48a705",
+      "kind": "company",
+      "label": "CoderzColumn",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8041165,
+      "updated_at": 1785803604.8041165
+    },
+    {
+      "id": "6b028245-d2b0-47e3-ba54-5febf78a9174",
+      "kind": "company",
+      "label": "Elite Automation",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8048432,
+      "updated_at": 1785803604.8048432
+    },
+    {
+      "id": "fa044550-b5a8-41b1-87fa-b47583888986",
+      "kind": "company",
+      "label": "MaxEye Technologies",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.805569,
+      "updated_at": 1785803604.805569
+    },
+    {
+      "id": "09235861-f979-4839-bf90-717b70e01b60",
+      "kind": "company",
+      "label": "SWAPNAKIRAN ENTERPRISES",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8063538,
+      "updated_at": 1785803604.8063538
+    },
+    {
+      "id": "4a412cb4-ecd9-4a0c-b3f1-8ac8f0644d6e",
+      "kind": "company",
+      "label": "Attri",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8071601,
+      "updated_at": 1785803604.8071601
+    },
+    {
+      "id": "69de1e9e-7eb2-45cd-947c-7cbefcd21e08",
+      "kind": "company",
+      "label": "Honeywell Technologies Process Automation & Technology",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8079734,
+      "updated_at": 1785803604.8079734
+    },
+    {
+      "id": "6c294cc0-a283-4d1e-b907-a71e1e5543f0",
+      "kind": "company",
+      "label": "TotalEnergies ENEOS",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8088171,
+      "updated_at": 1785803604.8088171
+    },
+    {
+      "id": "06336986-884b-4eb1-96b3-b0222df4ad03",
+      "kind": "company",
+      "label": "Dynocardia, Inc.",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8100839,
+      "updated_at": 1785803604.8100839
+    },
+    {
+      "id": "2353d250-d299-4db1-9f9b-40ed658c6517",
+      "kind": "company",
+      "label": "Valeo",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8111722,
+      "updated_at": 1785803604.8111722
+    },
+    {
+      "id": "0d4b2ca3-05aa-422d-a205-f8cbee37c9e0",
+      "kind": "company",
+      "label": "Mercedes-Benz Research and Development India",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8120987,
+      "updated_at": 1785803604.8120987
+    },
+    {
+      "id": "3c9d504a-c507-4d35-9048-4bf052d75d82",
+      "kind": "company",
+      "label": "Hunan Dye Natural Resource Inc-Raw ingredients manufacturer (On Food Chemical,pharmaceutical)",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.813041,
+      "updated_at": 1785803604.813041
+    },
+    {
+      "id": "e7f7b40b-da24-4151-8519-1fc65252b353",
+      "kind": "company",
+      "label": "UTC Aerospace Systems",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8140154,
+      "updated_at": 1785803604.8140154
+    },
+    {
+      "id": "3bc4aa66-abd5-4022-b67d-449964b1b6a6",
+      "kind": "company",
+      "label": "RTX",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8150754,
+      "updated_at": 1785803604.8150754
+    },
+    {
+      "id": "1ca4ea2c-1e18-49ed-bd55-517f1aa0f189",
+      "kind": "company",
+      "label": "Collins Aerospace",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8160937,
+      "updated_at": 1785803604.8160937
+    },
+    {
+      "id": "4b430043-d7e0-4255-b4ae-99f15dcf5392",
+      "kind": "company",
+      "label": "Rossell Techsys Limited",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8171036,
+      "updated_at": 1785803604.8171036
+    },
+    {
+      "id": "7812f352-d218-418a-b1a8-1c7728b2995d",
+      "kind": "company",
+      "label": "Felicity",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8181005,
+      "updated_at": 1785803604.8181005
+    },
+    {
+      "id": "449aedf7-c4e5-4d7b-9a61-e9d272dba61a",
+      "kind": "company",
+      "label": "NXP Semiconductors",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.819113,
+      "updated_at": 1785803604.819113
+    },
+    {
+      "id": "04429f9b-9464-4e69-8819-0ca77872bdff",
+      "kind": "company",
+      "label": "Share Street",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8201478,
+      "updated_at": 1785803604.8201478
+    },
+    {
+      "id": "3cf5ee75-957c-46d1-9391-c27fe556e838",
+      "kind": "company",
+      "label": "Bosch",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8212492,
+      "updated_at": 1785803604.8212492
+    },
+    {
+      "id": "a33e5df2-8e7d-42bc-85e9-f70dac1cc4a6",
+      "kind": "company",
+      "label": "Tata Technologies",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8224282,
+      "updated_at": 1785803604.8224282
+    },
+    {
+      "id": "6d6a2fea-437b-43a0-9316-44cbd227b45d",
+      "kind": "company",
+      "label": "Cyient",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8236296,
+      "updated_at": 1785803604.8236296
+    },
+    {
+      "id": "1026956b-8985-48fe-8cb9-c9b931c41791",
+      "kind": "company",
+      "label": "Bosch India",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.824851,
+      "updated_at": 1785803604.824851
+    },
+    {
+      "id": "667860ab-a659-4de7-9934-77303543e75a",
+      "kind": "company",
+      "label": "JLR",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.826589,
+      "updated_at": 1785803604.826589
+    },
+    {
+      "id": "d1e30f86-0bce-454a-a997-324215455583",
+      "kind": "company",
+      "label": "Trysol Global Services",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8289979,
+      "updated_at": 1785803604.8289979
+    },
+    {
+      "id": "3251d7b6-e016-466e-aef4-d2fa120ec879",
+      "kind": "company",
+      "label": "Bosch USA",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8303792,
+      "updated_at": 1785803604.8303792
+    },
+    {
+      "id": "68778aaf-7122-4d2c-95a4-99670fbb4600",
+      "kind": "company",
+      "label": "Strategy Analytics is now TechInsights",
+      "operator_status": "watching",
+      "notes": null,
+      "external_id": null,
+      "url": null,
+      "meta": {
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.831608,
+      "updated_at": 1785803604.831608
+    },
+    {
+      "id": "c5b7cf74-8baa-4390-ba37-2e1f53ece5cc",
+      "kind": "job",
+      "label": "System Test Engineer with MATLAB and Python Skills",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3132763342",
+      "url": "http://www.linkedin.com/jobs/view/3132763342",
+      "meta": {
+        "company": "Bosch Global Software Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8326187,
+      "updated_at": 1785807203.3174853
+    },
+    {
+      "id": "724a3728-6142-4fc6-b16b-d4a0796158a6",
+      "kind": "job",
+      "label": "2022_MBD_ESD_NR6_ADAS MATLAB Specialist",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3116812317",
+      "url": "http://www.linkedin.com/jobs/view/3116812317",
+      "meta": {
+        "company": "Bosch Global Software Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8336449,
+      "updated_at": 1785807203.3605978
+    },
+    {
+      "id": "9901b5dc-efef-4e1e-a0de-94b11e2326d8",
+      "kind": "job",
+      "label": "LabVIEW Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2809548665",
+      "url": "http://www.linkedin.com/jobs/view/2809548665",
+      "meta": {
+        "company": "SGS Tekniks Manufacturing Pvt. Ltd.",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8347316,
+      "updated_at": 1785807203.5212197
+    },
+    {
+      "id": "5b201310-38b9-48de-a6c7-a62138f103c4",
+      "kind": "job",
+      "label": "System Engineer for Two Wheeler Electric powertrain",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3192684667",
+      "url": "http://www.linkedin.com/jobs/view/3192684667",
+      "meta": {
+        "company": "Bosch India",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.835846,
+      "updated_at": 1785807203.547126
+    },
+    {
+      "id": "05fd925f-8694-4384-94e6-15311f41f8aa",
+      "kind": "job",
+      "label": "Application Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3260843065",
+      "url": "http://www.linkedin.com/jobs/view/3260843065",
+      "meta": {
+        "company": "Texas Instruments",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8375213,
+      "updated_at": 1785807203.3274593
+    },
+    {
+      "id": "9bd45942-da5b-4f2b-98b6-000d8da2b913",
+      "kind": "job",
+      "label": "Hardware Engineer - R&D",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2834595449",
+      "url": "http://www.linkedin.com/jobs/view/2834595449",
+      "meta": {
+        "company": "Evobi Automations Pvt Ltd",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8392086,
+      "updated_at": 1785807203.3298311
+    },
+    {
+      "id": "f2630f57-fc92-4d44-a1d7-4ebae86aee25",
+      "kind": "job",
+      "label": "Control System Engineer (DC-DC/OBC)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3342944314",
+      "url": "http://www.linkedin.com/jobs/view/3342944314",
+      "meta": {
+        "company": "Tata Elxsi",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8405712,
+      "updated_at": 1785807203.6271045
+    },
+    {
+      "id": "3fee795d-afcc-4626-a86d-8f86edad6f46",
+      "kind": "job",
+      "label": "linkedin-2818827346",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2818827346",
+      "url": "http://www.linkedin.com/jobs/view/2818827346",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.841938,
+      "updated_at": 1785807203.3346665
+    },
+    {
+      "id": "bcdff795-12a7-4936-9e33-60cadedbb51f",
+      "kind": "job",
+      "label": "LabVIEW",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3129102444",
+      "url": "http://www.linkedin.com/jobs/view/3129102444",
+      "meta": {
+        "company": "Cyient",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8431408,
+      "updated_at": 1785807203.3370292
+    },
+    {
+      "id": "43ca8634-a243-41fb-b2a5-298ce772cf4a",
+      "kind": "job",
+      "label": "System Simulation Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3116811018",
+      "url": "http://www.linkedin.com/jobs/view/3116811018",
+      "meta": {
+        "company": "Bosch Global Software Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.84428,
+      "updated_at": 1785807203.585198
+    },
+    {
+      "id": "006e3908-2cac-4ade-bc23-ae114d02aed2",
+      "kind": "job",
+      "label": "Design Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2819695179",
+      "url": "http://www.linkedin.com/jobs/view/2819695179",
+      "meta": {
+        "company": "Triphase Technologies (P) Ltd.",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.845429,
+      "updated_at": 1785807203.3417387
+    },
+    {
+      "id": "4f19d9a1-6b5b-4645-9ea3-486c47ef145c",
+      "kind": "job",
+      "label": "Product Design: Instrumentation and Controls Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2766029178",
+      "url": "http://www.linkedin.com/jobs/view/2766029178",
+      "meta": {
+        "company": "Fluence",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.846595,
+      "updated_at": 1785807203.3440187
+    },
+    {
+      "id": "22fab203-d8be-4432-8b55-6846cf81f7d1",
+      "kind": "job",
+      "label": "Academy Engineer - Semiconductor",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3082425187",
+      "url": "http://www.linkedin.com/jobs/view/3082425187",
+      "meta": {
+        "company": "NI (National Instruments)",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8477793,
+      "updated_at": 1785807203.3463588
+    },
+    {
+      "id": "adc6d899-8d37-4b2f-aae2-5368553732e6",
+      "kind": "job",
+      "label": "Senior Engineer - Labview Programming",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2836221750",
+      "url": "http://www.linkedin.com/jobs/view/2836221750",
+      "meta": {
+        "company": "FLEXI EFFICADS PRIVATE LIMITED",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8490105,
+      "updated_at": 1785807203.3488388
+    },
+    {
+      "id": "a8da5267-7fed-4391-90b2-87b51a4c51f2",
+      "kind": "job",
+      "label": "SME- EV Traction",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3025681295",
+      "url": "http://www.linkedin.com/jobs/view/3025681295",
+      "meta": {
+        "company": "Tata Elxsi",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.850322,
+      "updated_at": 1785807203.3511467
+    },
+    {
+      "id": "0f234364-5dda-492a-904b-5c8a49fe926c",
+      "kind": "job",
+      "label": "Power Electronics Hardware Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3229908253",
+      "url": "http://www.linkedin.com/jobs/view/3229908253",
+      "meta": {
+        "company": "NewSpace Research and Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8515854,
+      "updated_at": 1785807203.3535879
+    },
+    {
+      "id": "b513169e-7489-4c08-a5b1-16d735f69344",
+      "kind": "job",
+      "label": "LabVIEW Developer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-1256919420",
+      "url": "http://www.linkedin.com/jobs/view/1256919420",
+      "meta": {
+        "company": "Safran (Formerly Captronic Systems)",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8532345,
+      "updated_at": 1785807203.5285058
+    },
+    {
+      "id": "41955808-990b-4e16-8db4-fec1b89ba994",
+      "kind": "job",
+      "label": "Lead Power Electronic Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2788377933",
+      "url": "http://www.linkedin.com/jobs/view/2788377933",
+      "meta": {
+        "company": "Jaguar Land Rover India",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8548262,
+      "updated_at": 1785807203.358248
+    },
+    {
+      "id": "70a54f77-047f-40aa-b4c6-984a95301866",
+      "kind": "job",
+      "label": "Quality Assurance Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3237281551",
+      "url": "http://www.linkedin.com/jobs/view/3237281551",
+      "meta": {
+        "company": "Felicity",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.857563,
+      "updated_at": 1785807203.3628528
+    },
+    {
+      "id": "efac802a-133e-4d36-910b-f571ac7c6395",
+      "kind": "job",
+      "label": "Power electronics engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2753145348",
+      "url": "http://www.linkedin.com/jobs/view/2753145348",
+      "meta": {
+        "company": "AgniKul Cosmos",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8590183,
+      "updated_at": 1785807203.6042154
+    },
+    {
+      "id": "0e4d52d4-543e-4aa6-ad53-d1a37489cdca",
+      "kind": "job",
+      "label": "Instrumentation & Controls (LabView) Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3210530903",
+      "url": "http://www.linkedin.com/jobs/view/3210530903",
+      "meta": {
+        "company": "Skyroot Aerospace",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8611803,
+      "updated_at": 1785807203.367613
+    },
+    {
+      "id": "0583214e-4450-487f-81dd-4d1048854c82",
+      "kind": "job",
+      "label": "Power & Mixed Signal Electronics Hardware Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2843901867",
+      "url": "http://www.linkedin.com/jobs/view/2843901867",
+      "meta": {
+        "company": "Synedyne Systems",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8627343,
+      "updated_at": 1785807203.3699698
+    },
+    {
+      "id": "4ddd85f6-1b5f-4d82-ba98-1e647b75d1cb",
+      "kind": "job",
+      "label": "EV/HEV Hardware (Power Electronics / Electrification) Product Development",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3192685602",
+      "url": "http://www.linkedin.com/jobs/view/3192685602",
+      "meta": {
+        "company": "Bosch Global Software Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8642468,
+      "updated_at": 1785807203.5163438
+    },
+    {
+      "id": "2d35b086-8018-451d-958e-6a97ba3dbbb0",
+      "kind": "job",
+      "label": "Power Electronics",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3144471251",
+      "url": "http://www.linkedin.com/jobs/view/3144471251",
+      "meta": {
+        "company": "Cyient",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8656497,
+      "updated_at": 1785807203.3746521
+    },
+    {
+      "id": "03224950-bfb6-4ffc-9f99-7138d3de0033",
+      "kind": "job",
+      "label": "Labview Programmer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2794271182",
+      "url": "http://www.linkedin.com/jobs/view/2794271182",
+      "meta": {
+        "company": "SPM INDIA LTD",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8698761,
+      "updated_at": 1785807203.3816721
+    },
+    {
+      "id": "920e5ce1-b17f-4aef-94d0-dbd6d68c3c51",
+      "kind": "job",
+      "label": "Software Control Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3265868619",
+      "url": "http://www.linkedin.com/jobs/view/3265868619",
+      "meta": {
+        "company": "NXP Semiconductors",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8715496,
+      "updated_at": 1785807203.4121995
+    },
+    {
+      "id": "bf8d7789-0636-487f-99a9-59cdb88f0115",
+      "kind": "job",
+      "label": "Validation Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3249103574",
+      "url": "http://www.linkedin.com/jobs/view/3249103574",
+      "meta": {
+        "company": "Tata Elxsi",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8731122,
+      "updated_at": 1785807203.3863888
+    },
+    {
+      "id": "f8ae74e0-b768-4bd5-8a5a-15c0dc232dd8",
+      "kind": "job",
+      "label": "Hardware Design Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2821113739",
+      "url": "http://www.linkedin.com/jobs/view/2821113739",
+      "meta": {
+        "company": "BTL India Pvt Limited",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8747993,
+      "updated_at": 1785807203.4368477
+    },
+    {
+      "id": "2f023bbf-59af-4906-bb2f-717ac0f63cb5",
+      "kind": "job",
+      "label": "Principal Power Systems Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2720220205",
+      "url": "http://www.linkedin.com/jobs/view/2720220205",
+      "meta": {
+        "company": "Vysus Group",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8763337,
+      "updated_at": 1785807203.3911722
+    },
+    {
+      "id": "a78eec85-f267-49f7-8fa1-1b36fb4abb04",
+      "kind": "job",
+      "label": "Power Electronic Control Software",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3095793286",
+      "url": "http://www.linkedin.com/jobs/view/3095793286",
+      "meta": {
+        "company": "JLR",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8793452,
+      "updated_at": 1785807203.3957937
+    },
+    {
+      "id": "2f1cde16-d960-414b-8391-7710bcdf0d17",
+      "kind": "job",
+      "label": "Sr. LabVIEW Automation engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2803422040",
+      "url": "http://www.linkedin.com/jobs/view/2803422040",
+      "meta": {
+        "company": "Konem Pvt. Ltd.",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8808656,
+      "updated_at": 1785807203.3997507
+    },
+    {
+      "id": "120d57d4-1995-43a6-826a-08e600a5c81b",
+      "kind": "job",
+      "label": "Software Engineer - Labview",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2695600537",
+      "url": "http://www.linkedin.com/jobs/view/2695600537",
+      "meta": {
+        "company": "Lennox India Technology Centre",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8827,
+      "updated_at": 1785807203.4037056
+    },
+    {
+      "id": "6d49e910-4d64-405c-acaa-180010fe0c2b",
+      "kind": "job",
+      "label": "Exciting opportunity for Labview Developers - Design Engineers / Managers",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2861438640",
+      "url": "http://www.linkedin.com/jobs/view/2861438640",
+      "meta": {
+        "company": "VVDN Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8844764,
+      "updated_at": 1785807203.4077911
+    },
+    {
+      "id": "11bf4d36-cbaf-4ad7-9cb8-3d1c8f31cb85",
+      "kind": "job",
+      "label": "Senior Engineer/Data Scientist \u2013 NLP",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2766040696",
+      "url": "http://www.linkedin.com/jobs/view/2766040696",
+      "meta": {
+        "company": "VOICEplug AI",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.887637,
+      "updated_at": 1785807203.4161448
+    },
+    {
+      "id": "16013243-b319-41db-a75b-95533da07c60",
+      "kind": "job",
+      "label": "Lead Power Electronic Control Software",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2849255073",
+      "url": "http://www.linkedin.com/jobs/view/2849255073",
+      "meta": {
+        "company": "Jaguar Land Rover India",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.88923,
+      "updated_at": 1785807203.4201047
+    },
+    {
+      "id": "de11af94-db8e-4f52-a7bb-8a7fcfc76a48",
+      "kind": "job",
+      "label": "Instrumentation Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3189705556",
+      "url": "http://www.linkedin.com/jobs/view/3189705556",
+      "meta": {
+        "company": "L&T Technology Services",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.8908615,
+      "updated_at": 1785807203.5260642
+    },
+    {
+      "id": "31f3c8fb-af87-4f26-b279-8ea2d1701240",
+      "kind": "job",
+      "label": "matlab,simulink",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3131113680",
+      "url": "http://www.linkedin.com/jobs/view/3131113680",
+      "meta": {
+        "company": "Trysol Global Services",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.892784,
+      "updated_at": 1785807203.4285443
+    },
+    {
+      "id": "f7ccd8fa-cd92-4819-b169-a2bffd81c7b3",
+      "kind": "job",
+      "label": "HIL Validation Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3097396146",
+      "url": "http://www.linkedin.com/jobs/view/3097396146",
+      "meta": {
+        "company": "Tata Consultancy Services",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.89451,
+      "updated_at": 1785807203.4326024
+    },
+    {
+      "id": "2dc4c178-6128-4438-9daa-ee59111967ff",
+      "kind": "job",
+      "label": "Research And Development Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2826511473",
+      "url": "http://www.linkedin.com/jobs/view/2826511473",
+      "meta": {
+        "company": "HiyaMee",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.897899,
+      "updated_at": 1785807203.4408329
+    },
+    {
+      "id": "e99e897b-3f61-4199-994d-182f19c418dd",
+      "kind": "job",
+      "label": "Robotics - Control System Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2790021462",
+      "url": "http://www.linkedin.com/jobs/view/2790021462",
+      "meta": {
+        "company": "Flux Auto",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.899573,
+      "updated_at": 1785807203.4447713
+    },
+    {
+      "id": "60173806-273c-4975-abb7-c95a07d6750d",
+      "kind": "job",
+      "label": "Electric Vehicle- Traction Control",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3040866132",
+      "url": "http://www.linkedin.com/jobs/view/3040866132",
+      "meta": {
+        "company": "Tata Elxsi",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9013472,
+      "updated_at": 1785807203.4487276
+    },
+    {
+      "id": "feb0cfdd-b4ee-4d0d-9b52-5cb5e08a2547",
+      "kind": "job",
+      "label": "Research Scientist",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3361721408",
+      "url": "http://www.linkedin.com/jobs/view/3361721408",
+      "meta": {
+        "company": "Attri",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9030497,
+      "updated_at": 1785807203.452926
+    },
+    {
+      "id": "f7d2f819-c21a-4107-abd5-bfc414620ebd",
+      "kind": "job",
+      "label": "Fresher Hardware Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2802387989",
+      "url": "http://www.linkedin.com/jobs/view/2802387989",
+      "meta": {
+        "company": "Course",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.904906,
+      "updated_at": 1785807203.4570315
+    },
+    {
+      "id": "392ffe23-12a7-4ace-8059-585d762d7485",
+      "kind": "job",
+      "label": "LabVIEW and LabVIEW FPGA Engineers",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3386189360",
+      "url": "http://www.linkedin.com/jobs/view/3386189360",
+      "meta": {
+        "company": "MaxEye Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9066877,
+      "updated_at": 1785807203.461102
+    },
+    {
+      "id": "5a587388-cf97-4acd-8d0e-eaa6fd85136e",
+      "kind": "job",
+      "label": "Hardware Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2857509445",
+      "url": "http://www.linkedin.com/jobs/view/2857509445",
+      "meta": {
+        "company": "CUSMAT",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.908472,
+      "updated_at": 1785807203.4650183
+    },
+    {
+      "id": "8b585dde-074d-4be8-83d4-4d9658ae7533",
+      "kind": "job",
+      "label": "EAD Model Based Development with Control System and DSP 2022",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3116809440",
+      "url": "http://www.linkedin.com/jobs/view/3116809440",
+      "meta": {
+        "company": "Bosch Global Software Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.910336,
+      "updated_at": 1785807203.4690232
+    },
+    {
+      "id": "9894ad83-be98-463c-b1ee-44430e961461",
+      "kind": "job",
+      "label": "Energy Storage Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2800606066",
+      "url": "http://www.linkedin.com/jobs/view/2800606066",
+      "meta": {
+        "company": "Solarpro Holding",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9124188,
+      "updated_at": 1785807203.473103
+    },
+    {
+      "id": "bd95d348-574f-4e23-a5c6-64d4c80bb851",
+      "kind": "job",
+      "label": "Analog Circuit Design Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2790119823",
+      "url": "http://www.linkedin.com/jobs/view/2790119823",
+      "meta": {
+        "company": "AMD",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9166832,
+      "updated_at": 1785807203.481699
+    },
+    {
+      "id": "7aca26ff-f0b6-4e6b-8769-49004cef6f67",
+      "kind": "job",
+      "label": "Junior Electronics Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2792454876",
+      "url": "http://www.linkedin.com/jobs/view/2792454876",
+      "meta": {
+        "company": "Work With Botx",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.918644,
+      "updated_at": 1785807203.4861171
+    },
+    {
+      "id": "807a12bb-fb12-453d-ad23-bf7e16f98bb4",
+      "kind": "job",
+      "label": "Labview Software Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-1815221950",
+      "url": "http://www.linkedin.com/jobs/view/1815221950",
+      "meta": {
+        "company": "Testamatic Systems Private Limited",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9231603,
+      "updated_at": 1785807203.568916
+    },
+    {
+      "id": "f83b6e37-4d15-45e1-9a10-522ff50f5b70",
+      "kind": "job",
+      "label": "Electronics Hardware Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2766725850",
+      "url": "http://www.linkedin.com/jobs/view/2766725850",
+      "meta": {
+        "company": "Multispan Control Instruments Pvt Ltd",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9273913,
+      "updated_at": 1785807203.4970212
+    },
+    {
+      "id": "228f9d91-42fe-4177-beff-646f1e605c46",
+      "kind": "job",
+      "label": "linkedin-3018739063",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3018739063",
+      "url": "http://www.linkedin.com/jobs/view/3018739063",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.933566,
+      "updated_at": 1785807203.4993417
+    },
+    {
+      "id": "eb43ca68-e800-43cf-95db-a9e538e3bfa4",
+      "kind": "job",
+      "label": "Flight Control Design Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2800114753",
+      "url": "http://www.linkedin.com/jobs/view/2800114753",
+      "meta": {
+        "company": "NewSpace Research and Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9360218,
+      "updated_at": 1785807203.5016952
+    },
+    {
+      "id": "151150c1-c882-4043-afa8-8529fa77c1c0",
+      "kind": "job",
+      "label": "linkedin-2816506469",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2816506469",
+      "url": "http://www.linkedin.com/jobs/view/2816506469",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9454408,
+      "updated_at": 1785807203.506532
+    },
+    {
+      "id": "094df788-61c0-42a8-ada9-cd6336723fa5",
+      "kind": "job",
+      "label": "Analog Circuit Design Lead - PMIC",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2788393152",
+      "url": "http://www.linkedin.com/jobs/view/2788393152",
+      "meta": {
+        "company": "Texas Instruments",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.947464,
+      "updated_at": 1785807203.5088546
+    },
+    {
+      "id": "e812db18-c3f2-4bad-a81f-7c48649096fb",
+      "kind": "job",
+      "label": "Power Electronics Engieer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2817986861",
+      "url": "http://www.linkedin.com/jobs/view/2817986861",
+      "meta": {
+        "company": "Quest Global",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.949542,
+      "updated_at": 1785807203.5113819
+    },
+    {
+      "id": "e7046b7e-842b-4f97-a627-2ec00aafbd64",
+      "kind": "job",
+      "label": "Test Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3365804923",
+      "url": "http://www.linkedin.com/jobs/view/3365804923",
+      "meta": {
+        "company": "Tessolve",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.952656,
+      "updated_at": 1785807203.5138319
+    },
+    {
+      "id": "d1c05f1d-6648-462f-81e8-81c12842c493",
+      "kind": "job",
+      "label": "IT - Automation Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2814738404",
+      "url": "http://www.linkedin.com/jobs/view/2814738404",
+      "meta": {
+        "company": "Tata Consultancy Services",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9632707,
+      "updated_at": 1785807203.5187676
+    },
+    {
+      "id": "a5d2b124-d2e6-480f-b61b-cb521c05df91",
+      "kind": "job",
+      "label": "Silicon Validation and Applications Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2803401227",
+      "url": "http://www.linkedin.com/jobs/view/2803401227",
+      "meta": {
+        "company": "Cirel Systems",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.973429,
+      "updated_at": 1785807203.5235226
+    },
+    {
+      "id": "d8792105-62a3-4002-90b4-2b211d6e8b1e",
+      "kind": "job",
+      "label": "RBIN_Engineer_Instrumentation and Testing - CR system engineering",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3112937746",
+      "url": "http://www.linkedin.com/jobs/view/3112937746",
+      "meta": {
+        "company": "Bosch India",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.979452,
+      "updated_at": 1785807203.530827
+    },
+    {
+      "id": "2178b03b-a85e-448d-acc6-8d207c43a8d7",
+      "kind": "job",
+      "label": "Immediate Opening - NI LabVIEW Developer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2816749520",
+      "url": "http://www.linkedin.com/jobs/view/2816749520",
+      "meta": {
+        "company": "Lynchpin Resources",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9895573,
+      "updated_at": 1785807203.533154
+    },
+    {
+      "id": "1b3d085c-f1cd-4f31-b807-61be5f07d9e2",
+      "kind": "job",
+      "label": "linkedin-2812707394",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2812707394",
+      "url": "http://www.linkedin.com/jobs/view/2812707394",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9923668,
+      "updated_at": 1785807203.535459
+    },
+    {
+      "id": "07176a92-9272-4ce1-93e1-8f8118e4ebd7",
+      "kind": "job",
+      "label": "linkedin-3018734925",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3018734925",
+      "url": "http://www.linkedin.com/jobs/view/3018734925",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803604.9955277,
+      "updated_at": 1785807203.5377603
+    },
+    {
+      "id": "8f39b33a-b6e2-4a98-9c8b-b1bb267ed0e3",
+      "kind": "job",
+      "label": "Electrical Design Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2847888515",
+      "url": "http://www.linkedin.com/jobs/view/2847888515",
+      "meta": {
+        "company": "L&T Technology Services",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0066397,
+      "updated_at": 1785807203.540093
+    },
+    {
+      "id": "7b30971d-e993-485c-9670-b7a01314c195",
+      "kind": "job",
+      "label": "Labview Engineer/Labview Specialist",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2622890715",
+      "url": "http://www.linkedin.com/jobs/view/2622890715",
+      "meta": {
+        "company": "Ducom Instruments Pvt Ltd",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0090427,
+      "updated_at": 1785807203.5424147
+    },
+    {
+      "id": "28d41847-dd10-478d-9bc7-a3e77bb1296e",
+      "kind": "job",
+      "label": "Automation Test Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2802794532",
+      "url": "http://www.linkedin.com/jobs/view/2802794532",
+      "meta": {
+        "company": "Team Management Services (TMS)",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0125303,
+      "updated_at": 1785807203.544713
+    },
+    {
+      "id": "27844c07-ead9-4309-a771-e54412a89c18",
+      "kind": "job",
+      "label": "Electrical Engineer \u2013 Product Design",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2732410277",
+      "url": "http://www.linkedin.com/jobs/view/2732410277",
+      "meta": {
+        "company": "Fluence",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0171888,
+      "updated_at": 1785807203.5494654
+    },
+    {
+      "id": "5d11b73e-b19a-4dc9-b098-48a511ff0bd3",
+      "kind": "job",
+      "label": "linkedin-3128001638",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3128001638",
+      "url": "http://www.linkedin.com/jobs/view/3128001638",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0194223,
+      "updated_at": 1785807203.5518727
+    },
+    {
+      "id": "8abb2885-3339-4ce9-b588-816e226f68bf",
+      "kind": "job",
+      "label": "Algorithm Development Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3259945513",
+      "url": "http://www.linkedin.com/jobs/view/3259945513",
+      "meta": {
+        "company": "Dynocardia, Inc.",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0216272,
+      "updated_at": 1785807203.554296
+    },
+    {
+      "id": "24725aff-6875-41e4-b707-1307fd2afd15",
+      "kind": "job",
+      "label": "CONTROL SYSTEMS ENGINEER",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2722948543",
+      "url": "http://www.linkedin.com/jobs/view/2722948543",
+      "meta": {
+        "company": "Fluence",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0239015,
+      "updated_at": 1785807203.5567415
+    },
+    {
+      "id": "35f7cbc5-3180-4be6-bcd1-eaeec31e8312",
+      "kind": "job",
+      "label": "Associate Software Developer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2789140804",
+      "url": "http://www.linkedin.com/jobs/view/2789140804",
+      "meta": {
+        "company": "AlcoveX Product Studio",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0324113,
+      "updated_at": 1785807203.5590487
+    },
+    {
+      "id": "00837709-b79b-4e6b-9aa2-8b219de84266",
+      "kind": "job",
+      "label": "Senior LabVIEW Developer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2805986190",
+      "url": "http://www.linkedin.com/jobs/view/2805986190",
+      "meta": {
+        "company": "Prestion Systems",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0360231,
+      "updated_at": 1785807203.5613766
+    },
+    {
+      "id": "04eb1dd1-22b7-467d-82f6-f24a8de0a041",
+      "kind": "job",
+      "label": "Power Electronics Firmware Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2794270715",
+      "url": "http://www.linkedin.com/jobs/view/2794270715",
+      "meta": {
+        "company": "Havells India Ltd",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0462475,
+      "updated_at": 1785807203.5638218
+    },
+    {
+      "id": "5439222e-9eb7-4781-8041-2d4c005fb5b1",
+      "kind": "job",
+      "label": "Control System Engineer (Experienced)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3115659303",
+      "url": "http://www.linkedin.com/jobs/view/3115659303",
+      "meta": {
+        "company": "Flux Auto",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0487983,
+      "updated_at": 1785807203.6017947
+    },
+    {
+      "id": "3412a1c5-e129-41d0-95f9-56464f09bc50",
+      "kind": "job",
+      "label": "linkedin-3018738177",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3018738177",
+      "url": "http://www.linkedin.com/jobs/view/3018738177",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.054805,
+      "updated_at": 1785807203.571279
+    },
+    {
+      "id": "4a2617d9-ae2e-45e3-8e98-60e888696f38",
+      "kind": "job",
+      "label": "Inverter Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2768857751",
+      "url": "http://www.linkedin.com/jobs/view/2768857751",
+      "meta": {
+        "company": "Fluence",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0632343,
+      "updated_at": 1785807203.5735903
+    },
+    {
+      "id": "529bb637-41b6-4ade-932d-ff2623b47ddb",
+      "kind": "job",
+      "label": "Power System Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2792430646",
+      "url": "http://www.linkedin.com/jobs/view/2792430646",
+      "meta": {
+        "company": "AGS CONSULTTING ENGINEERS AND PROJECT MANAGEMENT",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0667958,
+      "updated_at": 1785807203.5758898
+    },
+    {
+      "id": "5ed0996c-c2bc-4b78-a84b-980ce1c137b3",
+      "kind": "job",
+      "label": "Power Electronics Design Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2829866806",
+      "url": "http://www.linkedin.com/jobs/view/2829866806",
+      "meta": {
+        "company": "ROHM Semiconductor India",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0755155,
+      "updated_at": 1785807203.578167
+    },
+    {
+      "id": "493d3f05-3b84-45be-918c-9f2b93269aa1",
+      "kind": "job",
+      "label": "EMBEDDED HARDWARE ENGINEER (AVIONICS)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3270537201",
+      "url": "http://www.linkedin.com/jobs/view/3270537201",
+      "meta": {
+        "company": "Skyroot Aerospace",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0799205,
+      "updated_at": 1785807203.5804927
+    },
+    {
+      "id": "2b465132-f464-49c5-b904-f533477ba619",
+      "kind": "job",
+      "label": "Sales Development Engineer (Fresher)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3123165523",
+      "url": "http://www.linkedin.com/jobs/view/3123165523",
+      "meta": {
+        "company": "NI (National Instruments)",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0853567,
+      "updated_at": 1785807203.5827603
+    },
+    {
+      "id": "88a1586f-48d0-4c3e-bbb1-098a7c9f218a",
+      "kind": "job",
+      "label": "ESD NR6 MATLAB ADAS Specialist",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3116807123",
+      "url": "http://www.linkedin.com/jobs/view/3116807123",
+      "meta": {
+        "company": "Bosch Global Software Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0903995,
+      "updated_at": 1785807203.587525
+    },
+    {
+      "id": "3520f683-a593-4b0c-bcc5-f53ea07d482f",
+      "kind": "job",
+      "label": "Graduate Engineer Trainee (GET)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2789993426",
+      "url": "http://www.linkedin.com/jobs/view/2789993426",
+      "meta": {
+        "company": "Micelio",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0935273,
+      "updated_at": 1785807203.5898666
+    },
+    {
+      "id": "f452afc7-1f44-4f5f-84a7-94d2d43f6261",
+      "kind": "job",
+      "label": "TCS Hiring for Power Automation_Hyderabad/India(WFO)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-4054514677",
+      "url": "http://www.linkedin.com/jobs/view/4054514677",
+      "meta": {
+        "company": "Tata Consultancy Services",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0972595,
+      "updated_at": 1785807203.592211
+    },
+    {
+      "id": "064bff82-635d-497a-a527-751fd2647fe9",
+      "kind": "job",
+      "label": "Semiconductor / Electronics Market Research Analyst - RF, Analog, Defense (Location Flexible)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3048165655",
+      "url": "http://www.linkedin.com/jobs/view/3048165655",
+      "meta": {
+        "company": "Strategy Analytics is now TechInsights",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.0999243,
+      "updated_at": 1785807203.5944958
+    },
+    {
+      "id": "b3af3b54-13cb-4ad0-b631-e1c4316a3c22",
+      "kind": "job",
+      "label": "Systems and Applications Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3313091333",
+      "url": "http://www.linkedin.com/jobs/view/3313091333",
+      "meta": {
+        "company": "NXP Semiconductors",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1024878,
+      "updated_at": 1785807203.5970178
+    },
+    {
+      "id": "e97acf35-02e9-44e3-9626-fb099c415423",
+      "kind": "job",
+      "label": "LabVIEW based Instrumentation & Controls Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2861484990",
+      "url": "http://www.linkedin.com/jobs/view/2861484990",
+      "meta": {
+        "company": "Skyroot Aerospace",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.105042,
+      "updated_at": 1785807203.5992732
+    },
+    {
+      "id": "42b6dbc0-a0fb-487e-951e-98016e54d28b",
+      "kind": "job",
+      "label": "Robotics Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3369225248",
+      "url": "http://www.linkedin.com/jobs/view/3369225248",
+      "meta": {
+        "company": "Elite Automation",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.112685,
+      "updated_at": 1785807203.606489
+    },
+    {
+      "id": "e77c33b4-b640-4819-a19d-0b59dee7e70a",
+      "kind": "job",
+      "label": "System Engineering",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3274099809",
+      "url": "http://www.linkedin.com/jobs/view/3274099809",
+      "meta": {
+        "company": "Tata Elxsi",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1159356,
+      "updated_at": 1785807203.608779
+    },
+    {
+      "id": "79e6383e-64c9-410a-b9d8-c6ef70055bcb",
+      "kind": "job",
+      "label": "Project Engineer(LabVIEW)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2828087167",
+      "url": "http://www.linkedin.com/jobs/view/2828087167",
+      "meta": {
+        "company": "SyncSols",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1186707,
+      "updated_at": 1785807203.6110485
+    },
+    {
+      "id": "b3aa8f53-7fa4-4232-92d9-0a556cf6e8aa",
+      "kind": "job",
+      "label": "Electrical Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2853616269",
+      "url": "http://www.linkedin.com/jobs/view/2853616269",
+      "meta": {
+        "company": "L&T Infrastructure Engineering Limited",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1213067,
+      "updated_at": 1785807203.6133564
+    },
+    {
+      "id": "b7096445-e447-4fff-9f76-19e63f9cff2c",
+      "kind": "job",
+      "label": "Application Support Engineers / Managers (Power train / MCU)",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2852164116",
+      "url": "http://www.linkedin.com/jobs/view/2852164116",
+      "meta": {
+        "company": "Sterling E-mobility Solutions LTD",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1238918,
+      "updated_at": 1785807203.6156821
+    },
+    {
+      "id": "2b71b560-73f6-4237-9803-77efd5b88dee",
+      "kind": "job",
+      "label": "linkedin-2803428009",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2803428009",
+      "url": "http://www.linkedin.com/jobs/view/2803428009",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1265073,
+      "updated_at": 1785807203.617916
+    },
+    {
+      "id": "2fc4f6a4-5104-4f38-908c-131317cb03b6",
+      "kind": "job",
+      "label": "MBD Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-3130524656",
+      "url": "http://www.linkedin.com/jobs/view/3130524656",
+      "meta": {
+        "company": "Tata Technologies",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1298437,
+      "updated_at": 1785807203.620172
+    },
+    {
+      "id": "446eebb5-9332-48cb-8e93-d1fee907a32e",
+      "kind": "job",
+      "label": "linkedin-2826520587",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2826520587",
+      "url": "http://www.linkedin.com/jobs/view/2826520587",
+      "meta": {
+        "company": "",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1340394,
+      "updated_at": 1785807203.6224477
+    },
+    {
+      "id": "952aff60-ea57-404c-92dc-93062d57d818",
+      "kind": "job",
+      "label": "Analog Design Engineer",
+      "operator_status": "applied",
+      "notes": null,
+      "external_id": "linkedin-2754684156",
+      "url": "http://www.linkedin.com/jobs/view/2754684156",
+      "meta": {
+        "company": "Tessolve",
+        "seeded_by": "career_observer"
+      },
+      "created_at": 1785803605.1368988,
+      "updated_at": 1785807203.6247325
+    }
+  ],
+  "updated_at": 1785807203.627151
+}

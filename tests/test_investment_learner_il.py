@@ -81,7 +81,9 @@ def test_program_lists_investment_universe_first():
 
 def test_india_learner_overrides_cash():
     o = india_equity_learner_overrides()
-    assert o["decision_simulation"]["starting_cash"] == 10000.0
+    assert o["decision_simulation"]["starting_cash"] == 50000.0
+    assert o["decision_simulation"]["strategy"]["trade_fraction"] == 1.0
+    assert o["decision_simulation"]["prefer_next_alternatives"] is True
     assert o["decision_simulation"]["instruments"] == []
     assert o["investment_universe"]["index"] == "NIFTY50"
 

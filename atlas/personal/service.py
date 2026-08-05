@@ -522,23 +522,131 @@ class PersonalService:
     ) -> dict[str, Any]:
         """Profile improvement tips for LinkedIn — suggestions only, never writes."""
         from atlas.personal.linkedin_coach import linkedin_suggestions as _coach
+        from atlas.personal.linkedin_export import extract_linkedin_export_text
 
         text = linkedin_text
+        export_meta: dict[str, Any] | None = None
         if not text and linkedin_path:
             from pathlib import Path
 
             from atlas.ingestion.extractors import extract
 
             p = Path(linkedin_path).expanduser()
-            if not p.is_file():
+            if not p.exists():
                 raise FileNotFoundError(f"path not found: {p}")
-            text = extract(p) or p.read_text(encoding="utf-8", errors="replace")
+            # Prefer dedicated LinkedIn export unpacker (zip / folder / html).
+            export_meta = extract_linkedin_export_text(p)
+            if export_meta.get("ok") and export_meta.get("text"):
+                text = str(export_meta["text"])
+            elif p.is_file():
+                text = extract(p) or p.read_text(encoding="utf-8", errors="replace")
+            elif not export_meta.get("ok"):
+                raise ValueError(export_meta.get("reason") or "could not read LinkedIn export")
         profile = self.profile(include_inferred=include_inferred)
-        return _coach(
+        out = _coach(
             profile,
             linkedin_text=text,
             linkedin_url=linkedin_url,
         )
+        if export_meta:
+            out["export"] = {
+                "ok": export_meta.get("ok"),
+                "path": export_meta.get("path"),
+                "files": export_meta.get("files") or [],
+                "chars": export_meta.get("chars") or len(text or ""),
+                "reason": export_meta.get("reason"),
+            }
+        return out
+
+    def ingest_linkedin_export(
+        self,
+        path: str,
+        *,
+        include_inferred: bool = True,
+        linkedin_url: str | None = None,
+        assets: Any | None = None,
+        register_snapshot: bool = True,
+        missions: Any | None = None,
+        configuration: Any | None = None,
+        templates: Any | None = None,
+        wire_observer: bool = True,
+    ) -> dict[str, Any]:
+        """CI.1+: unpack LinkedIn export → coach + snapshot + auto-wire Career Observer.
+
+        One operator step — Observer is ensured/updated with this path. Never writes to LinkedIn.
+        """
+        from atlas.career.observe import profile_snapshot_bytes
+        from atlas.personal.linkedin_export import load_linkedin_export_bundle
+
+        bundle = load_linkedin_export_bundle(path)
+        tips = self.linkedin_suggestions(
+            linkedin_path=path,
+            linkedin_url=linkedin_url,
+            include_inferred=include_inferred,
+        )
+        snapshot: dict[str, Any] | None = None
+        if register_snapshot and assets is not None and bundle.get("ok"):
+            try:
+                registered = assets.register(
+                    "linkedin_profile",
+                    "linkedin_profile_export",
+                    profile_snapshot_bytes(bundle),
+                    source_uri=str(bundle.get("path") or path),
+                    content_type="application/json",
+                    metadata={
+                        "ci": "CI.1.1",
+                        "skill_count": len(bundle.get("skills") or []),
+                        "posting_count": len(bundle.get("postings") or []),
+                        "policy": "suggestions_only",
+                    },
+                )
+                snapshot = {
+                    "ok": True,
+                    "asset_name": "linkedin_profile_export",
+                    "asset_id": str((registered.get("asset") or {}).get("id") or ""),
+                    "skills": len(bundle.get("skills") or []),
+                    "postings": len(bundle.get("postings") or []),
+                }
+            except Exception as exc:  # noqa: BLE001
+                snapshot = {"ok": False, "reason": str(exc)[:200]}
+
+        observer: dict[str, Any] | None = None
+        if wire_observer and bundle.get("ok"):
+            try:
+                from atlas.career.wiring import ensure_career_observer_with_export
+
+                observer = ensure_career_observer_with_export(
+                    path=str(bundle.get("path") or path),
+                    missions=missions,
+                    configuration=configuration,
+                    templates=templates,
+                )
+            except Exception as exc:  # noqa: BLE001
+                observer = {"ok": False, "reason": str(exc)[:240]}
+
+        return {
+            "ok": bool(bundle.get("ok")),
+            "can_write_linkedin": False,
+            "policy": "suggestions_only",
+            "suggestions": tips,
+            "bundle": {
+                "skills": bundle.get("skills") or [],
+                "positions": bundle.get("positions") or [],
+                "posting_count": len(bundle.get("postings") or []),
+                "companies_followed": (bundle.get("companies_followed") or [])[:20],
+                "files": bundle.get("files") or [],
+                "path": bundle.get("path"),
+                "reason": bundle.get("reason"),
+            },
+            "snapshot": snapshot,
+            "observer": observer,
+            "note": (
+                "LinkedIn export ingested in one step: coaching tips + profile snapshot "
+                "+ Career Observer path wiring (when missions are available). "
+                "Atlas will not edit your LinkedIn profile."
+            ),
+        }
+
 
     def best_jobs(
         self,

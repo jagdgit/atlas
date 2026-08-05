@@ -130,6 +130,25 @@ class ScheduleService:
     def set_interval(self, schedule_id: UUID | str, interval_seconds: int) -> bool:
         return self._repo.set_interval(schedule_id, interval_seconds)
 
+    def bump_next_run(
+        self,
+        schedule_id: UUID | str,
+        *,
+        delay_seconds: float = 120.0,
+    ) -> bool:
+        """Pull a schedule forward so host/budget deferrals do not waste a full interval.
+
+        Host Respect: never drop program work — retry soon instead of waiting the
+        full day after a single admitted-but-deferred tick fire.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        delay = max(15.0, float(delay_seconds or 120.0))
+        nxt = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        if hasattr(self._repo, "set_next_run_at"):
+            return bool(self._repo.set_next_run_at(schedule_id, nxt, only_if_later=True))
+        return False
+
     def set_cron(self, schedule_id: UUID | str, cron_expr: str) -> bool:
         if hasattr(self._repo, "set_cron"):
             return self._repo.set_cron(schedule_id, cron_expr)

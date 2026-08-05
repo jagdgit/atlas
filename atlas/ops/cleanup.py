@@ -1,8 +1,14 @@
 """ARMF Phase B — Ops cleanup toolkit (zombie / long no-progress retirement).
 
-Default targets: ``hello_watcher`` zombies and unprotected long no-progress workers.
-Protected programs (Market / Engineering / Personal) and Archive lane work are
-never archived unless ``include_protected=True`` (operator checkbox).
+**Constitution:** Host congestion is handled by **defer / queue / raise capacity** —
+never by stopping a Program worker mid-job. Accepted program work is not dropped
+(Host Respect / RESOURCE_OS). Cleanup may only retire:
+
+* orphan demo zombies (default: ``hello_watcher``), and
+* unprotected long no-progress workers,
+
+and **never** Market / Engineering / Personal / Archive workers unless the operator
+explicitly sets ``include_protected=True`` (Ops checkbox).
 
 Always dry-run first; apply archives missions (non-destructive — keeps journal,
 configs, checkpoints).
@@ -35,6 +41,14 @@ PROTECTED_WORKER_TYPES: frozenset[str] = frozenset(
         "decision_simulation",
         "portfolio_ledger",
         "market_observer",
+        # Personal / Career — never retire mid-program without include_protected
+        "career_observer",
+        "career_research",
+        "job_watcher",
+        "personal_mentor",
+        # Engineering continuous learning
+        "repo_watcher",
+        "engineering_mentor",
     }
 )
 PROTECTED_SERVICE_CLASSES: frozenset[str] = frozenset({"archive"})

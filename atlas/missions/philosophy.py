@@ -346,11 +346,37 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
     },
-    "job_hunting": {
+    "career_observer": {
         "mission_kind": KIND_CAREER,
         "never_stops": True,
         "lifecycle": _stages(
             observe=STAGE_ACTIVE,
+            learn=STAGE_PARTIAL,  # candidates → findings; CKG depth is CI.2
+            decide=STAGE_NA,  # L-SPLIT — never recommend
+            record_why=STAGE_PARTIAL,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "career_research": {
+        "mission_kind": KIND_RESEARCH,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_PARTIAL,
+            learn=STAGE_ACTIVE,
+            decide=STAGE_NA,  # research only
+            record_why=STAGE_PARTIAL,
+            evaluate=STAGE_PARTIAL,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "job_hunting": {
+        "mission_kind": KIND_CAREER,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_PARTIAL,  # CI.1.3 Advisor consumes feeds/CKG; Observer discovers
             decide=STAGE_ACTIVE,
             record_why=STAGE_ACTIVE,
             evaluate=STAGE_PARTIAL,  # OI-F4 outcome_feedback (still no auto-apply — P14)

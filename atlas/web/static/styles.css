@@ -820,17 +820,120 @@ button { cursor: pointer; font: inherit; }
   z-index: 30; box-shadow: 0 8px 24px rgba(0,0,0,.4);
 }
 
-/* IIP operator review */
-.iip-uni-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
-.iip-uni-row { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
-.iip-fail-list { max-height: 280px; overflow: auto; padding-right: 8px; }
-#view-iip .learner-panel { margin: 10px 22px; padding-bottom: 8px; }
+/* IIP operator review — full-width scrollable workspace */
+#view-iip {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 48px;
+  -webkit-overflow-scrolling: touch;
+}
+#view-iip > * { flex-shrink: 0; }
+#view-iip .learner-intro {
+  max-width: none;
+  padding: 0 22px 12px;
+}
+.iip-uni-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px 16px;
+  padding: 12px 16px 16px;
+}
+.iip-uni-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.iip-fail-list { max-height: min(420px, 50vh); overflow: auto; padding-right: 8px; }
+#view-iip .learner-panel {
+  margin: 12px 22px;
+  padding-bottom: 12px;
+  min-height: 0;
+  overflow: visible;
+  max-width: none;
+  width: auto;
+}
+#view-iip .learner-panel .panel-head {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  z-index: 1;
+}
+#view-iip .learner-panel ul,
+#view-iip .learner-panel ol {
+  max-height: none;
+  padding: 0 16px 12px 32px;
+}
+#view-iip .learner-panel p,
+#view-iip .learner-panel .small {
+  padding: 0 16px;
+  max-width: none;
+}
 #view-iip textarea {
-  width: 100%;
-  max-width: 720px;
+  width: calc(100% - 32px);
+  max-width: none;
   display: block;
-  margin-top: 6px;
+  margin: 6px 16px 12px;
+  box-sizing: border-box;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  padding: 8px;
+  padding: 10px;
+  min-height: 96px;
+}
+#view-iip input[type="text"],
+#view-iip input:not([type]),
+#view-iip select {
+  max-width: none;
+  min-width: 12rem;
+}
+.iip-layout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .iip-layout-grid { grid-template-columns: 1fr; }
+}
+.learner-deposit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.learner-deposit-row input {
+  width: 9rem;
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+}
+.learner-deposit-row .btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--accent, #2a6);
+  color: #fff;
+  cursor: pointer;
+}
+.learner-deposit-row .btn.btn-secondary {
+  background: transparent;
+  color: inherit;
+  border-color: var(--border);
+}
+.learner-deposit-row .btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

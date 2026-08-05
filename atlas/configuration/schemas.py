@@ -137,6 +137,8 @@ class TradingStrategyParams(BaseModel):
     rsi_oversold: float = Field(default=30.0, ge=0, le=100)
     trade_fraction: float = Field(default=0.1, gt=0, le=1)
     sell_fraction: float = Field(default=1.0, gt=0, le=1)
+    # India cash equity: allow buying 1 whole share when trade_fraction floor would be 0.
+    allow_min_lot: bool = True
 
 
 class PortfolioPersonaConfig(BaseModel):
@@ -199,6 +201,9 @@ class PaperTradingConfig(BaseModel):
     # IL.2 — empty instruments → M0 watchlist
     auto_max_instruments: int = Field(default=10, ge=1, le=100)
     universe_index: str = "NIFTY50"
+    # When primary names hold / cannot size, try next ranked watchlist symbols.
+    prefer_next_alternatives: bool = True
+    max_next_alternatives: int = Field(default=12, ge=0, le=50)
     # IL.11 — Simulation Engine instrument pack (empty → resolve from asset_class / persona)
     instrument_pack: str = ""
     # IRA research gate (optional; learner books also auto-enable via portfolio_key)
@@ -255,10 +260,10 @@ class KnowledgeVerificationConfig(BaseModel):
 
 
 class JobWatcherConfig(BaseModel):
-    """Config for the Job Watcher mission (Phase D · §D.8) — recommend-only (P14).
+    """Config for the Career Advisor / Job Watcher (Phase D · §D.8 / CI.1.3) — recommend-only (P14).
 
-    Continuously reads configured job-posting feed assets, matches them against Personal skills +
-    mission constraints + Policy, and recommends ranked matches (never applies). ``extra='forbid'``.
+    Advisor-only consumer of job feeds (+ optional Career watchlist company filter). Discovery
+    belongs to ``career_observer``. Never applies. ``extra='forbid'``.
     ``sources`` may be empty at instantiation and filled via a later config edit (B6)."""
 
     model_config = ConfigDict(extra="forbid")
@@ -271,9 +276,37 @@ class JobWatcherConfig(BaseModel):
     min_skill_overlap: int = Field(default=0, ge=0)
     include_inferred_skills: bool = True
     max_recommendations: int = Field(default=5, ge=1)
+    use_career_watchlist: bool = True  # CI.1.3 — merge Career Memory companies into filter
     tick_interval_seconds: int = Field(default=86400, ge=1)
     enable_soft_bias: bool = True
     outcome_feedback: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CareerObserverConfig(BaseModel):
+    """Config for Career Observer (CI.1.2) — discover only, never recommend (L-SPLIT / P14)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    linkedin_export_paths: list[str] = Field(default_factory=list)
+    job_feed_paths: list[str] = Field(default_factory=list)
+    job_feed_sources: list[str] = Field(default_factory=list)  # job_postings asset names
+    register_job_assets: bool = True
+    wire_advisor_sources: bool = False
+    seed_watchlist: bool = True
+    max_candidates_per_tick: int = Field(default=40, ge=1, le=200)
+    tick_interval_seconds: int = Field(default=86400, ge=1)
+
+
+class CareerResearchConfig(BaseModel):
+    """Config for Career Research (CI.2.5) — deepen companies only, never recommend/apply."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    company_names: list[str] = Field(default_factory=list)
+    company_ids: list[str] = Field(default_factory=list)
+    from_watchlist: bool = True
+    max_companies_per_tick: int = Field(default=8, ge=1, le=40)
+    tick_interval_seconds: int = Field(default=86400, ge=1)
 
 
 class TechSecurityWatcherConfig(BaseModel):
@@ -379,6 +412,8 @@ def default_registry() -> SchemaRegistry:
     registry.register("research_watcher", ResearchWatcherConfig, schema_version=1)
     registry.register("knowledge_verification", KnowledgeVerificationConfig, schema_version=1)
     registry.register("job_watcher", JobWatcherConfig, schema_version=1)
+    registry.register("career_observer", CareerObserverConfig, schema_version=1)
+    registry.register("career_research", CareerResearchConfig, schema_version=1)
     registry.register("tech_security_watcher", TechSecurityWatcherConfig, schema_version=1)
     registry.register("self_improvement", SelfImprovementConfig, schema_version=1)
     return registry

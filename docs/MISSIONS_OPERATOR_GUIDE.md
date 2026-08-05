@@ -391,11 +391,17 @@ Workers survive reboot via checkpoints. Archiving a mission does **not** delete 
 
 Do not also call Engineering ingest for the same path — that would duplicate the job.
 
-**Career / LinkedIn (suggestions only — P10/P14):**
+**Career / LinkedIn (suggestions only — P10/P14 · [`CAREER_INTELLIGENCE_PLAN.md`](CAREER_INTELLIGENCE_PLAN.md) LOCKED):**
 - Personal → **Career** tab: LinkedIn improvement tips + best open jobs for your profile
 - Atlas **never** edits LinkedIn and **never** applies to jobs — you copy tips / apply yourself
+- **LinkedIn export (CI.1+):** **One step** — Career → **Ingest export**, or `POST /v1/personal/linkedin/ingest-export` with `{"path":"…"}`. Coaches + snapshot + **auto-wires Career Observer** (creates mission if needed). No separate Observer config step
+- **Career Observer / Research:** `career_observer` (discover) + `career_research` (deepen companies) — both BATCH; never recommend/apply
+- **Career Advisor** remains `job_hunting` — Opportunity Score v1 + watchlist companies
+- **Jobs feed (CI.0.2):** Career → **Import sample / path → Advisor**, or `POST /v1/personal/career/import-feed`
+- **CKG / market / gaps / discover / gated-apply:** `GET /v1/personal/career/market|timeline|gaps|brief`, `POST /v1/personal/career/discover`, `POST /v1/personal/career/gated-apply` (LinkedIn always blocked)
+- **Watchlist:** `GET|POST /v1/personal/career/watchlist`
 - Share a LinkedIn profile export path for better tips; share a jobs JSON export (or configure `job_postings` assets) for ranking
-- API: `POST /v1/personal/learn-cv`, `POST /v1/personal/linkedin/suggestions`, `GET|POST /v1/personal/jobs`
+- API: `POST /v1/personal/learn-cv`, `POST /v1/personal/linkedin/suggestions`, `POST /v1/personal/linkedin/ingest-export`, `POST /v1/personal/career/import-feed`, `GET|POST /v1/personal/jobs`, plus market/timeline/gaps/discover/brief/watchlist/gated-apply
 
 API: `POST /v1/programs/{personal_intelligence|engineering_intelligence}/share` with `{"path":"/host/path"}`, or `POST .../chat` with a message like `share /host/path/resume.pdf`.
 

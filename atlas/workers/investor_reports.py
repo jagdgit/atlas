@@ -31,11 +31,13 @@ class InvestorReportsWorker(PersistentWorker):
         *,
         mailer: Any,
         portfolio: Any | None = None,
+        market_reader: Any | None = None,
         data_dir: str | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._mailer = mailer
         self._portfolio = portfolio
+        self._market_reader = market_reader
         self._data_dir = data_dir
         self._logger = logger or logging.getLogger("atlas.workers.investor_reports")
 
@@ -46,7 +48,16 @@ class InvestorReportsWorker(PersistentWorker):
         state["ticks"] = ticks
 
         program_id = str(cfg.get("program_id") or "market_intelligence")
-        portfolio_key = str(cfg.get("portfolio_key") or "").strip() or None
+        # Market investor reports belong to the learner book by default. Leaving
+        # this null produced Cash/Equity=None and hid real fills after restart.
+        portfolio_key = (
+            str(cfg.get("portfolio_key") or "").strip()
+            or (
+                "india_equity_learner"
+                if program_id == "market_intelligence"
+                else None
+            )
+        )
         force = bool(cfg.get("force") or False)
         now_ist = datetime.now(_IST)
         hour = now_ist.hour
@@ -185,17 +196,44 @@ class InvestorReportsWorker(PersistentWorker):
             meta = pf.get(portfolio_key)
             if not isinstance(meta, dict):
                 return None
+            persona = meta.get("persona") if isinstance(meta.get("persona"), dict) else {}
+            mission_id = meta.get("mission_id") or meta.get("ledger_mission_id")
             portfolio_doc: dict[str, Any] = {
                 "portfolio_key": portfolio_key,
                 "label": meta.get("label"),
-                "starting_cash": meta.get("starting_cash"),
-                "cash": meta.get("starting_cash"),
+                "starting_cash": persona.get("capital"),
+                "cash": persona.get("capital"),
+                "mission_id": mission_id,
                 "sim_portfolio_id": meta.get("sim_portfolio_id") or meta.get("portfolio_id"),
             }
+            # Registry identity is durable, but the sim id/cash live in Postgres.
+            # Resolve by (mission, portfolio_key) after every restart.
+            if (
+                not portfolio_doc.get("sim_portfolio_id")
+                and mission_id
+                and self._portfolio is not None
+                and hasattr(self._portfolio, "ensure_portfolio")
+            ):
+                ensured = self._portfolio.ensure_portfolio(
+                    mission_id=mission_id,
+                    name=portfolio_key,
+                    starting_cash=float(persona.get("capital") or 0),
+                    base_currency=str(persona.get("currency") or "INR"),
+                )
+                portfolio_doc["sim_portfolio_id"] = ensured.get("id")
+                portfolio_doc["starting_cash"] = ensured.get("starting_cash")
+                portfolio_doc["cash"] = ensured.get("cash")
             pid = portfolio_doc.get("sim_portfolio_id")
             if pid and self._portfolio is not None and hasattr(self._portfolio, "snapshot"):
                 try:
-                    snap = self._portfolio.snapshot(pid)
+                    positions = []
+                    repo = getattr(self._portfolio, "_repo", None)
+                    if repo is not None and hasattr(repo, "list_positions"):
+                        positions = list(repo.list_positions(pid) or [])
+                    marks, previous = self._market_marks(
+                        [str(p.get("symbol") or "") for p in positions]
+                    )
+                    snap = self._portfolio.snapshot(pid, prices=marks)
                     if isinstance(snap, dict):
                         portfolio_doc.update(snap)
                         portfolio_doc["positions"] = snap.get("positions") or snap.get(
@@ -203,6 +241,13 @@ class InvestorReportsWorker(PersistentWorker):
                         )
                         portfolio_doc["equity_value"] = snap.get("equity")
                         portfolio_doc["positions_value"] = snap.get("holdings_value")
+                        portfolio_doc["marks"] = marks
+                        portfolio_doc["previous_closes"] = previous
+                        portfolio_doc["valuation_basis"] = (
+                            "latest daily market bars"
+                            if marks
+                            else "average cost (market marks unavailable)"
+                        )
                 except Exception:  # noqa: BLE001
                     self._logger.debug("sim portfolio snapshot failed", exc_info=True)
                 if hasattr(self._portfolio, "trades"):
@@ -214,6 +259,9 @@ class InvestorReportsWorker(PersistentWorker):
                         portfolio_doc["trade_count"] = len(trades or [])
                     except Exception:  # noqa: BLE001
                         self._logger.debug("sim portfolio trades failed", exc_info=True)
+                self._add_cash_and_pnl_metrics(
+                    portfolio_doc, pid=pid, ist_date=ist_date
+                )
 
             data_dir = self._data_dir
             if not data_dir and self._mailer is not None:
@@ -224,10 +272,266 @@ class InvestorReportsWorker(PersistentWorker):
             portfolio_doc["no_fill_reasons"] = format_no_fill_reasons(notes)
             if notes.get("feed_gap_days") is not None:
                 portfolio_doc["feed_gap_days"] = notes.get("feed_gap_days")
+            try:
+                from atlas.investment.decision_packets import DecisionPacketStore
+
+                store = DecisionPacketStore(data_dir=data_dir)
+                portfolio_doc["decisions"] = store.list_day(
+                    portfolio_key=portfolio_key, ts_ist=ist_date, limit=100
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.1 decisions list failed", exc_info=True)
+            try:
+                from atlas.investment.decision_timeline import DecisionTimelineStore
+                from atlas.investment.fundamentals import fundamentals_view
+
+                tstore = DecisionTimelineStore(data_dir=data_dir)
+                portfolio_doc["evolution"] = tstore.learning_counts(
+                    portfolio_key=portfolio_key
+                )
+                fv = fundamentals_view(data_dir, program_id="market_intelligence", limit=5)
+                cov = dict(fv.get("coverage") or {})
+                # Attach watchlist gap summary when positions known
+                syms = [
+                    str(p.get("symbol"))
+                    for p in (portfolio_doc.get("positions") or [])
+                    if isinstance(p, dict) and p.get("symbol")
+                ]
+                if syms:
+                    from atlas.investment.fundamentals import learner_fundamentals_gaps
+
+                    cov["learner_gaps"] = learner_fundamentals_gaps(
+                        data_dir, syms, program_id="market_intelligence"
+                    )
+                portfolio_doc["fundamentals_coverage"] = cov
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.2/DI.4 evening enrich failed", exc_info=True)
+            try:
+                from atlas.investment.observations import DecisionObservationStore
+
+                ostore = DecisionObservationStore(data_dir=data_dir)
+                portfolio_doc["observations"] = ostore.list_since(
+                    since_hours=24.0, limit=20
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.Obs evening enrich failed", exc_info=True)
+            try:
+                from atlas.investment.decision_attribution import (
+                    DecisionAttributionStore,
+                    mirror_root,
+                )
+                import json
+                from pathlib import Path
+
+                items: list = []
+                root = mirror_root(data_dir) / "by_id" if data_dir else None
+                if root and root.is_dir():
+                    for path in sorted(
+                        root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+                    )[:15]:
+                        try:
+                            doc = json.loads(path.read_text(encoding="utf-8"))
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if (
+                            isinstance(doc, dict)
+                            and doc.get("portfolio_key") == portfolio_key
+                        ):
+                            items.append(doc)
+                portfolio_doc["attributions"] = items
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.Attr evening enrich failed", exc_info=True)
+            try:
+                from atlas.investment import watchlists as wl
+                from atlas.investment.trading_kpis import (
+                    build_trading_kpis,
+                    save_day_kpis,
+                )
+
+                plan = None
+                snap = wl.latest("market_intelligence")
+                if isinstance(snap, dict):
+                    plan = (snap.get("extra") or {}).get("daily_plan") or snap.get(
+                        "daily_plan"
+                    )
+                digest = None
+                if self._mailer is not None and hasattr(self._mailer, "_research_digest"):
+                    try:
+                        digest = self._mailer._research_digest("market_intelligence")
+                    except Exception:  # noqa: BLE001
+                        digest = None
+                kpis = build_trading_kpis(
+                    portfolio=portfolio_doc,
+                    plan=plan if isinstance(plan, dict) else None,
+                    session_note=notes,
+                    research_digest=digest if isinstance(digest, dict) else None,
+                    ist_date=ist_date,
+                )
+                portfolio_doc["kpis"] = kpis
+                save_day_kpis(
+                    data_dir,
+                    portfolio_key=portfolio_key,
+                    ist_date=ist_date,
+                    kpis=kpis,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("trading kpi snapshot failed", exc_info=True)
+            try:
+                from atlas.investment.process_proxies import collect_process_scorecard
+
+                portfolio_doc["process_proxies"] = collect_process_scorecard(
+                    data_dir=data_dir,
+                    portfolio_key=portfolio_key,
+                    portfolio=portfolio_doc,
+                    ist_date=ist_date,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.5 process proxies enrich failed", exc_info=True)
+            try:
+                from atlas.investment.meta_learning import collect_meta_learning_inputs
+
+                portfolio_doc["meta_learning"] = collect_meta_learning_inputs(
+                    data_dir=data_dir,
+                    portfolio_key=portfolio_key,
+                    portfolio=portfolio_doc,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.6 meta-learning enrich failed", exc_info=True)
+            try:
+                from atlas.investment.ml_export import ml_export_status
+
+                portfolio_doc["ml_export"] = ml_export_status(
+                    data_dir=data_dir,
+                    portfolio_key=portfolio_key,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.7 ml-export status enrich failed", exc_info=True)
+            # DI.3 after KPIs + process + meta so dashboards can read all
+            try:
+                from atlas.investment.di_dashboards import collect_dashboard_inputs
+
+                portfolio_doc["di_dashboards"] = collect_dashboard_inputs(
+                    data_dir=data_dir,
+                    portfolio_key=portfolio_key,
+                    portfolio=portfolio_doc,
+                    ist_date=ist_date,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.3 dashboards enrich failed", exc_info=True)
             return portfolio_doc
         except Exception:  # noqa: BLE001
             self._logger.debug("portfolio meta lookup failed", exc_info=True)
             return None
+
+    def _market_marks(
+        self, symbols: list[str]
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Latest and previous daily closes for honest EOD valuation."""
+        latest: dict[str, float] = {}
+        previous: dict[str, float] = {}
+        if self._market_reader is None:
+            return latest, previous
+        for symbol in dict.fromkeys(s for s in symbols if s):
+            try:
+                out = self._market_reader.bars_for(
+                    symbol, provider="yahoo", limit=2
+                )
+                bars = list((out or {}).get("bars") or [])
+                if bars and bars[-1].get("close") is not None:
+                    latest[symbol] = float(bars[-1]["close"])
+                if len(bars) > 1 and bars[-2].get("close") is not None:
+                    previous[symbol] = float(bars[-2]["close"])
+            except Exception:  # noqa: BLE001
+                self._logger.debug("EOD mark unavailable for %s", symbol, exc_info=True)
+        return latest, previous
+
+    def _add_cash_and_pnl_metrics(
+        self, portfolio_doc: dict[str, Any], *, pid: Any, ist_date: str
+    ) -> None:
+        """Add contribution-adjusted total P&L and approximate trading-day P&L."""
+        repo = getattr(self._portfolio, "_repo", None)
+        movements: list[dict[str, Any]] = []
+        if repo is not None and hasattr(repo, "list_cash_movements"):
+            try:
+                movements = list(repo.list_cash_movements(pid, limit=200) or [])
+            except Exception:  # noqa: BLE001
+                movements = []
+        deposits = sum(
+            float(m.get("amount") or 0)
+            for m in movements
+            if str(m.get("kind") or "") == "deposit"
+        )
+        withdrawals = sum(
+            abs(float(m.get("amount") or 0))
+            + float(m.get("tds") or 0)
+            + float(m.get("fee") or 0)
+            for m in movements
+            if str(m.get("kind") or "") == "withdraw"
+        )
+        starting = float(portfolio_doc.get("starting_cash") or 0)
+        net_contributed = starting + deposits - withdrawals
+        equity = float(
+            portfolio_doc.get("equity")
+            or portfolio_doc.get("equity_value")
+            or 0
+        )
+        portfolio_doc["deposits"] = deposits
+        portfolio_doc["withdrawals"] = withdrawals
+        portfolio_doc["net_contributed_capital"] = net_contributed
+        portfolio_doc["total_pnl"] = equity - net_contributed
+        portfolio_doc["total_return_pct"] = (
+            100.0 * (equity - net_contributed) / net_contributed
+            if net_contributed > 0
+            else None
+        )
+
+        trades = list(portfolio_doc.get("recent_trades") or [])
+        day_trades = [
+            t for t in trades
+            if isinstance(t, dict) and t.get("ist_day_match")
+        ]
+        previous = portfolio_doc.get("previous_closes") or {}
+        marks = portfolio_doc.get("marks") or {}
+        positions = portfolio_doc.get("positions") or []
+        if not marks or not previous:
+            portfolio_doc["day_pnl"] = None
+            return
+        # Start-of-day holdings plus today's fills, marked to latest close.
+        day_pnl = 0.0
+        current_qty: dict[str, float] = {
+            str(p.get("symbol")): float(p.get("quantity") or p.get("qty") or 0)
+            for p in positions
+            if isinstance(p, dict) and p.get("symbol")
+        }
+        start_qty = dict(current_qty)
+        for trade in day_trades:
+            symbol = str(trade.get("symbol") or "")
+            qty = float(trade.get("quantity") or trade.get("qty") or 0)
+            side = str(trade.get("side") or "").lower()
+            if side == "buy":
+                start_qty[symbol] = start_qty.get(symbol, 0.0) - qty
+            elif side == "sell":
+                start_qty[symbol] = start_qty.get(symbol, 0.0) + qty
+        for symbol, qty in start_qty.items():
+            if symbol in marks and symbol in previous:
+                day_pnl += qty * (float(marks[symbol]) - float(previous[symbol]))
+        for trade in day_trades:
+            symbol = str(trade.get("symbol") or "")
+            if symbol not in marks:
+                continue
+            qty = float(trade.get("quantity") or trade.get("qty") or 0)
+            price = float(trade.get("price") or trade.get("fill_price") or 0)
+            fee = float(trade.get("fee") or 0)
+            side = str(trade.get("side") or "").lower()
+            if side == "buy":
+                day_pnl += qty * (float(marks[symbol]) - price) - fee
+            elif side == "sell" and symbol in previous:
+                day_pnl += qty * (price - float(previous[symbol])) - fee
+        portfolio_doc["day_pnl"] = day_pnl
+        base = equity - day_pnl
+        portfolio_doc["day_return_pct"] = (
+            100.0 * day_pnl / base if base > 0 else None
+        )
 
     @staticmethod
     def _tag_trades_ist_day(

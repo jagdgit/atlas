@@ -1,20 +1,28 @@
 """Virtual portfolio registry (IL.10) — one Decision Simulation book per portfolio.
 
-In-process registry keyed by ``portfolio_key``. Cash/positions stay in
-``sim.portfolios`` (one row per mission + name=portfolio_key). Persona is required
-so books are not just separate cash piles.
+In-process registry keyed by ``portfolio_key``, **persisted under**
+``data/market/virtual_portfolios.json`` so books + mission binding survive
+``atlas serve`` restarts. Cash/positions remain the source of truth in
+``sim.portfolios`` (one row per mission + name=portfolio_key); the registry
+stores persona + mission binding for the UI.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 _LOCK = threading.RLock()
 _STORE: dict[str, dict[str, Any]] = {}
+_LOADED = False
+_LOG = logging.getLogger("atlas.investment.portfolios")
 
 DEFAULT_PROGRAM = "market_intelligence"
 
@@ -93,6 +101,95 @@ def india_equity_learner_persona(*, capital: float = 10000.0) -> dict[str, Any]:
     )
 
 
+def _data_root() -> Path | None:
+    # Explicit registry file/dir wins; under pytest skip global data dir unless set.
+    env = (os.environ.get("ATLAS_VIRTUAL_PORTFOLIOS") or "").strip()
+    if env:
+        p = Path(env)
+        return p if p.suffix else p
+    if os.environ.get("PYTEST_CURRENT_TEST") and not (
+        os.environ.get("ATLAS_DATA_DIR") or ""
+    ).strip():
+        return None
+    data = (os.environ.get("ATLAS_DATA_DIR") or "").strip()
+    if data:
+        return Path(data)
+    try:
+        from atlas.config import get_config
+
+        return Path(get_config().paths.data)
+    except Exception:  # noqa: BLE001
+        return None
+
+def persist_path() -> Path | None:
+    """JSON file for the whole registry (or dir/file via ATLAS_VIRTUAL_PORTFOLIOS)."""
+    env = (os.environ.get("ATLAS_VIRTUAL_PORTFOLIOS") or "").strip()
+    if env:
+        p = Path(env)
+        if p.suffix:
+            return p
+        return p / "virtual_portfolios.json"
+    root = _data_root()
+    if root is None:
+        return None
+    return root / "market" / "virtual_portfolios.json"
+
+
+def _write_disk() -> None:
+    path = persist_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": "il.10",
+            "updated_at": time.time(),
+            "portfolios": list(_STORE.values()),
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("virtual portfolio persist skipped: %s", exc)
+
+
+def _read_disk() -> dict[str, dict[str, Any]]:
+    path = persist_path()
+    if path is None or not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        items = data.get("portfolios") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("portfolio_key") or "").strip()
+            if not key:
+                continue
+            out[key] = dict(row)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("virtual portfolio load skipped: %s", exc)
+        return {}
+
+
+def _ensure_loaded() -> None:
+    global _LOADED
+    if _LOADED:
+        return
+    with _LOCK:
+        if _LOADED:
+            return
+        disk = _read_disk()
+        if disk:
+            _STORE.update(disk)
+            _LOG.info("loaded %d virtual portfolio(s) from disk", len(disk))
+        _LOADED = True
+
+
 def register(
     *,
     label: str,
@@ -107,7 +204,8 @@ def register(
     ledger_mission_id: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create or update a virtual portfolio registry row."""
+    """Create or update a virtual portfolio registry row (memory + disk)."""
+    _ensure_loaded()
     key = (portfolio_key or slugify(label)).strip() or slugify(label)
     person = normalize_persona(persona, capital=(persona or {}).get("capital"))
     if persona and persona.get("capital") is None:
@@ -136,6 +234,7 @@ def register(
             "extra": {**((existing or {}).get("extra") or {}), **(extra or {})},
         }
         _STORE[key] = row
+        _write_disk()
         return dict(row)
 
 
@@ -145,6 +244,7 @@ def bind_mission(
     mission_id: str,
     ledger_mission_id: str | None = None,
 ) -> dict[str, Any] | None:
+    _ensure_loaded()
     with _LOCK:
         row = _STORE.get(portfolio_key)
         if row is None:
@@ -153,16 +253,48 @@ def bind_mission(
         if ledger_mission_id:
             row["ledger_mission_id"] = str(ledger_mission_id)
         row["updated_at"] = time.time()
+        _write_disk()
+        return dict(row)
+
+
+def sync_live_cash(
+    portfolio_key: str,
+    cash: float,
+    *,
+    mission_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Update registry persona.capital from live sim book cash (post deposit / tick)."""
+    _ensure_loaded()
+    key = str(portfolio_key or "").strip()
+    if not key:
+        return None
+    try:
+        cash_f = float(cash)
+    except (TypeError, ValueError):
+        return None
+    with _LOCK:
+        row = _STORE.get(key)
+        if row is None:
+            return None
+        person = dict(row.get("persona") or {})
+        person["capital"] = cash_f
+        row["persona"] = person
+        if mission_id:
+            row["mission_id"] = str(mission_id)
+        row["updated_at"] = time.time()
+        _write_disk()
         return dict(row)
 
 
 def get(portfolio_key: str) -> dict[str, Any] | None:
+    _ensure_loaded()
     with _LOCK:
         row = _STORE.get(portfolio_key)
         return dict(row) if row else None
 
 
 def get_by_id(portfolio_id: str) -> dict[str, Any] | None:
+    _ensure_loaded()
     with _LOCK:
         for row in _STORE.values():
             if str(row.get("id")) == str(portfolio_id):
@@ -174,6 +306,7 @@ def list_portfolios(
     *,
     program_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    _ensure_loaded()
     with _LOCK:
         rows = [dict(r) for r in _STORE.values()]
     if program_id:
@@ -183,11 +316,23 @@ def list_portfolios(
 
 
 def clear(portfolio_key: str | None = None) -> None:
+    """Clear memory (and matching disk). Used by tests; full clear drops the file."""
+    global _LOADED
     with _LOCK:
+        path = persist_path()
         if portfolio_key is None:
             _STORE.clear()
+            _LOADED = True  # stay empty until next process (or re-register)
+            if path is not None and path.is_file():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
         else:
+            _ensure_loaded()
             _STORE.pop(portfolio_key, None)
+            _LOADED = True
+            _write_disk()
 
 
 def ensure_from_config(
@@ -195,7 +340,13 @@ def ensure_from_config(
     *,
     mission_id: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve/register a portfolio from Decision Simulation config."""
+    """Resolve/register a portfolio from Decision Simulation config.
+
+    Does **not** reset deposited capital: if the registry (or disk) already has a
+    higher ``persona.capital`` than config ``starting_cash``, the higher value wins.
+    Live cash in ``sim.portfolios`` is still authoritative once a book exists.
+    """
+    _ensure_loaded()
     cfg = cfg or {}
     key = str(cfg.get("portfolio_key") or "").strip()
     label = str(cfg.get("portfolio_label") or cfg.get("label") or "").strip()
@@ -203,29 +354,68 @@ def ensure_from_config(
         key = slugify(label) if label else "default"
     if not label:
         label = key.replace("_", " ").title()
-    persona_raw = cfg.get("persona") if isinstance(cfg.get("persona"), dict) else {}
+    persona_raw = dict(cfg.get("persona")) if isinstance(cfg.get("persona"), dict) else {}
     capital = cfg.get("starting_cash")
     if capital is not None:
         persona_raw = {**persona_raw, "capital": capital}
     existing = get(key)
+    # Never clobber deposited capital with a lower mission starting_cash.
+    if existing and isinstance(existing.get("persona"), dict):
+        try:
+            old_c = float((existing.get("persona") or {}).get("capital") or 0)
+        except (TypeError, ValueError):
+            old_c = 0.0
+        try:
+            new_c = float(persona_raw.get("capital") or capital or 0)
+        except (TypeError, ValueError):
+            new_c = 0.0
+        if old_c > new_c:
+            persona_raw = {
+                **((existing.get("persona") if isinstance(existing.get("persona"), dict) else {}) or {}),
+                **persona_raw,
+                "capital": old_c,
+            }
+            # Keep richer existing persona fields when config omits them
+            for k, v in (existing.get("persona") or {}).items():
+                if k not in persona_raw or persona_raw.get(k) in (None, "", []):
+                    persona_raw[k] = v
     if existing and not cfg.get("persona") and capital is None:
         if mission_id and not existing.get("mission_id"):
             return bind_mission(key, mission_id=mission_id) or existing
+        if mission_id and existing.get("mission_id") != str(mission_id):
+            return bind_mission(key, mission_id=mission_id) or existing
         return existing
     return register(
-        label=label,
+        label=label or (existing or {}).get("label") or key,
         portfolio_key=key,
         persona=persona_raw or (existing or {}).get("persona"),
-        program_id=str(cfg.get("program_id") or DEFAULT_PROGRAM),
-        universe=str(cfg.get("universe_index") or cfg.get("universe") or "NIFTY50"),
-        broker_profile=str(cfg.get("broker_profile") or "paper_demo"),
+        program_id=str(
+            cfg.get("program_id")
+            or (existing or {}).get("program_id")
+            or DEFAULT_PROGRAM
+        ),
+        universe=str(
+            cfg.get("universe_index")
+            or cfg.get("universe")
+            or (existing or {}).get("universe")
+            or "NIFTY50"
+        ),
+        broker_profile=str(
+            cfg.get("broker_profile")
+            or (existing or {}).get("broker_profile")
+            or "paper_demo"
+        ),
         asset_class=str(
             cfg.get("asset_class")
+            or (existing or {}).get("asset_class")
             or (persona_raw.get("allowed_assets") or ["cash_equity"])[0]
         ),
-        instrument_pack=str(cfg.get("instrument_pack") or "") or None,
+        instrument_pack=str(cfg.get("instrument_pack") or "") or (existing or {}).get(
+            "instrument_pack"
+        ),
         mission_id=mission_id or (existing or {}).get("mission_id"),
         ledger_mission_id=(existing or {}).get("ledger_mission_id"),
+        extra=(existing or {}).get("extra") if isinstance((existing or {}).get("extra"), dict) else None,
     )
 
 

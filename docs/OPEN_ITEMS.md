@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-07-28 — Research & Execution Roadmap finalized (Evidence → ARMF A/B → ARMF C → SI).
+> **Last updated:** 2026-08-03 — Career Intelligence **PLAN LOCKED** (`OI-CI0`; CI.2.5 Research layer).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -31,7 +31,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C11 | 🟢 | P2 | **Personal auto-inference: proficiency + timeline years + heuristic professional.** Skills get graded `proficiency`; stated `years` feed timeline tenure; role/publication heuristics from Experience text. Full CV / Research-finding professional auto-inference still deferred. | C.7b | closed OI-C11 |
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
-| OI-C7 | 🟢 | P3 | **Migration-number placeholders.** Registry through `0044` (IL.7 sim ledger realism). Prior: `0043` goals. **Next free slot: `0045`.** | C.2 | updated IL.7 |
+| OI-C7 | 🟢 | P3 | **Migration-number placeholders.** Registry through `0048` (DI.Attr attributions). Prior: `0047` DI.Obs. **Next free slot: `0049`.** | C.2 | updated DI.Attr |
 
 | OI-C12 | 🟢 | P3 | **Personal/Owner SPA dashboard view.** Console `/ui` Personal panel: coverage bars, skills/timeline/professional/identity with P9 "why", Confirm/Reject for inferred facts, Infer + draft-resume actions over `/v1/personal/*`. | C.8d | closed OI-C12 |
 | OI-C13 | 🟢 | P3 | **Conversation → experience extraction.** `build_conversation_experiences` distills owner-stated skills from user turns; `IngestionService` writes them when `source=conversation` + `extract_findings` (Owner Knowledge). | C.8a | closed OI-C13 |
@@ -48,6 +48,7 @@ Scope cuts recorded at plan time; remaining rows are post-Phase-D deferrals / fo
 | OI-D2 | 🟢 | P3 | **RM arbitration beyond weighted-priority + hard cap** — soft fair-share usage penalty on MissionArbiter (OI-D2). Preemption of *running* ticks remains out of scope (single-process; release-on-finish). | A7 | closed OI-D2 |
 | OI-D3 | 🟢 | P2 | **Phase D complete** (D.1–D.11 ✅), including applied watchers + e2e gate. | PHASE_D §3 |
 | OI-D4 | ⚪ | — | **Real-world side-effecting appliers** (e.g. actually submitting a draft) stay behind the P14 approval gate — out of scope until explicitly requested. | PHASE_D DD3/P14 |
+| OI-CI0 | 🟢 | P1 | **Career Intelligence CI.0–CI.5 implemented** (Observer one-step ingest, CKG/Opportunity Score, Career Research BATCH, board adapters + CapabilityGaps, learning plans, gated-apply stub). Operator self-ingests LinkedIn export when ready. Optional later: CI.1c browser, live board HTTP, Experience OS WHY depth. Plan: [`CAREER_INTELLIGENCE_PLAN.md`](CAREER_INTELLIGENCE_PLAN.md). | 2026-08-03 |
 
 ---
 
@@ -93,6 +94,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-MI0 | 🟢 | P1 | **Market Intelligence Program** — MI→KG→MCA + platform PA gaps ✅. **Next:** governance / ops polish. | `docs/MARKET_INTELLIGENCE_MISSIONS_PLAN.md` |
 | OI-IL0 | 🟢 | P1 | **Autonomous Investment Learner** — IL.1–11 + OX ✅; F&O packs, holidays, **filings refs**. Optional: live ToS filing clients. | `docs/AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md` §14–20 | filings 2026-07-26 |
 | OI-IIP0 | 🟢 | P1 | **Investment Intelligence Platform** — IIP.1–9 ✅. | `docs/INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md` |
+| OI-DI0 | 🟢 | P1 | **Decision Intelligence** — **DI.1→DI.7 shipped** (migrations `0045`–`0048`). Full stack: packets→timeline→obs→attr→KPIs→fundamentals→process→meta→gated ML export. DI.7 blocked until ≥300 trusted closed per strategy_tag (or override). **No live NN trading.** | [`DECISION_INTELLIGENCE_LEARNING_PLAN.md`](DECISION_INTELLIGENCE_LEARNING_PLAN.md) · playbook | 2026-08-05 |
 | OI-EVID0 | 🟢 | P1 | **IRA Evidence Plan** — **frozen/shipped** (F0–F5). Snapshots, incremental refresh, hierarchy, sufficiency, valuation path, claim→evidence. | `docs/IRA_NEXT_LEAP_EVIDENCE_PLAN.md` |
 | OI-OPS1 | 🟢 | P1 | **ARMF** — A–E frozen (C10 soft-focus deferred; Phase F goals deferred). Capacity, cleanup idempotent, archive lane, Ops summary first paint. | `docs/OPS_STARVATION_CLEANUP_AND_MARKET_FOCUS_PLAN.md` |
 | OI-SI0 | 🟢 | P1 | **Sector Intelligence** — SI.1–6 frozen (identity → packs → strategy → path branch → distinctiveness → Why A vs B). Operate under paper trading; deepen compare later if needed. | `docs/SECTOR_INTELLIGENCE_AND_RESEARCH_STRATEGY_PLAN.md` · [`ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md`](ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md) |

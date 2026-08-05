@@ -42,9 +42,11 @@ def mount_ui(app: "FastAPI", config: "AtlasConfig") -> bool:
 
         async def get_response(self, path, scope):  # type: ignore[no-untyped-def]
             response = await super().get_response(path, scope)
-            if getattr(response, "status_code", None) == 200:
-                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            # Apply to 200 and 304 so browsers never sticky-cache a broken app.js body.
+            if getattr(response, "status_code", None) in (200, 304):
+                response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
                 response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
             return response
 
     # html=True serves index.html at the mount root (/ui/) and resolves relative assets.

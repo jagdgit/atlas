@@ -1,0 +1,52 @@
+[
+  {
+    "id": "demo-re-001",
+    "title": "Principal Engineer — R&D (Renewable Energy)",
+    "company": "TotalEnergies",
+    "location": "Bangalore",
+    "salary": 4500000,
+    "skills": ["python", "power systems", "control systems", "fastapi", "docker"],
+    "url": "https://example.com/jobs/demo-re-001",
+    "description": "Lead R&D for solar/plant analytics. Python, power systems, real-time control."
+  },
+  {
+    "id": "demo-ai-002",
+    "title": "Staff Software Engineer — AI Platform",
+    "company": "Example Energy AI",
+    "location": "Remote",
+    "salary": 4200000,
+    "skills": ["python", "fastapi", "llms", "kubernetes", "celery"],
+    "url": "https://example.com/jobs/demo-ai-002",
+    "description": "Build internal LLM tooling for engineering knowledge. Python/FastAPI/Celery."
+  },
+  {
+    "id": "demo-backend-003",
+    "title": "Senior Backend Engineer",
+    "company": "Acme Grid",
+    "location": "Hyderabad",
+    "salary": 2800000,
+    "skills": ["python", "django", "postgres", "redis"],
+    "url": "https://example.com/jobs/demo-backend-003",
+    "description": "APIs and data pipelines for grid monitoring."
+  },
+  {
+    "id": "demo-rust-004",
+    "title": "Systems Engineer (Rust)",
+    "company": "OtherCo",
+    "location": "Remote",
+    "salary": 5000000,
+    "skills": ["rust", "linux", "networking"],
+    "url": "https://example.com/jobs/demo-rust-004",
+    "description": "Low-level systems work — weak Python overlap by design (for ranking tests)."
+  },
+  {
+    "id": "demo-fullstack-005",
+    "title": "Full-Stack Engineer",
+    "company": "Startup Solar",
+    "location": "Bangalore",
+    "salary": 2200000,
+    "skills": ["javascript", "typescript", "python", "react"],
+    "url": "https://example.com/jobs/demo-fullstack-005",
+    "description": "Product UI + light Python services."
+  }
+]

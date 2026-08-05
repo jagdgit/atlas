@@ -463,6 +463,67 @@ class BestJobsRequest(BaseModel):
     include_inferred_skills: bool = True
 
 
+class CareerImportFeedRequest(BaseModel):
+    """CI.0.2 — register a jobs JSON as job_postings and wire Career Advisor sources."""
+
+    path: str | None = Field(
+        default=None,
+        description="Host path to jobs JSON. Omit to load the built-in sample fixture.",
+    )
+    asset_name: str = Field(default="operator_sample_jobs", min_length=1, max_length=120)
+    wire_career_advisor: bool = True
+
+
+class LinkedInExportIngestRequest(BaseModel):
+    """CI.0/CI.1 — unpack LinkedIn data export for coaching only (never writes to LinkedIn)."""
+
+    path: str = Field(min_length=1, description="Path to .zip, extracted folder, or Profile.html")
+    linkedin_url: str | None = None
+    include_inferred: bool = True
+    register_snapshot: bool = True
+
+
+class CareerWatchlistUpsertRequest(BaseModel):
+    """CI.1.4 — Career Memory operator status."""
+
+    label: str = Field(min_length=1, max_length=240)
+    kind: str = Field(default="company", pattern="^(company|job|skill|role)$")
+    operator_status: str = Field(
+        default="watching",
+        pattern="^(watching|interested|applied|passed|hired|archived)$",
+    )
+    notes: str | None = None
+    external_id: str | None = None
+    url: str | None = None
+    item_id: str | None = None
+
+
+class CareerBriefRequest(BaseModel):
+    """CI.1.5 — morning brief options."""
+
+    include_jobs: bool = True
+    job_limit: int = Field(default=5, ge=1, le=20)
+
+
+class CareerDiscoverRequest(BaseModel):
+    """CI.3 — run job board sensors (CapabilityGap when live/ToS-blocked)."""
+
+    roles: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=lambda: ["fixture"])
+    salary_min: float = 0
+    limit: int = Field(default=25, ge=1, le=100)
+
+
+class CareerGatedApplyRequest(BaseModel):
+    """CI.5 — gated non-LinkedIn apply intent (never LinkedIn Easy Apply)."""
+
+    posting: dict[str, Any]
+    enabled: bool = False
+    approved: bool = False
+    channel: str = "non_linkedin_form"
+
 class ArchiveIngestRequest(BaseModel):
     """Start Owner Knowledge archive learning (USB / years-of-work dumps)."""
 
@@ -845,6 +906,14 @@ class WithdrawPortfolioRequest(BaseModel):
         description="Optional TDS rate; default from Broker Profile withdrawal_tds_pct",
     )
     broker_profile: str | None = None
+    note: str = ""
+    mission_id: str | None = None
+
+
+class DepositPortfolioRequest(BaseModel):
+    """IL.7 — simulate depositing cash into a virtual portfolio book."""
+
+    amount: float = Field(..., gt=0)
     note: str = ""
     mission_id: str | None = None
 

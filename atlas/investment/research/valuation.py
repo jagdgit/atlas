@@ -114,7 +114,10 @@ def build_valuation_case(
     de = _f(ratios.get("debt_to_equity"))
     fcf = _f(ratios.get("fcf"))
     sector = ratios.get("sector")
+    industry_pe = _f(ratios.get("industry_pe_median"))
+    industry_pb = _f(ratios.get("industry_pb_median"))
     fair_pe = fair_pe_from_quality(roe=roe, sector=str(sector) if sector else None)
+    fair_pe_source = "quality_heuristic"
     price_f = _f(price)
     shares_f = _f(shares)
 
@@ -124,6 +127,10 @@ def build_valuation_case(
     intrinsic: float | None = None
     dcf: dict[str, Any] | None = None
 
+    pe_vs_industry: float | None = None
+    if pe is not None and industry_pe is not None and industry_pe > 0:
+        pe_vs_industry = round(100.0 * (industry_pe - pe) / pe, 2)
+
     if pe is None and fcf is None:
         gaps.append("valuation: PE/FCF unavailable — MoS unknown")
         method = "insufficient"
@@ -132,8 +139,18 @@ def build_valuation_case(
         scenarios["multiples"] = {
             "pe": pe,
             "fair_pe": fair_pe,
-            "note": "Fair PE is a hermetic quality band, not a sell-side target",
+            "fair_pe_source": fair_pe_source,
+            "industry_pe_median": industry_pe,
+            "note": (
+                "Fair PE is a hermetic quality band, not a sell-side target "
+                "and not an industry average unless industry_pe_median was imported."
+            ),
         }
+        if industry_pe is None and pe is not None:
+            gaps.append(
+                "valuation: industry_pe_median not imported — "
+                "cannot claim PE vs industry average"
+            )
 
     if fcf is not None and fcf > 0:
         dcf = dcf_value(fcf)
@@ -194,6 +211,13 @@ def build_valuation_case(
         "method": display_method if display_method != "multiples" else method,
         "pe": pe,
         "fair_pe": fair_pe if pe is not None else None,
+        "fair_pe_source": fair_pe_source if pe is not None else None,
+        "industry_pe_median": industry_pe,
+        "industry_pb_median": industry_pb,
+        "pe_vs_industry_median_pct": pe_vs_industry,
+        "may_claim_below_industry_pe": bool(
+            pe is not None and industry_pe is not None and pe < industry_pe
+        ),
         "roe": roe,
         "roic": roic,
         "debt_to_equity": de,

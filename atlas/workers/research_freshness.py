@@ -28,9 +28,11 @@ class ResearchFreshnessWorker(PersistentWorker):
         self,
         *,
         research: Any | None = None,
+        observations: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._research = research
+        self._observations = observations
         self._logger = logger or logging.getLogger("atlas.workers.research_freshness")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -42,6 +44,28 @@ class ResearchFreshnessWorker(PersistentWorker):
         # IRA.21 — keep batches small; resume next tick via cursor
         max_symbols = max(1, min(int(cfg.get("max_symbols") or 4), 12))
         cursor = int(state.get("symbol_cursor") or 0)
+
+        # DI.Obs — research consumes observations since last run (done-when).
+        since_h = float(cfg.get("observation_lookback_hours") or 24.0)
+        if self._observations is not None:
+            try:
+                recent = self._observations.list_since(
+                    since_hours=since_h, limit=40
+                )
+                state["observations_since"] = [
+                    {
+                        "id": r.get("id"),
+                        "symbol": r.get("symbol"),
+                        "kind": r.get("kind"),
+                        "summary": (r.get("payload") or {}).get("text")
+                        or (r.get("payload") or {}).get("title")
+                        or r.get("kind"),
+                    }
+                    for r in recent
+                ]
+                state["observations_count"] = len(recent)
+            except Exception:  # noqa: BLE001
+                self._logger.debug("DI.Obs list_since failed", exc_info=True)
 
         if self._research is None:
             return TickResult(
@@ -141,8 +165,11 @@ class ResearchFreshnessWorker(PersistentWorker):
         state["last_refresh_count"] = len(refreshed)
         state["last_refresh"] = refreshed
         syms = [i.get("symbol") for i in refreshed if i.get("symbol")]
+        obs_n = int(state.get("observations_count") or 0)
         if refreshed:
             note = f"refreshed {len(refreshed)} dossier(s): {', '.join(syms[:5])}"
         else:
             note = f"no stale research sections (scanned {processed})"
+        if obs_n:
+            note = f"{note}; observations_since={obs_n}"
         return TickResult(state=state, note=note)

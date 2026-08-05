@@ -301,8 +301,13 @@ def close_with_attribution(
     pnl: float | None = None,
     note: str = "",
     trade: dict[str, Any] | None = None,
+    di_grades: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Close tracker: attribute P&L to which assumptions held/failed; update priors."""
+    """Close tracker: attribute P&L to which assumptions held/failed; update priors.
+
+    DI.Attr: when ``di_grades`` is provided and ``may_update_priors`` is False
+    (market_quality=F + decision_quality A/B), weight deltas are skipped.
+    """
     tracker = load_tracker(data_dir, symbol, program_id) or empty_tracker(symbol)
     res = str(result or "observed").strip().lower()
     assumptions = list(tracker.get("assumptions") or [])
@@ -333,6 +338,7 @@ def close_with_attribution(
             {"id": a.get("id"), "kind": a.get("kind"), "text": a.get("text")} for a in failed
         ],
         "trade": trade or {},
+        "di_grades": di_grades or None,
     }
     attrs = list(tracker.get("attributions") or [])
     attrs.append(attribution)
@@ -355,6 +361,9 @@ def close_with_attribution(
     tracker["lessons"] = lessons[-20:]
     save_tracker(data_dir, tracker, program_id)
 
+    allow_weights = True
+    if isinstance(di_grades, dict) and di_grades.get("may_update_priors") is False:
+        allow_weights = False
     priors = apply_outcome_to_priors(
         data_dir,
         program_id=program_id,
@@ -363,8 +372,15 @@ def close_with_attribution(
         failed_kinds=[str(a.get("kind") or "other") for a in failed],
         held_kinds=[str(a.get("kind") or "other") for a in held],
         lessons=list(attribution.get("lessons") or lessons[-3:]),
+        allow_weight_update=allow_weights,
+        di_grades=di_grades,
     )
-    return {"tracker": tracker, "attribution": attribution, "priors": priors_view(priors)}
+    return {
+        "tracker": tracker,
+        "attribution": attribution,
+        "priors": priors_view(priors),
+        "priors_weight_update": allow_weights,
+    }
 
 
 def _mentor_lesson(kind: str, text: str, result: str) -> str:
@@ -391,8 +407,14 @@ def apply_outcome_to_priors(
     failed_kinds: list[str] | None = None,
     held_kinds: list[str] | None = None,
     lessons: list[str] | None = None,
+    allow_weight_update: bool = True,
+    di_grades: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Update durable priors; weight deltas unlock after N closed outcomes."""
+    """Update durable priors; weight deltas unlock after N closed outcomes.
+
+    DI.Attr hard rule: when ``allow_weight_update`` is False, still record the
+    outcome count/lesson text but skip ranking/axis weight deltas.
+    """
     priors = load_priors(data_dir, program_id)
     res = str(result or "").lower()
     if res not in {"held", "weakened", "falsified"}:
@@ -423,42 +445,52 @@ def apply_outcome_to_priors(
     for lesson in lessons or []:
         if lesson and lesson not in fl:
             fl.insert(0, lesson)
+    if not allow_weight_update:
+        fl.insert(
+            0,
+            "DI.Attr: priors weight update skipped "
+            f"(market_quality={((di_grades or {}).get('market_quality'))}, "
+            f"decision_quality={((di_grades or {}).get('decision_quality'))})",
+        )
     priors["failure_lessons"] = fl[:40]
 
     n = int(priors["closed_outcomes"])
     deltas = dict(priors.get("weight_deltas") or empty_priors()["weight_deltas"])
-    # Soft updates always; meaningful unlock note at N>=20
-    if res == "falsified":
-        deltas["ranking_penalty_global"] = round(
-            float(deltas.get("ranking_penalty_global") or 0) + 0.02, 4
-        )
-        axis_pen = dict(deltas.get("scoring_axis_penalty") or {})
-        for kind in failed_kinds or []:
-            axis = {
-                "leverage_ok": "risk",
-                "valuation_band": "valuation",
-                "management_execution": "management",
-                "growth_path": "growth",
-                "theme_tailwind": "macro_theme",
-                "policy_support": "macro_theme",
-                "capex_delivery": "business",
-            }.get(kind, "risk")
-            axis_pen[axis] = round(float(axis_pen.get(axis) or 0) + 0.03, 4)
-        deltas["scoring_axis_penalty"] = axis_pen
-    elif res == "weakened":
-        deltas["ranking_penalty_global"] = round(
-            float(deltas.get("ranking_penalty_global") or 0) + 0.01, 4
-        )
-    elif res == "held":
-        deltas["ranking_bonus_global"] = round(
-            min(0.2, float(deltas.get("ranking_bonus_global") or 0) + 0.01), 4
-        )
-        boost = dict(deltas.get("discovery_theme_boost") or {})
-        for tid in theme_links or []:
-            key = str(tid).strip().lower()
-            if key:
-                boost[key] = round(min(0.25, float(boost.get(key) or 0) + 0.02), 4)
-        deltas["discovery_theme_boost"] = boost
+    # Soft updates always; meaningful unlock note at N>=20 — unless DI.Attr blocks.
+    if allow_weight_update:
+        if res == "falsified":
+            deltas["ranking_penalty_global"] = round(
+                float(deltas.get("ranking_penalty_global") or 0) + 0.02, 4
+            )
+            axis_pen = dict(deltas.get("scoring_axis_penalty") or {})
+            for kind in failed_kinds or []:
+                axis = {
+                    "leverage_ok": "risk",
+                    "valuation_band": "valuation",
+                    "management_execution": "management",
+                    "growth_path": "growth",
+                    "theme_tailwind": "macro_theme",
+                    "policy_support": "macro_theme",
+                    "capex_delivery": "business",
+                }.get(kind, "risk")
+                axis_pen[axis] = round(float(axis_pen.get(axis) or 0) + 0.03, 4)
+            deltas["scoring_axis_penalty"] = axis_pen
+        elif res == "weakened":
+            deltas["ranking_penalty_global"] = round(
+                float(deltas.get("ranking_penalty_global") or 0) + 0.01, 4
+            )
+        elif res == "held":
+            deltas["ranking_bonus_global"] = round(
+                min(0.2, float(deltas.get("ranking_bonus_global") or 0) + 0.01), 4
+            )
+            boost = dict(deltas.get("discovery_theme_boost") or {})
+            for tid in theme_links or []:
+                key = str(tid).strip().lower()
+                if key:
+                    boost[key] = round(min(0.25, float(boost.get(key) or 0) + 0.02), 4)
+            deltas["discovery_theme_boost"] = boost
+    else:
+        deltas["di_attr_skipped"] = int(deltas.get("di_attr_skipped") or 0) + 1
 
     deltas["unlocked"] = n >= 20
     deltas["unlock_note"] = (
@@ -466,6 +498,10 @@ def apply_outcome_to_priors(
         if n >= 20
         else f"Soft priors updating; full unlock at N=20 (now {n})."
     )
+    if not allow_weight_update:
+        deltas["unlock_note"] = (
+            "DI.Attr blocked weight update (market F + decision A/B). " + deltas["unlock_note"]
+        )
     priors["weight_deltas"] = deltas
     save_priors(data_dir, priors, program_id)
     return priors

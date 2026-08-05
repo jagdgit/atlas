@@ -20,13 +20,9 @@ _SUMMARY_SYSTEM = (
 
 
 def _skill_names(profile: dict[str, Any]) -> list[str]:
-    out: list[str] = []
-    for f in profile.get("skills", []):
-        val = f.get("value") or {}
-        name = val.get("skill") or f.get("key")
-        if name and name not in out:
-            out.append(str(name))
-    return out
+    from atlas.personal.skill_hygiene import skill_names_from_facts
+
+    return skill_names_from_facts(profile.get("skills") or [], include_inferred=True)
 
 
 def _deterministic_summary(profile: dict[str, Any]) -> str:

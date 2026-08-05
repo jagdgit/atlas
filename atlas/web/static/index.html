@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlas Console</title>
-  <link rel="stylesheet" href="./styles.css?v=dash55" />
+  <link rel="stylesheet" href="./styles.css?v=dash65" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
@@ -14,8 +14,9 @@
       <h1>Atlas</h1>
       <p class="muted">Enter your API key to connect to the local Atlas server.</p>
       <input id="login-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false" />
-      <button type="submit">Connect</button>
+      <button type="submit" id="login-submit">Connect</button>
       <p id="login-error" class="login-error hidden"></p>
+      <p class="muted small" style="margin:0">Use the value of <code>ATLAS_API_KEYS</code> from <code>/etc/atlas/atlas.env</code> (or repo <code>.env</code> if identical). Open only via <code>http://127.0.0.1:8000/ui/</code>.</p>
     </form>
   </div>
 
@@ -347,6 +348,17 @@
             <div id="learner-book" class="learner-body"></div>
           </div>
         </div>
+
+        <div class="learner-panel">
+          <div class="panel-head">
+            <h3 class="section-h">DI dashboards (staged)</h3>
+            <button id="learner-di-refresh" class="link" type="button">refresh</button>
+          </div>
+          <p class="muted small">
+            D1–D6 Stage-1 honesty · edge metrics gated 30/100/300 per strategy_tag (never mixed).
+          </p>
+          <div id="learner-di-dashboards" class="learner-body">Loading…</div>
+        </div>
       </section>
 
       <!-- Investment Intelligence operator review (IIP) -->
@@ -362,16 +374,25 @@
         <p class="muted learner-intro">
           Review what Atlas uses (sources, methodology, capabilities), enable broader universes,
           and triage web/data fetch failures so you can help Atlas get missing data.
+          Scroll this page — panels use the full content width.
         </p>
         <div id="iip-failures" class="learner-panel"></div>
-        <div id="iip-universes" class="learner-panel"></div>
-        <div id="iip-discovery" class="learner-panel"></div>
-        <div id="iip-themes" class="learner-panel"></div>
-        <div id="iip-fundamentals" class="learner-panel"></div>
-        <div id="iip-documents" class="learner-panel"></div>
-        <div id="iip-mkg" class="learner-panel"></div>
-        <div id="iip-thesis" class="learner-panel"></div>
-        <div id="iip-news" class="learner-panel"></div>
+        <div class="iip-layout-grid">
+          <div id="iip-universes" class="learner-panel"></div>
+          <div id="iip-discovery" class="learner-panel"></div>
+        </div>
+        <div class="iip-layout-grid">
+          <div id="iip-themes" class="learner-panel"></div>
+          <div id="iip-fundamentals" class="learner-panel"></div>
+        </div>
+        <div class="iip-layout-grid">
+          <div id="iip-documents" class="learner-panel"></div>
+          <div id="iip-mkg" class="learner-panel"></div>
+        </div>
+        <div class="iip-layout-grid">
+          <div id="iip-thesis" class="learner-panel"></div>
+          <div id="iip-news" class="learner-panel"></div>
+        </div>
         <div id="iip-sources" class="learner-panel"></div>
         <div id="iip-capabilities" class="learner-panel"></div>
         <div id="iip-methodology" class="learner-panel"></div>
@@ -497,6 +518,58 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="./app.js?v=dash55"></script>
+  <!-- App shell first so window.tryConnect exists before the emergency fallback. -->
+  <script src="./app.js?v=dash65"></script>
+  <!-- Minimal bootstrap: works even if app.js fails to load/parse, and survives late DOM. -->
+  <script>
+  (function () {
+    function showErr(msg) {
+      var e = document.getElementById("login-error");
+      if (!e) return;
+      e.textContent = msg || "";
+      e.classList.toggle("hidden", !msg);
+    }
+    function bootLogin() {
+      var form = document.getElementById("login-form");
+      var input = document.getElementById("login-key");
+      if (!form || !input) return;
+      if (form.dataset.bound === "1") return;
+      form.dataset.bound = "1";
+      form.addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        var key = (input.value || "").trim();
+        if (!key) {
+          showErr("Enter your API key.");
+          return;
+        }
+        if (typeof window.tryConnect === "function") {
+          window.tryConnect(key);
+          return;
+        }
+        // Fallback if app.js did not load (no reload loop — surface error and stay)
+        showErr("Connecting…");
+        fetch("/v1/status", {
+          headers: { "Authorization": "Bearer " + key },
+        }).then(function (res) {
+          if (res.status === 401) throw new Error("unauthorized");
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          try { localStorage.setItem("atlas_api_key", key); } catch (_) {}
+          showErr("API key OK but app.js failed to parse/load. Hard-refresh (Ctrl+Shift+R).");
+        }).catch(function (err) {
+          var m = (err && err.message) || String(err);
+          if (m === "unauthorized") showErr("Invalid API key.");
+          else if (/Failed to fetch|NetworkError/i.test(m))
+            showErr("Cannot reach API. Use http://127.0.0.1:8000/ui/ on this machine.");
+          else showErr("Could not connect: " + m);
+        });
+      });
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", bootLogin);
+    } else {
+      bootLogin();
+    }
+  })();
+  </script>
 </body>
 </html>

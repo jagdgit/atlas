@@ -40,6 +40,7 @@ from atlas.api.schemas import (
     ProgramShareRequest,
     CreateVirtualPortfolioRequest,
     WithdrawPortfolioRequest,
+    DepositPortfolioRequest,
     ScreenerSnapshotRequest,
     ScreenerComputeRequest,
     FilingsSnapshotRequest,
@@ -59,7 +60,12 @@ from atlas.api.schemas import (
     SetResearchConfidenceRequest,
     PersonalLearnCvRequest,
     LinkedInCoachRequest,
+    LinkedInExportIngestRequest,
     BestJobsRequest,
+    CareerImportFeedRequest,
+    CareerWatchlistUpsertRequest,
+    CareerDiscoverRequest,
+    CareerGatedApplyRequest,
     ArchiveEstimateRequest,
     ArchiveIngestRequest,
     RegisterAssetRequest,
@@ -1427,6 +1433,240 @@ def personal_linkedin_suggestions(body: LinkedInCoachRequest, request: Request) 
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@v1_router.post("/personal/linkedin/ingest-export", tags=["personal"])
+def personal_linkedin_ingest_export(
+    body: LinkedInExportIngestRequest, request: Request
+) -> dict:
+    """Unpack a LinkedIn data-export (.zip / folder) for coaching only (CI.0/CI.1)."""
+    container = _app(request).container
+    personal = container.resolve("personal")
+    assets = None
+    missions = None
+    configuration = None
+    templates = None
+    try:
+        assets = container.resolve("assets")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        missions = container.resolve("missions")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        configuration = container.resolve("configuration")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        templates = container.resolve("templates")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return personal.ingest_linkedin_export(
+            body.path,
+            include_inferred=body.include_inferred,
+            linkedin_url=body.linkedin_url,
+            assets=assets,
+            register_snapshot=body.register_snapshot,
+            missions=missions,
+            configuration=configuration,
+            templates=templates,
+            wire_observer=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@v1_router.get("/personal/career/watchlist", tags=["personal"])
+def personal_career_watchlist_get(
+    request: Request,
+    status: str | None = None,
+    kind: str | None = None,
+) -> dict:
+    """CI.1.4 — list Career Memory watchlist items."""
+    from atlas.career import watchlist as wl
+
+    return wl.list_items(status=status, kind=kind)
+
+
+@v1_router.post("/personal/career/watchlist", tags=["personal"])
+def personal_career_watchlist_upsert(
+    body: CareerWatchlistUpsertRequest, request: Request
+) -> dict:
+    """CI.1.4 — upsert operator_status on a company/job/skill/role."""
+    from atlas.career import watchlist as wl
+
+    try:
+        return wl.upsert(
+            label=body.label,
+            kind=body.kind,
+            operator_status=body.operator_status,
+            notes=body.notes,
+            external_id=body.external_id,
+            url=body.url,
+            item_id=body.item_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@v1_router.get("/personal/career/brief", tags=["personal"])
+def personal_career_brief(
+    request: Request,
+    include_jobs: bool = True,
+    job_limit: int = 5,
+) -> dict:
+    """CI.1.5 — Career morning brief (watchlist + optional Advisor ranks)."""
+    from atlas.career.brief import build_morning_brief
+
+    container = _app(request).container
+    personal = container.resolve("personal")
+    assets = None
+    postings_reader = None
+    decision_engine = None
+    try:
+        assets = container.resolve("assets")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        decision_engine = container.resolve("decision")
+    except Exception:  # noqa: BLE001
+        pass
+    return build_morning_brief(
+        personal=personal,
+        assets=assets,
+        postings_reader=postings_reader,
+        decision_engine=decision_engine,
+        include_jobs=include_jobs,
+        job_limit=max(1, min(20, job_limit)),
+    )
+
+
+@v1_router.get("/personal/career/market", tags=["personal"])
+def personal_career_market(request: Request, feed_path: str | None = None) -> dict:
+    """CI.2.3 — skill demand aggregates from sample/feed postings."""
+    from atlas.career.ckg import skill_demand
+    from atlas.career.feeds import load_postings_json, sample_fixture_path
+
+    path = (feed_path or "").strip() or str(sample_fixture_path())
+    try:
+        posts = load_postings_json(__import__("pathlib").Path(path))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    demand = skill_demand(posts)
+    return {"ok": True, "market": demand, "path": path, "can_apply": False}
+
+
+@v1_router.get("/personal/career/timeline", tags=["personal"])
+def personal_career_timeline(request: Request) -> dict:
+    """CI.2.5 timeline item — Career Timeline from Personal facts."""
+    from atlas.career.ckg import career_timeline
+
+    personal = _app(request).container.resolve("personal")
+    facts = []
+    try:
+        facts = personal.list_facts(limit=200) or []
+    except Exception:  # noqa: BLE001
+        try:
+            facts = personal.timeline(limit=200) or []
+        except Exception:  # noqa: BLE001
+            facts = []
+    return {"ok": True, "timeline": career_timeline(personal_facts=facts), "can_apply": False}
+
+
+@v1_router.get("/personal/career/gaps", tags=["personal"])
+def personal_career_gaps(request: Request, feed_path: str | None = None) -> dict:
+    """CI.2.6 / CI.4.4 — skill gaps + proposed learning plans."""
+    from atlas.career.feeds import load_postings_json, sample_fixture_path
+    from atlas.career.research import learning_plans_from_postings
+    from atlas.personal.skill_hygiene import skill_names_from_facts
+
+    personal = _app(request).container.resolve("personal")
+    try:
+        facts = personal.skills(include_inferred=True) or []
+    except Exception:  # noqa: BLE001
+        facts = []
+    skills = skill_names_from_facts(facts, include_inferred=True)
+    path = (feed_path or "").strip() or str(sample_fixture_path())
+    try:
+        posts = load_postings_json(__import__("pathlib").Path(path))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    out = learning_plans_from_postings(posts, skills)
+    return {"ok": True, **out, "can_apply": False, "can_write_linkedin": False}
+
+
+@v1_router.post("/personal/career/discover", tags=["personal"])
+def personal_career_discover(body: CareerDiscoverRequest, request: Request) -> dict:
+    """CI.3 — JobBoardAdapter.discover (sensors only)."""
+    from atlas.career.boards import discover_all
+
+    return discover_all(body.model_dump())
+
+
+@v1_router.post("/personal/career/gated-apply", tags=["personal"])
+def personal_career_gated_apply(body: CareerGatedApplyRequest, request: Request) -> dict:
+    """CI.5 — gated apply intent; LinkedIn always CapabilityGap."""
+    from atlas.career.research import gated_apply
+    from atlas.decision.rules import CapabilityGap
+
+    try:
+        return gated_apply(
+            body.posting,
+            enabled=body.enabled,
+            approved=body.approved,
+            channel=body.channel,
+        )
+    except CapabilityGap as gap:
+        return {
+            "ok": False,
+            "capability_gap": gap.capability,
+            "detail": gap.detail,
+            "can_apply": False,
+        }
+
+
+@v1_router.post("/personal/career/import-feed", tags=["personal"])
+def personal_career_import_feed(
+    body: CareerImportFeedRequest, request: Request
+) -> dict:
+    """Register jobs JSON as ``job_postings`` and wire Career Advisor sources (CI.0.2)."""
+    from atlas.career.feeds import import_job_feed, sample_fixture_path
+
+    container = _app(request).container
+    try:
+        assets = container.resolve("assets")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"assets unavailable: {exc}") from exc
+    path = (body.path or "").strip() or str(sample_fixture_path())
+    configuration = None
+    missions = None
+    try:
+        configuration = container.resolve("configuration")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        missions = container.resolve("missions")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return import_job_feed(
+            assets=assets,
+            path=path,
+            asset_name=body.asset_name,
+            configuration=configuration,
+            missions=missions,
+            wire_career_advisor=body.wire_career_advisor,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @v1_router.get("/personal/jobs", tags=["personal"])
@@ -1845,7 +2085,12 @@ def get_mission_config(mission_id: str, request: Request) -> dict:
 def update_mission_config(
     mission_id: str, body: UpdateMissionConfigRequest, request: Request
 ) -> dict:
-    """Write the next config version (immutable history) and optionally activate it."""
+    """Write the next config version (immutable history) and optionally activate it.
+
+    When ``tick_interval_seconds`` is present, align the mission worker schedule
+    interval and pull ``next_run_at`` forward so catch-up config is not ignored until
+    the old 24h (or longer) slot fires.
+    """
     try:
         _missions(request).get_mission(mission_id, journal_limit=1)
         cfg = _configuration(request).update_config(
@@ -1856,6 +2101,31 @@ def update_mission_config(
         )
     except Exception as exc:  # noqa: BLE001 - domain error → HTTP
         raise _mission_error(exc)
+
+    # Sync schedule interval when operator updates tick_interval_seconds (Career, etc.).
+    try:
+        doc = body.document or {}
+        if "tick_interval_seconds" in doc:
+            iv = max(60, int(doc.get("tick_interval_seconds") or 3600))
+            workers = _workers(request)
+            schedules = None
+            try:
+                schedules = _app(request).container.resolve("schedules")
+            except Exception:  # noqa: BLE001
+                schedules = None
+            for w in workers.list_workers(mission_id=mission_id) or []:
+                sid = getattr(w, "schedule_id", None) or (
+                    w.get("schedule_id") if isinstance(w, dict) else None
+                )
+                if not sid or schedules is None:
+                    continue
+                if hasattr(schedules, "set_interval"):
+                    schedules.set_interval(sid, iv)
+                if hasattr(schedules, "bump_next_run"):
+                    schedules.bump_next_run(sid, delay_seconds=15.0)
+    except Exception:  # noqa: BLE001 - config write already succeeded
+        pass
+
     return {"config": cfg.to_dict()}
 
 
@@ -2150,12 +2420,16 @@ def planning_plan_get(
 def daily_investment_plan(
     request: Request,
     program_id: str = "market_intelligence",
-    capital: float = 10000.0,
+    capital: float | None = None,
     portfolio_key: str | None = None,
     max_candidates: int = 5,
     deploy_fraction: float = 0.40,
 ) -> dict:
-    """IL.6 — Daily Investment Plan from M0 ranked watchlist (simulation sizing only)."""
+    """IL.6 — Daily Investment Plan from M0 ranked watchlist (simulation sizing only).
+
+    When ``capital`` is provided it sizes the plan (prefer live ledger cash from the UI).
+    Otherwise capital is taken from the virtual book persona, defaulting to ₹10,000.
+    """
     try:
         planning = _app(request).container.resolve("planning")
     except Exception as exc:  # noqa: BLE001
@@ -2291,6 +2565,56 @@ def get_market_chart_links(symbol: str) -> dict:
     return chart_links_for(symbol)
 
 
+def _ist_today() -> str:
+    from datetime import datetime, timezone, timedelta
+
+    return datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
+
+
+def _investor_portfolio_doc(request: Request, program_id: str = "market_intelligence") -> dict | None:
+    """Live learner book for preview/send — same path the evening worker uses."""
+    try:
+        from atlas.workers.investor_reports import InvestorReportsWorker
+
+        app = _app(request)
+        c = app.container
+        mailer = c.resolve("investor_mailer")
+        portfolio = None
+        market_reader = None
+        try:
+            portfolio = c.resolve("portfolio")
+        except Exception:  # noqa: BLE001
+            try:
+                portfolio = c.resolve("sim_portfolio")
+            except Exception:  # noqa: BLE001
+                portfolio = None
+        try:
+            market_reader = c.resolve("market_reader")
+        except Exception:  # noqa: BLE001
+            market_reader = None
+        data_dir = getattr(mailer, "_data_dir", None)
+        if not data_dir:
+            try:
+                from atlas.config import get_config
+
+                data_dir = str(get_config().paths.data)
+            except Exception:  # noqa: BLE001
+                data_dir = None
+        worker = InvestorReportsWorker(
+            mailer=mailer,
+            portfolio=portfolio,
+            market_reader=market_reader,
+            data_dir=data_dir,
+        )
+        # Prefer explicit config key; fall back to India learner.
+        pkey = "india_equity_learner"
+        if program_id and program_id != "market_intelligence":
+            pkey = program_id
+        return worker._portfolio_doc(pkey, ist_date=_ist_today())
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @v1_router.post("/market/investor-report/morning", tags=["programs"])
 def market_investor_morning_report(
     request: Request,
@@ -2302,7 +2626,8 @@ def market_investor_morning_report(
         mailer = _app(request).container.resolve("investor_mailer")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
-    return mailer.send_morning(program_id=program_id, force=force)
+    portfolio = _investor_portfolio_doc(request, program_id=program_id)
+    return mailer.send_morning(program_id=program_id, portfolio=portfolio, force=force)
 
 
 @v1_router.post("/market/investor-report/evening", tags=["programs"])
@@ -2316,7 +2641,8 @@ def market_investor_evening_report(
         mailer = _app(request).container.resolve("investor_mailer")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
-    return mailer.send_evening(program_id=program_id, force=force)
+    portfolio = _investor_portfolio_doc(request, program_id=program_id)
+    return mailer.send_evening(program_id=program_id, portfolio=portfolio, force=force)
 
 
 @v1_router.get("/market/investor-report/status", tags=["programs"])
@@ -2340,12 +2666,13 @@ def market_investor_report_preview(
         mailer = _app(request).container.resolve("investor_mailer")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
+    portfolio = _investor_portfolio_doc(request, program_id=program_id)
     k = str(kind or "morning").strip().lower()
     if k == "evening":
-        return mailer.preview_evening(program_id=program_id)
+        return mailer.preview_evening(program_id=program_id, portfolio=portfolio)
     if k in {"weekly", "research_weekly", "weekly_research"}:
         return mailer.preview_weekly_research(program_id=program_id)
-    return mailer.preview_morning(program_id=program_id)
+    return mailer.preview_morning(program_id=program_id, portfolio=portfolio)
 
 
 @v1_router.post("/market/investor-report/weekly", tags=["programs"])
@@ -2982,12 +3309,72 @@ def market_intelligence_catalog(request: Request) -> dict:
 def get_market_fundamentals(
     program_id: str = "market_intelligence",
     limit: int = 40,
+    include_learner_gaps: bool = True,
 ) -> dict:
-    """IIP.3 — durable fundamentals store status (operator / Screener import)."""
+    """IIP.3 / DI.4 — durable fundamentals store status (operator / Screener import)."""
     from atlas.config import get_config
     from atlas.investment.fundamentals import fundamentals_view
 
-    return fundamentals_view(str(get_config().paths.data), program_id=program_id, limit=limit)
+    data_dir = str(get_config().paths.data)
+    gap_symbols = None
+    if include_learner_gaps:
+        try:
+            from atlas.investment import watchlists as wl
+
+            snap = wl.latest(program_id)
+            if isinstance(snap, dict):
+                gap_symbols = list(snap.get("watchlist_symbols") or [])[:40]
+                if not gap_symbols:
+                    watch = snap.get("watchlist") or []
+                    gap_symbols = [
+                        str(w.get("symbol"))
+                        for w in watch
+                        if isinstance(w, dict) and w.get("symbol")
+                    ][:40]
+        except Exception:  # noqa: BLE001
+            gap_symbols = None
+    return fundamentals_view(
+        data_dir,
+        program_id=program_id,
+        limit=limit,
+        gap_symbols=gap_symbols,
+    )
+
+
+@v1_router.get("/market/fundamentals/learner-template", tags=["programs"])
+def get_market_fundamentals_learner_template(
+    program_id: str = "market_intelligence",
+    only_gaps: bool = True,
+    limit: int = 40,
+) -> dict:
+    """DI.4 — CSV gap-fill template for learner watchlist PE/FCF (never invent)."""
+    from atlas.config import get_config
+    from atlas.investment.fundamentals import learner_gap_fill_template
+
+    data_dir = str(get_config().paths.data)
+    symbols: list[str] = []
+    try:
+        from atlas.investment import watchlists as wl
+
+        snap = wl.latest(program_id)
+        if isinstance(snap, dict):
+            symbols = list(snap.get("watchlist_symbols") or [])
+            if not symbols:
+                watch = snap.get("watchlist") or snap.get("ranked") or []
+                symbols = [
+                    str(w.get("symbol"))
+                    for w in watch
+                    if isinstance(w, dict) and w.get("symbol")
+                ]
+    except Exception:  # noqa: BLE001
+        symbols = []
+    lim = max(1, min(int(limit or 40), 80))
+    return learner_gap_fill_template(
+        data_dir,
+        symbols[:lim],
+        program_id=program_id,
+        only_gaps=bool(only_gaps),
+    )
 
 
 @v1_router.post("/market/fundamentals/import", tags=["programs"])
@@ -3079,6 +3466,30 @@ def post_market_fundamentals_import(request: Request, body: dict | None = None) 
                 except Exception as exc:  # noqa: BLE001
                     ira_out.append({"symbol": sym, "error": str(exc)[:200]})
         result["ira"] = {"pushed": len(ira_out), "items": ira_out[:10]}
+
+    # DI.4 — recompute learner gaps after import so operator sees residual holes
+    if body.get("include_learner_gaps", True):
+        try:
+            from atlas.investment import watchlists as wl
+            from atlas.investment.fundamentals import learner_fundamentals_gaps
+
+            snap = wl.latest(program_id)
+            gap_symbols: list[str] = []
+            if isinstance(snap, dict):
+                gap_symbols = list(snap.get("watchlist_symbols") or [])[:40]
+                if not gap_symbols:
+                    watch = snap.get("watchlist") or []
+                    gap_symbols = [
+                        str(w.get("symbol"))
+                        for w in watch
+                        if isinstance(w, dict) and w.get("symbol")
+                    ][:40]
+            if gap_symbols:
+                result["learner_gaps"] = learner_fundamentals_gaps(
+                    data_dir, gap_symbols, program_id=program_id
+                )
+        except Exception:  # noqa: BLE001
+            pass
     return result
 
 
@@ -3334,6 +3745,490 @@ def get_market_investment_score(
         },
         "note": score.get("note"),
     }
+
+
+@v1_router.get("/market/decisions/{decision_id}", tags=["programs"])
+def get_market_decision_packet(request: Request, decision_id: str) -> dict:
+    """DI.1 — fetch a frozen Decision Packet by id (immutable)."""
+    from atlas.investment.decision_packets import PACKET_VERSION, mirror_by_id_path
+
+    try:
+        store = _app(request).container.resolve("decision_packets")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"decision packets unavailable: {exc}") from exc
+    packet = store.get(decision_id)
+    if not packet:
+        raise HTTPException(status_code=404, detail=f"decision packet {decision_id} not found")
+    mirror = None
+    data_dir = getattr(store, "data_dir", None)
+    if data_dir:
+        mirror = str(mirror_by_id_path(data_dir, decision_id))
+    return {
+        "packet": packet,
+        "mirror_path": mirror,
+        "version": packet.get("version") or PACKET_VERSION,
+    }
+
+
+@v1_router.get("/market/decisions/{decision_id}/replay", tags=["programs"])
+def get_market_decision_replay(request: Request, decision_id: str) -> dict:
+    """DI.Attr — Replay: frozen packet + timeline + attribution (Stage 3 priors stub)."""
+    try:
+        store = _app(request).container.resolve("decision_attributions")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"decision attributions unavailable: {exc}"
+        ) from exc
+    replay = store.build_replay(decision_id)
+    if not replay.get("packet"):
+        # Still return timeline/attr if packet missing
+        try:
+            packets = _app(request).container.resolve("decision_packets")
+            pkt = packets.get(decision_id)
+            if pkt:
+                replay["packet"] = pkt
+        except Exception:  # noqa: BLE001
+            pass
+    if not replay.get("packet") and not replay.get("attributions"):
+        raise HTTPException(status_code=404, detail=f"no replay data for {decision_id}")
+    return replay
+
+
+@v1_router.get("/market/attributions", tags=["programs"])
+def list_market_attributions(
+    request: Request,
+    portfolio_key: str = "india_equity_learner",
+    decision_id: str | None = None,
+    limit: int = 40,
+) -> dict:
+    """DI.Attr — list outcome attributions."""
+    try:
+        store = _app(request).container.resolve("decision_attributions")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"decision attributions unavailable: {exc}"
+        ) from exc
+    lim = max(1, min(int(limit or 40), 100))
+    if decision_id:
+        items = store.list_for_decision(decision_id, limit=lim)
+    else:
+        items = store.list_portfolio(portfolio_key=portfolio_key, limit=lim)
+    return {
+        "count": len(items),
+        "items": items,
+        "portfolio_key": portfolio_key,
+        "decision_id": decision_id,
+        "version": "di.attr.1",
+    }
+
+
+@v1_router.post("/market/attributions", tags=["programs"])
+def post_market_attribution(request: Request, body: dict | None = None) -> dict:
+    """DI.Attr — operator/manual attribution for a decision."""
+    try:
+        store = _app(request).container.resolve("decision_attributions")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"decision attributions unavailable: {exc}"
+        ) from exc
+    body = body or {}
+    symbol = str(body.get("symbol") or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+    result = store.record(
+        decision_id=str(body["decision_id"]) if body.get("decision_id") else None,
+        symbol=symbol,
+        portfolio_key=str(body.get("portfolio_key") or "india_equity_learner"),
+        trigger=str(body.get("trigger") or "manual"),
+        checkpoint=body.get("checkpoint"),
+        pnl=float(body["pnl"]) if body.get("pnl") is not None else None,
+        price_change_pct=float(body["price_change_pct"])
+        if body.get("price_change_pct") is not None
+        else None,
+        what_changed=body.get("what_changed")
+        if isinstance(body.get("what_changed"), dict)
+        else None,
+        what_atlas_missed=list(body.get("what_atlas_missed") or [])
+        if body.get("what_atlas_missed")
+        else None,
+        extra=body.get("extra") if isinstance(body.get("extra"), dict) else None,
+    )
+    return {"ok": True, **result}
+
+
+@v1_router.get("/market/di-dashboards", tags=["programs"])
+def get_market_di_dashboards(
+    request: Request,
+    portfolio_key: str = "india_equity_learner",
+    ist_date: str | None = None,
+) -> dict:
+    """DI.3 — staged dashboards D1–D6 with sample gates (never mix strategy_tags)."""
+    from atlas.config import get_config
+    from atlas.investment.di_dashboards import collect_dashboard_inputs
+
+    data_dir = str(get_config().paths.data)
+    portfolio: dict | None = None
+    try:
+        port = _app(request).container.resolve("portfolio")
+        if hasattr(port, "snapshot"):
+            snap = port.snapshot(portfolio_key=portfolio_key)
+            if isinstance(snap, dict):
+                portfolio = snap
+        elif hasattr(port, "get"):
+            snap = port.get(portfolio_key)
+            if isinstance(snap, dict):
+                portfolio = snap
+    except Exception:  # noqa: BLE001
+        portfolio = None
+    return collect_dashboard_inputs(
+        data_dir=data_dir,
+        portfolio_key=portfolio_key,
+        portfolio=portfolio,
+        ist_date=ist_date,
+    )
+
+
+@v1_router.get("/market/process-proxies", tags=["programs"])
+def get_market_process_proxies(
+    request: Request,
+    portfolio_key: str = "india_equity_learner",
+    ist_date: str | None = None,
+) -> dict:
+    """DI.5 — process proxies scorecard (FOMO/revenge/hesitation/… — no emotions)."""
+    from atlas.config import get_config
+    from atlas.investment.process_proxies import collect_process_scorecard
+
+    data_dir = str(get_config().paths.data)
+    portfolio: dict | None = None
+    try:
+        port = _app(request).container.resolve("portfolio")
+        if hasattr(port, "snapshot"):
+            snap = port.snapshot(portfolio_key=portfolio_key)
+            if isinstance(snap, dict):
+                portfolio = snap
+        elif hasattr(port, "get"):
+            snap = port.get(portfolio_key)
+            if isinstance(snap, dict):
+                portfolio = snap
+    except Exception:  # noqa: BLE001
+        portfolio = None
+    return collect_process_scorecard(
+        data_dir=data_dir,
+        portfolio_key=portfolio_key,
+        portfolio=portfolio,
+        ist_date=ist_date,
+    )
+
+
+@v1_router.get("/market/meta-learning", tags=["programs"])
+def get_market_meta_learning(
+    request: Request,
+    portfolio_key: str = "india_equity_learner",
+    lookback_days: int = 14,
+) -> dict:
+    """DI.6 — weekly meta-learning / Intelligence Dashboard digest (proposals only)."""
+    from atlas.config import get_config
+    from atlas.investment.meta_learning import collect_meta_learning_inputs
+
+    data_dir = str(get_config().paths.data)
+    portfolio: dict | None = None
+    try:
+        port = _app(request).container.resolve("portfolio")
+        if hasattr(port, "snapshot"):
+            snap = port.snapshot(portfolio_key=portfolio_key)
+            if isinstance(snap, dict):
+                portfolio = snap
+        elif hasattr(port, "get"):
+            snap = port.get(portfolio_key)
+            if isinstance(snap, dict):
+                portfolio = snap
+    except Exception:  # noqa: BLE001
+        portfolio = None
+    return collect_meta_learning_inputs(
+        data_dir=data_dir,
+        portfolio_key=portfolio_key,
+        portfolio=portfolio,
+        lookback_days=max(1, min(int(lookback_days or 14), 60)),
+    )
+
+
+@v1_router.post("/market/meta-learning/run", tags=["programs"])
+def post_market_meta_learning_run(
+    request: Request,
+    body: dict | None = None,
+) -> dict:
+    """DI.6 — force-build meta-learning digest (same as weekly worker; no strategy edit)."""
+    from atlas.config import get_config
+    from atlas.investment.meta_learning import collect_meta_learning_inputs
+
+    body = body or {}
+    portfolio_key = str(body.get("portfolio_key") or "india_equity_learner")
+    lookback_days = max(1, min(int(body.get("lookback_days") or 14), 60))
+    data_dir = str(get_config().paths.data)
+    doc = collect_meta_learning_inputs(
+        data_dir=data_dir,
+        portfolio_key=portfolio_key,
+        lookback_days=lookback_days,
+    )
+    return {"ok": True, "digest": doc}
+
+
+@v1_router.get("/market/ml-export", tags=["programs"])
+def get_market_ml_export_status(
+    portfolio_key: str = "india_equity_learner",
+    lookback_limit: int = 500,
+) -> dict:
+    """DI.7 — ML export gate status (never enables live NN trading)."""
+    from atlas.config import get_config
+    from atlas.investment.ml_export import ml_export_status
+
+    return ml_export_status(
+        data_dir=str(get_config().paths.data),
+        portfolio_key=portfolio_key,
+        lookback_limit=max(50, min(int(lookback_limit or 500), 2000)),
+    )
+
+
+@v1_router.post("/market/ml-export", tags=["programs"])
+def post_market_ml_export(body: dict | None = None) -> dict:
+    """DI.7 — gated ML-ready JSONL export + offline rules-baseline eval.
+
+    Requires ≥300 trusted closed attributable exits on a strategy_tag, or
+    ``force_override`` + ``override_note``. Never trains or deploys live NN.
+    """
+    from atlas.config import get_config
+    from atlas.investment.ml_export import export_ml_dataset
+
+    body = body or {}
+    force = bool(body.get("force_override") or body.get("force"))
+    note = str(body.get("override_note") or body.get("note") or "")
+    if force and not note.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="force_override requires override_note (operator rationale)",
+        )
+    return export_ml_dataset(
+        data_dir=str(get_config().paths.data),
+        portfolio_key=str(body.get("portfolio_key") or "india_equity_learner"),
+        force_override=force,
+        override_note=note,
+        lookback_limit=max(50, min(int(body.get("lookback_limit") or 500), 2000)),
+    )
+
+
+@v1_router.get("/market/decisions", tags=["programs"])
+def list_market_decision_packets(
+    request: Request,
+    portfolio_key: str = "india_equity_learner",
+    ist_date: str | None = None,
+    symbol: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """DI.1 — list Decision Packets by IST day and/or symbol."""
+    from atlas.investment.decision_packets import ist_today, summarize_packet
+
+    try:
+        store = _app(request).container.resolve("decision_packets")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"decision packets unavailable: {exc}") from exc
+    lim = max(1, min(int(limit or 50), 200))
+    if symbol:
+        items = store.list_symbol(
+            symbol=symbol, limit=lim, portfolio_key=portfolio_key or None
+        )
+        return {
+            "count": len(items),
+            "items": [summarize_packet(p) for p in items],
+            "symbol": symbol,
+            "portfolio_key": portfolio_key,
+        }
+    day = ist_date or ist_today()
+    items = store.list_day(portfolio_key=portfolio_key, ts_ist=day, limit=lim)
+    return {
+        "count": len(items),
+        "items": [summarize_packet(p) for p in items],
+        "ist_date": day,
+        "portfolio_key": portfolio_key,
+    }
+
+
+@v1_router.get("/market/timeline/{symbol}", tags=["programs"])
+def get_market_timeline(
+    request: Request,
+    symbol: str,
+    kind: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """DI.2 — Market Timeline events for a symbol (append-only)."""
+    try:
+        store = _app(request).container.resolve("decision_timeline")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"decision timeline unavailable: {exc}") from exc
+    lim = max(1, min(int(limit or 100), 500))
+    events = store.list_symbol(symbol=symbol, limit=lim, kind=kind)
+    return {
+        "symbol": symbol,
+        "count": len(events),
+        "kind": kind,
+        "events": events,
+        "version": "di.timeline.1",
+    }
+
+
+@v1_router.get("/market/timeline", tags=["programs"])
+def get_market_timeline_overview(
+    request: Request,
+    portfolio_key: str = "india_equity_learner",
+    ist_date: str | None = None,
+) -> dict:
+    """DI.2 — evolution counts + due revisits for a book."""
+    from atlas.investment.decision_timeline import ist_today
+
+    try:
+        store = _app(request).container.resolve("decision_timeline")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"decision timeline unavailable: {exc}") from exc
+    day = ist_date or ist_today()
+    due = store.list_due(as_of_ist=day, portfolio_key=portfolio_key, limit=40)
+    counts = store.learning_counts(portfolio_key=portfolio_key)
+    return {
+        "portfolio_key": portfolio_key,
+        "ist_date": day,
+        "counts": counts,
+        "due_revisits": due,
+        "due_count": len(due),
+        "version": "di.timeline.1",
+    }
+
+
+@v1_router.post("/market/timeline/run-revisits", tags=["programs"])
+def post_market_timeline_run_revisits(
+    request: Request,
+    portfolio_key: str = "india_equity_learner",
+    limit: int = 20,
+) -> dict:
+    """DI.2 — operator force-run due evolution revisits (simulation)."""
+    try:
+        store = _app(request).container.resolve("decision_timeline")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"decision timeline unavailable: {exc}") from exc
+    research = None
+    market = None
+    try:
+        research = _app(request).container.resolve("investment_research")
+    except Exception:  # noqa: BLE001
+        research = None
+    try:
+        market = _app(request).container.resolve("market_reader")
+    except Exception:  # noqa: BLE001
+        market = None
+
+    def mark_fn(symbol: str):
+        if market is None:
+            return None
+        try:
+            out = market.bars_for(symbol, provider="yahoo", limit=1)
+            bars = list((out or {}).get("bars") or [])
+            if bars and bars[-1].get("close") is not None:
+                return float(bars[-1]["close"])
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def awareness_fn(symbol: str):
+        if research is None:
+            return None
+        try:
+            return research.awareness(symbol, program_id="market_intelligence")
+        except Exception:  # noqa: BLE001
+            return None
+
+    return store.run_due_revisits(
+        portfolio_key=portfolio_key,
+        limit=max(1, min(int(limit or 20), 50)),
+        mark_fn=mark_fn,
+        awareness_fn=awareness_fn,
+    )
+
+
+@v1_router.get("/market/observations/{observation_id}", tags=["programs"])
+def get_market_observation(request: Request, observation_id: str) -> dict:
+    """DI.Obs — fetch one observation by id."""
+    from atlas.investment.observations import OBS_VERSION
+
+    try:
+        store = _app(request).container.resolve("decision_observations")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"decision observations unavailable: {exc}"
+        ) from exc
+    row = store.get(observation_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"observation {observation_id} not found")
+    return {"observation": row, "version": row.get("payload_version") or OBS_VERSION}
+
+
+@v1_router.get("/market/observations", tags=["programs"])
+def list_market_observations(
+    request: Request,
+    symbol: str | None = None,
+    kind: str | None = None,
+    since_hours: float = 72.0,
+    limit: int = 40,
+) -> dict:
+    """DI.Obs — list recent observations (by symbol or global since window)."""
+    from atlas.investment.observations import summarize_observation
+
+    try:
+        store = _app(request).container.resolve("decision_observations")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"decision observations unavailable: {exc}"
+        ) from exc
+    lim = max(1, min(int(limit or 40), 200))
+    if symbol:
+        items = store.list_symbol(
+            symbol=symbol, limit=lim, kind=kind, since_hours=since_hours
+        )
+    else:
+        items = store.list_since(since_hours=since_hours, limit=lim)
+        if kind:
+            items = [r for r in items if r.get("kind") == kind]
+    return {
+        "count": len(items),
+        "items": [summarize_observation(r) for r in items],
+        "symbol": symbol,
+        "kind": kind,
+        "since_hours": since_hours,
+        "version": "di.obs.1",
+    }
+
+
+@v1_router.post("/market/observations", tags=["programs"])
+def post_market_observation(request: Request, body: dict | None = None) -> dict:
+    """DI.Obs — operator/manual observation (never invents facts beyond payload)."""
+    try:
+        store = _app(request).container.resolve("decision_observations")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"decision observations unavailable: {exc}"
+        ) from exc
+    body = body or {}
+    kind = str(body.get("kind") or "").strip()
+    if not kind:
+        raise HTTPException(status_code=400, detail="kind is required")
+    try:
+        result = store.record(
+            kind=kind,
+            symbol=str(body["symbol"]).strip() if body.get("symbol") else None,
+            payload=body.get("payload") if isinstance(body.get("payload"), dict) else body,
+            source=str(body.get("source") or "operator"),
+            confidence=str(body.get("confidence") or "estimated"),
+            ttl_hours=float(body["ttl_hours"]) if body.get("ttl_hours") is not None else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result}
 
 
 @v1_router.post("/market/portfolio/pre-trade", tags=["programs"])
@@ -3761,12 +4656,121 @@ def list_virtual_portfolios(
     request: Request,
     program_id: str | None = None,
 ) -> dict:
-    """IL.10 — list virtual portfolios (persona + mission binding)."""
+    """IL.10 — list virtual portfolios (persona + mission binding).
+
+    Registry is disk-backed; on empty/stale process we rebind from mission configs
+    and refresh persona.capital from live sim cash so deposits survive restarts.
+    """
     from atlas.investment import portfolios as vp
 
+    try:
+        _rehydrate_virtual_portfolios(request)
+    except Exception:  # noqa: BLE001
+        pass
     rows = vp.list_portfolios(program_id=program_id)
     return {"portfolios": rows, "count": len(rows), "version": "il.10"}
 
+
+def _rehydrate_virtual_portfolios(request: Request) -> int:
+    """Rebuild / refresh registry from *active* paper books + sim cash.
+
+    Never invents ``portfolio_key=default`` from null keys, and never resurrects
+    archived template missions (that is how the stale ₹1,00,000 book appeared).
+    """
+    from atlas.investment import portfolios as vp
+
+    live_statuses = {"active", "waiting", "paused", "draft"}
+    rebound = 0
+    try:
+        missions = _missions(request).list_missions(limit=200)
+        configuration = _configuration(request)
+    except Exception:  # noqa: BLE001
+        return 0
+    try:
+        portfolio_svc = _app(request).container.resolve("portfolio")
+    except Exception:  # noqa: BLE001
+        portfolio_svc = None
+
+    active_keys: set[str] = set()
+    for mission in missions:
+        mid = str(getattr(mission, "id", None) or "")
+        if not mid:
+            continue
+        status = str(getattr(mission, "status", "") or "").strip().lower()
+        if status and status not in live_statuses:
+            continue
+        try:
+            cfg_row = configuration.get_active(mid)
+        except Exception:  # noqa: BLE001
+            continue
+        if cfg_row is None:
+            continue
+        doc = getattr(cfg_row, "document", None)
+        if not isinstance(doc, dict):
+            try:
+                d = cfg_row.to_dict() if hasattr(cfg_row, "to_dict") else {}
+                doc = d.get("document") if isinstance(d, dict) else {}
+            except Exception:  # noqa: BLE001
+                doc = {}
+        if not isinstance(doc, dict):
+            continue
+        schema = str(getattr(cfg_row, "schema_type", None) or doc.get("schema_type") or "")
+        pkey = str(doc.get("portfolio_key") or "").strip()
+        # Explicit book key required — null/blank must NOT become "default".
+        if not pkey:
+            continue
+        paperish = (
+            schema in ("paper_trading", "decision_simulation")
+            or "paper" in schema
+            or doc.get("starting_cash") is not None
+            or isinstance(doc.get("persona"), dict)
+        )
+        if not paperish:
+            continue
+        try:
+            row = vp.ensure_from_config(doc, mission_id=mid)
+            rebound += 1
+            active_keys.add(str(row.get("portfolio_key") or pkey))
+        except Exception:  # noqa: BLE001
+            continue
+        if portfolio_svc is None:
+            continue
+        try:
+            book = portfolio_svc.ensure_portfolio(
+                mission_id=mid,
+                name=pkey,
+                starting_cash=float((row.get("persona") or {}).get("capital") or 0),
+            )
+            live = float(book.get("cash") if book.get("cash") is not None else 0)
+            vp.sync_live_cash(pkey, live, mission_id=mid)
+        except Exception:  # noqa: BLE001
+            continue
+
+    # Drop stale template books (e.g. archived "start trade" → default/100k).
+    try:
+        for row in vp.list_portfolios():
+            key = str(row.get("portfolio_key") or "").strip()
+            if not key or key in active_keys:
+                continue
+            mid = str(row.get("mission_id") or "").strip()
+            if not mid:
+                if key == "default":
+                    vp.clear(key)
+                continue
+            try:
+                m = _missions(request).get_mission(mid, journal_limit=0)
+                st = str(
+                    ((m or {}).get("mission") or {}).get("status")
+                    or getattr((m or {}).get("mission"), "status", "")
+                    or ""
+                ).strip().lower()
+            except Exception:  # noqa: BLE001
+                st = ""
+            if st in {"archived", "completed"} or (key == "default" and st not in live_statuses):
+                vp.clear(key)
+    except Exception:  # noqa: BLE001
+        pass
+    return rebound
 
 @v1_router.post("/market/portfolios", tags=["programs"])
 def create_virtual_portfolio(
@@ -3810,6 +4814,12 @@ def get_virtual_portfolio(portfolio_ref: str, request: Request) -> dict:
 
     row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
     if row is None:
+        try:
+            _rehydrate_virtual_portfolios(request)
+        except Exception:  # noqa: BLE001
+            pass
+        row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+    if row is None:
         raise HTTPException(status_code=404, detail=f"unknown portfolio: {portfolio_ref}")
     snap = None
     mid = row.get("mission_id")
@@ -3823,6 +4833,16 @@ def get_virtual_portfolio(portfolio_ref: str, request: Request) -> dict:
                 starting_cash=float((row.get("persona") or {}).get("capital") or 0),
             )
             snap = portfolio_svc.snapshot(ensured["id"])
+            try:
+                if snap and snap.get("cash") is not None:
+                    vp.sync_live_cash(
+                        str(row.get("portfolio_key") or portfolio_ref),
+                        float(snap["cash"]),
+                        mission_id=str(mid),
+                    )
+                    row = vp.get(portfolio_ref) or row
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:  # noqa: BLE001
             snap = None
     return {"portfolio": row, "snapshot": snap, "version": "il.10"}
@@ -3834,6 +4854,12 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
     from atlas.investment import portfolios as vp
 
     row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+    if row is None:
+        try:
+            _rehydrate_virtual_portfolios(request)
+        except Exception:  # noqa: BLE001
+            pass
+        row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
     if row is None:
         raise HTTPException(status_code=404, detail=f"unknown portfolio: {portfolio_ref}")
     mid = row.get("mission_id") or row.get("ledger_mission_id")
@@ -3852,10 +4878,129 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
         name=row.get("portfolio_key") or "default",
         starting_cash=float((row.get("persona") or {}).get("capital") or 0),
     )
+    try:
+        live = float(ensured.get("cash") if ensured.get("cash") is not None else 0)
+        vp.sync_live_cash(
+            str(row.get("portfolio_key") or portfolio_ref),
+            live,
+            mission_id=str(mid),
+        )
+        row = vp.get(portfolio_ref) or row
+    except Exception:  # noqa: BLE001
+        pass
     stmt = ledger.statement(
         ensured["id"],
         broker_profile=str(row.get("broker_profile") or "") or None,
     )
+    # Mark holdings to latest daily market close. Without this, snapshot() uses
+    # average cost and every new position misleadingly shows zero P&L.
+    marks: dict[str, float] = {}
+    previous_closes: dict[str, float] = {}
+    try:
+        market_reader = _app(request).container.resolve("market_reader")
+        for pos in stmt.get("positions") or []:
+            symbol = str(pos.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            out = market_reader.bars_for(symbol, provider="yahoo", limit=2)
+            bars = list((out or {}).get("bars") or [])
+            if bars and bars[-1].get("close") is not None:
+                marks[symbol] = float(bars[-1]["close"])
+            if len(bars) > 1 and bars[-2].get("close") is not None:
+                previous_closes[symbol] = float(bars[-2]["close"])
+        if marks:
+            stmt = ledger.statement(
+                ensured["id"],
+                prices=marks,
+                broker_profile=str(row.get("broker_profile") or "") or None,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    stmt["valuation_basis"] = (
+        "latest daily market bars" if marks else "average cost (market marks unavailable)"
+    )
+    stmt["marks"] = marks
+    stmt["previous_closes"] = previous_closes
+    deposits = float(stmt.get("deposited") or 0)
+    withdrawals = float(stmt.get("withdrawn") or 0) + float(
+        stmt.get("withdrawal_tds") or 0
+    )
+    net_capital = float(stmt.get("starting_cash") or 0) + deposits - withdrawals
+    stmt["net_contributed_capital"] = net_capital
+    stmt["total_pnl"] = float(stmt.get("equity") or 0) - net_capital
+    stmt["total_return_pct"] = (
+        100.0 * stmt["total_pnl"] / net_capital if net_capital > 0 else None
+    )
+    stmt["day_pnl"] = None
+    stmt["day_return_pct"] = None
+    if marks and previous_closes:
+        try:
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+            today_ist = _dt.now(_tz(_td(hours=5, minutes=30))).date()
+            day_trades: list[dict] = []
+            for trade in stmt.get("recent_trades") or []:
+                raw = trade.get("created_at")
+                if raw is None:
+                    continue
+                created = raw if isinstance(raw, _dt) else _dt.fromisoformat(
+                    str(raw).replace("Z", "+00:00")
+                )
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=_tz.utc)
+                if created.astimezone(_tz(_td(hours=5, minutes=30))).date() == today_ist:
+                    day_trades.append(trade)
+            current_qty = {
+                str(p.get("symbol")): float(p.get("quantity") or 0)
+                for p in stmt.get("positions") or []
+                if p.get("symbol")
+            }
+            start_qty = dict(current_qty)
+            for trade in day_trades:
+                symbol = str(trade.get("symbol") or "")
+                qty = float(trade.get("quantity") or 0)
+                if str(trade.get("side") or "").lower() == "buy":
+                    start_qty[symbol] = start_qty.get(symbol, 0) - qty
+                elif str(trade.get("side") or "").lower() == "sell":
+                    start_qty[symbol] = start_qty.get(symbol, 0) + qty
+            day_pnl = sum(
+                qty * (marks[symbol] - previous_closes[symbol])
+                for symbol, qty in start_qty.items()
+                if symbol in marks and symbol in previous_closes
+            )
+            for trade in day_trades:
+                symbol = str(trade.get("symbol") or "")
+                if symbol not in marks:
+                    continue
+                qty = float(trade.get("quantity") or 0)
+                price = float(trade.get("price") or 0)
+                fee = float(trade.get("fee") or 0)
+                if str(trade.get("side") or "").lower() == "buy":
+                    day_pnl += qty * (marks[symbol] - price) - fee
+                elif (
+                    str(trade.get("side") or "").lower() == "sell"
+                    and symbol in previous_closes
+                ):
+                    day_pnl += qty * (price - previous_closes[symbol]) - fee
+            stmt["day_pnl"] = day_pnl
+            opening_equity = float(stmt.get("equity") or 0) - day_pnl
+            stmt["day_return_pct"] = (
+                100.0 * day_pnl / opening_equity if opening_equity > 0 else None
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    # Attach P9 explanations so the Market UI can answer "why did this buy?".
+    try:
+        decision = _app(request).container.resolve("decision")
+        for trade in stmt.get("recent_trades") or []:
+            did = trade.get("decision_id")
+            if not did:
+                continue
+            explained = decision.get_decision(did)
+            if isinstance(explained, dict):
+                trade["decision"] = explained
+    except Exception:  # noqa: BLE001
+        pass
     # Attach today's session note so Learner can explain zero fills honestly.
     session_note = None
     try:
@@ -3881,13 +5026,52 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
             }
     except Exception:  # noqa: BLE001
         session_note = None
+    # Operator KPI scorecard (playbook §4) — attach + persist for strategy review.
+    kpis = None
+    try:
+        from atlas.config import get_config
+        from atlas.investment import watchlists as wl
+        from atlas.investment.trading_kpis import (
+            build_trading_kpis,
+            save_day_kpis,
+        )
+
+        data_dir = str(get_config().paths.data)
+        from datetime import datetime, timezone, timedelta
+
+        ist = timezone(timedelta(hours=5, minutes=30))
+        ist_date = datetime.now(ist).date().isoformat()
+        plan = None
+        try:
+            snap = wl.latest("market_intelligence")
+            if isinstance(snap, dict):
+                plan = (snap.get("extra") or {}).get("daily_plan") or snap.get(
+                    "daily_plan"
+                )
+        except Exception:  # noqa: BLE001
+            plan = None
+        kpis = build_trading_kpis(
+            portfolio=stmt,
+            plan=plan if isinstance(plan, dict) else None,
+            session_note=session_note,
+            ist_date=ist_date,
+        )
+        stmt["kpis"] = kpis
+        save_day_kpis(
+            data_dir,
+            portfolio_key=str(row.get("portfolio_key") or portfolio_ref),
+            ist_date=ist_date,
+            kpis=kpis,
+        )
+    except Exception:  # noqa: BLE001
+        kpis = None
     return {
         "portfolio": row,
         "statement": stmt,
         "session_note": session_note,
+        "kpis": kpis,
         "version": "il.7",
     }
-
 
 @v1_router.post("/market/portfolios/{portfolio_ref}/withdraw", tags=["programs"])
 def withdraw_from_portfolio(
@@ -3912,24 +5096,181 @@ def withdraw_from_portfolio(
         portfolio_svc = _app(request).container.resolve("portfolio")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    ensured = portfolio_svc.ensure_portfolio(
-        mission_id=mid,
-        name=row.get("portfolio_key") or "default",
-        starting_cash=float((row.get("persona") or {}).get("capital") or 0),
-    )
+    candidates: list[str] = []
+    for c in (
+        body.mission_id,
+        row.get("mission_id"),
+        row.get("ledger_mission_id"),
+    ):
+        cs = str(c or "").strip()
+        if cs and cs not in candidates:
+            candidates.append(cs)
+    withdrawals: list[dict] = []
+    last_err: Exception | None = None
     profile = body.broker_profile or row.get("broker_profile") or "zerodha"
+    for cand in candidates:
+        try:
+            ensured = portfolio_svc.ensure_portfolio(
+                mission_id=cand,
+                name=row.get("portfolio_key") or "default",
+                starting_cash=float((row.get("persona") or {}).get("capital") or 0),
+            )
+            piece = ledger.withdraw(
+                ensured["id"],
+                amount=body.amount,
+                broker_profile=profile,
+                tds_pct=body.tds_pct,
+                note=body.note or "operator withdrawal",
+                mission_id=cand,
+            )
+            withdrawals.append({"mission_id": cand, **(piece if isinstance(piece, dict) else {})})
+            last_err = None
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+    if not withdrawals:
+        raise HTTPException(status_code=400, detail=str(last_err or "withdrawal failed"))
+    out = withdrawals[0]
+    for w in withdrawals:
+        if w.get("mission_id") == (row.get("mission_id") or mid):
+            out = w
+            break
+    # Keep virtual-book persona.capital aligned with ledger cash (UI label).
     try:
-        out = ledger.withdraw(
-            ensured["id"],
-            amount=body.amount,
-            broker_profile=profile,
-            tds_pct=body.tds_pct,
-            note=body.note,
-            mission_id=mid,
+        person = dict(row.get("persona") or {})
+        cash_after = float((out.get("movement") or {}).get("cash_after") or 0)
+        if cash_after <= 0:
+            for w in withdrawals:
+                ca = float((w.get("movement") or {}).get("cash_after") or 0)
+                if ca > cash_after:
+                    cash_after = ca
+        if cash_after >= 0 and (out.get("movement") or {}).get("cash_after") is not None:
+            person["capital"] = float((out.get("movement") or {}).get("cash_after"))
+        elif cash_after > 0:
+            person["capital"] = cash_after
+        else:
+            person["capital"] = max(0.0, float(person.get("capital") or 0) - float(body.amount))
+        vp.register(
+            label=str(row.get("label") or row.get("portfolio_key")),
+            portfolio_key=str(row.get("portfolio_key")),
+            persona=person,
+            program_id=str(row.get("program_id") or "market_intelligence"),
+            universe=str(row.get("universe") or "NIFTY50"),
+            broker_profile=str(row.get("broker_profile") or "zerodha"),
+            asset_class=str(row.get("asset_class") or "cash_equity"),
+            instrument_pack=row.get("instrument_pack"),
+            mission_id=row.get("mission_id"),
+            ledger_mission_id=row.get("ledger_mission_id"),
+            extra=row.get("extra") if isinstance(row.get("extra"), dict) else None,
         )
+        row = vp.get(portfolio_ref) or row
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "portfolio": row,
+        "withdrawal": out,
+        "withdrawals": withdrawals,
+        "version": "il.7",
+    }
+
+@v1_router.post("/market/portfolios/{portfolio_ref}/deposit", tags=["programs"])
+def deposit_to_portfolio(
+    portfolio_ref: str,
+    request: Request,
+    body: DepositPortfolioRequest,
+) -> dict:
+    """IL.7 — simulate depositing cash into a virtual book (add capital)."""
+    from atlas.investment import portfolios as vp
+
+    row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown portfolio: {portfolio_ref}")
+    mid = body.mission_id or row.get("mission_id") or row.get("ledger_mission_id")
+    if not mid:
+        raise HTTPException(
+            status_code=400,
+            detail="portfolio needs a bound mission before deposits "
+            "(start India learner / trade simulation first)",
+        )
+    try:
+        ledger = _app(request).container.resolve("portfolio_ledger")
+        portfolio_svc = _app(request).container.resolve("portfolio")
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"portfolio": row, "withdrawal": out, "version": "il.7"}
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    candidates: list[str] = []
+    for c in (
+        body.mission_id,
+        row.get("mission_id"),
+        row.get("ledger_mission_id"),
+    ):
+        cs = str(c or "").strip()
+        if cs and cs not in candidates:
+            candidates.append(cs)
+    deposits: list[dict] = []
+    last_err: Exception | None = None
+    # Credit every bound mission book with this key so sim + ledger stay aligned.
+    for cand in candidates:
+        try:
+            ensured = portfolio_svc.ensure_portfolio(
+                mission_id=cand,
+                name=row.get("portfolio_key") or "default",
+                starting_cash=float((row.get("persona") or {}).get("capital") or 0),
+            )
+            piece = ledger.deposit(
+                ensured["id"],
+                amount=body.amount,
+                note=body.note or "operator deposit",
+                mission_id=cand,
+            )
+            deposits.append({"mission_id": cand, **(piece if isinstance(piece, dict) else {})})
+            last_err = None
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+    if not deposits:
+        raise HTTPException(status_code=400, detail=str(last_err or "deposit failed"))
+    out = deposits[0]
+    # Prefer the primary sim mission’s movement for the payload.
+    for d in deposits:
+        if d.get("mission_id") == (row.get("mission_id") or mid):
+            out = d
+            break
+    # Keep virtual-book persona.capital in sync for UI (ledger cash is truth).
+    try:
+        person = dict(row.get("persona") or {})
+        cash_after = float((out.get("movement") or {}).get("cash_after") or 0)
+        if cash_after <= 0:
+            # Reconstruct from primary movement
+            for d in deposits:
+                ca = float((d.get("movement") or {}).get("cash_after") or 0)
+                if ca > cash_after:
+                    cash_after = ca
+        if cash_after > 0:
+            person["capital"] = cash_after
+        else:
+            person["capital"] = float(person.get("capital") or 0) + float(body.amount)
+        vp.register(
+            label=str(row.get("label") or row.get("portfolio_key")),
+            portfolio_key=str(row.get("portfolio_key")),
+            persona=person,
+            program_id=str(row.get("program_id") or "market_intelligence"),
+            universe=str(row.get("universe") or "NIFTY50"),
+            broker_profile=str(row.get("broker_profile") or "zerodha"),
+            asset_class=str(row.get("asset_class") or "cash_equity"),
+            instrument_pack=row.get("instrument_pack"),
+            mission_id=row.get("mission_id"),
+            ledger_mission_id=row.get("ledger_mission_id"),
+            extra=row.get("extra") if isinstance(row.get("extra"), dict) else None,
+        )
+        row = vp.get(portfolio_ref) or row
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "portfolio": row,
+        "deposit": out,
+        "deposits": deposits,
+        "version": "il.7",
+    }
 
 
 @v1_router.get("/goals", tags=["programs"])

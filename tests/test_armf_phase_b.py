@@ -70,6 +70,12 @@ def test_archive_worker_is_protected():
     assert is_protected_worker(row) is True
 
 
+def test_career_observer_type_is_protected():
+    assert is_protected_worker({"type": "career_observer", "owner": {}}) is True
+    assert is_protected_worker({"type": "career_research", "owner": {}}) is True
+    assert is_protected_worker({"type": "job_watcher", "owner": {}}) is True
+
+
 def test_fresh_worker_not_candidate():
     now = datetime.now(timezone.utc)
     w = _w(
