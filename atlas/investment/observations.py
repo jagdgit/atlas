@@ -19,11 +19,40 @@ from atlas.repositories.decision_observation_repo import OBSERVATION_KINDS
 
 _log = logging.getLogger("atlas.investment.observations")
 
-OBS_VERSION = "di.obs.1"
+OBS_VERSION = "di.obs.2"
 STORE_REL = Path("investment") / "decisions" / "observations"
 _IST = ZoneInfo("Asia/Kolkata")
 
 CONFIDENCE_LEVELS = frozenset({"high", "medium", "low", "estimated", "unknown"})
+
+# LQ.3 / §8.1 — provisional topic tags (keyword hints; never invent facts)
+NEWS_TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "earnings": ("earnings", "results", "quarterly", " q1", " q2", " q3", " q4", "profit"),
+    "regulation": ("sebi", "rbi", "regulation", "regulatory", "approval", "ban "),
+    "management": ("ceo", "cfo", "md ", "resignation", "appointed", "guidance"),
+    "order": ("order win", "order book", "contract", "bagged order", "won order"),
+    "lawsuit": ("lawsuit", "litigation", "court case", "probe"),
+    "capex": ("capex", "capacity expansion", "new plant"),
+    "sector": ("sector", "industry outlook"),
+    "macro": ("inflation", "gdp", "rate hike", "budget", "fed ", "crude"),
+}
+
+
+def infer_news_topic_tags(text: str) -> list[str]:
+    """Provisional topic tags from headline text — honest keyword hints only."""
+    low = f" {(text or '').lower()} "
+    tags: list[str] = []
+    for tag, keys in NEWS_TOPIC_KEYWORDS.items():
+        if any(k in low for k in keys):
+            tags.append(tag)
+    return tags[:8]
+
+
+def normalize_news_sentiment(raw: Any) -> str:
+    s = str(raw or "").strip().lower()
+    if s in {"positive", "negative", "neutral", "mixed", "unknown"}:
+        return s
+    return "unknown"
 
 
 def ist_now_iso() -> str:
@@ -48,10 +77,41 @@ def _mirror(data_dir: str | Path | None, row: dict[str, Any]) -> str | None:
         day_path.parent.mkdir(parents=True, exist_ok=True)
         with day_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, default=str) + "\n")
+        # LQ.3 — dedicated per-symbol news timeline jsonl
+        if row.get("kind") == "news_event" and row.get("symbol"):
+            news_path = root / "news" / f"{sym}.jsonl"
+            news_path.parent.mkdir(parents=True, exist_ok=True)
+            with news_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, default=str) + "\n")
         return str(by_id)
     except Exception:  # noqa: BLE001
         _log.warning("observation mirror failed", exc_info=True)
         return None
+
+
+def _load_news_jsonl(
+    data_dir: str | Path, symbol: str, *, limit: int = 40
+) -> list[dict[str, Any]]:
+    path = mirror_root(data_dir) / "news" / f"{str(symbol).replace('/', '_')}.jsonl"
+    if not path.is_file():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                doc = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(doc, dict):
+                out.append(doc)
+            if len(out) >= limit:
+                break
+    except Exception:  # noqa: BLE001
+        return []
+    return out
 
 
 def _row_from_db(r: dict[str, Any]) -> dict[str, Any]:
@@ -374,6 +434,33 @@ class DecisionObservationStore:
             },
         )
 
+    def record_mark_snapshot(
+        self,
+        *,
+        symbol: str,
+        pct_move: float | None = None,
+        provider: str | None = None,
+        bar_count: int | None = None,
+        source: str = "market_observer",
+        density: str = "mark_snapshot",
+    ) -> dict[str, Any]:
+        """LI.3a — low-noise session mark so quiet books still get observations."""
+        return self.record(
+            kind="market_event",
+            symbol=symbol,
+            source=source,
+            confidence="estimated",
+            ttl_hours=24.0,
+            payload={
+                "pct_move": pct_move,
+                "score": 0.15,
+                "kind": density,
+                "provider": provider,
+                "bar_count": bar_count,
+                "reason": "session_mark_snapshot",
+            },
+        )
+
     def record_news_event(
         self,
         *,
@@ -381,8 +468,35 @@ class DecisionObservationStore:
         symbol: str | None = None,
         source: str = "news_intelligence",
         extra: dict[str, Any] | None = None,
+        topic_tags: list[str] | None = None,
+        sentiment: str | None = None,
+        link: str | None = None,
+        observed_before_move: bool | None = None,
+        link_decision_id: str | None = None,
+        open_book: bool = False,
     ) -> dict[str, Any]:
-        body = {"text": (text or "")[:500], **(extra or {})}
+        """LQ.3 — news_event with §8.1 fields; mirrors to news/{SYM}.jsonl."""
+        extra = dict(extra or {})
+        tags = list(topic_tags) if topic_tags else infer_news_topic_tags(text)
+        if extra.get("topic_tags") and not topic_tags:
+            tags = list(extra.get("topic_tags") or [])[:8]
+        sent = normalize_news_sentiment(
+            sentiment if sentiment is not None else extra.get("sentiment")
+        )
+        body = {
+            "text": (text or "")[:500],
+            "topic_tags": tags[:8],
+            "sentiment": sent,
+            "observed_before_move": observed_before_move
+            if observed_before_move is not None
+            else extra.get("observed_before_move"),
+            "open_book": bool(open_book or extra.get("open_book")),
+            **{k: v for k, v in extra.items() if k not in {"topic_tags", "sentiment", "observed_before_move", "open_book"}},
+        }
+        if link or extra.get("link"):
+            body["link"] = str(link or extra.get("link"))[:500]
+        if link_decision_id or extra.get("decision_id"):
+            body["decision_id"] = str(link_decision_id or extra.get("decision_id"))
         return self.record(
             kind="news_event",
             symbol=symbol,
@@ -390,7 +504,66 @@ class DecisionObservationStore:
             confidence="estimated",
             ttl_hours=168.0,
             payload=body,
+            link_decision_id=link_decision_id or body.get("decision_id"),
         )
+
+    def list_news_for_symbol(
+        self,
+        *,
+        symbol: str,
+        limit: int = 40,
+        since_hours: float | None = None,
+        open_book_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """LQ.3 — per-symbol news timeline (dedicated jsonl, else filtered obs)."""
+        sym = str(symbol or "").strip()
+        if not sym:
+            return []
+        items: list[dict[str, Any]] = []
+        if self._data_dir:
+            items.extend(_load_news_jsonl(self._data_dir, sym, limit=limit * 2))
+        if not items:
+            items = self.list_symbol(
+                symbol=sym, limit=limit * 2, kind="news_event", since_hours=since_hours
+            )
+        else:
+            # Merge in-memory / repo rows not yet on disk
+            items.extend(
+                self.list_symbol(
+                    symbol=sym, limit=limit, kind="news_event", since_hours=since_hours
+                )
+            )
+        # Dedupe by id, newest first
+        seen: set[str] = set()
+        out: list[dict[str, Any]] = []
+        for r in sorted(
+            items,
+            key=lambda x: str(x.get("created_at") or ""),
+            reverse=True,
+        ):
+            oid = str(r.get("id") or "")
+            if oid and oid in seen:
+                continue
+            if oid:
+                seen.add(oid)
+            if open_book_only and not (r.get("payload") or {}).get("open_book"):
+                continue
+            if since_hours is not None and r.get("created_at"):
+                try:
+                    created = r["created_at"]
+                    if isinstance(created, str):
+                        created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    cutoff = datetime.now(timezone.utc) - timedelta(hours=float(since_hours))
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    if created < cutoff:
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
+            out.append(r)
+            if len(out) >= limit:
+                break
+        return out
 
     def record_policy_event(
         self,
@@ -413,6 +586,109 @@ class DecisionObservationStore:
             },
         )
 
+    def record_mgmt_event(
+        self,
+        *,
+        symbol: str,
+        title: str,
+        detail: str = "",
+        source: str = "operator",
+        confidence: str = "estimated",
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """LI.3b — management commentary / guidance (company-scoped)."""
+        return self.record(
+            kind="mgmt_event",
+            symbol=symbol,
+            source=source,
+            confidence=confidence,
+            ttl_hours=720.0,
+            payload={
+                "title": (title or "")[:300],
+                "detail": (detail or "")[:800],
+                **(extra or {}),
+            },
+        )
+
+    def record_operating_metric(
+        self,
+        *,
+        symbol: str,
+        metric: str,
+        value: Any = None,
+        unit: str | None = None,
+        period: str | None = None,
+        source: str = "operator",
+        confidence: str = "estimated",
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """LI.3b — operating KPI observation (not a valuation invent)."""
+        return self.record(
+            kind="operating_metric",
+            symbol=symbol,
+            source=source,
+            confidence=confidence,
+            ttl_hours=2160.0,
+            payload={
+                "metric": (metric or "")[:120],
+                "value": value,
+                "unit": unit,
+                "period": period,
+                **(extra or {}),
+            },
+        )
+
+    def record_filing_event(
+        self,
+        *,
+        symbol: str,
+        filing_type: str,
+        title: str = "",
+        as_of: str | None = None,
+        source: str = "operator",
+        confidence: str = "medium",
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """LI.3b — AR / quarterly / exchange filing notice."""
+        return self.record(
+            kind="filing_event",
+            symbol=symbol,
+            source=source,
+            confidence=confidence,
+            ttl_hours=2160.0,
+            payload={
+                "filing_type": (filing_type or "unknown")[:80],
+                "title": (title or "")[:300],
+                "as_of": as_of,
+                **(extra or {}),
+            },
+        )
+
+    def record_macro_event(
+        self,
+        *,
+        title: str,
+        regime_tags: list[str] | None = None,
+        detail: str = "",
+        source: str = "operator",
+        confidence: str = "estimated",
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """LI.3b — macro/regime observation (symbol=None → __MACRO__ timeline)."""
+        return self.record(
+            kind="macro_event",
+            symbol=None,
+            source=source,
+            confidence=confidence,
+            ttl_hours=720.0,
+            payload={
+                "title": (title or "")[:300],
+                "detail": (detail or "")[:800],
+                "regime_tags": list(regime_tags or [])[:12],
+                **(extra or {}),
+            },
+        )
+
 
 def _summarize_payload(kind: str, payload: dict[str, Any]) -> str:
     if kind == "market_event":
@@ -422,6 +698,18 @@ def _summarize_payload(kind: str, payload: dict[str, Any]) -> str:
         return str(payload.get("text") or "")[:120]
     if kind == "policy_event":
         return str(payload.get("title") or "policy")[:120]
+    if kind == "mgmt_event":
+        return str(payload.get("title") or "mgmt")[:120]
+    if kind == "operating_metric":
+        m = payload.get("metric") or "metric"
+        v = payload.get("value")
+        return f"{m}={v}" if v is not None else str(m)[:120]
+    if kind == "filing_event":
+        return f"{payload.get('filing_type') or 'filing'}: {payload.get('title') or ''}"[:120]
+    if kind == "macro_event":
+        tags = payload.get("regime_tags") or []
+        tag_s = ",".join(str(t) for t in tags[:4])
+        return f"{payload.get('title') or 'macro'} [{tag_s}]"[:120]
     return kind
 
 

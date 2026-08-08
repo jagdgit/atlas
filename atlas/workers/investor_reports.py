@@ -92,9 +92,17 @@ class InvestorReportsWorker(PersistentWorker):
         evening_sent = False
         if self._mailer is not None:
             if hasattr(self._mailer, "already_sent_morning"):
-                morning_sent = bool(self._mailer.already_sent_morning(ist_date))
+                morning_sent = bool(
+                    self._mailer.already_sent_morning(
+                        ist_date, laboratory_id=portfolio_key
+                    )
+                )
             if hasattr(self._mailer, "already_sent_evening"):
-                evening_sent = bool(self._mailer.already_sent_evening(ist_date))
+                evening_sent = bool(
+                    self._mailer.already_sent_evening(
+                        ist_date, laboratory_id=portfolio_key
+                    )
+                )
 
         # Catch-up: after the scheduled window, still send once per IST day if not sent.
         morning_catch_up = (
@@ -200,11 +208,13 @@ class InvestorReportsWorker(PersistentWorker):
             mission_id = meta.get("mission_id") or meta.get("ledger_mission_id")
             portfolio_doc: dict[str, Any] = {
                 "portfolio_key": portfolio_key,
+                "laboratory_id": portfolio_key,
                 "label": meta.get("label"),
                 "starting_cash": persona.get("capital"),
                 "cash": persona.get("capital"),
                 "mission_id": mission_id,
                 "sim_portfolio_id": meta.get("sim_portfolio_id") or meta.get("portfolio_id"),
+                "persona": persona,
             }
             # Registry identity is durable, but the sim id/cash live in Postgres.
             # Resolve by (mission, portfolio_key) after every restart.
@@ -286,9 +296,43 @@ class InvestorReportsWorker(PersistentWorker):
                 from atlas.investment.fundamentals import fundamentals_view
 
                 tstore = DecisionTimelineStore(data_dir=data_dir)
-                portfolio_doc["evolution"] = tstore.learning_counts(
-                    portfolio_key=portfolio_key
-                )
+                evo = tstore.learning_counts(portfolio_key=portfolio_key)
+                open_syms = [
+                    str(p.get("symbol") or "").strip().upper()
+                    for p in (portfolio_doc.get("positions") or [])
+                    if isinstance(p, dict) and p.get("symbol")
+                    and float(p.get("qty") or p.get("quantity") or p.get("shares") or 0) > 0
+                ]
+                if open_syms:
+                    try:
+                        kind = str(
+                            (persona.get("personality_kind") if isinstance(persona, dict) else None)
+                            or meta.get("personality_kind")
+                            or "swing"
+                        )
+                        cov_tl = tstore.open_book_timeline_coverage(
+                            portfolio_key=portfolio_key,
+                            open_symbols=open_syms,
+                            personality_kind=kind,
+                            review_schedule=(
+                                persona.get("review_schedule")
+                                if isinstance(persona, dict)
+                                else None
+                            ),
+                        )
+                        evo.update(
+                            {
+                                "open_books": cov_tl.get("open_books"),
+                                "open_books_with_full_schedule": cov_tl.get(
+                                    "open_books_with_full_schedule"
+                                ),
+                                "overdue_revisits": cov_tl.get("overdue_revisits"),
+                                "timeline_books": cov_tl.get("books"),
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("LQ.2 coverage enrich failed", exc_info=True)
+                portfolio_doc["evolution"] = evo
                 fv = fundamentals_view(data_dir, program_id="market_intelligence", limit=5)
                 cov = dict(fv.get("coverage") or {})
                 # Attach watchlist gap summary when positions known
@@ -406,6 +450,15 @@ class InvestorReportsWorker(PersistentWorker):
                 )
             except Exception:  # noqa: BLE001
                 self._logger.debug("DI.7 ml-export status enrich failed", exc_info=True)
+            try:
+                from atlas.investment.atlasnet_prep import atlasnet_prep_status
+
+                portfolio_doc["atlasnet_prep"] = atlasnet_prep_status(
+                    data_dir=data_dir,
+                    laboratory_id=portfolio_key,
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("LQ.9 atlasnet hard-gate enrich failed", exc_info=True)
             # DI.3 after KPIs + process + meta so dashboards can read all
             try:
                 from atlas.investment.di_dashboards import collect_dashboard_inputs

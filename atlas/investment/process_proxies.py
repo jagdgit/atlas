@@ -250,9 +250,11 @@ def detect_packet_flags(
             )
 
     # --- Journal incomplete (packet hygiene) ---
-    if action in {"buy", "sell", "watch", "hold"}:
+    # Hold/watch with a reason is still a valid decision journal; only flag thin
+    # completeness or buys/sells missing any rationale.
+    if action in {"buy", "sell"}:
         thin = completeness < JOURNAL_COMPLETENESS_OK
-        no_reasons = action in {"buy", "sell"} and not reasons and not against
+        no_reasons = not reasons and not against
         if thin or no_reasons:
             flags.append(
                 {
@@ -264,6 +266,14 @@ def detect_packet_flags(
                     ),
                 }
             )
+    elif action in {"hold", "watch"} and completeness < 0.25 and not reasons and not against:
+        flags.append(
+            {
+                "proxy": "journal_incomplete",
+                "severity": 1.0 - completeness,
+                "detail": f"empty hold/watch journal completeness={completeness:.2f}",
+            }
+        )
 
     return flags
 

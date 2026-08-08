@@ -92,7 +92,11 @@ def build_question_plan(
     identity: dict[str, Any] | None = None,
     max_total: int = 16,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """~28% universal MVR + ~72% sector pack questions (by count)."""
+    """~72% sector pack + ~28% universal MVR (by count).
+
+    LQ.1 — sector questions are emitted **first** so the live dossier head
+    differs by pack before generic MVR (Apollo ≠ MTAR).
+    """
     sym = normalize_symbol(symbol)
     pack = pack if isinstance(pack, dict) else {}
     pack_id = pack.get("id")
@@ -110,31 +114,32 @@ def build_question_plan(
                 *universal_texts,
             ]
 
-    questions: list[dict[str, Any]] = []
-    for i, text in enumerate(universal_texts[:n_univ]):
-        questions.append(
-            _q(
-                qid=f"univ-q{i+1}",
-                text=text,
-                kind="universal",
-                priority=10 + i,
-                symbol=sym,
-                pack_id=pack_id,
-                critical=i < 2,
-            )
-        )
-
     sector_texts = list(pack.get("extra_questions") or [])
     # KPI-framed prompts fill when pack questions are thin
     for kpi in pack.get("primary_kpis") or []:
         sector_texts.append(f"What is the evidence path for sector KPI: {kpi}?")
+
+    questions: list[dict[str, Any]] = []
+    # Sector-led head (LQ.1)
     for i, text in enumerate(sector_texts[:n_sec]):
         questions.append(
             _q(
                 qid=f"sec-q{i+1}",
                 text=text,
                 kind="sector",
-                priority=20 + i,
+                priority=10 + i,
+                symbol=sym,
+                pack_id=pack_id,
+                critical=i < 2,
+            )
+        )
+    for i, text in enumerate(universal_texts[:n_univ]):
+        questions.append(
+            _q(
+                qid=f"univ-q{i+1}",
+                text=text,
+                kind="universal",
+                priority=50 + i,
                 symbol=sym,
                 pack_id=pack_id,
                 critical=i < 2,
@@ -151,6 +156,7 @@ def build_question_plan(
         "sector_share": round(n_s / total, 3),
         "target_universal_share": UNIVERSAL_SHARE,
         "target_sector_share": SECTOR_SHARE,
+        "activation": "sector_first",
     }
     return questions, mix
 
@@ -209,25 +215,93 @@ def generate_research_strategy(
     }
 
 
+def _is_replaceable_research_qid(qid: str) -> bool:
+    """Seed MVR (q1..) and strategy/pack ids — replaced on LQ.1 activation."""
+    q = str(qid or "")
+    if q.startswith(("univ-q", "sec-q", "pack-q")):
+        return True
+    return bool(q.startswith("q") and q[1:].isdigit())
+
+
 def apply_strategy_to_dossier(doc: dict[str, Any], strategy: dict[str, Any]) -> dict[str, Any]:
-    """Stamp strategy; merge question_plan into dossier questions (idempotent by id)."""
+    """Stamp strategy; LQ.1 — sector-led question_plan becomes the live research head.
+
+    Replaces seed ``q*`` / prior ``sec-q*`` / ``univ-q*`` / ``pack-q*``. Preserves
+    management checklist and other non-strategy questions (and answered rows).
+    """
     out = dict(doc)
     out["research_strategy"] = dict(strategy)
     if strategy.get("sector_pack_id"):
         out["pack"] = strategy["sector_pack_id"]
 
-    existing = list(out.get("questions") or [])
-    have = {q.get("id") for q in existing if isinstance(q, dict)}
-    merged = list(existing)
-    for q in strategy.get("question_plan") or []:
-        if not isinstance(q, dict):
-            continue
-        qid = q.get("id")
-        if qid in have:
-            continue
-        merged.append(dict(q))
-        have.add(qid)
-    out["questions"] = merged
+    existing = [q for q in (out.get("questions") or []) if isinstance(q, dict)]
+    plan = [dict(q) for q in (strategy.get("question_plan") or []) if isinstance(q, dict)]
+    strategy_id = str(strategy.get("strategy_id") or "")
+
+    if plan and strategy_id != "blocked_identity":
+        preserved: list[dict[str, Any]] = []
+        answered_by_text: dict[str, dict[str, Any]] = {}
+        for q in existing:
+            qid = str(q.get("id") or "")
+            if q.get("status") == "answered" and _is_replaceable_research_qid(qid):
+                answered_by_text[str(q.get("text") or "")] = dict(q)
+                continue
+            if not _is_replaceable_research_qid(qid):
+                preserved.append(dict(q))
+
+        ordered = sorted(
+            plan,
+            key=lambda q: (
+                0 if q.get("kind") == "sector" else 1,
+                int(q.get("priority") or 99),
+                str(q.get("id") or ""),
+            ),
+        )
+        new_qs: list[dict[str, Any]] = []
+        have: set[Any] = set()
+        for q in ordered:
+            text = str(q.get("text") or "")
+            if text in answered_by_text:
+                aq = dict(answered_by_text[text])
+                aq["id"] = q.get("id") or aq.get("id")
+                aq["kind"] = q.get("kind") or aq.get("kind")
+                aq["priority"] = q.get("priority", aq.get("priority"))
+                aq["source"] = "research_strategy"
+                aq["pack"] = q.get("pack") or aq.get("pack")
+                new_qs.append(aq)
+                have.add(aq.get("id"))
+                continue
+            qid = q.get("id")
+            if qid in have:
+                continue
+            new_qs.append(dict(q))
+            have.add(qid)
+        for q in preserved:
+            qid = q.get("id")
+            if qid in have:
+                continue
+            new_qs.append(q)
+            have.add(qid)
+        out["questions"] = new_qs
+        research_head = [q for q in new_qs if q.get("kind") in {"sector", "universal"}]
+        out["question_activation"] = {
+            "version": "lq.1",
+            "mode": "sector_first",
+            "sector_pack_id": strategy.get("sector_pack_id"),
+            "research_head_kinds": [q.get("kind") for q in research_head[:8]],
+            "research_question_count": len(research_head),
+        }
+    else:
+        # Blocked / empty plan — keep existing; append only if anything new appears
+        have = {q.get("id") for q in existing}
+        merged = list(existing)
+        for q in plan:
+            qid = q.get("id")
+            if qid in have:
+                continue
+            merged.append(dict(q))
+            have.add(qid)
+        out["questions"] = merged
 
     # Surface valuation path note into valuation section gaps when DCF blocked
     val_paths = strategy.get("valuation_paths") or {}

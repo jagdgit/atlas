@@ -8,9 +8,11 @@
 > [`AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md`](AUTONOMOUS_INVESTMENT_LEARNER_PLAN.md) ·
 > [`INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md`](INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md) ·
 > [`ATLAS_MISSION_PHILOSOPHY.md`](ATLAS_MISSION_PHILOSOPHY.md)  
+> **Successor (🔒 locked):** [`LEARNING_INTELLIGENCE_AND_MULTI_LEDGER_PLAN.md`](LEARNING_INTELLIGENCE_AND_MULTI_LEDGER_PLAN.md) — Market Laboratories + Learning Intelligence; **does not reopen** DI; LI.1a→LI.6 ✅  
+> **Next quality plan (🔒 locked):** [`MARKET_LABORATORY_EVIDENCE_AND_ATTRIBUTION_PLAN.md`](MARKET_LABORATORY_EVIDENCE_AND_ATTRIBUTION_PLAN.md) (`OI-MLQ0`) — **LQ.1–LQ.9 ✅ shipped**; AtlasNet prep-only until §8.2
 > **Open item:** `OI-DI0` — **DI.1→DI.7 shipped**; DI.7 export gated until ≥300 trusted (or override); **no live NN**  
 > **Book in scope first:** `india_equity_learner` · P10 simulation only  
-> **Migrations used:** `0045`–`0048` · **Next free:** `0049` (DI.3–DI.7 needed no new migration)
+> **Migrations used:** `0045`–`0048` · **Next free:** `0049` (reserved for LI / Learning Intelligence plan)
 
 ---
 

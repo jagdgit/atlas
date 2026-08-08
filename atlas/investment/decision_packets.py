@@ -143,6 +143,11 @@ def compute_unknowns(
         unknowns.append("pe_missing")
     if fund.get("fcf") is None and fund.get("free_cash_flow") is None:
         unknowns.append("fcf_missing")
+    # LI.2 — provider conflicts (never invent blended PE)
+    for c in fund.get("evidence_conflicts") or []:
+        tag = str(c)
+        if tag and tag not in unknowns:
+            unknowns.append(tag)
     score = investment_score if isinstance(investment_score, dict) else {}
     axes = score.get("axes") if isinstance(score.get("axes"), dict) else {}
     if not axes:
@@ -313,6 +318,119 @@ def empty_market_snapshot(*, session: str | None = None, sector: str | None = No
     }
 
 
+# LQ.6 / LI.0a.2 — locked regime vocabulary (unknown allowed; never invent)
+REGIME_VOCAB: frozenset[str] = frozenset(
+    {
+        "bull",
+        "bear",
+        "sideways",
+        "high_vol",
+        "election",
+        "geopolitical",
+        "budget",
+        "pandemic",
+        "rate_cut",
+        "rate_hike",
+        "unknown",
+    }
+)
+
+_REGIME_ALIASES: dict[str, str] = {
+    "bullish": "bull",
+    "bearish": "bear",
+    "range": "sideways",
+    "ranging": "sideways",
+    "volatile": "high_vol",
+    "highvol": "high_vol",
+    "high-volatility": "high_vol",
+    "ratecut": "rate_cut",
+    "ratehike": "rate_hike",
+    "geo": "geopolitical",
+}
+
+
+def normalize_regime_tags(tags: Any) -> list[str]:
+    """Keep only locked vocab tags; map light aliases; never invent from P&L."""
+    if tags is None:
+        return []
+    raw = tags if isinstance(tags, (list, tuple, set)) else [tags]
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in raw:
+        s = str(t or "").strip().lower().replace(" ", "_").replace("-", "_")
+        if not s:
+            continue
+        s = _REGIME_ALIASES.get(s, s)
+        if s not in REGIME_VOCAB:
+            continue
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out[:12]
+
+
+def resolve_regime_tags(
+    *,
+    explicit: Any = None,
+    macro_observations: list[dict[str, Any]] | None = None,
+    default_unknown: bool = True,
+) -> list[str]:
+    """LQ.6 — evidence tags or ``["unknown"]``; never invent bull/bear from prices.
+
+    Prefer concrete explicit → macro/policy payload.regime_tags → unknown.
+    """
+    tags = normalize_regime_tags(explicit)
+    concrete = [t for t in tags if t != "unknown"]
+    if concrete:
+        return concrete[:12]
+    for obs in macro_observations or []:
+        if not isinstance(obs, dict):
+            continue
+        pl = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
+        got = normalize_regime_tags(pl.get("regime_tags") or obs.get("regime_tags"))
+        got_concrete = [t for t in got if t != "unknown"]
+        if got_concrete:
+            return got_concrete[:12]
+    if tags:
+        return ["unknown"]
+    if default_unknown:
+        return ["unknown"]
+    return []
+
+
+def stamp_regime_on_snapshot(
+    snap: dict[str, Any] | None,
+    *,
+    explicit: Any = None,
+    macro_observations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Ensure market_snapshot.regime_tags is non-empty (unknown OK)."""
+    out = dict(snap or empty_market_snapshot())
+    existing = out.get("regime_tags")
+    out["regime_tags"] = resolve_regime_tags(
+        explicit=explicit if explicit is not None else existing,
+        macro_observations=macro_observations,
+        default_unknown=True,
+    )
+    return out
+
+
+def regime_tags_for_closed_row(
+    packet: dict[str, Any] | None = None,
+    attr: dict[str, Any] | None = None,
+) -> list[str]:
+    """LQ.6 — regime labels for a closed training/export row (unknown OK)."""
+    pkt = packet if isinstance(packet, dict) else {}
+    a = attr if isinstance(attr, dict) else {}
+    pl = a.get("payload") if isinstance(a.get("payload"), dict) else {}
+    snap = pkt.get("market_snapshot") if isinstance(pkt.get("market_snapshot"), dict) else {}
+    return resolve_regime_tags(
+        explicit=pl.get("regime_tags") or snap.get("regime_tags"),
+        default_unknown=True,
+    )
+
+
 def build_packet(
     *,
     action: str,
@@ -328,6 +446,8 @@ def build_packet(
     prior_thesis_id: str | None = None,
     engine_decision_id: str | None = None,
     fill_trade_id: str | None = None,
+    experiment_id: str | None = None,
+    hypothesis_id: str | None = None,
     market_snapshot: dict[str, Any] | None = None,
     prices: dict[str, Any] | None = None,
     investment_score: dict[str, Any] | None = None,
@@ -355,7 +475,10 @@ def build_packet(
     tag = str(strategy_tag or "").strip() or "manual_operator"
     did = str(decision_id or uuid4())
     day = ts_ist or ist_today()
-    snap = dict(market_snapshot or empty_market_snapshot())
+    from atlas.investment.laboratory import normalize_experiment_id
+
+    exp_id = normalize_experiment_id(experiment_id)
+    snap = stamp_regime_on_snapshot(dict(market_snapshot or empty_market_snapshot()))
     contrib = feature_contributions_v1(
         investment_score=investment_score,
         indicators=indicators,
@@ -393,9 +516,15 @@ def build_packet(
         "symbol": symbol,
         "action": act,
         "portfolio_key": portfolio_key or "unknown",
+        # LI.1a — laboratory_id aliases portfolio_key (Laboratory ⊃ ledger)
+        "laboratory_id": portfolio_key or "unknown",
         "mission_id": str(mission_id) if mission_id else None,
         "strategy_tag": tag,
         "setup_tag": setup_tag,
+        # LI.4 — experiment lane (default keeps legacy packets gated together)
+        "experiment_id": exp_id,
+        # LI.5b — scientific hypothesis link (distinct from prior_thesis_id)
+        "hypothesis_id": str(hypothesis_id) if hypothesis_id else None,
         "parent_decision_id": parent_decision_id,
         "derived_from_lesson_ids": list(derived_from_lesson_ids or []),
         "prior_thesis_id": prior_thesis_id,
@@ -429,8 +558,9 @@ def build_packet(
         try:
             from atlas.investment.process_proxies import detect_packet_flags
 
-            # Attach score temporarily for overconfidence detection
+            # Attach score + meta so overconfidence / journal gates see real completeness
             tmp = dict(payload)
+            tmp["meta"] = dict(meta)
             if isinstance(investment_score, dict):
                 tmp["investment_score"] = investment_score
             flags = detect_packet_flags(tmp, **dict(process_context))
@@ -773,8 +903,10 @@ def emit_plan_watch_packets(
             strategy_tag="plan_watch",
             ts_ist=day,
             mission_id=mission_id,
-            market_snapshot=empty_market_snapshot(
-                session=session, sector=str(cand.get("sector") or "") or None
+            market_snapshot=stamp_regime_on_snapshot(
+                empty_market_snapshot(
+                    session=session, sector=str(cand.get("sector") or "") or None
+                )
             ),
             prices={"mark": cand.get("mark") or cand.get("price")},
             reasons_for=reasons,

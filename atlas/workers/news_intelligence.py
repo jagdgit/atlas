@@ -1,10 +1,10 @@
-"""NewsIntelligenceWorker — Market Intelligence M3 (MI.4 / IL.4).
+"""NewsIntelligenceWorker — Market Intelligence M3 (MI.4 / IL.4 / LQ.3).
 
 Ingest configured headlines/items → typed knowledge candidates → CandidateConsumer.
-Optional verify queue hand-off. Hermetic by default (config headlines); live RSS later.
+LQ.3: denser news_event obs (§8.1 fields), per-symbol news jsonl, open-book
+decision_id linking, citeable on revisits.
 
-IL.4: empty headlines/items → symbol-tagged watchlist monitoring seeds
-(``source=watchlist_seed``) when ``seed_from_watchlist`` is true (default).
+Hermetic by default (config headlines); live RSS optional.
 """
 
 from __future__ import annotations
@@ -14,13 +14,14 @@ import logging
 from typing import Any
 
 from atlas.investment import watchlists as wl
+from atlas.investment.observations import infer_news_topic_tags, normalize_news_sentiment
 from atlas.knowledge.media_extraction import MediaKnowledgeExtractor
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 
 class NewsIntelligenceWorker(PersistentWorker):
     type = "news_intelligence"
-    VERSION = 2
+    VERSION = 3
     journal_ticks = True
 
     def __init__(
@@ -31,6 +32,8 @@ class NewsIntelligenceWorker(PersistentWorker):
         knowledge_verification: Any | None = None,
         events: Any | None = None,
         observations: Any | None = None,
+        decision_packets: Any | None = None,
+        portfolio: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._candidates = candidates
@@ -38,6 +41,8 @@ class NewsIntelligenceWorker(PersistentWorker):
         self._verify = knowledge_verification
         self._events = events
         self._observations = observations
+        self._packets = decision_packets
+        self._portfolio = portfolio
         self._logger = logger or logging.getLogger("atlas.workers.news_intelligence")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -45,6 +50,9 @@ class NewsIntelligenceWorker(PersistentWorker):
         state = dict(ctx.state or {})
         ticks = int(state.get("ticks", 0)) + 1
         state["ticks"] = ticks
+
+        open_syms = self._open_symbols(cfg)
+        state["open_book_symbols"] = open_syms[:40]
 
         items, auto = wl.resolve_news_items(cfg)
         # IIP.9 — optional RSS allow-list (enabled feeds only)
@@ -57,7 +65,6 @@ class NewsIntelligenceWorker(PersistentWorker):
                     cfg.get("rss_feeds") if isinstance(cfg.get("rss_feeds"), list) else None,
                     include_defaults=bool(cfg.get("rss_include_defaults", True)),
                 )
-                # Mission may pass enabled ids
                 enable_ids = {
                     str(x).strip()
                     for x in (cfg.get("rss_enable") or [])
@@ -102,6 +109,9 @@ class NewsIntelligenceWorker(PersistentWorker):
                         "text": str(inp["headline"]),
                         "symbol": str(inp.get("symbol") or ""),
                         "source": "operator_input",
+                        "topic_tags": inp.get("topic_tags"),
+                        "sentiment": inp.get("sentiment"),
+                        "link": inp.get("link"),
                     }
                 )
                 auto = False
@@ -111,9 +121,42 @@ class NewsIntelligenceWorker(PersistentWorker):
                         "text": str(inp["text"]),
                         "symbol": str(inp.get("symbol") or ""),
                         "source": "operator_input",
+                        "topic_tags": inp.get("topic_tags"),
+                        "sentiment": inp.get("sentiment"),
+                        "link": inp.get("link"),
                     }
                 )
                 auto = False
+
+        # LQ.3 — when open books exist, prefer their seeds / tagged items first
+        open_set = {s.upper() for s in open_syms}
+        if open_set and items:
+            preferred = [
+                i
+                for i in items
+                if str(i.get("symbol") or "").strip().upper() in open_set
+            ]
+            if preferred:
+                rest = [
+                    i
+                    for i in items
+                    if str(i.get("symbol") or "").strip().upper() not in open_set
+                ]
+                items = preferred + rest
+            elif auto:
+                # Watchlist seeds only for open books when we hold them
+                items = [
+                    {
+                        "text": (
+                            f"Monitor material news for open book "
+                            f"{sym}: earnings, orders, regulation, management."
+                        ),
+                        "symbol": sym,
+                        "source": "open_book_seed",
+                    }
+                    for sym in open_syms[:15]
+                ]
+                auto = True
 
         state["auto_watchlist"] = auto
         if auto:
@@ -135,6 +178,8 @@ class NewsIntelligenceWorker(PersistentWorker):
         seen = set(state.get("seen_hashes") or [])
         emitted = 0
         skipped = 0
+        news_obs = 0
+        open_book_news = 0
         new_hashes: list[str] = []
         for item in items:
             text = str(item.get("text") or "").strip()
@@ -147,10 +192,18 @@ class NewsIntelligenceWorker(PersistentWorker):
                 continue
             symbol = str(item.get("symbol") or "").strip()
             source = str(item.get("source") or "news_config").strip()
+            is_open = bool(symbol and symbol.upper() in open_set)
+            decision_id = None
+            if is_open and self._packets is not None:
+                decision_id = self._latest_buy_decision_id(
+                    symbol,
+                    portfolio_key=str(cfg.get("portfolio_key") or "india_equity_learner"),
+                )
             evidence = {
                 "source": source,
                 "symbol": symbol or None,
                 "mission_id": ctx.mission_id,
+                "open_book": is_open,
             }
             payloads = self._extractor.extract(
                 text,
@@ -165,12 +218,24 @@ class NewsIntelligenceWorker(PersistentWorker):
                     self._logger.warning("candidate emit failed: %s", exc)
             if self._observations is not None:
                 try:
+                    tags = item.get("topic_tags")
+                    if not tags:
+                        tags = infer_news_topic_tags(text)
                     self._observations.record_news_event(
                         text=text,
                         symbol=symbol or None,
                         source=source,
-                        extra={"digest": digest},
+                        topic_tags=list(tags) if tags else None,
+                        sentiment=normalize_news_sentiment(item.get("sentiment")),
+                        link=str(item.get("link") or "") or None,
+                        observed_before_move=item.get("observed_before_move"),
+                        link_decision_id=decision_id,
+                        open_book=is_open,
+                        extra={"digest": digest, "lq": "lq.3"},
                     )
+                    news_obs += 1
+                    if is_open:
+                        open_book_news += 1
                 except Exception:  # noqa: BLE001
                     self._logger.debug("DI.Obs news_event skipped", exc_info=True)
             seen.add(digest)
@@ -182,8 +247,13 @@ class NewsIntelligenceWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001
                 self._logger.warning("candidate consolidate failed: %s", exc)
 
-        # Bound seen set
         state["seen_hashes"] = list(seen)[-200:]
+        state["last_news"] = {
+            "news_observations": news_obs,
+            "open_book_news": open_book_news,
+            "emitted_candidates": emitted,
+            "skipped": skipped,
+        }
 
         verify_note = ""
         if emitted and cfg.get("verify") and self._verify is not None:
@@ -199,7 +269,7 @@ class NewsIntelligenceWorker(PersistentWorker):
             except Exception as exc:  # noqa: BLE001
                 verify_note = f"; verify skipped ({exc})"
 
-        if self._events is not None and emitted:
+        if self._events is not None and (emitted or news_obs):
             try:
                 self._events.emit(
                     "NewsIntelligenceExtracted",
@@ -207,6 +277,8 @@ class NewsIntelligenceWorker(PersistentWorker):
                         "mission_id": ctx.mission_id,
                         "emitted": emitted,
                         "items": len(new_hashes),
+                        "news_observations": news_obs,
+                        "open_book_news": open_book_news,
                     },
                     source=self.type,
                 )
@@ -217,7 +289,74 @@ class NewsIntelligenceWorker(PersistentWorker):
         return TickResult(
             state=state,
             note=(
-                f"{auto_note}news: emitted {emitted} candidate(s), skipped {skipped}"
+                f"{auto_note}news: emitted {emitted} candidate(s), "
+                f"obs={news_obs} open_book={open_book_news}, skipped {skipped}"
                 f"{verify_note}{rss_note}"
             ),
         )
+
+    def _open_symbols(self, cfg: dict[str, Any]) -> list[str]:
+        raw = cfg.get("open_symbols") or cfg.get("symbols") or []
+        if isinstance(raw, str):
+            raw = [s.strip() for s in raw.split(",") if s.strip()]
+        out = [str(s).strip().upper() for s in raw if str(s).strip()]
+        if out:
+            return out[:40]
+        if self._portfolio is None:
+            return []
+        portfolio_key = str(cfg.get("portfolio_key") or "india_equity_learner").strip()
+        try:
+            from atlas.investment import portfolios as pf
+
+            meta = pf.get(portfolio_key) or {}
+            pid = meta.get("sim_portfolio_id") or meta.get("portfolio_id")
+            mission_id = meta.get("mission_id") or meta.get("ledger_mission_id")
+            persona = meta.get("persona") if isinstance(meta.get("persona"), dict) else {}
+            if (
+                not pid
+                and mission_id
+                and hasattr(self._portfolio, "ensure_portfolio")
+            ):
+                ensured = self._portfolio.ensure_portfolio(
+                    mission_id=mission_id,
+                    name=portfolio_key,
+                    starting_cash=float(persona.get("capital") or 0),
+                    base_currency=str(persona.get("currency") or "INR"),
+                )
+                pid = (ensured or {}).get("id")
+            positions: list[dict[str, Any]] = []
+            repo = getattr(self._portfolio, "_repo", None)
+            if pid and repo is not None and hasattr(repo, "list_positions"):
+                positions = list(repo.list_positions(pid) or [])
+            elif pid and hasattr(self._portfolio, "snapshot"):
+                snap = self._portfolio.snapshot(pid) or {}
+                positions = list(snap.get("positions") or snap.get("holdings") or [])
+            for p in positions:
+                if not isinstance(p, dict):
+                    continue
+                qty = float(p.get("qty") or p.get("quantity") or p.get("shares") or 0)
+                sym = str(p.get("symbol") or "").strip().upper()
+                if sym and qty > 0 and sym not in out:
+                    out.append(sym)
+                if len(out) >= 40:
+                    break
+        except Exception:  # noqa: BLE001
+            self._logger.debug("LQ.3 open positions resolve failed", exc_info=True)
+        return out
+
+    def _latest_buy_decision_id(
+        self, symbol: str, *, portfolio_key: str
+    ) -> str | None:
+        if self._packets is None:
+            return None
+        try:
+            rows = self._packets.list_symbol(
+                symbol=symbol, limit=20, portfolio_key=portfolio_key
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        for p in rows or []:
+            if isinstance(p, dict) and str(p.get("action") or "").lower() == "buy":
+                did = p.get("decision_id")
+                return str(did) if did else None
+        return None

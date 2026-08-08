@@ -97,6 +97,26 @@ No dedicated WAN yet: treat intermittent connectivity as normal; Atlas must be *
 
 ---
 
+## 3b. Intraday & F&O laboratories — outages (LI.1b)
+
+Same durability rule as the swing learner: **sim ledger lives in Postgres** and is not wiped when Wi‑Fi or power drops.
+
+| Event | What Atlas does |
+|-------|-----------------|
+| Power / process death | systemd + watchdog restart; ledger cash/positions intact |
+| Internet drop mid-session | ticks record `empty_live_feed` / feed gaps in session notes; **no invented fills** |
+| Internet returns | `POST /v1/market/laboratories/{id}/resume` (or next paper tick) re-binds the book, **marks** open positions from Yahoo/replay, continues strategy |
+| Intraday `flat_eod` with leftover positions after outage | resume reports `overnight_warning` — operator/strategy must decide; Atlas does **not** silently invent an exit |
+| F&O | same mark-to-market resume; expiry/margin gates re-evaluated on next tick — still no fabricated trades for the dark window |
+
+**Catch-up emails** remain IST-day scoped **per laboratory** (LI.1b): morning/evening dedup keys are `laboratory_id|date`, so Swing and Intraday each get their own digests after reconnect.
+
+Multi-day offline: catch up **today’s** lab digests when back; do not invent historical fills.
+
+See also: [`LEARNING_INTELLIGENCE_AND_MULTI_LEDGER_PLAN.md`](LEARNING_INTELLIGENCE_AND_MULTI_LEDGER_PLAN.md) §LI.1b · `atlas/investment/laboratory_resume.py`.
+
+---
+
 ## 4. Does trading start tomorrow when markets are live?
 
 **Yes — if all of the following hold:**

@@ -35,7 +35,9 @@ TIMELINE_KINDS = frozenset(
         "lesson",
     }
 )
-CHECKPOINTS = frozenset({"day1", "week1", "month1", "quarter", "exit"})
+CHECKPOINTS = frozenset(
+    {"day1", "day3", "week1", "day14", "month1", "quarter", "exit"}
+)
 
 
 def _json_safe(value: Any) -> Any:

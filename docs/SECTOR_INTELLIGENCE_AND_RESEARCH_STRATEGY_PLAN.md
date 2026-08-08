@@ -6,6 +6,7 @@
 > [`IRA_NEXT_LEAP_EVIDENCE_PLAN.md`](IRA_NEXT_LEAP_EVIDENCE_PLAN.md) ·
 > [`INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md`](INVESTMENT_INTELLIGENCE_PLATFORM_PLAN.md)  
 > **Open item:** `OI-SI0`  
+> **Downstream activation (🔒 LQ.1 ✅):** [`MARKET_LABORATORY_EVIDENCE_AND_ATTRIBUTION_PLAN.md`](MARKET_LABORATORY_EVIDENCE_AND_ATTRIBUTION_PLAN.md) — sector packs lead the **live** research question path (Apollo ≠ MTAR)  
 > **Master sprint order:** [`ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md`](ATLAS_RESEARCH_AND_EXECUTION_ROADMAP.md)  
 > **Horizon:** permanent capability for 5–10 year differentiating research — not a patch for today’s Apollo/MTAR similarity
 

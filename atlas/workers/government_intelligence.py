@@ -124,9 +124,23 @@ class GovernmentIntelligenceWorker(PersistentWorker):
                         source="government_intelligence",
                         extra={"updated_at": state.get("updated_at")},
                     )
+                    # LI.3b — also a macro_event when policy touch rate/budget/election-ish sectors
+                    sectors_l = [str(s).lower() for s in (state.get("sector_deltas") or {})]
+                    macro_hit = any(
+                        any(k in s for k in ("bank", "rate", "financ", "budget", "psu"))
+                        for s in sectors_l
+                    )
+                    if macro_hit or int(state["item_count"] or 0) >= 3:
+                        self._observations.record_macro_event(
+                            title=f"policy/macro pulse items={state['item_count']}",
+                            regime_tags=["unknown"] if not macro_hit else ["geopolitical"],
+                            detail=f"sectors={','.join(list(state['sector_deltas'])[:8])}",
+                            source="government_intelligence",
+                            extra={"updated_at": state.get("updated_at")},
+                        )
                     state["obs_item_count"] = state["item_count"]
             except Exception:  # noqa: BLE001
-                self._logger.debug("DI.Obs policy_event skipped", exc_info=True)
+                self._logger.debug("DI.Obs policy/macro event skipped", exc_info=True)
 
         if self._events is not None:
             try:

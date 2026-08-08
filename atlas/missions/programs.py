@@ -138,6 +138,10 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "program_id": "market_intelligence",
             "max_symbols": 4,
         },
+        "fundamentals_enrich": {
+            "program_id": "market_intelligence",
+            "max_symbols": 20,
+        },
         "thesis_outcome": {
             "program_id": "market_intelligence",
             "portfolio_key": "india_equity_learner",
@@ -268,6 +272,14 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 description="IRA TTL refresh — incremental dossier sections (no full rebuild)",
             ),
             ProgramMember(
+                role="Fundamentals Enrich",
+                template="fundamentals_enrich",
+                kind="learning",
+                cadence="daily off-hours",
+                status=MEMBER_ENABLED,
+                description="LQ.7 — Tier C Yahoo enrich on watchlist PE/FCF/ROE/D/E gaps",
+            ),
+            ProgramMember(
                 role="Thesis Outcome",
                 template="thesis_outcome",
                 kind="maintenance",
@@ -281,7 +293,7 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 kind="maintenance",
                 cadence="daily IST",
                 status=MEMBER_ENABLED,
-                description="DI.2 timeline revisits Day1→Week1→Month1→Quarter (what_changed)",
+                description="LQ.2 denser timeline revisits Day1→Day3→Week1→Day14→Month1→Quarter",
             ),
             ProgramMember(
                 role="Decision Meta-Learning",

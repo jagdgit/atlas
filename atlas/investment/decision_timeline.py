@@ -1,8 +1,9 @@
-"""Market Timeline + Decision Evolution (DI.2).
+"""Market Timeline + Decision Evolution (DI.2 / LQ.2).
 
-Append-only events per symbol. Evolution schedule: Day1 → Week1 → Month1 →
-Quarter → Exit. Each completed revisit records a ``what_changed`` diff vs the
-frozen Decision Packet (belief never rewritten).
+Append-only events per symbol. Evolution schedule densifies open books:
+Day1 → Day3 → Week1 → Day14 → Month1 → Quarter (Host Guard may thin drain).
+Each completed revisit records a ``what_changed`` diff vs the frozen Decision
+Packet (belief never rewritten).
 
 Hybrid: Postgres via ``DecisionTimelineRepository`` when available; JSON mirrors
 under ``investment/decisions/timeline/`` and ``…/revisits/``.
@@ -23,20 +24,77 @@ from atlas.repositories.decision_timeline_repo import CHECKPOINTS, TIMELINE_KIND
 _log = logging.getLogger("atlas.investment.decision_timeline")
 
 TIMELINE_VERSION = "di.timeline.1"
-REVISIT_VERSION = "di.revisit.1"
+REVISIT_VERSION = "di.revisit.2"
 STORE_REL = Path("investment") / "decisions"
 _IST = ZoneInfo("Asia/Kolkata")
 
-# Offset in calendar days from packet ts_ist.
+# Offset in calendar days from packet ts_ist (LQ.2 denser set).
 CHECKPOINT_OFFSETS: dict[str, int] = {
     "day1": 1,
+    "day3": 3,
     "week1": 7,
+    "day14": 14,
     "month1": 30,
     "quarter": 90,
 }
 
+# Default swing / equity laboratory density (LQ.2).
+DEFAULT_SWING_CHECKPOINTS: tuple[str, ...] = (
+    "day1",
+    "day3",
+    "week1",
+    "day14",
+    "month1",
+    "quarter",
+)
+
+# Map LI.1b review_schedule tokens → checkpoint ids.
+_SCHEDULE_TOKEN_MAP: dict[str, str] = {
+    "D1": "day1",
+    "D3": "day3",
+    "W1": "week1",
+    "D14": "day14",
+    "M1": "month1",
+    "Q": "quarter",
+    "same_day": "day1",
+    "next_open": "day3",
+    "expiry": "week1",
+    "day1": "day1",
+    "day3": "day3",
+    "week1": "week1",
+    "day14": "day14",
+    "month1": "month1",
+    "quarter": "quarter",
+}
+
 # Actions that get a full evolution schedule (not every engine_hold spam).
 SCHEDULE_ACTIONS = frozenset({"buy", "sell", "watch", "reduce"})
+
+
+def checkpoints_for_personality(
+    kind: str | None = None,
+    *,
+    review_schedule: list[str] | None = None,
+) -> list[str]:
+    """LQ.2 — checkpoint ids for a laboratory personality (swing denser by default)."""
+    if review_schedule:
+        out: list[str] = []
+        seen: set[str] = set()
+        for tok in review_schedule:
+            cp = _SCHEDULE_TOKEN_MAP.get(str(tok).strip()) or _SCHEDULE_TOKEN_MAP.get(
+                str(tok).strip().upper()
+            )
+            if cp and cp in CHECKPOINT_OFFSETS and cp not in seen:
+                seen.add(cp)
+                out.append(cp)
+        if out:
+            return out
+    k = str(kind or "swing").strip().lower()
+    if k in {"intraday", "equity_intraday"}:
+        return ["day1", "day3"]
+    if k in {"futures", "options", "f&o"}:
+        return ["day1", "day3", "week1"]
+    return list(DEFAULT_SWING_CHECKPOINTS)
 
 
 def ist_today() -> str:
@@ -52,6 +110,7 @@ def due_ist_for(ts_ist: str, checkpoint: str) -> str:
     if offset is None:
         raise ValueError(f"unknown checkpoint {checkpoint!r}")
     return (_parse_ist(ts_ist) + timedelta(days=offset)).isoformat()
+
 
 
 def timeline_root(data_dir: str | Path) -> Path:
@@ -149,9 +208,10 @@ def what_changed(
     current_score: dict[str, Any] | None = None,
     current_valuation: dict[str, Any] | None = None,
     current_unknowns: list[str] | None = None,
+    recent_observations: list[dict[str, Any]] | None = None,
     note: str = "",
 ) -> dict[str, Any]:
-    """Diff current evidence vs frozen packet beliefs (DI.2 revisit answers)."""
+    """Diff current evidence vs frozen packet beliefs (DI.2 / LI.3b revisit answers)."""
     packet = packet if isinstance(packet, dict) else {}
     prices = packet.get("prices") if isinstance(packet.get("prices"), dict) else {}
     conf = (
@@ -159,7 +219,6 @@ def what_changed(
         if isinstance(packet.get("confidence_breakdown"), dict)
         else {}
     )
-    val0 = None
     # Packet gates may hold valuation indirectly; prefer expected/thesis later.
     mark0 = prices.get("fill_price") or prices.get("mark")
     deltas: list[str] = []
@@ -198,6 +257,68 @@ def what_changed(
     if new_gaps:
         deltas.append("new_gaps:" + ",".join(new_gaps[:6]))
 
+    # LI.3b / LQ.3 — new observations since decide-time citation
+    cited = {str(x) for x in (packet.get("observation_ids") or []) if x}
+    obs_rows = [o for o in (recent_observations or []) if isinstance(o, dict)]
+    new_obs = [o for o in obs_rows if str(o.get("id") or "") not in cited]
+    new_obs_kinds = sorted(
+        {str(o.get("kind") or "") for o in new_obs if o.get("kind")}
+    )
+    mgmt_notes = [
+        str((o.get("payload") or {}).get("title") or o.get("kind"))
+        for o in new_obs
+        if o.get("kind") in {"mgmt_event", "filing_event"}
+    ]
+    management_note = None
+    if mgmt_notes:
+        management_note = "; ".join(mgmt_notes[:3])[:300]
+        deltas.append(f"mgmt:{management_note[:80]}")
+
+    news_rows = [o for o in new_obs if o.get("kind") == "news_event"]
+    news_delta: dict[str, Any] | None = None
+    if news_rows:
+        titles: list[str] = []
+        tags: list[str] = []
+        sentiments: list[str] = []
+        observed_flags: list[bool] = []
+        for o in news_rows[:12]:
+            pl = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+            t = str(pl.get("text") or pl.get("title") or "").strip()
+            if t:
+                titles.append(t[:120])
+            for tag in pl.get("topic_tags") or []:
+                if tag and tag not in tags:
+                    tags.append(str(tag))
+            sent = str(pl.get("sentiment") or "unknown")
+            if sent and sent not in sentiments:
+                sentiments.append(sent)
+            obm = pl.get("observed_before_move")
+            if isinstance(obm, bool):
+                observed_flags.append(obm)
+        news_delta = {
+            "count": len(news_rows),
+            "titles": titles[:6],
+            "observation_ids": [str(o.get("id")) for o in news_rows[:12] if o.get("id")],
+            "topic_tags": tags[:12],
+            "sentiment": sentiments[0] if len(sentiments) == 1 else (
+                "mixed" if len(sentiments) > 1 else "unknown"
+            ),
+            "observed_before_move": (
+                any(observed_flags) if observed_flags else None
+            ),
+            "open_book": any(
+                bool((o.get("payload") or {}).get("open_book")) for o in news_rows
+            ),
+        }
+        head = titles[0] if titles else "news"
+        deltas.append(f"news_delta:{news_delta['count']} {head[:70]}")
+
+    if new_obs:
+        deltas.append(
+            f"new_observations={len(new_obs)}"
+            + (f" kinds={','.join(new_obs_kinds[:6])}" if new_obs_kinds else "")
+        )
+
     thesis_improved = None
     if conf_delta is not None:
         thesis_improved = conf_delta > 0.02
@@ -211,7 +332,12 @@ def what_changed(
         "confidence_delta": conf_delta,
         "price_change_pct": price_chg_pct,
         "valuation_note": f"mos={mos_now}" if mos_now is not None else None,
-        "management_note": None,  # DI.Attr / research later
+        "management_note": management_note,
+        "news_delta": news_delta,
+        "new_observations": bool(new_obs),
+        "new_observation_count": len(new_obs),
+        "new_observation_kinds": new_obs_kinds,
+        "new_observation_ids": [str(o.get("id")) for o in new_obs[:12] if o.get("id")],
         "resolved_unknowns": resolved,
         "new_unknowns": new_gaps,
         "deltas": deltas,
@@ -301,15 +427,29 @@ class DecisionTimelineStore:
             scheduled = self.schedule_evolution(packet)
         return {"events": 1, "scheduled": scheduled}
 
-    def schedule_evolution(self, packet: dict[str, Any]) -> int:
+    def schedule_evolution(
+        self,
+        packet: dict[str, Any],
+        *,
+        checkpoints: list[str] | None = None,
+        personality_kind: str | None = None,
+    ) -> int:
+        """LQ.2 — schedule denser checkpoints (idempotent per decision+checkpoint)."""
         ts_ist = str(packet.get("ts_ist") or ist_today())
         did = str(packet.get("decision_id") or "")
         symbol = str(packet.get("symbol") or "")
         pk = str(packet.get("portfolio_key") or "unknown")
         if not did or not symbol:
             return 0
+        cps = list(checkpoints) if checkpoints else checkpoints_for_personality(
+            personality_kind
+            or (packet.get("meta") or {}).get("personality_kind")
+            or packet.get("laboratory_kind")
+        )
         n = 0
-        for checkpoint in ("day1", "week1", "month1", "quarter"):
+        for checkpoint in cps:
+            if checkpoint not in CHECKPOINT_OFFSETS:
+                continue
             row = {
                 "id": str(uuid4()),
                 "decision_id": did,
@@ -322,6 +462,7 @@ class DecisionTimelineStore:
                     "action": packet.get("action"),
                     "strategy_tag": packet.get("strategy_tag"),
                     "packet_ts_ist": ts_ist,
+                    "density": "lq.2",
                 },
                 "payload_version": REVISIT_VERSION,
             }
@@ -337,7 +478,7 @@ class DecisionTimelineStore:
                 exists = any(
                     r.get("decision_id") == did
                     and r.get("checkpoint") == checkpoint
-                    and r.get("status") == "pending"
+                    and r.get("status") in {"pending", "done", "skipped"}
                     for r in self._mem_revisits
                 )
                 if not exists and self._data_dir:
@@ -348,6 +489,15 @@ class DecisionTimelineStore:
                         ):
                             exists = True
                             break
+                    if not exists:
+                        # Also treat completed mirrors as already scheduled
+                        for existing in self._all_revisit_rows_json():
+                            if (
+                                existing.get("decision_id") == did
+                                and existing.get("checkpoint") == checkpoint
+                            ):
+                                exists = True
+                                break
                 if not exists:
                     self._mem_revisits.append(row)
                     inserted = row
@@ -355,6 +505,227 @@ class DecisionTimelineStore:
                 _mirror_revisit_schedule(self._data_dir, row)
                 n += 1
         return n
+
+    def _all_revisit_rows_json(self) -> list[dict[str, Any]]:
+        if not self._data_dir:
+            return []
+        root = revisits_root(self._data_dir) / "by_decision"
+        if not root.is_dir():
+            return []
+        out: list[dict[str, Any]] = []
+        for path in root.glob("*.jsonl"):
+            try:
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        doc = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(doc, dict):
+                        out.append(doc)
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+
+    def revisits_for_decision(self, decision_id: str) -> dict[str, dict[str, Any]]:
+        """Latest revisit row per checkpoint for a decision."""
+        did = str(decision_id or "")
+        if not did:
+            return {}
+        latest: dict[str, dict[str, Any]] = {}
+        rows = list(self._mem_revisits)
+        if self._repo is not None:
+            try:
+                # Prefer listing due + completed via counts path — scan mem+json fallback
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+        if self._data_dir:
+            rows.extend(self._all_revisit_rows_json())
+        if self._repo is not None:
+            try:
+                # Use list_due with high limit won't get done; use raw if available
+                if hasattr(self._repo, "list_for_decision"):
+                    for r in self._repo.list_for_decision(did) or []:
+                        rows.append(dict(r))
+            except Exception:  # noqa: BLE001
+                self._logger.debug("list_for_decision failed", exc_info=True)
+        for r in rows:
+            if str(r.get("decision_id") or "") != did:
+                continue
+            cp = str(r.get("checkpoint") or "")
+            if cp:
+                latest[cp] = r
+        return latest
+
+    def ensure_open_book_schedules(
+        self,
+        *,
+        portfolio_key: str,
+        open_symbols: list[str] | None = None,
+        personality_kind: str | None = None,
+        review_schedule: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """LQ.2 — ensure every open material symbol has denser checkpoint rows.
+
+        Resolves latest buy packet per symbol. Does not invent marks/news —
+        only schedules missing due rows (idempotent).
+        """
+        pk = str(portfolio_key or "").strip()
+        syms = [
+            str(s).strip().upper()
+            for s in (open_symbols or [])
+            if str(s).strip()
+        ]
+        cps = checkpoints_for_personality(
+            personality_kind, review_schedule=review_schedule
+        )
+        ensured = 0
+        scheduled_new = 0
+        missing_packet = 0
+        books: list[dict[str, Any]] = []
+        for sym in syms:
+            packet = self._latest_buy_packet(sym, portfolio_key=pk)
+            if not packet:
+                missing_packet += 1
+                books.append(
+                    {
+                        "symbol": sym,
+                        "status": "no_buy_packet",
+                        "scheduled": 0,
+                        "expected": list(cps),
+                    }
+                )
+                continue
+            n = self.schedule_evolution(
+                packet, checkpoints=cps, personality_kind=personality_kind
+            )
+            scheduled_new += n
+            ensured += 1
+            books.append(
+                {
+                    "symbol": sym,
+                    "decision_id": packet.get("decision_id"),
+                    "status": "ensured",
+                    "scheduled_new": n,
+                    "expected": list(cps),
+                }
+            )
+        return {
+            "version": "lq.2",
+            "portfolio_key": pk,
+            "open_symbols": len(syms),
+            "books_ensured": ensured,
+            "scheduled_new": scheduled_new,
+            "missing_buy_packet": missing_packet,
+            "checkpoints": list(cps),
+            "books": books[:40],
+        }
+
+    def _latest_buy_packet(
+        self, symbol: str, *, portfolio_key: str | None = None
+    ) -> dict[str, Any] | None:
+        if self._packets is None:
+            return None
+        try:
+            rows = self._packets.list_symbol(
+                symbol=symbol, limit=40, portfolio_key=portfolio_key
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        for p in rows or []:
+            if not isinstance(p, dict):
+                continue
+            if str(p.get("action") or "").lower() == "buy":
+                return p
+        return None
+
+    def open_book_timeline_coverage(
+        self,
+        *,
+        portfolio_key: str,
+        open_symbols: list[str] | None = None,
+        as_of_ist: str | None = None,
+        personality_kind: str | None = None,
+        review_schedule: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """LQ.2 honesty — per open book checkpoint coverage + overdue count."""
+        day = as_of_ist or ist_today()
+        pk = str(portfolio_key or "").strip()
+        syms = [
+            str(s).strip().upper()
+            for s in (open_symbols or [])
+            if str(s).strip()
+        ]
+        expected = checkpoints_for_personality(
+            personality_kind, review_schedule=review_schedule
+        )
+        books: list[dict[str, Any]] = []
+        with_full = 0
+        overdue = 0
+        for sym in syms:
+            packet = self._latest_buy_packet(sym, portfolio_key=pk)
+            if not packet:
+                books.append(
+                    {
+                        "symbol": sym,
+                        "status": "no_buy_packet",
+                        "missing": list(expected),
+                        "pending": [],
+                        "done": [],
+                        "next_due": None,
+                    }
+                )
+                continue
+            did = str(packet.get("decision_id") or "")
+            by_cp = self.revisits_for_decision(did)
+            missing = [c for c in expected if c not in by_cp]
+            pending = [
+                c
+                for c in expected
+                if (by_cp.get(c) or {}).get("status", "pending") == "pending"
+            ]
+            done = [
+                c for c in expected if (by_cp.get(c) or {}).get("status") == "done"
+            ]
+            overdue_cps = [
+                c
+                for c in pending
+                if str((by_cp.get(c) or {}).get("due_ist") or "") <= day
+            ]
+            overdue += len(overdue_cps)
+            if not missing and expected:
+                with_full += 1
+            next_due = None
+            for c in expected:
+                row = by_cp.get(c) or {}
+                if row.get("status", "pending") == "pending":
+                    next_due = {"checkpoint": c, "due_ist": row.get("due_ist")}
+                    break
+            books.append(
+                {
+                    "symbol": sym,
+                    "decision_id": did,
+                    "status": "full" if not missing else "partial",
+                    "missing": missing,
+                    "pending": pending,
+                    "done": done,
+                    "overdue": overdue_cps,
+                    "next_due": next_due,
+                }
+            )
+        return {
+            "version": "lq.2",
+            "as_of_ist": day,
+            "portfolio_key": pk,
+            "open_books": len(syms),
+            "open_books_with_full_schedule": with_full,
+            "overdue_revisits": overdue,
+            "expected_checkpoints": list(expected),
+            "books": books[:40],
+        }
 
     def list_symbol(
         self, *, symbol: str, limit: int = 100, kind: str | None = None
@@ -450,6 +821,10 @@ class DecisionTimelineStore:
             },
         )
         payload_update = {"what_changed": diff, "mark": mark}
+        done_row = {**revisit, "status": "done", "payload": {
+            **(revisit.get("payload") or {}),
+            **payload_update,
+        }}
         if self._repo is not None and revisit.get("id"):
             try:
                 self._repo.complete_revisit(
@@ -466,8 +841,8 @@ class DecisionTimelineStore:
                 if str(r.get("id")) == rid:
                     r["status"] = "done"
                     r["payload"] = {**(r.get("payload") or {}), **payload_update}
-            done_row = {**revisit, "status": "done", "payload": payload_update}
-            _mirror_revisit_schedule(self._data_dir, done_row)
+        # LI.3a — always mirror done so evening JSON counts match Postgres drain
+        _mirror_revisit_schedule(self._data_dir, done_row)
         return event
 
     def run_due_revisits(
@@ -478,6 +853,7 @@ class DecisionTimelineStore:
         limit: int = 20,
         mark_fn: Any | None = None,
         awareness_fn: Any | None = None,
+        observations_fn: Any | None = None,
     ) -> dict[str, Any]:
         due = self.list_due(as_of_ist=as_of_ist, portfolio_key=portfolio_key, limit=limit)
         done: list[dict[str, Any]] = []
@@ -492,6 +868,7 @@ class DecisionTimelineStore:
             score = None
             valuation = None
             unknowns = list((packet or {}).get("unknowns") or [])
+            recent_obs: list[dict[str, Any]] = []
             sym = str(rev.get("symbol") or "")
             if mark_fn is not None and sym:
                 try:
@@ -505,14 +882,22 @@ class DecisionTimelineStore:
                         score = aw.get("investment_score")
                         valuation = aw.get("valuation")
                         # Prefer live unknowns from packet builder if we have fundamentals later
+                        if aw.get("recent_observations"):
+                            recent_obs = list(aw.get("recent_observations") or [])
                 except Exception:  # noqa: BLE001
                     pass
+            if observations_fn is not None and sym and not recent_obs:
+                try:
+                    recent_obs = list(observations_fn(sym) or [])
+                except Exception:  # noqa: BLE001
+                    recent_obs = []
             diff = what_changed(
                 packet,
                 current_mark=mark,
                 current_score=score if isinstance(score, dict) else None,
                 current_valuation=valuation if isinstance(valuation, dict) else None,
                 current_unknowns=unknowns,
+                recent_observations=recent_obs,
                 note=f"auto {rev.get('checkpoint')}",
             )
             event = self.complete_revisit(rev, diff=diff, mark=mark)
@@ -543,29 +928,13 @@ class DecisionTimelineStore:
                     "skipped_revisits": c.get("skipped", 0),
                     "open_evolution": c.get("pending", 0),
                     "closed_checkpoints": c.get("done", 0) + c.get("skipped", 0),
+                    "density": "lq.2",
                 }
             except Exception:  # noqa: BLE001
                 self._logger.debug("learning_counts repo failed", exc_info=True)
         all_rows = list(self._mem_revisits)
         if self._data_dir:
-            # Include completed markers from jsonl (last status wins already in pending loader —
-            # scan all lines for done counts)
-            root = revisits_root(self._data_dir) / "by_decision"
-            if root.is_dir():
-                for path in root.glob("*.jsonl"):
-                    try:
-                        for line in path.read_text(encoding="utf-8").splitlines():
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                doc = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-                            if isinstance(doc, dict):
-                                all_rows.append(doc)
-                    except Exception:  # noqa: BLE001
-                        continue
+            all_rows.extend(self._all_revisit_rows_json())
         # Dedupe by (decision_id, checkpoint) keeping last status
         latest: dict[tuple[str, str], dict[str, Any]] = {}
         for r in all_rows:
@@ -583,8 +952,10 @@ class DecisionTimelineStore:
             "skipped_revisits": skipped,
             "open_evolution": pending,
             "closed_checkpoints": done + skipped,
+            "density": "lq.2",
             "note": "json/memory counts" if self._repo is None else None,
         }
+
 
     def append_observation(
         self,
@@ -609,8 +980,23 @@ def format_evolution_section(counts: dict[str, Any] | None) -> list[str]:
     counts = counts or {}
     lines = [
         "",
-        "Decision evolution (DI.2):",
+        "Decision evolution (DI.2 / LQ.2):",
         f"  Open revisits pending: {counts.get('pending_revisits', 0)}",
         f"  Checkpoints completed: {counts.get('done_revisits', 0)}",
     ]
+    if counts.get("skipped_revisits"):
+        lines.append(f"  Checkpoints skipped: {counts.get('skipped_revisits')}")
+    if counts.get("open_books") is not None:
+        lines.append(
+            f"  Open books with full schedule: "
+            f"{counts.get('open_books_with_full_schedule', 0)}/"
+            f"{counts.get('open_books', 0)}"
+        )
+    if counts.get("overdue_revisits") is not None:
+        lines.append(f"  Overdue revisits: {counts.get('overdue_revisits')}")
+    if counts.get("host_guard_reason"):
+        lines.append(
+            f"  Host Guard: {counts.get('host_guard_reason')} "
+            f"(budget={counts.get('host_guard_budget', '—')})"
+        )
     return lines

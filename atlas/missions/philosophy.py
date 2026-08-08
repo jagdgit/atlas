@@ -230,6 +230,18 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
     },
+    "fundamentals_enrich": {
+        "mission_kind": KIND_LEARNING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_PARTIAL,
+            learn=STAGE_ACTIVE,
+            record_why=STAGE_PARTIAL,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
     "event_research": {
         "mission_kind": KIND_RESEARCH,
         "never_stops": False,

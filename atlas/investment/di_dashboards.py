@@ -6,6 +6,8 @@ Gates (locked): hide edge metrics &lt;30 closed · provisional 30–99 · usable
 Stage 1 ships always (book/process honesty). Edge stats (win rate, PF, …)
 appear only when the lane clears the gate. Stage 3 (Sharpe etc.) stays gated
 at trusted (≥300) and is stubbed until enough exits exist.
+
+LQ.8 — operator KPI narrative A→D layered on DI gates (never invent Stage C/D).
 """
 
 from __future__ import annotations
@@ -18,13 +20,16 @@ from typing import Any
 
 _log = logging.getLogger("atlas.investment.di_dashboards")
 
-VERSION = "di.dashboard.1"
+VERSION = "di.dashboard.lq8"
 STORE_REL = Path("investment") / "decisions" / "dashboards"
 
 # Closed attributable decisions per strategy_tag
 GATE_HIDDEN_MAX = 29
 GATE_PROVISIONAL_MAX = 99
 GATE_USABLE_MAX = 299
+
+# LQ.8 — Stage D (NN / meta-opt theater) stays off until §8 AtlasNet gates
+STAGE_D_ENABLED = False
 
 
 def sample_tier(n_closed: int) -> str:
@@ -47,6 +52,32 @@ def tier_label(tier: str) -> str:
     }.get(tier, tier)
 
 
+def kpi_stage_for_tier(tier: str) -> str:
+    """LQ.8 — map DI sample tier → operator Stage A/B/C (D never auto-on)."""
+    t = str(tier or "hidden")
+    if t == "hidden":
+        return "A"
+    if t in {"provisional", "usable"}:
+        return "B"
+    if t == "trusted":
+        return "C"
+    return "A"
+
+
+def kpi_stage_label(stage: str) -> str:
+    return {
+        "A": "Stage A — process / book / decision quality (always)",
+        "B": "Stage B — edge lanes (win rate, PF, expectancy) after sample gate",
+        "C": "Stage C — risk ratios (Sharpe/Sortino/…) at trusted sample",
+        "D": "Stage D — NN / meta-learning / portfolio opt (gated by §8)",
+    }.get(str(stage or "A"), str(stage))
+
+
+def stage_c_metrics_allowed(tier: str) -> bool:
+    """Stage C vanity only when trusted; values still stub until series exists."""
+    return str(tier or "") == "trusted"
+
+
 def _f(x: Any, default: float | None = None) -> float | None:
     if x is None:
         return default
@@ -66,7 +97,27 @@ def classify_exits_by_strategy(
     attributions: list[dict[str, Any]],
     packets_by_id: dict[str, dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Group exit attributions by packet strategy_tag (never mix)."""
+    """Group exit attributions by lane (strategy[+experiment]) — never mix labs.
+
+    LI.4: sample gates are per ``(laboratory_id, strategy_tag, experiment_id)``.
+    Within a hermetic lab, display keys are ``strategy`` or ``strategy@experiment``.
+    """
+    from atlas.investment.laboratory import (
+        refuse_pooled_edge_metrics,
+        resolve_lane_from_rows,
+    )
+
+    # Hermeticity: refuse if attributions/packets span multiple laboratories.
+    check_rows: list[dict[str, Any]] = []
+    for attr in attributions:
+        if isinstance(attr, dict):
+            check_rows.append(attr)
+            did = str(attr.get("decision_id") or "")
+            pkt = packets_by_id.get(did) if did else None
+            if isinstance(pkt, dict):
+                check_rows.append(pkt)
+    refuse_pooled_edge_metrics(check_rows, context="classify_exits_by_strategy")
+
     lanes: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for attr in attributions:
         if not isinstance(attr, dict):
@@ -75,11 +126,8 @@ def classify_exits_by_strategy(
             continue
         did = str(attr.get("decision_id") or "")
         pkt = packets_by_id.get(did) if did else None
-        tag = "unknown"
-        if isinstance(pkt, dict) and pkt.get("strategy_tag"):
-            tag = str(pkt["strategy_tag"])
-        elif isinstance(attr.get("payload"), dict):
-            tag = str((attr["payload"].get("extra") or {}).get("strategy_tag") or tag)
+        lane = resolve_lane_from_rows(attr, pkt if isinstance(pkt, dict) else None)
+        tag = lane["display_key"]
         grades = attr.get("grades") if isinstance(attr.get("grades"), dict) else {}
         pnl = grades.get("pnl")
         if pnl is None and isinstance(attr.get("payload"), dict):
@@ -90,6 +138,10 @@ def classify_exits_by_strategy(
                 "packet": pkt,
                 "pnl": _f(pnl),
                 "grades": grades,
+                "lane_key": lane["lane_key"],
+                "strategy_tag": lane["strategy_tag"],
+                "experiment_id": lane["experiment_id"],
+                "laboratory_id": lane["laboratory_id"],
             }
         )
     return dict(lanes)
@@ -100,17 +152,28 @@ def edge_metrics_for_lane(
 ) -> dict[str, Any]:
     """Win rate / PF / expectancy — only when tier allows; else honest hide."""
     n = len(exits)
+    stage = kpi_stage_for_tier(tier)
     base = {
         "n_closed": n,
         "tier": tier,
         "tier_label": tier_label(tier),
+        "kpi_stage": stage,
+        "kpi_stage_label": kpi_stage_label(stage),
         "edge_visible": tier != "hidden",
         "edge_status": "hidden" if tier == "hidden" else tier,
+        "stage_c_visible": False,
+        "stage_d_visible": False,
     }
     if tier == "hidden":
         base["note"] = (
-            f"Edge metrics hidden until ≥30 closed exits for this strategy_tag "
-            f"(have {n})."
+            f"Stage A only — edge (Stage B) hidden until ≥30 closed exits "
+            f"for this strategy_tag (have {n})."
+        )
+        base["stage3_sharpe"] = None
+        base["stage3_sortino"] = None
+        base["stage3_calmar"] = None
+        base["stage3_note"] = (
+            "Stage C (Sharpe/Sortino/Calmar) hidden until trusted (≥300) sample."
         )
         return base
 
@@ -160,22 +223,30 @@ def edge_metrics_for_lane(
             "consecutive_losses_max": max_streak,
             "provisional": tier == "provisional",
             "note": (
-                "Provisional — treat cautiously until 100 closed."
+                "Stage B provisional — treat cautiously until 100 closed."
                 if tier == "provisional"
                 else (
-                    "Usable sample."
+                    "Stage B usable sample (Stage C still reserved for ≥300)."
                     if tier == "usable"
-                    else "Trusted sample (≥300)."
+                    else "Stage C eligible (≥300); risk ratios stub until equity series."
                 )
             ),
         }
     )
-    if tier != "trusted":
-        base["stage3_sharpe"] = None
-        base["stage3_note"] = "Sharpe/Sortino/Calmar reserved for trusted (≥300) sample."
+    # LQ.8 — Stage C fields never invent numbers; visible flag only at trusted
+    base["stage3_sharpe"] = None
+    base["stage3_sortino"] = None
+    base["stage3_calmar"] = None
+    if stage_c_metrics_allowed(tier):
+        base["stage_c_visible"] = True
+        base["stage3_note"] = (
+            "Stage C gate open; Sharpe/Sortino/Calmar not computed yet "
+            "(no durable returns series) — never invent."
+        )
     else:
-        base["stage3_sharpe"] = None  # still stub until returns series wired
-        base["stage3_note"] = "Trusted gate open; Sharpe series not yet computed (Stage 3 stub)."
+        base["stage3_note"] = (
+            "Stage C (Sharpe/Sortino/Calmar) hidden until trusted (≥300) sample."
+        )
     return base
 
 
@@ -224,10 +295,12 @@ def build_di_dashboards(
     with_parent = sum(1 for p in pkt_list if p.get("parent_decision_id"))
 
     # D1 Process / session
+    # D1 Process — LQ.8 Stage A always
     d1 = {
         "id": "D1",
         "title": "Process / session",
         "stage": 1,
+        "kpi_stage": "A",
         "metrics": {
             "fills_today": kpis.get("fills_today"),
             "buys_today": kpis.get("buys_today"),
@@ -248,25 +321,31 @@ def build_di_dashboards(
         },
     }
 
-    # D2 Trading — stage 1 always; edge per strategy_tag gated
+    # D2 Trading — Stage A execution always; Stage B edge per lane gated
     d2 = {
         "id": "D2",
         "title": "Trading (execution edge)",
         "stage": 1,
+        "kpi_stage": "A+B",
         "metrics_stage1": {
             "fills_today": kpis.get("fills_today"),
             "fees_paid": kpis.get("fees_paid"),
             "consecutive_losses_hint": "see strategy_lanes when exits exist",
         },
         "strategy_lanes": strategy_lanes,
-        "note": "Edge metrics never mix strategy_tags. Gates: 30 / 100 / 300.",
+        "note": (
+            "LQ.8: Stage A execution always; Stage B edge never mixes "
+            "strategy_tags/experiments/labs. Gates: 30 / 100 / 300 per "
+            "(laboratory_id, strategy_tag, experiment_id). Stage C/D not invented."
+        ),
     }
 
-    # D3 Portfolio
+    # D3 Portfolio — Stage A book health
     d3 = {
         "id": "D3",
         "title": "Portfolio (book health)",
         "stage": 1,
+        "kpi_stage": "A",
         "metrics": {
             "cash": kpis.get("cash") if kpis.get("cash") is not None else _f(port.get("cash")),
             "holdings_value": kpis.get("holdings_value")
@@ -298,6 +377,7 @@ def build_di_dashboards(
         "id": "D4",
         "title": "Learning (markets)",
         "stage": 1,
+        "kpi_stage": "A",
         "metrics": {
             "packets_recorded": len(pkt_list),
             "exit_attributions": sum(
@@ -319,6 +399,7 @@ def build_di_dashboards(
         "id": "D5",
         "title": "Research (what don’t we know?)",
         "stage": 1,
+        "kpi_stage": "A",
         "metrics": {
             "fundamentals_symbols": fund.get("symbols"),
             "with_pe": fund.get("with_pe"),
@@ -373,6 +454,7 @@ def build_di_dashboards(
         "id": "D6",
         "title": "Intelligence (Atlas-the-product)",
         "stage": 2 if meta_doc.get("intelligence_score") is not None else 1,
+        "kpi_stage": "A",
         "metrics": d6_metrics,
         "note": (
             "D6 scores whether Atlas is becoming a better decision system — "
@@ -387,10 +469,39 @@ def build_di_dashboards(
         else None,
     }
 
+    any_stage_b = any(
+        lane.get("edge_visible") for lane in strategy_lanes.values()
+    )
+    any_stage_c = any(
+        lane.get("stage_c_visible") for lane in strategy_lanes.values()
+    )
+    kpi_staging = {
+        "version": "lq.8",
+        "stage_a_always": True,
+        "stage_b_visible": bool(any_stage_b),
+        "stage_c_visible": bool(any_stage_c),
+        "stage_d_visible": False,
+        "stage_d_enabled": STAGE_D_ENABLED,
+        "honesty": (
+            "Stage A (process/book/intelligence) always. "
+            "Stage B edge only past DI gates (≥30/lane). "
+            "Stage C risk ratios only at trusted (≥300) and never invented. "
+            "Stage D NN/meta-opt off until §8 AtlasNet gates."
+        ),
+        "di_gates": {
+            "hidden": "n≤29 → Stage A only",
+            "provisional": "30–99 → Stage B provisional",
+            "usable": "100–299 → Stage B usable",
+            "trusted": "n≥300 → Stage C eligible (stub until series)",
+        },
+    }
+
     doc = {
         "version": VERSION,
         "portfolio_key": portfolio_key,
         "ist_date": ist_date,
+        "lq": "lq.8",
+        "kpi_staging": kpi_staging,
         "sample_gates": {
             "hidden": "n≤29",
             "provisional": "30–99",
@@ -410,8 +521,11 @@ def build_di_dashboards(
             tag: {
                 "n_closed": lane.get("n_closed"),
                 "tier": lane.get("tier"),
-                "win_rate": lane.get("win_rate"),
+                "kpi_stage": lane.get("kpi_stage"),
+                "win_rate": lane.get("win_rate") if lane.get("edge_visible") else None,
                 "edge_visible": lane.get("edge_visible"),
+                "stage_c_visible": lane.get("stage_c_visible"),
+                "stage3_sharpe": None,  # LQ.8 — never surface invented Sharpe in summary
             }
             for tag, lane in strategy_lanes.items()
         },
@@ -435,20 +549,28 @@ def build_di_dashboards(
 
 
 def format_di_dashboard_section(doc: dict[str, Any] | None) -> list[str]:
-    """Evening-mail / operator plain-text block."""
+    """Evening-mail / operator plain-text block (LQ.8 Stage A/B honesty)."""
     if not isinstance(doc, dict) or not doc.get("dashboards"):
         return []
-    lines = ["", "DI dashboards (staged · sample-gated):"]
+    lines = ["", "DI dashboards (LQ.8 · staged · sample-gated):"]
+    staging = doc.get("kpi_staging") if isinstance(doc.get("kpi_staging"), dict) else {}
+    if staging:
+        lines.append(
+            "  KPI stages: A always · B edge after ≥30/lane · "
+            "C risk ratios at ≥300 (stub) · D NN off"
+        )
+        if staging.get("honesty"):
+            lines.append(f"  honesty: {staging['honesty'][:160]}")
     d3 = (doc.get("dashboards") or {}).get("D3") or {}
     m3 = d3.get("metrics") or {}
     lines.append(
-        f"  D3 book: equity={m3.get('equity')} cash={m3.get('cash')} "
+        f"  Stage A · D3 book: equity={m3.get('equity')} cash={m3.get('cash')} "
         f"day_pnl={m3.get('day_pnl')} open={m3.get('open_positions')}"
     )
     d6 = (doc.get("dashboards") or {}).get("D6") or {}
     m6 = d6.get("metrics") or {}
     lines.append(
-        f"  D6 intelligence: packet_completeness={m6.get('avg_packet_completeness')} "
+        f"  Stage A · D6 intelligence: packet_completeness={m6.get('avg_packet_completeness')} "
         f"obs_cite={m6.get('observation_citation_rate')} "
         f"revisits pending/done={m6.get('pending_revisits')}/{m6.get('done_revisits')} "
         f"priors_blocked={m6.get('priors_blocked_exits')}"
@@ -462,21 +584,33 @@ def format_di_dashboard_section(doc: dict[str, Any] | None) -> list[str]:
         )
     summary = doc.get("strategy_lane_summary") or {}
     if summary:
-        lines.append("  D2 strategy lanes (never mixed):")
+        lines.append("  Stage B · D2 strategy lanes (never mixed):")
         for tag, row in list(summary.items())[:8]:
             wr = row.get("win_rate")
             wr_s = f"{float(wr):.0%}" if wr is not None else "—"
             vis = "visible" if row.get("edge_visible") else "hidden"
+            st = row.get("kpi_stage") or kpi_stage_for_tier(str(row.get("tier") or "hidden"))
             lines.append(
                 f"    · {tag}: n={row.get('n_closed')} tier={row.get('tier')} "
-                f"edge={vis} win_rate={wr_s}"
+                f"kpi={st} edge={vis} win_rate={wr_s}"
             )
+            if row.get("stage_c_visible"):
+                lines.append(
+                    "      Stage C eligible — Sharpe/Sortino not invented (stub)"
+                )
     else:
-        lines.append("  D2 strategy lanes: (no closed exits yet — edge metrics hidden)")
+        lines.append(
+            "  Stage B · D2 strategy lanes: (no closed exits yet — edge hidden)"
+        )
+    lines.append(
+        "  Stage C/D: risk ratios + NN claims hidden unless gates clear "
+        f"(stage_c_visible={bool(staging.get('stage_c_visible'))}; "
+        f"stage_d={bool(staging.get('stage_d_visible'))})"
+    )
     d5 = ((doc.get("dashboards") or {}).get("D5") or {}).get("metrics") or {}
     if d5.get("watchlist_gaps"):
         lines.append(
-            f"  D5 research holes: {d5.get('watchlist_gaps')}/{d5.get('watchlist_checked')} "
+            f"  Stage A · D5 research holes: {d5.get('watchlist_gaps')}/{d5.get('watchlist_checked')} "
             f"names missing PE/FCF (import required)"
         )
     return lines
@@ -567,7 +701,49 @@ def collect_dashboard_inputs(
         except Exception:  # noqa: BLE001
             pass
 
-    return build_di_dashboards(
+    # LI.5b — Atlas IQ skill axes + narrative + readiness
+    atlas_iq: dict[str, Any] | None = None
+    evolution_narrative: list[str] = []
+    readiness: dict[str, Any] | None = None
+    try:
+        from atlas.investment.learning_intelligence import (
+            build_atlas_iq_proxies,
+            format_evolution_narrative,
+            list_evolution_events,
+        )
+        from atlas.investment.ml_export import build_export_quality_report
+
+        prox = port.get("process_proxies") if isinstance(port.get("process_proxies"), dict) else {}
+        atlas_iq = build_atlas_iq_proxies(
+            data_dir,
+            laboratory_id=portfolio_key,
+            packets=packets,
+            process_score=prox.get("process_score") if isinstance(prox, dict) else None,
+            pending_revisits=int(evolution.get("pending_revisits") or 0),
+            done_revisits=int(evolution.get("done_revisits") or 0),
+            observation_count=len(observations),
+            attributions=attributions,
+        )
+        events = list_evolution_events(data_dir, laboratory_id=portfolio_key, limit=20)
+        evolution_narrative = format_evolution_narrative(events)
+        quality = build_export_quality_report(
+            packets=packets,
+            attributions=attributions,
+            laboratory_id=portfolio_key,
+        )
+        readiness = quality.get("readiness") if isinstance(quality, dict) else None
+        if isinstance(port, dict):
+            port = {
+                **port,
+                "atlas_iq": atlas_iq,
+                "evolution_narrative": evolution_narrative,
+                "evolution_events": events,
+                "readiness": readiness,
+            }
+    except Exception:  # noqa: BLE001
+        _log.debug("atlas_iq / readiness failed", exc_info=True)
+
+    out = build_di_dashboards(
         data_dir=data_dir,
         portfolio_key=portfolio_key,
         portfolio=port,
@@ -579,3 +755,10 @@ def collect_dashboard_inputs(
         fundamentals_coverage=fund_cov,
         ist_date=day,
     )
+    if atlas_iq is not None:
+        out["atlas_iq"] = atlas_iq
+    if evolution_narrative:
+        out["evolution_narrative"] = evolution_narrative
+    if readiness is not None:
+        out["readiness"] = readiness
+    return out

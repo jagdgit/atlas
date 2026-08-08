@@ -389,6 +389,34 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "research_freshness"),
     },
     {
+        "name": "fundamentals_enrich",
+        "template_version": 2,
+        "description": (
+            "LQ.7 — Tier C Yahoo fundamentals enrich on watchlist gaps (PE/FCF/ROE/D/E). "
+            "Medium confidence; never invents; Screener/filing outrank Yahoo. "
+            "Slow-and-steady batches (respect Yahoo rate limits). "
+            "Gated on market.yahoo_enabled."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Fundamentals Enrich",
+            "roadmap": "OI-MLQ0 / LQ.7",
+            "program_id": "market_intelligence",
+            "max_symbols": 3,
+            "batch_size": 3,
+            "tick_interval_seconds": 900,
+        },
+        "worker_specs": [
+            # Every ~15m: 3 symbols paced ~3s apart — fills gaps without 429 storms
+            {"type": "fundamentals_enrich", "interval_seconds": 900},
+            # Overnight Mon–Fri ~03:00 IST = 21:30 UTC previous day → use 21:45 UTC
+            {"type": "fundamentals_enrich", "cron": "45 21 * * 0-4", "interval_seconds": 900},
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "fundamentals_enrich"),
+    },
+    {
         "name": "thesis_outcome",
         "template_version": 2,
         "description": (
@@ -422,8 +450,9 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "name": "decision_evolution",
         "template_version": 1,
         "description": (
-            "DI.2 — Decision evolution revisits (Day1→Week1→Month1→Quarter). "
-            "Appends timeline revisit events with what_changed diffs; never rewrites packets."
+            "DI.2 / LQ.2 — Decision evolution denser revisits "
+            "(Day1→Day3→Week1→Day14→Month1→Quarter; Host Guard may thin). "
+            "Ensures open books have schedules; appends what_changed; never rewrites packets."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,

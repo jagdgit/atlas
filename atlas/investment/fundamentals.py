@@ -18,12 +18,13 @@ from typing import Any
 
 _log = logging.getLogger("atlas.investment.fundamentals")
 
-VERSION = "di.4.fundamentals"
+VERSION = "li.2.fundamentals"
 STORE_REL = Path("investment") / "fundamentals"
 IMPORT_DROP_REL = Path("imports") / "fundamentals"
 DEFAULT_PROGRAM = "market_intelligence"
 SOURCE_OPERATOR = "operator_import"
 SOURCE_SCREENER_EXPORT = "screener_export"
+SOURCE_YAHOO = "yahoo_fundamentals"
 
 # Schema v2 — importable fields (never invent missing ones).
 # Industry/peer medians are optional operator evidence only — never computed.
@@ -369,7 +370,46 @@ def upsert_rows(
     for row in normalized:
         sym = row["symbol"]
         prev = dict(symbols.get(sym) or {})
-        prev.update({k: v for k, v in row.items() if v is not None})
+        # LI.2 — attach evidence provenance for imported flat fields
+        try:
+            from atlas.investment.evidence_providers import (
+                append_evidence,
+                evidence_from_flat_row,
+                make_evidence_value,
+            )
+
+            row_ev = evidence_from_flat_row(row)
+            for field, hist in (row_ev.get("evidence") or {}).items():
+                for ev in hist or []:
+                    if isinstance(ev, dict):
+                        prev = append_evidence(prev, ev)
+            # Also stamp explicit evidence when source is yahoo
+            if str(row.get("source") or source) == SOURCE_YAHOO:
+                for fld in SCHEMA_FIELDS:
+                    if row.get(fld) is None:
+                        continue
+                    prev = append_evidence(
+                        prev,
+                        make_evidence_value(
+                            field=fld,
+                            value=row[fld],
+                            provider=SOURCE_YAHOO,
+                            as_of=row.get("as_of"),
+                        ),
+                    )
+        except Exception:  # noqa: BLE001
+            _log.debug("evidence attach skipped", exc_info=True)
+        prev.update({k: v for k, v in row.items() if v is not None and k != "evidence"})
+        # merge evidence bags if row carried them
+        if isinstance(row.get("evidence"), dict):
+            bag = dict(prev.get("evidence") or {})
+            for fld, hist in row["evidence"].items():
+                existing = list(bag.get(fld) or [])
+                for ev in hist or []:
+                    if ev not in existing:
+                        existing.append(ev)
+                bag[fld] = existing[-12:]
+            prev["evidence"] = bag
         symbols[sym] = prev
     doc["symbols"] = symbols
     doc["count"] = len(symbols)
@@ -772,6 +812,370 @@ def learner_gap_fill_template(
     }
 
 
+def enrich_from_yahoo(
+    data_dir: str | Path | None,
+    symbols: list[str],
+    *,
+    program_id: str = DEFAULT_PROGRAM,
+    enabled: bool = True,
+    opener: Any | None = None,
+    only_gaps: bool = True,
+    batch_size: int | None = None,
+) -> dict[str, Any]:
+    """LI.2 — fetch Yahoo fundamentals as medium-confidence evidence and upsert.
+
+    Never overwrites a higher-tier preferred value via reconcile (Yahoo loses to
+    Screener/filing when both exist). ``only_gaps`` skips symbols that already
+    have all learner-critical fields (PE, FCF, ROE, D/E) from any source.
+
+    Live network uses slow-and-steady pacing (shared rate gate). ``batch_size``
+    caps how many gap symbols are attempted per call; remaining resume later.
+    """
+    from atlas.investment.evidence_providers import append_evidence
+    from atlas.investment.yahoo_fundamentals import (
+        DEFAULT_BATCH_SIZE,
+        YahooFundamentalsProvider,
+        get_yahoo_rate_gate,
+        is_yahoo_rate_block_error,
+    )
+
+    gate = None if opener is not None else get_yahoo_rate_gate(data_dir)
+    rate_status = gate.status() if gate else {"ready": True, "cooldown_remaining_s": 0}
+    if gate is not None and gate.remaining_cooldown_s() > 0:
+        return {
+            "version": VERSION,
+            "provider": SOURCE_YAHOO,
+            "confidence": "medium",
+            "ok": True,
+            "fetched": 0,
+            "skipped_already_covered": 0,
+            "evidence_attached": 0,
+            "errors": [],
+            "symbols": [],
+            "reason": "yahoo_cooldown",
+            "remaining_symbols": [normalize_symbol(s) for s in symbols if normalize_symbol(s)],
+            "rate_gate": rate_status,
+            "honesty": (
+                "Yahoo cooldown active — not hammering. Worker/UI will resume "
+                f"after ~{rate_status.get('cooldown_remaining_s')}s."
+            ),
+        }
+
+    provider = YahooFundamentalsProvider(
+        enabled=enabled, opener=opener, data_dir=data_dir, rate_gate=gate
+    )
+    fetched = 0
+    skipped = 0
+    errors: list[dict[str, str]] = []
+    rows_for_upsert: list[dict[str, Any]] = []
+    evidence_attached = 0
+    remaining: list[str] = []
+    paused = False
+    # Live: small batches. Hermetic opener: process all (tests).
+    if batch_size is None:
+        limit_n = None if opener is not None else DEFAULT_BATCH_SIZE
+    else:
+        limit_n = max(1, int(batch_size))
+
+    doc = load_store(data_dir, program_id)
+    symbols_doc = dict(doc.get("symbols") or {})
+
+    try:
+        attempted = 0
+        pending = [normalize_symbol(s) for s in symbols]
+        pending = [s for s in pending if s]
+        for idx, sym in enumerate(pending):
+            if paused:
+                remaining.extend(pending[idx:])
+                break
+            existing = symbols_doc.get(sym) or {}
+            if only_gaps and not _row_missing_critical(existing):
+                skipped += 1
+                continue
+            if limit_n is not None and attempted >= limit_n:
+                remaining.extend(pending[idx:])
+                break
+            if gate is not None and gate.remaining_cooldown_s() > 0:
+                remaining.extend(pending[idx:])
+                paused = True
+                break
+            attempted += 1
+            parsed = provider.fetch_symbol(sym)
+            if parsed.get("rate_limited") or (
+                parsed.get("error") and is_yahoo_rate_block_error(str(parsed.get("error")))
+            ):
+                errors.append({"symbol": sym, "error": str(parsed.get("error"))})
+                remaining.append(sym)
+                remaining.extend(pending[idx + 1 :])
+                paused = True
+                break
+            if parsed.get("error") and not parsed.get("fields"):
+                errors.append({"symbol": sym, "error": str(parsed.get("error"))})
+                continue
+            fields = dict(parsed.get("fields") or {})
+            if not fields:
+                errors.append({"symbol": sym, "error": "no_fields"})
+                continue
+            row = {"symbol": sym, "source": SOURCE_YAHOO, **fields}
+            merged = dict(existing)
+            for ev in parsed.get("evidence") or []:
+                if isinstance(ev, dict):
+                    merged = append_evidence(merged, ev)
+                    evidence_attached += 1
+            for k, v in fields.items():
+                if merged.get(k) is None:
+                    merged[k] = v
+            symbols_doc[sym] = merged
+            rows_for_upsert.append(row)
+            fetched += 1
+    finally:
+        try:
+            provider.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # de-dupe remaining while preserving order
+    seen_rem: set[str] = set()
+    rem_out: list[str] = []
+    for s in remaining:
+        if s and s not in seen_rem:
+            seen_rem.add(s)
+            rem_out.append(s)
+
+    doc["symbols"] = symbols_doc
+    doc["count"] = len(symbols_doc)
+    doc["note"] = "LI.2 Yahoo fundamentals enrich (medium confidence, paced)"
+    rate_status = gate.status() if gate else rate_status
+    doc["last_yahoo_enrich"] = {
+        "fetched": fetched,
+        "skipped": skipped,
+        "errors": len(errors),
+        "remaining": len(rem_out),
+        "paused": paused,
+        "as_of": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if fetched or skipped or errors or rem_out
+        else None,
+        "mode": "gaps" if only_gaps else "all",
+        "rate_gate": rate_status,
+    }
+    save_store(data_dir, doc, program_id)
+
+    reason = None
+    if paused:
+        reason = "yahoo_cooldown" if (gate and gate.remaining_cooldown_s() > 0) else "batch_paused"
+    elif rem_out:
+        reason = "batch_partial"
+
+    return {
+        "version": VERSION,
+        "provider": SOURCE_YAHOO,
+        "confidence": "medium",
+        "ok": True,
+        "fetched": fetched,
+        "skipped_already_covered": skipped,
+        "evidence_attached": evidence_attached,
+        "errors": errors[:40],
+        "symbols": [r["symbol"] for r in rows_for_upsert],
+        "remaining_symbols": rem_out,
+        "remaining": len(rem_out),
+        "paused": paused,
+        "reason": reason,
+        "rate_gate": rate_status,
+        "batch_size": limit_n,
+        "honesty": (
+            "Yahoo PE/FCF are medium evidence — Screener/filing outrank them. "
+            "Conflicts are flagged; values are never blended. "
+            "Fetches are paced (~3s) with cooldown on 429/401; remaining gaps resume later."
+        ),
+    }
+
+
+def _row_missing_critical(
+    row: dict[str, Any] | None,
+    *,
+    critical_fields: tuple[str, ...] = ("pe", "fcf", "roe", "debt_to_equity"),
+) -> bool:
+    """True when any learner-critical field is absent (LQ.7 / DI.4 gaps)."""
+    if not isinstance(row, dict) or not row:
+        return True
+    for f in critical_fields:
+        if f == "fcf":
+            if row.get("fcf") is None and row.get("free_cash_flow") is None:
+                return True
+            continue
+        if row.get(f) is None:
+            return True
+    return False
+
+
+def watchlist_symbols(
+    program_id: str = DEFAULT_PROGRAM,
+    *,
+    limit: int = 40,
+) -> list[str]:
+    """Symbols from the latest durable watchlist (empty if none)."""
+    try:
+        from atlas.investment import watchlists as wl
+
+        rows = wl.ranked_rows(program_id, max_n=max(1, int(limit)))
+    except Exception:  # noqa: BLE001
+        rows = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sym = normalize_symbol(row.get("symbol"))
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        out.append(sym)
+        if len(out) >= max(1, int(limit)):
+            break
+    if out:
+        return out
+    # Fallbacks for older / ad-hoc snapshots
+    try:
+        from atlas.investment import watchlists as wl
+
+        snap = wl.latest(program_id)
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(snap, dict):
+        return []
+    for key in ("watchlist_symbols", "symbols"):
+        for raw in snap.get(key) or []:
+            sym = normalize_symbol(raw)
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            out.append(sym)
+            if len(out) >= max(1, int(limit)):
+                return out
+    for w in snap.get("watchlist") or []:
+        if not isinstance(w, dict):
+            continue
+        sym = normalize_symbol(w.get("symbol"))
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        out.append(sym)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def enrich_watchlist_gaps(
+    data_dir: str | Path | None,
+    *,
+    program_id: str = DEFAULT_PROGRAM,
+    enabled: bool = True,
+    opener: Any | None = None,
+    limit: int = 40,
+    batch_size: int | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """LQ.7 — auto Tier C enrich for watchlist symbols missing critical fields.
+
+    Runs only when ``enabled`` (typically ``market.yahoo_enabled``). Never invents;
+    medium confidence; conflicts flagged by LI.2 reconcile. Processes a small
+    batch per call so Yahoo rate limits are respected; remaining gaps resume later.
+    """
+    from atlas.investment.yahoo_fundamentals import (
+        DEFAULT_BATCH_SIZE,
+        get_yahoo_rate_gate,
+    )
+
+    want = [normalize_symbol(s) for s in (symbols or []) if str(s).strip()]
+    want = [s for s in want if s]
+    if not want:
+        want = watchlist_symbols(program_id, limit=limit)
+    if not want:
+        return {
+            "version": VERSION,
+            "provider": SOURCE_YAHOO,
+            "ok": True,
+            "fetched": 0,
+            "skipped_already_covered": 0,
+            "gap_symbols": [],
+            "reason": "no_watchlist_symbols",
+            "honesty": "No symbols to enrich — watchlist empty or not provided.",
+        }
+
+    gaps_doc = learner_fundamentals_gaps(data_dir, want, program_id=program_id)
+    gap_syms = [
+        str(g.get("symbol"))
+        for g in (gaps_doc.get("gaps") or [])
+        if isinstance(g, dict) and g.get("symbol")
+    ]
+    if not gap_syms:
+        return {
+            "version": VERSION,
+            "provider": SOURCE_YAHOO,
+            "ok": True,
+            "fetched": 0,
+            "skipped_already_covered": len(want),
+            "gap_symbols": [],
+            "symbols_checked": len(want),
+            "reason": "no_gaps",
+            "gaps": gaps_doc,
+            "honesty": (
+                "Watchlist already has PE/FCF/ROE/D/E for checked symbols — "
+                "no Tier C fetch needed."
+            ),
+        }
+
+    if not enabled:
+        return {
+            "version": VERSION,
+            "provider": SOURCE_YAHOO,
+            "ok": False,
+            "fetched": 0,
+            "skipped_already_covered": 0,
+            "gap_symbols": gap_syms[:limit],
+            "symbols_checked": len(want),
+            "reason": "yahoo_disabled",
+            "gaps": gaps_doc,
+            "honesty": (
+                "Tier C auto-enrich is gated on market.yahoo_enabled — "
+                "gaps remain honest unknowns until enabled or Screener import."
+            ),
+        }
+
+    bs = DEFAULT_BATCH_SIZE if batch_size is None else max(1, int(batch_size))
+    work = gap_syms[: max(bs, min(int(limit), len(gap_syms)))]
+    out = enrich_from_yahoo(
+        data_dir,
+        work,
+        program_id=program_id,
+        enabled=True,
+        opener=opener,
+        only_gaps=True,
+        batch_size=bs if opener is None else None,
+    )
+    out["ok"] = True
+    out["gap_symbols"] = gap_syms[:limit]
+    out["symbols_checked"] = len(want)
+    out["gaps_before"] = {
+        "symbols_with_gaps": gaps_doc.get("symbols_with_gaps"),
+        "missing_pe": gaps_doc.get("missing_pe"),
+        "missing_fcf": gaps_doc.get("missing_fcf"),
+    }
+    out["mode"] = "lq.7_watchlist_gaps"
+    if opener is None:
+        out["rate_gate"] = out.get("rate_gate") or get_yahoo_rate_gate(data_dir).status()
+    rem = list(out.get("remaining_symbols") or [])
+    done = set(out.get("symbols") or [])
+    beyond = [s for s in gap_syms if s not in done and s not in rem]
+    if beyond:
+        rem = rem + [s for s in beyond if s not in rem]
+        out["remaining_symbols"] = rem
+        out["remaining"] = len(rem)
+        if not out.get("reason"):
+            out["reason"] = "batch_partial"
+    return out
+
+
 def fundamentals_view(
     data_dir: str | Path | None,
     *,
@@ -828,6 +1232,12 @@ def fundamentals_view(
         if isinstance(r, dict) and r.get("industry_pe_median") is not None
     )
     drop = import_drop_dir(data_dir) if data_dir else None
+    try:
+        from atlas.investment.evidence_providers import coverage_by_provider
+
+        tier_cov = coverage_by_provider(symbols if isinstance(symbols, dict) else {})
+    except Exception:  # noqa: BLE001
+        tier_cov = {}
     out: dict[str, Any] = {
         "count": len(symbols),
         "rows": rows,
@@ -839,6 +1249,7 @@ def fundamentals_view(
             "pe_coverage_pct": round(100.0 * all_pe / max(1, len(symbols)), 1)
             if symbols
             else 0.0,
+            "by_provider": tier_cov,
             "note": (
                 "Empty PE/FCF is honest incomplete evidence — not a valuation signal."
                 if all_pe == 0
@@ -860,6 +1271,7 @@ def fundamentals_view(
         "version": VERSION,
         "guide": (
             "Export from Screener.in (ToS-safe CSV) or paste JSON. "
+            "Or POST /v1/market/fundamentals/yahoo-enrich for medium-tier Yahoo fill. "
             "Required: symbol column. Useful: ROE, ROCE, Debt to equity, "
             "Operating margin, Promoter holding, Sales growth, PE, FCF. "
             "Optional peer honesty: industry_pe_median / industry_pb_median. "

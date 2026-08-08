@@ -43,19 +43,44 @@ def normalize_symbol(symbol: str) -> str:
     return s
 
 
-def store_dir(data_dir: str | Path, program_id: str = DEFAULT_PROGRAM) -> Path:
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (program_id or DEFAULT_PROGRAM))
-    return Path(data_dir) / STORE_REL / safe
+def _safe_seg(raw: str, default: str = DEFAULT_PROGRAM) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in (raw or default))
 
 
-def priors_path(data_dir: str | Path, program_id: str = DEFAULT_PROGRAM) -> Path:
-    return store_dir(data_dir, program_id) / PRIORS_NAME
+def store_dir(
+    data_dir: str | Path,
+    program_id: str = DEFAULT_PROGRAM,
+    *,
+    laboratory_id: str | None = None,
+) -> Path:
+    """Priors/trackers: program root, or ``…/<program>/lab_<id>/`` when lab-scoped (LI.1a)."""
+    base = Path(data_dir) / STORE_REL / _safe_seg(program_id or DEFAULT_PROGRAM)
+    lid = str(laboratory_id or "").strip()
+    if lid:
+        return base / f"lab_{_safe_seg(lid, lid)}"
+    return base
+
+
+def priors_path(
+    data_dir: str | Path,
+    program_id: str = DEFAULT_PROGRAM,
+    *,
+    laboratory_id: str | None = None,
+) -> Path:
+    return store_dir(data_dir, program_id, laboratory_id=laboratory_id) / PRIORS_NAME
 
 
 def tracker_path(
-    data_dir: str | Path, symbol: str, program_id: str = DEFAULT_PROGRAM
+    data_dir: str | Path,
+    symbol: str,
+    program_id: str = DEFAULT_PROGRAM,
+    *,
+    laboratory_id: str | None = None,
 ) -> Path:
-    return store_dir(data_dir, program_id) / f"{normalize_symbol(symbol)}.json"
+    return (
+        store_dir(data_dir, program_id, laboratory_id=laboratory_id)
+        / f"{normalize_symbol(symbol)}.json"
+    )
 
 
 def empty_priors() -> dict[str, Any]:
@@ -79,10 +104,15 @@ def empty_priors() -> dict[str, Any]:
     }
 
 
-def load_priors(data_dir: str | Path | None, program_id: str = DEFAULT_PROGRAM) -> dict[str, Any]:
+def load_priors(
+    data_dir: str | Path | None,
+    program_id: str = DEFAULT_PROGRAM,
+    *,
+    laboratory_id: str | None = None,
+) -> dict[str, Any]:
     if not data_dir:
         return empty_priors()
-    path = priors_path(data_dir, program_id)
+    path = priors_path(data_dir, program_id, laboratory_id=laboratory_id)
     if not path.is_file():
         return empty_priors()
     try:
@@ -91,6 +121,8 @@ def load_priors(data_dir: str | Path | None, program_id: str = DEFAULT_PROGRAM) 
             base = empty_priors()
             base.update(raw)
             base.setdefault("weight_deltas", empty_priors()["weight_deltas"])
+            if laboratory_id:
+                base["laboratory_id"] = str(laboratory_id).strip()
             return base
     except Exception:  # noqa: BLE001
         _log.debug("priors load failed", exc_info=True)
@@ -101,15 +133,19 @@ def save_priors(
     data_dir: str | Path | None,
     priors: dict[str, Any],
     program_id: str = DEFAULT_PROGRAM,
+    *,
+    laboratory_id: str | None = None,
 ) -> Path | None:
     if not data_dir:
         return None
-    path = priors_path(data_dir, program_id)
+    path = priors_path(data_dir, program_id, laboratory_id=laboratory_id)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         doc = dict(priors)
         doc["version"] = VERSION
         doc["updated_at"] = _utc()
+        if laboratory_id:
+            doc["laboratory_id"] = str(laboratory_id).strip()
         path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
     except Exception:  # noqa: BLE001
@@ -297,6 +333,7 @@ def close_with_attribution(
     symbol: str,
     *,
     program_id: str = DEFAULT_PROGRAM,
+    laboratory_id: str | None = None,
     result: str,
     pnl: float | None = None,
     note: str = "",
@@ -307,6 +344,8 @@ def close_with_attribution(
 
     DI.Attr: when ``di_grades`` is provided and ``may_update_priors`` is False
     (market_quality=F + decision_quality A/B), weight deltas are skipped.
+
+    LI.1a: ``laboratory_id`` scopes prior updates (never mix labs).
     """
     tracker = load_tracker(data_dir, symbol, program_id) or empty_tracker(symbol)
     res = str(result or "observed").strip().lower()
@@ -367,6 +406,7 @@ def close_with_attribution(
     priors = apply_outcome_to_priors(
         data_dir,
         program_id=program_id,
+        laboratory_id=laboratory_id,
         result=res,
         theme_links=list(tracker.get("theme_links") or []),
         failed_kinds=[str(a.get("kind") or "other") for a in failed],
@@ -402,6 +442,7 @@ def apply_outcome_to_priors(
     data_dir: str | Path | None,
     *,
     program_id: str = DEFAULT_PROGRAM,
+    laboratory_id: str | None = None,
     result: str,
     theme_links: list[str] | None = None,
     failed_kinds: list[str] | None = None,
@@ -414,15 +455,17 @@ def apply_outcome_to_priors(
 
     DI.Attr hard rule: when ``allow_weight_update`` is False, still record the
     outcome count/lesson text but skip ranking/axis weight deltas.
+
+    LI.1a: pass ``laboratory_id`` so priors never mix across laboratories.
     """
-    priors = load_priors(data_dir, program_id)
+    priors = load_priors(data_dir, program_id, laboratory_id=laboratory_id)
     res = str(result or "").lower()
     if res not in {"held", "weakened", "falsified"}:
         # observed/fill don't count toward N for weight shifts
         by = dict(priors.get("by_result") or {})
         by[res] = int(by.get(res) or 0) + 1
         priors["by_result"] = by
-        save_priors(data_dir, priors, program_id)
+        save_priors(data_dir, priors, program_id, laboratory_id=laboratory_id)
         return priors
 
     priors["closed_outcomes"] = int(priors.get("closed_outcomes") or 0) + 1
@@ -503,7 +546,7 @@ def apply_outcome_to_priors(
             "DI.Attr blocked weight update (market F + decision A/B). " + deltas["unlock_note"]
         )
     priors["weight_deltas"] = deltas
-    save_priors(data_dir, priors, program_id)
+    save_priors(data_dir, priors, program_id, laboratory_id=laboratory_id)
     return priors
 
 

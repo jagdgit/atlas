@@ -1626,7 +1626,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )
-    # MI.3 — Market Observer (interesting events; optional research spawn).
+    # MI.3 / LI.3a — Market Observer (interesting events; Host Guard cadence).
     worker_manager.register_worker_type(
         MarketObserverWorker(
             market_reader=market_reader_service,
@@ -1634,6 +1634,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             jobs=job_service,
             capabilities=capabilities,
             observations=decision_observation_store,
+            host_guard=host_guard,
             logger=get_logger("atlas.workers.market_observer"),
         )
     )
@@ -1671,6 +1672,15 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.research_freshness"),
         )
     )
+    from atlas.workers.fundamentals_enrich import FundamentalsEnrichWorker
+
+    worker_manager.register_worker_type(
+        FundamentalsEnrichWorker(
+            data_dir=str(cfg.paths.data),
+            yahoo_enabled=bool(cfg.market.yahoo_enabled),
+            logger=get_logger("atlas.workers.fundamentals_enrich"),
+        )
+    )
     from atlas.workers.thesis_outcome import ThesisOutcomeWorker
 
     worker_manager.register_worker_type(
@@ -1690,6 +1700,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             investment_research=investment_research,
             market_reader=market_reader_service,
             attributions=decision_attribution_store,
+            observations=decision_observation_store,
+            portfolio=portfolio_service,
+            host_guard=host_guard,
             logger=get_logger("atlas.workers.decision_evolution"),
         )
     )
@@ -1943,6 +1956,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             knowledge_verification=knowledge_verification,
             events=events,
             observations=decision_observation_store,
+            decision_packets=decision_packet_store,
+            portfolio=portfolio_service,
             logger=get_logger("atlas.workers.news_intelligence"),
         )
     )

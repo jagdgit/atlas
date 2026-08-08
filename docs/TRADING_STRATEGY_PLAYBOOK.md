@@ -61,6 +61,15 @@ Morning / evening investor email
 4. **Portfolio gate** — cash buffer, name/sector concentration, max names.
 5. **Sizing** — target ≈ persona per-name budget (**~18%** for medium risk), ceiling **`max_exposure_pct` 40%**. Whole shares only; min lot = 1 share when cash allows.
 
+### Why a sell happens
+
+1. **Technical exit (v1):** while holding, fast SMA falls **below** slow SMA and RSI is not
+   oversold (default RSI &gt; 30). Default exits the **full** position (`sell_fraction=1`).
+2. **Not yet automatic:** calendar time-stops, hard MoS stops, or “falsifier → market sell”.
+   Thesis falsifiers are reviewed on **Decision Evolution revisits** and exit attribution.
+3. **Learning implication:** until sells happen, Atlas can record decisions and fills but cannot
+   prove strategy edge (win rate / expectancy stay gated).
+
 ### Why a buy does *not* happen
 
 Session notes + evening mail list the top reasons, typically:

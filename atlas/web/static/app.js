@@ -1816,8 +1816,11 @@ async function loadIip() {
     fundHtml += "<button id='iip-fund-import' class='btn' type='button'>Import paste</button> ";
     fundHtml += "<button id='iip-fund-drop' class='link' type='button'>Ingest drop folder</button>";
     fundHtml += "<button id='iip-fund-template' class='link' type='button'>Learner gap template</button>";
+    fundHtml += "<button id='iip-fund-yahoo' class='link' type='button'>Yahoo enrich gaps</button>";
     fundHtml += "<label class='small' style='margin-left:12px'><input type='checkbox' id='iip-fund-ira' /> push to IRA</label>";
     fundHtml += "</div>";
+    fundHtml += `<p class='small muted'>Yahoo enabled: <strong>${live.yahoo_enabled ? "yes" : "no"}</strong>`
+      + " — Tier C only; Screener/filings still win on conflict.</p>";
     const cov = fund.coverage || {};
     fundHtml += `<p class='small muted'>Coverage · PE ${cov.with_pe || 0}/${cov.symbols || 0}`
       + ` · FCF ${cov.with_fcf || 0}`
@@ -1844,6 +1847,8 @@ async function loadIip() {
     if (fundDropBtn) fundDropBtn.addEventListener("click", () => ingestIipFundamentalsDrop());
     const fundTplBtn = $("#iip-fund-template");
     if (fundTplBtn) fundTplBtn.addEventListener("click", () => loadLearnerFundTemplate());
+    const fundYahooBtn = $("#iip-fund-yahoo");
+    if (fundYahooBtn) fundYahooBtn.addEventListener("click", () => enrichIipYahooGaps());
 
     const docsBox = $("#iip-documents");
     const docs = live.company_documents || {};
@@ -2116,6 +2121,102 @@ async function loadLearnerFundTemplate() {
   }
 }
 
+async function runYahooEnrichFromUi(opts = {}) {
+  const reloadLab = opts.reloadLab !== false;
+  const reloadIip = !!opts.reloadIip;
+  let symbols = [];
+  try {
+    const watch = await api("/v1/market/watchlist?limit=40");
+    const ranked = watch.ranked || watch.items || [];
+    if (Array.isArray(ranked)) {
+      for (const r of ranked) {
+        const s = typeof r === "string" ? r : (r && (r.symbol || r.ticker));
+        if (s) symbols.push(String(s));
+      }
+    }
+    const rawSyms = watch.symbols || watch.watchlist_symbols || [];
+    if (Array.isArray(rawSyms)) {
+      for (const s of rawSyms) {
+        if (typeof s === "string" && s) symbols.push(s);
+        else if (s && s.symbol) symbols.push(String(s.symbol));
+      }
+    }
+  } catch (_) { /* watchlist optional */ }
+  symbols = [...new Set(symbols.map((s) => String(s).trim().toUpperCase()).filter(Boolean))];
+  // Slow-and-steady: 3 symbols per click; worker continues the rest
+  const body = { enabled: true, limit: 12, batch_size: 3 };
+  if (symbols.length) body.symbols = symbols.slice(0, 12);
+  const res = await api("/v1/market/fundamentals/yahoo-enrich", {
+    method: "POST",
+    body,
+  });
+  let msg = "";
+  const gate = res.rate_gate || {};
+  const remain = Number(res.remaining || (res.remaining_symbols || []).length || 0);
+  if (res.reason === "yahoo_disabled") {
+    msg = "Yahoo still gated — set market.yahoo_enabled: true and restart Atlas";
+  } else if (res.reason === "no_watchlist_symbols" && !symbols.length) {
+    msg = "No watchlist symbols yet — wait for Investment Universe tick, then Enrich again";
+  } else if (res.reason === "no_gaps") {
+    msg = `No PE/FCF gaps on ${res.symbols_checked || symbols.length || 0} checked name(s)`;
+  } else if (res.reason === "yahoo_cooldown") {
+    const sec = gate.cooldown_remaining_s != null ? Math.ceil(gate.cooldown_remaining_s) : "?";
+    msg = `Yahoo cooling down ${sec}s — ${remain} gap(s) queued (slow & steady)`;
+  } else {
+    const got = res.fetched || 0;
+    const sample = (res.symbols || []).slice(0, 5).join(", ");
+    if (got) {
+      msg = `Yahoo enriched ${got}${sample ? `: ${sample}` : ""}`;
+      if (remain) msg += ` · ${remain} remain (click again or wait for worker)`;
+    } else {
+      msg = `Enrich finished · fetched 0${res.reason ? ` (${res.reason})` : ""}`
+        + (res.errors && res.errors.length
+          ? ` · errors: ${String((res.errors[0] && res.errors[0].error) || res.errors[0]).slice(0, 80)}`
+          : "");
+      if (remain) msg += ` · ${remain} remain`;
+    }
+  }
+  toast(msg);
+  try {
+    sessionStorage.setItem("atlas_last_yahoo_enrich", msg);
+  } catch (_) { /* ignore */ }
+  if (reloadLab) await loadLearnerLabStatus();
+  if (reloadIip) loadIip();
+  return res;
+}
+
+async function enrichIipYahooGaps() {
+  try {
+    await runYahooEnrichFromUi({ reloadLab: false, reloadIip: true });
+  } catch (err) {
+    toast(err.message || String(err));
+  }
+}
+
+async function portfolioCashMove(portfolioKey, kind, amount, missionId) {
+  const key = String(portfolioKey || "").trim();
+  if (!key) throw new Error("missing portfolio key");
+  const amt = Number(amount || 0);
+  if (!amt || amt <= 0) throw new Error("Enter a positive amount");
+  const body = {
+    amount: amt,
+    note: kind === "withdraw"
+      ? "operator withdrawal from Market page"
+      : "operator deposit from Market page",
+  };
+  if (missionId) body.mission_id = missionId;
+  if (kind === "withdraw") body.tds_pct = 0;
+  await api(
+    `/v1/market/portfolios/${encodeURIComponent(key)}/${kind}`,
+    { method: "POST", body },
+  );
+  toast(
+    kind === "withdraw"
+      ? `Withdrew ₹${amt.toLocaleString("en-IN")} from ${key}`
+      : `Deposited ₹${amt.toLocaleString("en-IN")} into ${key}`,
+  );
+}
+
 async function importIipDocument() {
   const symbol = ($("#iip-doc-symbol") && $("#iip-doc-symbol").value || "").trim();
   const kind = ($("#iip-doc-kind") && $("#iip-doc-kind").value) || "annual";
@@ -2340,10 +2441,303 @@ async function loadLearner(opts = {}) {
   renderLearnerWatchlist(wlBox, watch);
   renderLearnerChecklist(checkBox, status);
   renderLearnerBook(bookBox, { status, portfolios, missions, plan, ledger });
+  loadLearnerLabStatus();
   loadLearnerDiDashboards();
   loadInvestorEmailStatus();
   loadLearnerResearchList();
   startLearnerPoll();
+}
+
+async function loadLearnerLabStatus() {
+  const box = $("#learner-lab-status");
+  if (!box) return;
+  box.textContent = "Loading laboratory status…";
+  try {
+    const [catalog, dash, gate, ports, yahooGate] = await Promise.all([
+      api("/v1/market/intelligence-catalog").catch(() => null),
+      api("/v1/market/di-dashboards?portfolio_key=india_equity_learner").catch(() => null),
+      api("/v1/market/atlasnet-hard-gate?laboratory_id=india_equity_learner").catch(() => null),
+      api("/v1/market/portfolios").catch(() => null),
+      api("/v1/market/fundamentals/yahoo-rate-gate").catch(() => null),
+    ]);
+    renderLearnerLabStatus(box, { catalog, dash, gate, ports, yahooGate });
+  } catch (err) {
+    box.textContent =
+      "Laboratory status unavailable — " +
+      (err && err.message ? err.message : String(err));
+  }
+}
+
+function renderLearnerLabStatus(box, { catalog, dash, gate, ports, yahooGate }) {
+  box.innerHTML = "";
+  const live = (catalog && catalog.live) || {};
+  const yahooOn = !!(live.yahoo_enabled);
+  const fund = live.fundamentals || {};
+  const cov = fund.coverage || {};
+  const gaps = fund.learner_gaps || {};
+  const staging = (dash && dash.kpi_staging) || {};
+  const hg = (gate && gate.hard_gate) || {};
+  const books = (ports && (ports.portfolios || ports.items || ports)) || [];
+  const bookList = Array.isArray(books) ? books : [];
+  const yg = yahooGate || {};
+
+  // --- Yahoo / fundamentals ---
+  box.append(el("div", {
+    class: "muted small",
+    text: "Price & earnings (Tier C Yahoo · slow & steady)",
+  }));
+  let lastEnrich = "";
+  try { lastEnrich = sessionStorage.getItem("atlas_last_yahoo_enrich") || ""; } catch (_) {}
+  box.append(el("div", {
+    class: "learner-row",
+  },
+    el("div", { class: "rank", text: "Y" }),
+    el("div", {},
+      el("div", {
+        class: "sym",
+        text: yahooOn ? "Yahoo enabled" : "Yahoo OFF (config)",
+      }),
+      el("div", {
+        class: "why",
+        text: yahooOn
+          ? `PE ${cov.with_pe || 0}/${cov.symbols || fund.count || 0}`
+            + ` · FCF ${cov.with_fcf || 0}`
+            + ` · store ${fund.count || 0} row(s)`
+            + (gaps.symbols_with_gaps
+              ? ` · watchlist gaps ${gaps.symbols_with_gaps}/${gaps.symbols_checked || "?"}`
+              : " · gap report via Enrich / Invest intel")
+          : "Set market.yahoo_enabled: true + restart — then Enrich gaps here or Invest intel.",
+      }),
+    ),
+  ));
+  if (yg && (yg.cooldown_remaining_s > 0 || yg.min_interval_s)) {
+    const cool = Number(yg.cooldown_remaining_s || 0);
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin:0 0 6px",
+      text: cool > 0
+        ? `Yahoo cooldown ${Math.ceil(cool)}s — not hammering; worker resumes after`
+        : `Pacing ~${yg.min_interval_s || 3}s/request · batches of 3`,
+    }));
+  }
+  if (lastEnrich) {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin:0 0 6px",
+      text: `Last enrich: ${lastEnrich}`,
+    }));
+  }
+  const fundActions = el("div", { class: "panel-actions", style: "margin:4px 0 10px" });
+  const enrichBtn = el("button", {
+    class: "btn",
+    type: "button",
+    text: "Enrich next 3 gaps (Yahoo)",
+  });
+  enrichBtn.addEventListener("click", async () => {
+    enrichBtn.disabled = true;
+    enrichBtn.textContent = "Enriching (paced)…";
+    try {
+      await runYahooEnrichFromUi({ reloadLab: true });
+    } catch (err) {
+      toast("Enrich failed: " + (err && err.message ? err.message : String(err)));
+    } finally {
+      enrichBtn.disabled = false;
+      enrichBtn.textContent = "Enrich next 3 gaps (Yahoo)";
+    }
+  });
+  fundActions.append(enrichBtn);
+  const iipLink = el("button", {
+    class: "link",
+    type: "button",
+    text: "Open Invest intel (import PE)",
+  });
+  iipLink.addEventListener("click", () => {
+    const btn = document.querySelector('.nav-btn[data-view="iip"]');
+    if (btn) btn.click();
+  });
+  fundActions.append(iipLink);
+  box.append(fundActions);
+
+  // --- KPI staging LQ.8 ---
+  box.append(el("div", {
+    class: "muted small",
+    text: "KPI stages (LQ.8)",
+  }));
+  box.append(el("div", {
+    class: "learner-row",
+  },
+    el("div", { class: "rank", text: "A" }),
+    el("div", {},
+      el("div", { class: "sym", text: "Stage honesty" }),
+      el("div", {
+        class: "why",
+        text: staging.honesty
+          ? String(staging.honesty).slice(0, 180)
+          : "A always · B after ≥30 · C at ≥300 (stub) · D NN off",
+      }),
+    ),
+  ));
+  box.append(el("div", {
+    class: "muted small",
+    style: "margin:0 0 10px",
+    text: `Visible · A=${staging.stage_a_always !== false ? "yes" : "no"}`
+      + ` · B=${staging.stage_b_visible ? "yes" : "no"}`
+      + ` · C=${staging.stage_c_visible ? "yes" : "no"}`
+      + ` · D=${staging.stage_d_visible ? "yes" : "no"}`,
+  }));
+
+  // --- AtlasNet LQ.9 ---
+  box.append(el("div", {
+    class: "muted small",
+    text: "AtlasNet hard gate (LQ.9 / §8.2)",
+  }));
+  const status = (gate && gate.atlasnet_status) || hg.atlasnet_status || "prep_only";
+  const train = !!(gate && gate.train_allowed) || !!hg.train_allowed;
+  const blocking = hg.blocking || [];
+  box.append(el("div", {
+    class: "learner-row",
+  },
+    el("div", { class: "rank", text: "N" }),
+    el("div", {},
+      el("div", {
+        class: "sym",
+        text: `${status} · train ${train ? "ALLOWED" : "blocked"} · live_nn=False`,
+      }),
+      el("div", {
+        class: "why",
+        text: blocking.length
+          ? `blocking: ${blocking.slice(0, 6).join(", ")}`
+          : (train
+            ? "§8.2 cleared for train eligibility (live still operator-gated)"
+            : "Waiting for closed sample / regimes / timelines…"),
+      }),
+    ),
+  ));
+  box.append(el("div", {
+    class: "muted small",
+    style: "margin:0 0 10px",
+    text: (gate && gate.next_step) ? String(gate.next_step).slice(0, 160) : "",
+  }));
+
+  // --- Labs ---
+  box.append(el("div", {
+    class: "muted small",
+    text: "Laboratories (ledgers)",
+  }));
+  if (!bookList.length) {
+    box.append(el("div", {
+      class: "muted small",
+      text: "No portfolio books yet — swing learner may still be starting.",
+    }));
+  } else {
+    for (const p of bookList.slice(0, 12)) {
+      const key = p.portfolio_key || p.laboratory_id || p.name || "?";
+      const cap = (p.persona && p.persona.capital != null)
+        ? Number(p.persona.capital)
+        : null;
+      box.append(el("div", {
+        class: "learner-row",
+      },
+        el("div", { class: "rank", text: "L" }),
+        el("div", {},
+          el("div", { class: "sym", text: key }),
+          el("div", {
+            class: "why",
+            text: `${p.label || p.asset_class || "lab"}`
+              + (cap != null ? ` · capital ₹${cap.toLocaleString("en-IN")}` : "")
+              + (p.mission_id ? ` · mission ${String(p.mission_id).slice(0, 8)}…` : ""),
+          }),
+        ),
+      ));
+      const cashRow = el("div", { class: "learner-deposit-row", style: "margin:2px 0 8px 28px" });
+      const amtInput = el("input", {
+        type: "number",
+        min: "1",
+        step: "1000",
+        value: "10000",
+        title: `Amount for ${key}`,
+        "aria-label": `Cash amount ${key}`,
+      });
+      const depBtn = el("button", { type: "button", class: "btn", text: "Add cash" });
+      const wdrBtn = el("button", {
+        type: "button",
+        class: "btn btn-secondary",
+        text: "Withdraw",
+      });
+      async function move(kind) {
+        depBtn.disabled = true;
+        wdrBtn.disabled = true;
+        try {
+          await portfolioCashMove(key, kind, amtInput.value, p.mission_id);
+          await loadLearnerLabStatus();
+          await loadLearner({ quiet: true });
+        } catch (e) {
+          toast(e.message || String(e));
+        } finally {
+          depBtn.disabled = false;
+          wdrBtn.disabled = false;
+        }
+      }
+      depBtn.addEventListener("click", () => { move("deposit"); });
+      wdrBtn.addEventListener("click", () => { move("withdraw"); });
+      cashRow.append(amtInput, depBtn, wdrBtn);
+      box.append(cashRow);
+    }
+  }
+  const labActions = el("div", { class: "panel-actions", style: "margin-top:8px" });
+  const makeLabBtn = (label, body) => {
+    const b = el("button", { class: "btn", type: "button", text: label });
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        await api("/v1/market/portfolios", { method: "POST", body });
+        await loadLearnerLabStatus();
+        await loadLearner({ quiet: true });
+      } catch (err) {
+        box.append(el("div", {
+          class: "muted small",
+          text: "Create failed: " + (err && err.message ? err.message : String(err)),
+        }));
+        b.disabled = false;
+      }
+    });
+    return b;
+  };
+  const hasIntra = bookList.some(
+    (p) => (p.portfolio_key || "") === "equity_intraday_learner",
+  );
+  const hasFno = bookList.some(
+    (p) => String(p.portfolio_key || "").includes("fno")
+      || String(p.asset_class || "") === "futures",
+  );
+  if (!hasIntra) {
+    labActions.append(makeLabBtn("Start Intraday lab", {
+      label: "India Intraday Lab",
+      portfolio_key: "equity_intraday_learner",
+      capital: 50000,
+      asset_class: "cash_equity",
+      instantiate: true,
+      activate: true,
+    }));
+  }
+  if (!hasFno) {
+    labActions.append(makeLabBtn("Start F&O lab (demo)", {
+      label: "India F&O Lab",
+      portfolio_key: "india_fno_learner",
+      capital: 100000,
+      asset_class: "futures",
+      instantiate: true,
+      activate: true,
+    }));
+  }
+  if (labActions.childNodes.length) box.append(labActions);
+  else {
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin-top:6px",
+      text: "Intraday + F&O books already registered.",
+    }));
+  }
 }
 
 async function loadLearnerDiDashboards() {
@@ -2368,19 +2762,30 @@ function renderLearnerDiDashboards(box, doc) {
     box.append(el("div", { class: "muted small", text: "No dashboard payload yet." }));
     return;
   }
+  const staging = doc.kpi_staging || {};
+  if (staging.honesty || doc.lq) {
+    box.append(el("div", {
+      class: "muted small",
+      text: `${doc.lq || "lq.8"} · A always · B=${staging.stage_b_visible ? "on" : "off"}`
+        + ` · C=${staging.stage_c_visible ? "on" : "off"}`
+        + ` · D=${staging.stage_d_visible ? "on" : "off"}`
+        + ` · ${doc.ist_date || ""}`,
+    }));
+  } else {
+    box.append(el("div", {
+      class: "muted small",
+      text: `Gates ${JSON.stringify(doc.sample_gates || {}).slice(0, 80)}… · ${doc.ist_date || ""}`,
+    }));
+  }
   const d3 = (doc.dashboards.D3 && doc.dashboards.D3.metrics) || {};
   const d6 = (doc.dashboards.D6 && doc.dashboards.D6.metrics) || {};
   const d5 = (doc.dashboards.D5 && doc.dashboards.D5.metrics) || {};
-  box.append(el("div", {
-    class: "muted small",
-    text: `Gates ${JSON.stringify(doc.sample_gates || {}).slice(0, 80)}… · ${doc.ist_date || ""}`,
-  }));
   box.append(el("div", {
     class: "learner-row",
   },
     el("div", { class: "rank", text: "D3" }),
     el("div", {},
-      el("div", { class: "sym", text: "Book health" }),
+      el("div", { class: "sym", text: "Stage A · Book health" }),
       el("div", {
         class: "why",
         text: `equity ${d3.equity != null ? d3.equity : "—"}`
@@ -2395,7 +2800,7 @@ function renderLearnerDiDashboards(box, doc) {
   },
     el("div", { class: "rank", text: "D6" }),
     el("div", {},
-      el("div", { class: "sym", text: "Intelligence (Atlas)" }),
+      el("div", { class: "sym", text: "Stage A · Intelligence (Atlas)" }),
       el("div", {
         class: "why",
         text: `completeness ${d6.avg_packet_completeness != null ? d6.avg_packet_completeness : "—"}`
@@ -2422,17 +2827,18 @@ function renderLearnerDiDashboards(box, doc) {
   if (!tags.length) {
     box.append(el("div", {
       class: "muted small",
-      text: "D2 lanes: no closed exits yet — edge metrics hidden (<30).",
+      text: "Stage B · D2 lanes: no closed exits yet — edge metrics hidden (<30).",
     }));
   } else {
     box.append(el("div", {
       class: "muted small",
       style: "margin-top:6px",
-      text: "D2 strategy lanes (never mixed):",
+      text: "Stage B · D2 strategy lanes (never mixed):",
     }));
     for (const tag of tags.slice(0, 8)) {
       const row = lanes[tag] || {};
       const wr = row.win_rate != null ? `${Math.round(Number(row.win_rate) * 100)}%` : "—";
+      const st = row.kpi_stage || "—";
       box.append(el("div", {
         class: "learner-row",
       },
@@ -2441,7 +2847,8 @@ function renderLearnerDiDashboards(box, doc) {
           el("div", { class: "sym", text: tag }),
           el("div", {
             class: "why",
-            text: `n=${row.n_closed ?? 0} · ${row.tier || "—"} · edge ${row.edge_visible ? "visible" : "hidden"} · win ${wr}`,
+            text: `n=${row.n_closed ?? 0} · ${row.tier || "—"} · kpi=${st}`
+              + ` · edge ${row.edge_visible ? "visible" : "hidden"} · win ${wr}`,
           }),
         ),
       ));
@@ -2451,7 +2858,7 @@ function renderLearnerDiDashboards(box, doc) {
     box.append(el("div", {
       class: "muted small",
       style: "margin-top:6px",
-      text: `D5 research holes: ${d5.watchlist_gaps}/${d5.watchlist_checked || "?"} missing PE/FCF`,
+      text: `Stage A · D5 research holes: ${d5.watchlist_gaps}/${d5.watchlist_checked || "?"} missing PE/FCF`,
     }));
   }
   // DI.5 process proxies (loaded alongside)
@@ -3752,24 +4159,7 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
       depBtn.disabled = true;
       wdrBtn.disabled = true;
       try {
-        const body = {
-          amount,
-          note: kind === "withdraw"
-            ? "operator withdrawal from Market page"
-            : "operator deposit from Market page",
-        };
-        if (st.mission_id) body.mission_id = st.mission_id;
-        // Flat sim withdraw: principal only (no TDS surprise on the practice book).
-        if (kind === "withdraw") body.tds_pct = 0;
-        await api(
-          `/v1/market/portfolios/${encodeURIComponent(pkey)}/${kind}`,
-          { method: "POST", body },
-        );
-        toast(
-          kind === "withdraw"
-            ? `Withdrew ₹${amount.toLocaleString("en-IN")}`
-            : `Deposited ₹${amount.toLocaleString("en-IN")}`,
-        );
+        await portfolioCashMove(pkey, kind, amount, st.mission_id);
         await loadLearner({ quiet: true });
       } catch (e) {
         toast(e.message || String(e));
@@ -3857,7 +4247,11 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
   const list = Array.isArray(books) ? books : [];
   const currentBooks = list.filter((p) => (p.portfolio_key || p.name) !== "default");
   if (currentBooks.length) {
-    box.append(el("div", { class: "muted small", style: "margin:10px 0 6px", text: "Virtual portfolios" }));
+    box.append(el("div", {
+      class: "muted small",
+      style: "margin:10px 0 6px",
+      text: "Virtual portfolios — Add cash / Withdraw per lab",
+    }));
     for (const p of currentBooks.slice(0, 8)) {
       const key = p.portfolio_key || p.name || p.id || "?";
       const cap = p.persona && p.persona.capital != null ? p.persona.capital : p.capital;
@@ -3873,6 +4267,38 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
           text: cap != null ? Number(cap).toLocaleString("en-IN") : "",
         }),
       ));
+      const cashRow = el("div", { class: "learner-deposit-row", style: "margin:2px 0 10px 28px" });
+      const amtInput = el("input", {
+        type: "number",
+        min: "1",
+        step: "1000",
+        value: key === "india_equity_learner" ? "50000" : "10000",
+        title: `Amount for ${key}`,
+        "aria-label": `Cash amount ${key}`,
+      });
+      const depBtn = el("button", { type: "button", class: "btn", text: "Add cash" });
+      const wdrBtn = el("button", {
+        type: "button",
+        class: "btn btn-secondary",
+        text: "Withdraw",
+      });
+      async function move(kind) {
+        depBtn.disabled = true;
+        wdrBtn.disabled = true;
+        try {
+          await portfolioCashMove(key, kind, amtInput.value, p.mission_id);
+          await loadLearner({ quiet: true });
+        } catch (e) {
+          toast(e.message || String(e));
+        } finally {
+          depBtn.disabled = false;
+          wdrBtn.disabled = false;
+        }
+      }
+      depBtn.addEventListener("click", () => { move("deposit"); });
+      wdrBtn.addEventListener("click", () => { move("withdraw"); });
+      cashRow.append(amtInput, depBtn, wdrBtn);
+      box.append(cashRow);
     }
     if (list.length !== currentBooks.length) {
       box.append(el("div", {
@@ -5469,6 +5895,8 @@ function _wireUi() {
   if (programsRefresh) programsRefresh.addEventListener("click", loadPrograms);
   const learnerRefresh = $("#learner-refresh");
   if (learnerRefresh) learnerRefresh.addEventListener("click", () => loadLearner());
+  const learnerLabRefresh = $("#learner-lab-refresh");
+  if (learnerLabRefresh) learnerLabRefresh.addEventListener("click", () => loadLearnerLabStatus());
   const learnerDiRefresh = $("#learner-di-refresh");
   if (learnerDiRefresh) learnerDiRefresh.addEventListener("click", () => loadLearnerDiDashboards());
   const iipRefresh = $("#iip-refresh");

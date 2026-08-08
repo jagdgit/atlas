@@ -635,6 +635,7 @@ class PaperTradingWorker(PersistentWorker):
             from atlas.investment.decision_packets import (
                 empty_market_snapshot,
                 infer_strategy_tag,
+                stamp_regime_on_snapshot,
             )
 
             tag = strategy_tag or infer_strategy_tag(kind=action, as_alt=as_alt)
@@ -669,6 +670,7 @@ class PaperTradingWorker(PersistentWorker):
                 fundamentals = None
             session = str(cfg.get("market_session") or "nse_equity")
             obs_ids: list[str] = []
+            macro_obs: list[dict] = []
             if self._observations is not None:
                 try:
                     obs_ids = self._observations.ids_for_symbol(
@@ -676,6 +678,20 @@ class PaperTradingWorker(PersistentWorker):
                     )
                 except Exception:  # noqa: BLE001
                     obs_ids = []
+                try:
+                    # LQ.6 — cite recent macro/policy regime tags when present
+                    recent = self._observations.list_since(
+                        since_hours=168.0, limit=40
+                    )
+                    macro_obs = [
+                        o
+                        for o in recent
+                        if isinstance(o, dict)
+                        and str(o.get("kind") or "")
+                        in {"macro_event", "policy_event"}
+                    ][:12]
+                except Exception:  # noqa: BLE001
+                    macro_obs = []
 
             # DI.5 — process proxy context
             from atlas.investment.process_proxies import (
@@ -741,7 +757,10 @@ class PaperTradingWorker(PersistentWorker):
                 mission_id=str(mission_id) if mission_id else None,
                 engine_decision_id=str(engine_decision_id) if engine_decision_id else None,
                 fill_trade_id=str(fill_trade_id) if fill_trade_id else None,
-                market_snapshot=empty_market_snapshot(session=session, sector=sector),
+                market_snapshot=stamp_regime_on_snapshot(
+                    empty_market_snapshot(session=session, sector=sector),
+                    macro_observations=macro_obs,
+                ),
                 prices=prices_doc,
                 investment_score=score if isinstance(score, dict) else None,
                 indicators=indicators,
@@ -1327,6 +1346,16 @@ class PaperTradingWorker(PersistentWorker):
                     decision=decision_doc,
                     mission_id=str(mission_id) if mission_id else None,
                     realized_pnl=float(trade.get("realized_pnl", 0.0)),
+                    laboratory_id=str(
+                        state.get("portfolio_key")
+                        or cfg.get("portfolio_key")
+                        or "india_equity_learner"
+                    ),
+                    portfolio_key=str(
+                        state.get("portfolio_key")
+                        or cfg.get("portfolio_key")
+                        or "india_equity_learner"
+                    ),
                 )
             except Exception:  # noqa: BLE001 - never fail a fill on email
                 self._logger.debug("investor trade email failed", exc_info=True)
@@ -1474,7 +1503,13 @@ class PaperTradingWorker(PersistentWorker):
                     packet=packet,
                     pnl=pnl,
                     price_change_pct=chg,
-                    extra={"why": why, "engine_decision_id": str(engine_decision_id) if engine_decision_id else None},
+                    extra={
+                        "why": why,
+                        "exit_reason": why,
+                        "engine_decision_id": str(engine_decision_id)
+                        if engine_decision_id
+                        else None,
+                    },
                 )
                 di_grades = (attr.get("attribution") or {}).get("grades")
             except Exception:  # noqa: BLE001

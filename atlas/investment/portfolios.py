@@ -41,7 +41,11 @@ ASSET_CLASSES = (
 
 
 def normalize_persona(raw: dict[str, Any] | None = None, *, capital: float | None = None) -> dict[str, Any]:
-    """Require a complete persona; fill sensible India-learner defaults."""
+    """Require a complete persona; fill sensible India-learner defaults.
+
+    LI.1b optional personality fields (mentor, capital_policy, holding_philosophy,
+    confidence_calibration, review_schedule) pass through when provided.
+    """
     raw = dict(raw or {})
     cash = capital
     if cash is None:
@@ -67,7 +71,7 @@ def normalize_persona(raw: dict[str, Any] | None = None, *, capital: float | Non
         strategy = {}
     elif not isinstance(strategy, dict):
         strategy = {"ref": str(strategy)}
-    return {
+    out: dict[str, Any] = {
         "objective": str(raw.get("objective") or "Learning").strip() or "Learning",
         "risk": risk,
         "time_horizon": str(raw.get("time_horizon") or "medium").strip() or "medium",
@@ -76,6 +80,100 @@ def normalize_persona(raw: dict[str, Any] | None = None, *, capital: float | Non
         "strategy": strategy,
         "currency": str(raw.get("currency") or "INR").strip().upper() or "INR",
     }
+    # LI.1b laboratory personality (optional; defaults applied by apply_laboratory_personality)
+    for key in (
+        "mentor",
+        "capital_policy",
+        "holding_philosophy",
+        "confidence_calibration",
+        "review_schedule",
+    ):
+        if raw.get(key) is not None:
+            out[key] = raw[key]
+    return out
+
+
+def laboratory_personality_preset(kind: str) -> dict[str, Any]:
+    """LI.1b character defaults for swing / intraday / F&O laboratories."""
+    k = str(kind or "swing").strip().lower().replace(" ", "_")
+    presets = {
+        "swing": {
+            "mentor": "mos_patience",
+            "risk": "medium",
+            "time_horizon": "weeks",
+            "capital_policy": "gradual_buffer",
+            "holding_philosophy": "weeks_ignore_noise",
+            "confidence_calibration": "research_depth",
+            "review_schedule": ["D1", "D3", "W1", "D14", "M1", "Q"],
+        },
+        "equity_swing": {
+            "mentor": "mos_patience",
+            "risk": "medium",
+            "time_horizon": "weeks",
+            "capital_policy": "gradual_buffer",
+            "holding_philosophy": "weeks_ignore_noise",
+            "confidence_calibration": "research_depth",
+            "review_schedule": ["D1", "D3", "W1", "D14", "M1", "Q"],
+        },
+        "intraday": {
+            "mentor": "session_risk",
+            "risk": "high",
+            "time_horizon": "intraday",
+            "capital_policy": "tight_day",
+            "holding_philosophy": "flat_eod",
+            "confidence_calibration": "liquidity_timing",
+            "review_schedule": ["same_day", "next_open"],
+        },
+        "equity_intraday": {
+            "mentor": "session_risk",
+            "risk": "high",
+            "time_horizon": "intraday",
+            "capital_policy": "tight_day",
+            "holding_philosophy": "flat_eod",
+            "confidence_calibration": "liquidity_timing",
+            "review_schedule": ["same_day", "next_open"],
+        },
+        "futures": {
+            "mentor": "margin_lot_expiry",
+            "risk": "very_high",
+            "time_horizon": "intraday",
+            "capital_policy": "margin_aware",
+            "holding_philosophy": "contract_lifecycle",
+            "confidence_calibration": "pack_readiness",
+            "review_schedule": ["same_day", "expiry"],
+        },
+        "options": {
+            "mentor": "margin_lot_expiry",
+            "risk": "very_high",
+            "time_horizon": "intraday",
+            "capital_policy": "margin_aware",
+            "holding_philosophy": "contract_lifecycle",
+            "confidence_calibration": "pack_readiness",
+            "review_schedule": ["same_day", "expiry"],
+        },
+        "f&o": {
+            "mentor": "margin_lot_expiry",
+            "risk": "very_high",
+            "time_horizon": "intraday",
+            "capital_policy": "margin_aware",
+            "holding_philosophy": "contract_lifecycle",
+            "confidence_calibration": "pack_readiness",
+            "review_schedule": ["same_day", "expiry"],
+        },
+    }
+    return dict(presets.get(k) or presets["swing"])
+
+
+def apply_laboratory_personality(
+    persona: dict[str, Any] | None,
+    *,
+    kind: str | None = None,
+    capital: float | None = None,
+) -> dict[str, Any]:
+    """Merge LI.1b personality preset under explicit persona overrides."""
+    base = laboratory_personality_preset(kind or "swing")
+    merged = {**base, **dict(persona or {})}
+    return normalize_persona(merged, capital=capital)
 
 
 def slugify(label: str) -> str:
@@ -85,6 +183,76 @@ def slugify(label: str) -> str:
 
 def experience_tag(portfolio_key: str) -> str:
     return f"portfolio:{portfolio_key}"
+
+
+def laboratory_id_for(portfolio_key: str | None) -> str:
+    """LI.1a — laboratory_id is 1:1 with portfolio_key."""
+    from atlas.investment.laboratory import laboratory_id_for as _lab
+
+    return _lab(portfolio_key)
+
+
+def create_laboratory(
+    *,
+    label: str,
+    laboratory_id: str | None = None,
+    capital: float | None = None,
+    persona: dict[str, Any] | None = None,
+    personality_kind: str | None = None,
+    program_id: str = DEFAULT_PROGRAM,
+    universe: str = "NIFTY50",
+    broker_profile: str = "paper_demo",
+    asset_class: str = "cash_equity",
+    instantiate: bool = False,
+    templates: Any = None,
+    activate: bool = True,
+) -> dict[str, Any]:
+    """Register a Market Laboratory (IL.10 book + laboratory_id + LI.1b personality).
+
+    Does not configure providers (LI.2). Mail lanes use laboratory_id in subjects.
+    """
+    kind = personality_kind
+    if not kind:
+        ac = str(asset_class or "").lower()
+        if ac in {"futures", "options"}:
+            kind = ac
+        elif "intraday" in str(laboratory_id or label).lower():
+            kind = "intraday"
+        else:
+            kind = "swing"
+    person = apply_laboratory_personality(persona, kind=kind, capital=capital)
+    row = create_book(
+        label=label,
+        persona=person,
+        capital=capital if capital is not None else person.get("capital"),
+        program_id=program_id,
+        portfolio_key=laboratory_id,
+        universe=universe,
+        broker_profile=broker_profile,
+        asset_class=asset_class,
+        instantiate=instantiate,
+        templates=templates,
+        activate=activate,
+    )
+    out = stamp_laboratory_row(row)
+    out["personality_kind"] = kind
+    return out
+
+
+def stamp_laboratory_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Ensure registry row exposes laboratory_id + lab experience tags."""
+    from atlas.investment.laboratory import (
+        laboratory_tag,
+        lab_prior_tag,
+        stamp_laboratory_identity,
+    )
+
+    out = stamp_laboratory_identity(dict(row))
+    lid = str(out["laboratory_id"])
+    out["experience_scope"] = experience_tag(lid)
+    out["laboratory_tag"] = laboratory_tag(lid)
+    out["lab_prior_tag"] = lab_prior_tag(lid)
+    return out
 
 
 def india_equity_learner_persona(*, capital: float = 10000.0) -> dict[str, Any]:
@@ -229,6 +397,9 @@ def register(
             "ledger_mission_id": ledger_mission_id
             or (existing or {}).get("ledger_mission_id"),
             "experience_scope": experience_tag(key),
+            "laboratory_id": key,  # LI.1a — Laboratory contains this ledger
+            "laboratory_tag": f"laboratory:{key}",
+            "lab_prior_tag": f"lab:{key}",
             "created_at": (existing or {}).get("created_at") or now,
             "updated_at": now,
             "extra": {**((existing or {}).get("extra") or {}), **(extra or {})},

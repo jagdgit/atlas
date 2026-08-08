@@ -20,7 +20,7 @@ from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 class MarketObserverWorker(PersistentWorker):
     type = "market_observer"
-    VERSION = 3
+    VERSION = 4
     journal_ticks = True
 
     def __init__(
@@ -31,6 +31,7 @@ class MarketObserverWorker(PersistentWorker):
         jobs: Any | None = None,
         capabilities: Any | None = None,
         observations: Any | None = None,
+        host_guard: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._reader = market_reader
@@ -38,6 +39,7 @@ class MarketObserverWorker(PersistentWorker):
         self._jobs = jobs
         self._capabilities = capabilities
         self._observations = observations
+        self._host_guard = host_guard
         self._logger = logger or logging.getLogger("atlas.workers.market_observer")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -60,6 +62,18 @@ class MarketObserverWorker(PersistentWorker):
                         f"(declare via Capability Registry, not imports)"
                     ),
                 )
+
+        from atlas.investment.observation_cadence import observation_cadence_budget
+
+        cadence = observation_cadence_budget(
+            self._host_guard,
+            worker_type=self.type,
+            requested=int(cfg.get("mark_snapshot_budget") or 20),
+            reduced=int(cfg.get("mark_snapshot_budget_reduced") or 5),
+        )
+        state["observation_cadence"] = cadence
+        mark_budget = int(cadence.get("budget") or 0)
+        record_marks = bool(cfg.get("record_mark_snapshots", True))
 
         targets, auto = wl.resolve_instruments(cfg)
         state["auto_watchlist"] = auto
@@ -88,6 +102,7 @@ class MarketObserverWorker(PersistentWorker):
         gaps = 0
         ok = 0
         spawned = 0
+        mark_snaps = 0
         spawned_keys = set(state.get("spawned_keys") or [])
 
         for target in targets:
@@ -122,19 +137,37 @@ class MarketObserverWorker(PersistentWorker):
                 volume_min_ratio=volume_min,
                 provider=str(prov) if prov else None,
             )
-            if event is None:
-                continue
-            interesting.append(event.as_dict())
-            if self._observations is not None:
+            if event is not None:
+                interesting.append(event.as_dict())
+                if self._observations is not None:
+                    try:
+                        self._observations.record_market_event(
+                            symbol=target["symbol"],
+                            event=event.as_dict(),
+                        )
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("DI.Obs market_event skipped", exc_info=True)
+            elif (
+                record_marks
+                and mark_snaps < mark_budget
+                and self._observations is not None
+                and count > 0
+            ):
+                # LI.3a — quiet books still get a mark observation (resource-gated)
                 try:
-                    self._observations.record_market_event(
+                    self._observations.record_mark_snapshot(
                         symbol=target["symbol"],
-                        event=event.as_dict(),
+                        pct_move=move if isinstance(move, (int, float)) else None,
+                        provider=str(prov) if prov else None,
+                        bar_count=count,
                     )
+                    mark_snaps += 1
                 except Exception:  # noqa: BLE001
-                    self._logger.debug("DI.Obs market_event skipped", exc_info=True)
+                    self._logger.debug("DI.Obs mark_snapshot skipped", exc_info=True)
+
             if (
-                spawn_research
+                event is not None
+                and spawn_research
                 and self._jobs is not None
                 and event.score >= score_threshold
             ):
@@ -153,6 +186,7 @@ class MarketObserverWorker(PersistentWorker):
         state["last_interesting"] = interesting
         state["last_ok"] = ok
         state["last_gaps"] = gaps
+        state["last_mark_snapshots"] = mark_snaps
         state["spawned_keys"] = list(spawned_keys)[-50:]
         if interesting and self._events is not None:
             try:
@@ -171,6 +205,10 @@ class MarketObserverWorker(PersistentWorker):
         head = f"{auto_note}observe: {ok} ok, {gaps} gap(s)"
         if interesting:
             head += f", {len(interesting)} interesting"
+        if mark_snaps:
+            head += f", {mark_snaps} mark_snapshot(s)"
+        if not cadence.get("allowed"):
+            head += f" [cadence reduced: {cadence.get('reason')}]"
         if spawned:
             head += f", spawned {spawned} research job(s)"
         detail = "; ".join(notes[:6])

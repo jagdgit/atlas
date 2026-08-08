@@ -34,7 +34,7 @@ def test_packet_schedules_timeline_and_revisits(tmp_path: Path):
         reasons_for=["signal"],
     )
     assert out["timeline"]["events"] == 1
-    assert out["timeline"]["scheduled"] == 4  # day1 week1 month1 quarter
+    assert out["timeline"]["scheduled"] == 6  # LQ.2 denser: day1/3/week1/day14/month1/quarter
 
     events = timeline.list_symbol(symbol="EICHERMOT.NS")
     assert any(e.get("kind") == "decision" for e in events)

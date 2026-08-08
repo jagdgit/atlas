@@ -3265,6 +3265,15 @@ def market_intelligence_catalog(request: Request) -> dict:
     except Exception:  # noqa: BLE001
         base["live"]["fundamentals"] = {"count": 0, "rows": []}
     try:
+        from atlas.investment.fundamentals import learner_fundamentals_gaps, watchlist_symbols
+
+        wl = watchlist_symbols("market_intelligence", limit=40)
+        if wl and isinstance(base.get("live", {}).get("fundamentals"), dict):
+            gaps = learner_fundamentals_gaps(data_dir, wl, program_id="market_intelligence")
+            base["live"]["fundamentals"]["learner_gaps"] = gaps
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         from atlas.investment.company_documents import documents_view
 
         base["live"]["company_documents"] = documents_view(data_dir, limit=25)
@@ -3502,6 +3511,52 @@ def post_market_fundamentals_import_drop(
     from atlas.investment.fundamentals import import_drop_folder
 
     return import_drop_folder(str(get_config().paths.data), program_id=program_id)
+
+
+@v1_router.post("/market/fundamentals/yahoo-enrich", tags=["programs"])
+def post_market_fundamentals_yahoo_enrich(body: dict | None = None) -> dict:
+    """LI.2 / LQ.7 — Yahoo fundamentals as medium-confidence evidence (never sole truth).
+
+    With no ``symbols``, runs LQ.7 watchlist-gap enrich.
+    Slow-and-steady: small ``batch_size`` (default 3); respects shared Yahoo rate gate.
+    """
+    from atlas.config import get_config
+    from atlas.investment.fundamentals import enrich_from_yahoo, enrich_watchlist_gaps
+
+    body = body or {}
+    cfg = get_config()
+    program_id = str(body.get("program_id") or "market_intelligence")
+    enabled = bool(body.get("enabled", getattr(cfg.market, "yahoo_enabled", False)))
+    symbols = body.get("symbols") or []
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+    batch_size = body.get("batch_size")
+    limit = int(body.get("limit") or 40)
+    if not symbols:
+        return enrich_watchlist_gaps(
+            str(cfg.paths.data),
+            program_id=program_id,
+            enabled=enabled,
+            limit=limit,
+            batch_size=int(batch_size) if batch_size is not None else None,
+        )
+    return enrich_from_yahoo(
+        str(cfg.paths.data),
+        [str(s) for s in symbols],
+        program_id=program_id,
+        enabled=enabled,
+        only_gaps=bool(body.get("only_gaps", True)),
+        batch_size=int(batch_size) if batch_size is not None else None,
+    )
+
+
+@v1_router.get("/market/fundamentals/yahoo-rate-gate", tags=["programs"])
+def get_market_fundamentals_yahoo_rate_gate() -> dict:
+    """LQ.7 — shared Yahoo pacing / cooldown status (API + worker)."""
+    from atlas.config import get_config
+    from atlas.investment.yahoo_fundamentals import get_yahoo_rate_gate
+
+    return get_yahoo_rate_gate(str(get_config().paths.data)).status()
 
 
 @v1_router.get("/market/company-documents", tags=["programs"])
@@ -3771,15 +3826,39 @@ def get_market_decision_packet(request: Request, decision_id: str) -> dict:
 
 
 @v1_router.get("/market/decisions/{decision_id}/replay", tags=["programs"])
-def get_market_decision_replay(request: Request, decision_id: str) -> dict:
-    """DI.Attr — Replay: frozen packet + timeline + attribution (Stage 3 priors stub)."""
+def get_market_decision_replay(
+    request: Request,
+    decision_id: str,
+    laboratory_id: str | None = None,
+    strategy_tag: str | None = None,
+    experiment_id: str | None = None,
+) -> dict:
+    """DI.Attr / LI.4 — Replay: frozen packet + timeline + attribution.
+
+    Optional ``laboratory_id`` / ``strategy_tag`` / ``experiment_id`` filters
+    return 404 when the decision does not match (no invented data).
+    """
     try:
         store = _app(request).container.resolve("decision_attributions")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=503, detail=f"decision attributions unavailable: {exc}"
         ) from exc
-    replay = store.build_replay(decision_id)
+    replay = store.build_replay(
+        decision_id,
+        laboratory_id=laboratory_id,
+        strategy_tag=strategy_tag,
+        experiment_id=experiment_id,
+    )
+    if replay.get("matched") is False:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": f"replay filters did not match {decision_id}",
+                "mismatch_reasons": replay.get("mismatch_reasons") or [],
+                "filters": replay.get("filters"),
+            },
+        )
     if not replay.get("packet"):
         # Still return timeline/attr if packet missing
         try:
@@ -3792,6 +3871,38 @@ def get_market_decision_replay(request: Request, decision_id: str) -> dict:
     if not replay.get("packet") and not replay.get("attributions"):
         raise HTTPException(status_code=404, detail=f"no replay data for {decision_id}")
     return replay
+
+
+@v1_router.get("/market/replays", tags=["programs"])
+def get_market_replays(
+    request: Request,
+    laboratory_id: str = "india_equity_learner",
+    strategy_tag: str | None = None,
+    experiment_id: str | None = None,
+    limit: int = 40,
+) -> dict:
+    """LI.4 — list replay candidates filtered by lab / strategy / experiment."""
+    try:
+        store = _app(request).container.resolve("decision_attributions")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"decision attributions unavailable: {exc}"
+        ) from exc
+    items = store.list_replay_candidates(
+        laboratory_id=laboratory_id,
+        strategy_tag=strategy_tag,
+        experiment_id=experiment_id,
+        limit=max(1, min(200, int(limit))),
+    )
+    return {
+        "ok": True,
+        "laboratory_id": laboratory_id,
+        "strategy_tag": strategy_tag,
+        "experiment_id": experiment_id,
+        "count": len(items),
+        "items": items,
+        "version": "li.4.replay_filters",
+    }
 
 
 @v1_router.get("/market/attributions", tags=["programs"])
@@ -3852,8 +3963,176 @@ def post_market_attribution(request: Request, body: dict | None = None) -> dict:
         if body.get("what_atlas_missed")
         else None,
         extra=body.get("extra") if isinstance(body.get("extra"), dict) else None,
+        failure_cause=body.get("failure_cause"),
     )
     return {"ok": True, **result}
+
+
+@v1_router.get("/market/learning-intelligence", tags=["programs"])
+def get_market_learning_intelligence(
+    request: Request,
+    laboratory_id: str = "india_equity_learner",
+    program_id: str = "market_intelligence",
+    evolution_limit: int = 40,
+) -> dict:
+    """LI.5b — Atlas IQ skill axes, evolution narratives, hypotheses, readiness."""
+    from atlas.config import get_config
+    from atlas.investment.decision_attribution import DecisionAttributionStore
+    from atlas.investment.decision_packets import DecisionPacketStore
+    from atlas.investment.decision_timeline import DecisionTimelineStore
+    from atlas.investment.laboratory import normalize_laboratory_id
+    from atlas.investment.learning_intelligence import build_learning_intelligence_report
+    from atlas.investment.ml_export import build_export_quality_report
+    from atlas.investment.observations import DecisionObservationStore
+
+    lab = normalize_laboratory_id(laboratory_id=laboratory_id)
+    data_dir = str(get_config().paths.data)
+    packets: list = []
+    attributions: list = []
+    observations: list = []
+    pending = 0
+    done = 0
+    process_score = None
+    try:
+        packets = DecisionPacketStore(data_dir=data_dir).list_day(
+            portfolio_key=lab, limit=100
+        )
+    except Exception:  # noqa: BLE001
+        packets = []
+    try:
+        attributions = DecisionAttributionStore(data_dir=data_dir).list_portfolio(
+            portfolio_key=lab, limit=100
+        )
+    except Exception:  # noqa: BLE001
+        attributions = []
+    try:
+        observations = DecisionObservationStore(data_dir=data_dir).list_since(
+            since_hours=72.0, limit=80
+        )
+    except Exception:  # noqa: BLE001
+        observations = []
+    try:
+        counts = DecisionTimelineStore(data_dir=data_dir).learning_counts(
+            portfolio_key=lab
+        )
+        pending = int(counts.get("pending_revisits") or 0)
+        done = int(counts.get("done_revisits") or 0)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        port = _app(request).container.resolve("portfolio")
+        snap = None
+        if hasattr(port, "snapshot"):
+            snap = port.snapshot(portfolio_key=lab)
+        elif hasattr(port, "get"):
+            snap = port.get(lab)
+        if isinstance(snap, dict):
+            prox = snap.get("process_proxies")
+            if isinstance(prox, dict):
+                process_score = prox.get("process_score")
+    except Exception:  # noqa: BLE001
+        pass
+    quality = build_export_quality_report(
+        packets=packets if isinstance(packets, list) else [],
+        attributions=attributions if isinstance(attributions, list) else [],
+        laboratory_id=lab,
+    )
+    return build_learning_intelligence_report(
+        data_dir,
+        laboratory_id=lab,
+        program_id=program_id,
+        packets=packets if isinstance(packets, list) else [],
+        attributions=attributions if isinstance(attributions, list) else [],
+        process_score=process_score,
+        pending_revisits=pending,
+        done_revisits=done,
+        observation_count=len(observations) if isinstance(observations, list) else 0,
+        evolution_limit=max(1, min(200, int(evolution_limit))),
+        quality=quality,
+    )
+
+
+@v1_router.get("/market/hypotheses", tags=["programs"])
+def get_market_hypotheses(
+    laboratory_id: str | None = "india_equity_learner",
+    include_world: bool = True,
+    status: str | None = None,
+    limit: int = 40,
+) -> dict:
+    """LI.5b / LI.0a.9 — list scientific hypotheses (not per-symbol theses)."""
+    from atlas.config import get_config
+    from atlas.investment.hypothesis_learning import list_hypotheses
+
+    items = list_hypotheses(
+        str(get_config().paths.data),
+        laboratory_id=laboratory_id or None,
+        include_world=bool(include_world),
+        status=status,
+        limit=max(1, min(200, int(limit))),
+    )
+    return {
+        "ok": True,
+        "count": len(items),
+        "items": items,
+        "version": "li.5b.hypothesis_learning",
+    }
+
+
+@v1_router.post("/market/hypotheses", tags=["programs"])
+def post_market_hypothesis(body: dict | None = None) -> dict:
+    """LI.5b — create a scientific hypothesis (world or lab-scoped)."""
+    from atlas.config import get_config
+    from atlas.investment.hypothesis_learning import create_hypothesis
+
+    body = body or {}
+    try:
+        return {
+            "ok": True,
+            **create_hypothesis(
+                str(get_config().paths.data),
+                statement=str(body.get("statement") or ""),
+                domain_tags=list(body.get("domain_tags") or [])
+                if body.get("domain_tags")
+                else None,
+                laboratory_id=body.get("laboratory_id"),
+                transfer_class=str(body.get("transfer_class") or "world"),
+                linked_decision_ids=list(body.get("linked_decision_ids") or [])
+                if body.get("linked_decision_ids")
+                else None,
+                linked_experiment_ids=list(body.get("linked_experiment_ids") or [])
+                if body.get("linked_experiment_ids")
+                else None,
+                extra=body.get("extra") if isinstance(body.get("extra"), dict) else None,
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@v1_router.post("/market/hypotheses/{hypothesis_id}/verdict", tags=["programs"])
+def post_market_hypothesis_verdict(hypothesis_id: str, body: dict | None = None) -> dict:
+    """LI.5b — gated hypothesis verdict job (thin evidence → inconclusive)."""
+    from atlas.config import get_config
+    from atlas.investment.hypothesis_learning import record_verdict
+
+    body = body or {}
+    try:
+        return {
+            "ok": True,
+            **record_verdict(
+                str(get_config().paths.data),
+                hypothesis_id=hypothesis_id,
+                verdict=str(body.get("verdict") or ""),
+                laboratory_id=body.get("laboratory_id"),
+                evidence_n=int(body["evidence_n"]) if body.get("evidence_n") is not None else None,
+                note=str(body.get("note") or ""),
+                force=bool(body.get("force") or False),
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @v1_router.get("/market/di-dashboards", tags=["programs"])
@@ -3978,7 +4257,7 @@ def get_market_ml_export_status(
     portfolio_key: str = "india_equity_learner",
     lookback_limit: int = 500,
 ) -> dict:
-    """DI.7 — ML export gate status (never enables live NN trading)."""
+    """DI.7 / LI.4 — ML export gate status + quality report (never enables live NN)."""
     from atlas.config import get_config
     from atlas.investment.ml_export import ml_export_status
 
@@ -3986,6 +4265,120 @@ def get_market_ml_export_status(
         data_dir=str(get_config().paths.data),
         portfolio_key=portfolio_key,
         lookback_limit=max(50, min(int(lookback_limit or 500), 2000)),
+    )
+
+
+@v1_router.get("/market/export-quality", tags=["programs"])
+def get_market_export_quality(
+    laboratory_id: str = "india_equity_learner",
+    lookback_limit: int = 500,
+) -> dict:
+    """LI.4/LI.5b — export quality report + readiness gauge (never enables live NN)."""
+    from atlas.config import get_config
+    from atlas.investment.ml_export import collect_export_quality_report
+
+    return {
+        "ok": True,
+        **collect_export_quality_report(
+            data_dir=str(get_config().paths.data),
+            laboratory_id=laboratory_id,
+            lookback_limit=max(50, min(int(lookback_limit or 500), 2000)),
+        ),
+    }
+
+
+@v1_router.get("/market/atlasnet-prep", tags=["programs"])
+def get_market_atlasnet_prep_status(
+    laboratory_id: str = "india_equity_learner",
+    lookback_limit: int = 500,
+) -> dict:
+    """LI.6 — AtlasNet prep status (lab-partitioned export readiness; no NN)."""
+    from atlas.config import get_config
+    from atlas.investment.atlasnet_prep import atlasnet_prep_status
+
+    return atlasnet_prep_status(
+        data_dir=str(get_config().paths.data),
+        laboratory_id=laboratory_id,
+        lookback_limit=max(50, min(int(lookback_limit or 500), 2000)),
+    )
+
+
+@v1_router.post("/market/atlasnet-prep", tags=["programs"])
+def post_market_atlasnet_prep(body: dict | None = None) -> dict:
+    """LI.6 — quality-gated lab-partitioned export + walk-forward contract stub.
+
+    Requires sample gate + readiness (or force_override + override_note).
+    Never trains or deploys live/paper NN.
+    """
+    from atlas.config import get_config
+    from atlas.investment.atlasnet_prep import export_atlasnet_prep
+
+    body = body or {}
+    force = bool(body.get("force_override") or body.get("force"))
+    note = str(body.get("override_note") or body.get("note") or "")
+    if force and not note.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="force_override requires a non-empty override_note",
+        )
+    return export_atlasnet_prep(
+        data_dir=str(get_config().paths.data),
+        laboratory_id=str(
+            body.get("laboratory_id") or body.get("portfolio_key") or "india_equity_learner"
+        ),
+        force_override=force,
+        override_note=note,
+        lookback_limit=max(50, min(int(body.get("lookback_limit") or 500), 2000)),
+        train_frac=float(body.get("train_frac") or 0.7),
+    )
+
+
+@v1_router.get("/market/atlasnet-hard-gate", tags=["programs"])
+def get_market_atlasnet_hard_gate(
+    laboratory_id: str = "india_equity_learner",
+    lookback_limit: int = 800,
+) -> dict:
+    """LQ.9 — §8.2 AtlasNet hard gate status (prep ≠ train)."""
+    from atlas.config import get_config
+    from atlas.investment.atlasnet_prep import atlasnet_prep_status
+
+    st = atlasnet_prep_status(
+        data_dir=str(get_config().paths.data),
+        laboratory_id=laboratory_id,
+        lookback_limit=max(50, min(int(lookback_limit or 800), 5000)),
+    )
+    return {
+        "version": "lq.9.hard_gate",
+        "laboratory_id": st.get("laboratory_id"),
+        "hard_gate": st.get("hard_gate"),
+        "train_allowed": st.get("train_allowed"),
+        "export_allowed": st.get("export_allowed"),
+        "live_nn_trading": False,
+        "atlasnet_status": st.get("atlasnet_status"),
+        "next_step": st.get("next_step"),
+    }
+
+
+@v1_router.post("/market/atlasnet-train", tags=["programs"])
+def post_market_atlasnet_train(body: dict | None = None) -> dict:
+    """LQ.9 — train/paper-NN entry. Blocked unless §8.2 hard gate clears.
+
+    ``force_override`` cannot unlock training (prep export only).
+    """
+    from atlas.config import get_config
+    from atlas.investment.atlasnet_prep import request_atlasnet_train
+
+    body = body or {}
+    return request_atlasnet_train(
+        data_dir=str(get_config().paths.data),
+        laboratory_id=str(
+            body.get("laboratory_id") or body.get("portfolio_key") or "india_equity_learner"
+        ),
+        intent=str(body.get("intent") or "train"),
+        lookback_limit=max(50, min(int(body.get("lookback_limit") or 800), 5000)),
+        learned_beats_rules=bool(body.get("learned_beats_rules")),
+        force_override=bool(body.get("force_override") or body.get("force")),
+        override_note=str(body.get("override_note") or body.get("note") or ""),
     )
 
 
@@ -4143,12 +4536,124 @@ def post_market_timeline_run_revisits(
         except Exception:  # noqa: BLE001
             return None
 
+    observations = None
+    try:
+        observations = _app(request).container.resolve("decision_observations")
+    except Exception:  # noqa: BLE001
+        observations = None
+
+    def observations_fn(symbol: str):
+        if observations is None:
+            return []
+        try:
+            return list(
+                observations.list_symbol(symbol=symbol, limit=20, since_hours=168.0) or []
+            )
+        except Exception:  # noqa: BLE001
+            return []
+
     return store.run_due_revisits(
         portfolio_key=portfolio_key,
         limit=max(1, min(int(limit or 20), 50)),
         mark_fn=mark_fn,
         awareness_fn=awareness_fn,
+        observations_fn=observations_fn,
     )
+
+
+@v1_router.get("/market/opportunities", tags=["programs"])
+def get_market_opportunities(
+    laboratory_id: str = "india_equity_learner",
+    status: str | None = None,
+    kind: str | None = None,
+    symbol: str | None = None,
+    limit: int = 40,
+) -> dict:
+    """LI.3b — forgotten opportunities (lab-scoped; not trade win-rate)."""
+    from atlas.config import get_config
+    from atlas.investment.opportunity_tracker import (
+        list_opportunities,
+        opportunity_counts,
+    )
+
+    data_dir = str(get_config().paths.data)
+    items = list_opportunities(
+        data_dir,
+        laboratory_id=laboratory_id,
+        status=status,
+        kind=kind,
+        symbol=symbol,
+        limit=max(1, min(200, int(limit))),
+    )
+    return {
+        "ok": True,
+        "items": items,
+        "count": len(items),
+        "counts": opportunity_counts(data_dir, laboratory_id=laboratory_id),
+        "version": "li.3b.opportunity_tracker",
+    }
+
+
+@v1_router.post("/market/opportunities", tags=["programs"])
+def post_market_opportunity(body: dict | None = None) -> dict:
+    """LI.3b — record ignored/missed/rejected/deferred opportunity (lab-scoped)."""
+    from atlas.config import get_config
+    from atlas.investment.opportunity_tracker import record_opportunity
+
+    body = body or {}
+    symbol = str(body.get("symbol") or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+    kind = str(body.get("kind") or "").strip()
+    if not kind:
+        raise HTTPException(
+            status_code=400,
+            detail="kind is required (ignored|missed|rejected|deferred)",
+        )
+    try:
+        return {
+            "ok": True,
+            **record_opportunity(
+                str(get_config().paths.data),
+                laboratory_id=str(body.get("laboratory_id") or "india_equity_learner"),
+                symbol=symbol,
+                kind=kind,
+                reason=str(body.get("reason") or ""),
+                source=str(body.get("source") or "operator"),
+                mark=float(body["mark"]) if body.get("mark") is not None else None,
+                horizon=body.get("horizon"),
+                related_decision_id=body.get("related_decision_id"),
+                related_discovery_id=body.get("related_discovery_id"),
+                extra=body.get("extra") if isinstance(body.get("extra"), dict) else None,
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@v1_router.post("/market/opportunities/{opportunity_id}/resolve", tags=["programs"])
+def post_market_opportunity_resolve(opportunity_id: str, body: dict | None = None) -> dict:
+    """LI.3b — attach material-move outcome (not strategy PnL)."""
+    from atlas.config import get_config
+    from atlas.investment.opportunity_tracker import resolve_material_move
+
+    body = body or {}
+    if body.get("mark_now") is None:
+        raise HTTPException(status_code=400, detail="mark_now is required")
+    try:
+        row = resolve_material_move(
+            str(get_config().paths.data),
+            laboratory_id=str(body.get("laboratory_id") or "india_equity_learner"),
+            opportunity_id=opportunity_id,
+            mark_now=float(body["mark_now"]),
+            adverse=body.get("adverse") if "adverse" in body else None,
+            note=str(body.get("note") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"opportunity {opportunity_id} not found")
+    return {"ok": True, "opportunity": row}
 
 
 @v1_router.get("/market/observations/{observation_id}", tags=["programs"])
@@ -5271,6 +5776,54 @@ def deposit_to_portfolio(
         "deposits": deposits,
         "version": "il.7",
     }
+
+
+@v1_router.post("/market/portfolios/{portfolio_ref}/resume", tags=["programs"])
+@v1_router.post("/market/laboratories/{portfolio_ref}/resume", tags=["programs"])
+def resume_laboratory_after_outage(portfolio_ref: str, request: Request) -> dict:
+    """LI.1b — re-bind durable ledger + mark prices after power/internet outage.
+
+    Does **not** invent fills for the dark window. ``portfolio_ref`` is the
+    laboratory_id (1:1 with portfolio_key).
+    """
+    from atlas.investment import portfolios as vp
+    from atlas.investment.laboratory_resume import resume_laboratory_ledger
+    from atlas.config import get_config
+
+    row = vp.get(portfolio_ref) or vp.get_by_id(portfolio_ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown laboratory: {portfolio_ref}")
+    mid = row.get("mission_id") or row.get("ledger_mission_id")
+    if not mid:
+        raise HTTPException(
+            status_code=400,
+            detail="laboratory needs a bound mission before resume",
+        )
+    try:
+        portfolio_svc = _app(request).container.resolve("portfolio")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    market_reader = None
+    try:
+        market_reader = _app(request).container.resolve("market_reader")
+    except Exception:  # noqa: BLE001
+        market_reader = None
+    data_dir = None
+    try:
+        data_dir = str(get_config().paths.data)
+    except Exception:  # noqa: BLE001
+        data_dir = None
+    person = row.get("persona") if isinstance(row.get("persona"), dict) else {}
+    report = resume_laboratory_ledger(
+        portfolio_service=portfolio_svc,
+        market_reader=market_reader,
+        mission_id=str(mid),
+        laboratory_id=str(row.get("laboratory_id") or row.get("portfolio_key")),
+        starting_cash=float(person.get("capital") or 0),
+        data_dir=data_dir,
+        personality=person,
+    )
+    return {"laboratory": row, "resume": report, "version": "li.1b"}
 
 
 @v1_router.get("/goals", tags=["programs"])
