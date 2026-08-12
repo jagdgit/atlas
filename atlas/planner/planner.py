@@ -63,6 +63,8 @@ class Intent:
     REGISTER_MARKET_DATA = "register_market_data"
     START_INVESTMENT_LEARNER = "start_investment_learner"
     MANAGE_GOAL = "manage_goal"
+    CAREER_STATUS = "career_status"
+    MARKET_STATUS = "market_status"
     VERIFY_KNOWLEDGE = "verify_knowledge"
 
 
@@ -630,6 +632,17 @@ def _start_investment_learner_args(message: str, _m: re.Match[str] | None) -> di
     }
 
 
+def _career_status_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    """PLC.F — Career Intelligence status without an LLM turn."""
+    return {"query": (message or "").strip()[:400], "action": "status"}
+
+
+def _market_status_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    """PLC.F / UTS.G — Market Intelligence / coverage status without an LLM turn."""
+    text = (message or "").strip()[:400]
+    return {"query": text, "message": text, "action": "status"}
+
+
 def _manage_goal_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     """OX.3 / OX.4 — create / list / status / progress goals (objectives first)."""
     text = message.strip()
@@ -684,6 +697,44 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
             re.IGNORECASE,
         ),
         _query_args,
+    ),
+    (
+        Intent.CAREER_STATUS,
+        "",  # PLC.F — no plugin capability; deterministic brief
+        re.compile(
+            r"\bcareer\s+intelligence\b"
+            r"|\b(what (?:have you |did you )?learn(?:ed)?|what(?:'s| is) (?:the )?status|"
+            r"progress|summary|brief|update)\b.{0,60}\bcareer\b"
+            r"|\bcareer\b.{0,40}\b(learn(?:ed|ing)?|status|progress|brief|watchlist|"
+            r"jobs?|gaps?)\b"
+            r"|\b(ci\.(?:0|1|2|3|4|5)|oi-ci0)\b",
+            re.IGNORECASE,
+        ),
+        _career_status_args,
+    ),
+    (
+        Intent.MARKET_STATUS,
+        "",  # PLC.F — durable stores / Goals DB; no interactive LLM
+        re.compile(
+            r"\bmarket\s+intelligence\b"
+            r"|\b(what (?:have you |did you )?learn(?:ed)?|what(?:'s| is) (?:the )?status|"
+            r"progress|summary|brief|update)\b.{0,80}\b"
+            r"(market|india\s+(?:equity\s+)?learner|laboratory|nifty|paper\s*trad|"
+            r"swing\s+lab|intraday\s+lab|f\s*&\s*o|fno)\b"
+            r"|\b(india\s+(?:equity\s+)?learner|laboratory|paper\s*trad(?:ing)?)\b"
+            r".{0,40}\b(learn(?:ed|ing)?|status|progress|brief)\b"
+            r"|\b(oi-mi0|oi-il0|oi-di0|oi-li0|oi-mlq0|oi-plc0|oi-uts0)\b"
+            r"|\bmarket\s+intelligence\s+status\b"
+            r"|\blearner\s+status\b"
+            r"|\bdid\s+we\s+scan\b"
+            r"|\bscan\s+the\s+universe\b"
+            r"|\buniverse\s+coverage\b"
+            r"|\bcoverage\s+kpi"
+            r"|\bwhy\s+not\s+switch\s+into\b"
+            r"|\bwhy\s+(?:didn'?t|did\s+not)\s+we\s+switch\b",
+            re.IGNORECASE,
+        ),
+        _market_status_args,
     ),
     (
         Intent.MANAGE_GOAL,
@@ -869,6 +920,10 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
             r"|\bwhat'?s in it\b"
             r"|\baccording to\b"
             r"|\bsummar(y|ize|ise)\b"
+            r"|\bwhat do we know about\b"
+            r"|\bwhat does atlas know\b"
+            r"|\bfindings (on|about|for)\b"
+            r"|\bin (the )?knowledge (base|store)\b"
             r"|\b(the|this|that|it)\b[^?]{0,40}\b(document|doc|pdf|file|paper|report)\b"
             r"|\b(document|doc|pdf|file|paper|report|knowledge base)\b",
             re.IGNORECASE,
@@ -903,6 +958,8 @@ _DESCRIPTIONS = {
     Intent.REGISTER_MARKET_DATA: "Register a market_data OHLCV feed asset (fixture/sample).",
     Intent.START_INVESTMENT_LEARNER: "Preview or start the India equity learner Program (OX.2: preview default; now/confirm activates).",
     Intent.MANAGE_GOAL: "Create, list, or check durable Goals (OX.3 — objectives first).",
+    Intent.CAREER_STATUS: "Career Intelligence status / brief (deterministic — no interactive LLM).",
+    Intent.MARKET_STATUS: "Market Intelligence / lab status from durable stores + Goals DB (no interactive LLM).",
 }
 
 

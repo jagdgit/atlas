@@ -183,7 +183,9 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "use_quality_seed": True,
             "use_screener_signals": True,
             "screener_computed": True,
-            "provider": "",
+            # OI-MKT-COV: intended M0 provider when market.yahoo_enabled
+            # (worker also resolves empty → yahoo; keep abstraction for other feeds)
+            "provider": "yahoo",
             "tick_interval_seconds": 3600,
         },
         "worker_specs": [
@@ -281,17 +283,17 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "news_intelligence",
-        "template_version": 4,
+        "template_version": 5,
         "description": (
             "Market Intelligence M3 — headlines/items → typed candidates → Knowledge "
             "(optional verify). Hermetic headlines config; empty → watchlist seeds "
-            "(IL.4); live RSS later."
+            "(IL.4). E1: curated RSS allow-list (PIB by default when enabled)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "News Intelligence",
-            "roadmap": "MI.4",
+            "roadmap": "MI.4 / OI-EVID-NET0 E1",
             "program_id": "market_intelligence",
             "headlines": [],
             "items": [],
@@ -300,6 +302,9 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "verify": False,
             "gather": False,
             "verify_batch_limit": 5,
+            "use_rss_allowlist": True,
+            "rss_enable": ["pib_press"],
+            "rss_include_defaults": True,
             "tick_interval_seconds": 3600,
         },
         "worker_specs": [{"type": "news_intelligence", "interval_seconds": 3600}],
@@ -308,21 +313,24 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "government_intelligence",
-        "template_version": 1,
+        "template_version": 2,
         "description": (
             "Market Intelligence — Indian government budget / industrial policy themes "
             "mapped to NSE sectors for ranking nudges (PLI, capex, defence, renewables). "
-            "Hermetic catalog + operator items; not a live gazette scrape."
+            "Hermetic catalog + operator items; E1 PIB policy RSS (XML allow-list only)."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "Government Intelligence",
-            "roadmap": "MI-GOV",
+            "roadmap": "MI-GOV / OI-EVID-NET0 E1",
             "program_id": "market_intelligence",
             "include_defaults": True,
             "items": [],
             "policies": [],
+            "fetch_policy_rss": True,
+            "rss_enable": ["pib_press"],
+            "rss_include_defaults": True,
             "tick_interval_seconds": 21600,
         },
         "worker_specs": [
@@ -353,16 +361,49 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "evening_hour_start": 15,
             "evening_minute_start": 45,
             "evening_hour_end": 18,
+            "hourly_digests": True,
+            "hourly_hour_start": 8,
+            "hourly_hour_end": 20,
             "force": False,
-            "tick_interval_seconds": 1800,
+            "tick_interval_seconds": 900,
         },
         "worker_specs": [
-            {"type": "investor_reports", "interval_seconds": 1800},
-            {"type": "investor_reports", "cron": "0 3 * * 1-5", "interval_seconds": 1800},
-            {"type": "investor_reports", "cron": "45 10 * * 1-5", "interval_seconds": 1800},
+            {"type": "investor_reports", "interval_seconds": 900},
+            {"type": "investor_reports", "cron": "0 3 * * 1-5", "interval_seconds": 900},
+            {"type": "investor_reports", "cron": "0 8-20 * * 1-6", "interval_seconds": 900},
+            {"type": "investor_reports", "cron": "45 10 * * 1-5", "interval_seconds": 900},
         ],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "investor_reports"),
+    },
+    {
+        "name": "historical_bars_bootstrap",
+        "template_version": 1,
+        "description": (
+            "J1 / OI-HIST-BARS — budgeted 5–10y daily OHLCV bootstrap into durable "
+            "market/bars (Yahoo history job, separate from live ticks)."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Historical Bars Bootstrap",
+            "roadmap": "OI-HIST-BARS",
+            "program_id": "market_intelligence",
+            "range": "10y",
+            "max_symbols_per_tick": 6,
+            "universe_limit": 80,
+            "tick_interval_seconds": 600,
+        },
+        "worker_specs": [
+            {"type": "historical_bars_bootstrap", "interval_seconds": 600},
+            {
+                "type": "historical_bars_bootstrap",
+                "cron": "*/20 * * * *",
+                "interval_seconds": 600,
+            },
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "market_observer"),
     },
     {
         "name": "research_freshness",
@@ -390,28 +431,39 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "fundamentals_enrich",
-        "template_version": 2,
+        "template_version": 3,
         "description": (
-            "LQ.7 — Tier C Yahoo fundamentals enrich on watchlist gaps (PE/FCF/ROE/D/E). "
+            "LQ.7 / E2 — Tier C Yahoo fundamentals enrich on PE/FCF/ROE/D/E gaps. "
+            "Daily: open books only (A9). Weekly: rest of watchlist. "
             "Medium confidence; never invents; Screener/filing outrank Yahoo. "
-            "Slow-and-steady batches (respect Yahoo rate limits). "
             "Gated on market.yahoo_enabled."
         ),
         "config_schema_type": "generic",
         "config_schema_version": 1,
         "default_config": {
             "role": "Fundamentals Enrich",
-            "roadmap": "OI-MLQ0 / LQ.7",
+            "roadmap": "OI-MLQ0 / LQ.7 / OI-EVID-NET0 E2",
             "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
             "max_symbols": 3,
             "batch_size": 3,
+            "prefer_open_books": True,
+            "open_books_only": True,
+            "universe_weekly": {
+                "enabled": True,
+                "ist_weekday": 6,
+                "hour_start": 3,
+                "hour_end": 5,
+            },
             "tick_interval_seconds": 900,
         },
         "worker_specs": [
-            # Every ~15m: 3 symbols paced ~3s apart — fills gaps without 429 storms
+            # Every ~15m: open-book gaps only (A9 daily cadence)
             {"type": "fundamentals_enrich", "interval_seconds": 900},
-            # Overnight Mon–Fri ~03:00 IST = 21:30 UTC previous day → use 21:45 UTC
+            # Overnight Mon–Fri ~03:00 IST (21:45 UTC) — open books
             {"type": "fundamentals_enrich", "cron": "45 21 * * 0-4", "interval_seconds": 900},
+            # Sun ~04:00 IST (22:30 UTC Sat) — worker expands to watchlist in IST Sunday window
+            {"type": "fundamentals_enrich", "cron": "30 22 * * 6", "interval_seconds": 900},
         ],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "fundamentals_enrich"),

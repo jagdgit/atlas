@@ -142,12 +142,40 @@ class InvestorReportsWorker(PersistentWorker):
             catch_up_evening = bool(evening_catch_up and not in_evening)
 
         if not send_morning and not send_evening:
+            # OI-HOURLY0 — still send hourly digests 08–20 IST (awareness)
+            hourly_start = int(cfg.get("hourly_hour_start", 8))
+            hourly_end = int(cfg.get("hourly_hour_end", 20))
+            send_hourly = (
+                bool(cfg.get("hourly_digests", True))
+                and hourly_start <= hour <= hourly_end
+                and now_ist.weekday() < 6  # Mon–Sat (incl. prep days)
+            )
+            if send_hourly and self._mailer is not None:
+                portfolio_doc = self._portfolio_doc(portfolio_key, ist_date=ist_date)
+                result = self._mailer.send_hourly(
+                    program_id=program_id,
+                    portfolio=portfolio_doc if isinstance(portfolio_doc, dict) else None,
+                    force=False,
+                    hour=hour,
+                    laboratory_id=portfolio_key,
+                )
+                state["last_hourly_send"] = result
+                if result.get("sent"):
+                    return TickResult(
+                        state=state,
+                        note=f"hourly sent {hour:02d}:00: {result.get('subject')}",
+                    )
+                return TickResult(
+                    state=state,
+                    note=f"hourly not sent: {result.get('reason') or result}",
+                )
             state["skipped"] = "outside_report_windows_ist"
             return TickResult(
                 state=state,
                 note=(
                     f"idle: outside IST windows morning {morning_start:02d}–{morning_end:02d} "
                     f"/ evening {evening_start_h:02d}:{evening_start_m:02d}–{evening_end:02d} "
+                    f"/ hourly {hourly_start:02d}–{hourly_end:02d} "
                     f"(catch-up until {catch_up_until:02d}; now {hour:02d}:{minute:02d})"
                 ),
             )
@@ -342,14 +370,67 @@ class InvestorReportsWorker(PersistentWorker):
                     if isinstance(p, dict) and p.get("symbol")
                 ]
                 if syms:
-                    from atlas.investment.fundamentals import learner_fundamentals_gaps
+                    from atlas.investment.fundamentals import (
+                        OPEN_BOOK_CRITICAL_FIELDS,
+                        learner_fundamentals_gaps,
+                    )
 
                     cov["learner_gaps"] = learner_fundamentals_gaps(
-                        data_dir, syms, program_id="market_intelligence"
+                        data_dir,
+                        syms,
+                        program_id="market_intelligence",
+                        critical_fields=OPEN_BOOK_CRITICAL_FIELDS,
                     )
                 portfolio_doc["fundamentals_coverage"] = cov
             except Exception:  # noqa: BLE001
                 self._logger.debug("DI.2/DI.4 evening enrich failed", exc_info=True)
+            try:
+                from atlas.investment.triage_memory import load_latest_triage_bundle
+
+                portfolio_doc["triage"] = load_latest_triage_bundle(
+                    data_dir, program_id="market_intelligence"
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("UTS triage evening enrich failed", exc_info=True)
+            try:
+                from atlas.investment import watchlists as wl
+
+                snap = wl.latest("market_intelligence")
+                if isinstance(snap, dict):
+                    ranked = list(snap.get("ranked") or [])
+                    if ranked:
+                        portfolio_doc["ranked"] = ranked
+                    # Prefer ladder rows from triage when present for Δ/accel.
+                    triage = portfolio_doc.get("triage")
+                    if isinstance(triage, dict) and triage.get("ok"):
+                        by_sym = {
+                            str(r.get("symbol") or "").upper(): r
+                            for r in (triage.get("rows") or [])
+                            if isinstance(r, dict) and r.get("symbol")
+                        }
+                        if by_sym and ranked:
+                            merged = []
+                            for r in ranked:
+                                if not isinstance(r, dict):
+                                    continue
+                                sym = str(r.get("symbol") or "").upper()
+                                src = by_sym.get(sym) or {}
+                                row = dict(r)
+                                for k in (
+                                    "rank_delta_1d",
+                                    "rank_delta_3d",
+                                    "acceleration_3d",
+                                    "accel_score",
+                                    "last_price",
+                                    "rank",
+                                    "score",
+                                ):
+                                    if row.get(k) is None and src.get(k) is not None:
+                                        row[k] = src.get(k)
+                                merged.append(row)
+                            portfolio_doc["ranked"] = merged
+            except Exception:  # noqa: BLE001
+                self._logger.debug("UTS ranked enrich failed", exc_info=True)
             try:
                 from atlas.investment.observations import DecisionObservationStore
 
@@ -382,6 +463,30 @@ class InvestorReportsWorker(PersistentWorker):
                             and doc.get("portfolio_key") == portfolio_key
                         ):
                             items.append(doc)
+                # DAV.1 — densify causes for evening mail (display-only if store predates DAV)
+                try:
+                    from atlas.investment.causal_attribution import (
+                        enrich_attributions_for_evening,
+                    )
+                    from atlas.investment.decision_packets import DecisionPacketStore
+
+                    pkt_map: dict = {}
+                    pstore = DecisionPacketStore(data_dir=data_dir)
+                    for a in items:
+                        did = str(a.get("decision_id") or "")
+                        if not did:
+                            continue
+                        try:
+                            pkt = pstore.get(did)
+                        except Exception:  # noqa: BLE001
+                            pkt = None
+                        if isinstance(pkt, dict):
+                            pkt_map[did] = pkt
+                    items = enrich_attributions_for_evening(
+                        items, packet_by_id=pkt_map
+                    )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("DAV.1 evening densify skipped", exc_info=True)
                 portfolio_doc["attributions"] = items
             except Exception:  # noqa: BLE001
                 self._logger.debug("DI.Attr evening enrich failed", exc_info=True)

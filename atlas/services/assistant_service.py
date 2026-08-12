@@ -175,6 +175,72 @@ def _research_citations(data: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _normalize_chat_citations(raw: list[Any] | None) -> list[dict[str, Any]]:
+    """Map Belief Core / research / RAG cite dicts into ChatResponse CitationOut shape."""
+    out: list[dict[str, Any]] = []
+    for i, c in enumerate(raw or []):
+        if not isinstance(c, dict):
+            continue
+        ctype = str(c.get("type") or "").lower()
+        belief_id = str(c.get("belief_id") or "").strip()
+        experience_id = str(c.get("experience_id") or "").strip()
+        if ctype == "belief" or belief_id:
+            bid = belief_id or str(c.get("id") or f"belief-{i}")
+            snippet = str(
+                c.get("snippet") or c.get("statement") or c.get("title") or ""
+            ).strip()
+            out.append(
+                {
+                    "index": int(c.get("index") if c.get("index") is not None else i),
+                    "document_id": f"belief:{bid}",
+                    "chunk_id": bid,
+                    "similarity": float(c.get("similarity") if c.get("similarity") is not None else 1.0),
+                    "snippet": snippet[:500] or f"belief {bid}",
+                }
+            )
+            continue
+        if ctype == "experience" or experience_id:
+            eid = experience_id or str(c.get("id") or f"experience-{i}")
+            snippet = str(
+                c.get("snippet") or c.get("summary") or c.get("title") or ""
+            ).strip()
+            out.append(
+                {
+                    "index": int(c.get("index") if c.get("index") is not None else i),
+                    "document_id": f"experience:{eid}",
+                    "chunk_id": eid,
+                    "similarity": float(c.get("similarity") if c.get("similarity") is not None else 1.0),
+                    "snippet": snippet[:500] or f"experience {eid}",
+                }
+            )
+            continue
+        doc = str(
+            c.get("document_id")
+            or c.get("source_id")
+            or c.get("url")
+            or c.get("id")
+            or f"src-{i}"
+        )
+        chunk = str(c.get("chunk_id") or c.get("id") or f"chunk-{i}")
+        snippet = str(
+            c.get("snippet") or c.get("title") or c.get("statement") or ""
+        ).strip()
+        try:
+            sim = float(c.get("similarity") if c.get("similarity") is not None else 0.0)
+        except (TypeError, ValueError):
+            sim = 0.0
+        out.append(
+            {
+                "index": int(c.get("index") if c.get("index") is not None else i),
+                "document_id": doc,
+                "chunk_id": chunk,
+                "similarity": sim,
+                "snippet": snippet[:500],
+            }
+        )
+    return out
+
+
 def _format_browse(data: dict[str, Any]) -> str:
     """Render a browsed page: title + a text preview + a few links."""
     title = data.get("title") or "(untitled)"
@@ -208,7 +274,7 @@ class ChatTurn:
             "session_id": self.session_id,
             "answer": self.answer,
             "intent": self.intent,
-            "citations": self.citations,
+            "citations": _normalize_chat_citations(self.citations),
             "tool_calls": self.tool_calls,
             "capability_gaps": self.capability_gaps,
             "run_id": self.run_id,
@@ -246,6 +312,7 @@ class ResponseBuilder:
         context: "ConversationContext | None" = None,
         fallback: str = "",
         timeout: float | None = None,
+        busy_preflight: bool = True,
     ) -> str:
         messages = [ChatMessage("system", system)]
         if context is not None:
@@ -254,6 +321,17 @@ class ResponseBuilder:
         options: dict[str, Any] = {}
         if timeout is not None:
             options["timeout"] = timeout
+        # PLC.F6 — fail fast when Ollama/LLM lane is saturated (<3s vs 60s hang)
+        if busy_preflight:
+            try:
+                if hasattr(self._llm, "lane_busy") and self._llm.lane_busy():
+                    return fallback or (
+                        "Chat LLM is busy right now (inference lane saturated). "
+                        "Try “market intelligence status” or “career intelligence status” "
+                        "(no LLM), or ask me to research it as a background job."
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         try:
             return (
                 self._llm.for_role("chat").chat(messages, **options).text.strip()
@@ -306,6 +384,8 @@ class AssistantService:
         programs: Any = None,
         planning: Any = None,
         goals: Any = None,
+        reasoning: Any = None,
+        experience_os: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._conversation = conversation
@@ -315,6 +395,8 @@ class AssistantService:
         self._memory = memory
         self._agent = agent
         self._llm = llm
+        self._reasoning = reasoning
+        self._experience_os = experience_os
         self._tools = tools
         self._capabilities = capabilities
         self._templates = templates
@@ -340,6 +422,78 @@ class AssistantService:
         self._responder = ResponseBuilder(llm, logger)
         self._logger = logger or logging.getLogger("atlas.assistant")
 
+    def bind_reasoning(self, reasoning: Any, *, experience_os: Any | None = None) -> None:
+        """OI-SELF-ID — attach Belief Core / Living RAG for identity-first chat."""
+        self._reasoning = reasoning
+        if experience_os is not None:
+            self._experience_os = experience_os
+
+    def _identity_chat_answer(
+        self,
+        msg: str,
+        context: Any,
+        *,
+        allow_llm: bool = True,
+        benchmarks_only: bool = False,
+    ) -> dict[str, Any] | None:
+        """Return Living RAG / benchmark answer dict, or None to use legacy compose."""
+        if self._reasoning is None:
+            return None
+        try:
+            from atlas.reasoning.identity_chat import (
+                answer_as_atlas,
+                answer_belief_benchmark,
+                detect_belief_benchmark,
+            )
+
+            if benchmarks_only or detect_belief_benchmark(msg):
+                bench = answer_belief_benchmark(self._reasoning, msg)
+                if bench is not None:
+                    return {"version": "self0.identity_chat.v1", "mode": "benchmark", **bench}
+                if benchmarks_only:
+                    return None
+
+            return answer_as_atlas(
+                self._reasoning,
+                msg,
+                compose_fn=self._responder.compose if allow_llm else None,
+                experience_os=self._experience_os,
+                knowledge=self._knowledge,
+                memory=self._memory,
+                context=context,
+                timeout=self._interactive_timeout,
+                allow_llm=allow_llm,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("identity chat path failed", exc_info=True)
+            return None
+
+    def _outcome_from_identity(
+        self,
+        identity: dict[str, Any],
+        *,
+        intent: str,
+        tool_calls: list[dict[str, Any]],
+    ) -> "_Outcome | None":
+        answer = str(identity.get("answer") or "").strip()
+        if not answer and identity.get("mode") != "benchmark":
+            return None
+        if not answer:
+            answer = "Belief Core returned no text for that query."
+        tool_calls.append(
+            {
+                "intent": intent,
+                "action": "identity_chat",
+                "mode": identity.get("mode"),
+                "capability": "reasoning",
+                "bundle": identity.get("bundle_counts"),
+            }
+        )
+        return _Outcome(
+            answer=answer,
+            citations=list(identity.get("citations") or []),
+        )
+
     # --- capability API -------------------------------------------------
     def chat(self, message: str, *, session_id: str | None = None, **options: Any) -> ChatTurn:
         session = self._conversation.ensure_session(session_id)
@@ -353,8 +507,35 @@ class AssistantService:
         step = plan.steps[0]
         tool_calls: list[dict[str, Any]] = []
 
-        if gaps:
+        # OI-SELF-ID — belief benchmarks never wait on Ollama / planner tools
+        try:
+            from atlas.reasoning.identity_chat import detect_belief_benchmark
+
+            is_belief_q = detect_belief_benchmark(message) is not None
+        except Exception:  # noqa: BLE001
+            is_belief_q = False
+
+        if gaps and not is_belief_q:
             outcome = _Outcome(answer=self._gap_answer(gaps))
+        elif is_belief_q:
+            identity = self._identity_chat_answer(
+                message, context, allow_llm=False, benchmarks_only=True
+            )
+            if identity is not None:
+                outcome = self._outcome_from_identity(
+                    identity, intent="belief_benchmark", tool_calls=tool_calls
+                )
+            else:
+                outcome = _Outcome(
+                    answer=(
+                        "Belief Core is not bound on this process (restart Atlas after "
+                        "OI-SELF Phase 4). Try again, or call POST /v1/reasoning/why."
+                    )
+                )
+            if outcome is None:
+                outcome = _Outcome(
+                    answer="Belief Core could not answer that why/mind-change query."
+                )
         else:
             outcome = self._dispatch(step.intent, step.args, context, tool_calls)
 
@@ -364,10 +545,10 @@ class AssistantService:
         return ChatTurn(
             session_id=sid,
             answer=outcome.answer,
-            intent=step.intent,
+            intent="belief_benchmark" if is_belief_q else step.intent,
             citations=outcome.citations,
             tool_calls=tool_calls,
-            capability_gaps=gaps,
+            capability_gaps=[] if is_belief_q else gaps,
             run_id=outcome.run_id,
         )
 
@@ -434,11 +615,20 @@ class AssistantService:
             Intent.REGISTER_MARKET_DATA: self._do_register_market_data,
             Intent.START_INVESTMENT_LEARNER: self._do_start_investment_learner,
             Intent.MANAGE_GOAL: self._do_manage_goal,
+            Intent.CAREER_STATUS: self._do_career_status,
+            Intent.MARKET_STATUS: self._do_market_status,
         }.get(intent, self._do_react)
         return handler(args, context, tool_calls)
 
     def _do_smalltalk(self, args, context, tool_calls) -> _Outcome:
         msg = args.get("query", "")
+        identity = self._identity_chat_answer(msg, context)
+        if identity is not None:
+            out = self._outcome_from_identity(
+                identity, intent=Intent.SMALLTALK, tool_calls=tool_calls
+            )
+            if out is not None:
+                return out
         answer = self._responder.compose(
             _SMALLTALK_SYSTEM, msg, context=context, fallback="Hello! How can I help?",
             timeout=self._interactive_timeout,
@@ -447,23 +637,32 @@ class AssistantService:
         return _Outcome(answer=answer)
 
     def _do_answer(self, args, context, tool_calls) -> _Outcome:
-        """Fast fallback (RC/D3.12): answer a general question in one model call.
+        """Fast fallback (RC/D3.12) — identity-first Living RAG when ReasoningService bound.
 
         This is the default route for open-ended messages the deterministic router
-        doesn't map to a tool. It deliberately avoids the ReAct agent (multiple LLM
-        calls, each carrying the full tool catalog) so a plain question returns
-        quickly instead of timing out on CPU-only inference. An interactive timeout
-        keeps a slow generation from hanging the chat; on timeout the user is offered
-        the background-job path, which is where heavy tool work belongs.
+        doesn't map to a tool. With OI-SELF-ID, answers consult Atlas identity,
+        goals, beliefs, experiences, then the chat model — not raw Qwen alone.
+        When Ollama times out, Living RAG still returns Belief Core grounded text.
         """
         msg = args.get("query", "")
+        identity = self._identity_chat_answer(msg, context, allow_llm=True)
+        if identity is not None:
+            out = self._outcome_from_identity(
+                identity, intent=Intent.ANSWER, tool_calls=tool_calls
+            )
+            if out is not None:
+                return out
         answer = self._responder.compose(
             _ANSWER_SYSTEM,
             msg,
             context=context,
             fallback=(
-                "That took longer than I allow for an interactive answer. I can run "
-                "it as a background research job instead — just ask me to research it."
+                "Chat LLM timed out (Ollama busy or slow — market workers + "
+                "inference share this host). Try a Belief Core phrase without the "
+                "LLM: “why do you believe capital preservation”, or a status "
+                "phrase: “market intelligence status”, “career intelligence "
+                "status”, “learner status”. Or ask me to research it as a "
+                "background job."
             ),
             timeout=self._interactive_timeout,
         )
@@ -1229,9 +1428,23 @@ class AssistantService:
                 "run_id": result.run_id,
             }
         )
+        answer = (result.answer or "").strip()
+        citations = [c.as_dict() for c in result.citations]
+        # PLC.F5 — never invent; empty RAG → honest gap
+        if not answer or answer.lower() in {"", "i don't know", "unknown"}:
+            if not citations:
+                return _Outcome(
+                    answer=(
+                        f"I don't have durable knowledge findings for {query!r} yet. "
+                        "Nothing invented. Ingest a document, run research, or ask "
+                        "“market intelligence status” / “learner status” for store-backed facts."
+                    ),
+                    citations=[],
+                    run_id=result.run_id,
+                )
         return _Outcome(
-            answer=result.answer,
-            citations=[c.as_dict() for c in result.citations],
+            answer=answer,
+            citations=citations,
             run_id=result.run_id,
         )
 
@@ -1564,6 +1777,127 @@ class AssistantService:
             },
         )
 
+    def _do_career_status(self, args, context, tool_calls) -> _Outcome:
+        """PLC.F — Career Intelligence status without waiting on Ollama."""
+        lines: list[str] = [
+            "Career Intelligence (CI.0–CI.5) — what Atlas has learned / can do so far:",
+            "",
+            "Shipped capabilities (not inventing job outcomes):",
+            "· Observer one-step ingest (LinkedIn/export when you provide it)",
+            "· Career Knowledge Graph + opportunity score",
+            "· Career Research BATCH mode",
+            "· Board adapters + honest CapabilityGaps when live HTTP isn’t wired",
+            "· Learning plans from postings + gated-apply stub (recommend-only)",
+            "",
+        ]
+        brief: dict[str, Any] | None = None
+        try:
+            from atlas.career.brief import build_morning_brief
+
+            brief = build_morning_brief(include_jobs=False)
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"Brief unavailable right now: {type(exc).__name__}: {exc}"[:180])
+            brief = None
+
+        if isinstance(brief, dict):
+            highlights = brief.get("highlights") or []
+            watching = brief.get("watchlist") or {}
+            n = int(watching.get("count") or 0) if isinstance(watching, dict) else 0
+            lines.append(f"Watchlist items on disk: {n}")
+            for h in (highlights or [])[:6]:
+                lines.append(f"· {h}")
+            market = brief.get("market") or {}
+            skills = (market.get("skills") or [])[:5] if isinstance(market, dict) else []
+            if skills:
+                lines.append("Fixture market demand (sample feed — not live boards):")
+                for s in skills:
+                    lines.append(
+                        f"  · {s.get('skill')}: {s.get('demand_pct')}%"
+                    )
+            honesty = brief.get("note")
+            if honesty:
+                lines.append(str(honesty)[:280])
+            else:
+                lines.append(
+                    "Honesty: live board apply is gated; sample/fixture demand ≠ "
+                    "your real market until you import a feed or enable boards."
+                )
+
+        lines.extend(
+            [
+                "",
+                "Next useful operator moves:",
+                "· Personal tab → career brief / watchlist",
+                "· Import LinkedIn export or job feed when ready",
+                "· GET /v1/personal/career/brief",
+                "",
+                "(This reply is deterministic — no chat LLM — so it works even when Ollama is busy.)",
+            ]
+        )
+        wl_n = None
+        if isinstance(brief, dict):
+            wl_n = int((brief.get("watchlist") or {}).get("count") or 0)
+        tool_calls.append(
+            {
+                "intent": Intent.CAREER_STATUS,
+                "action": "status",
+                "capability": "career_brief",
+                "watchlist_n": wl_n,
+            }
+        )
+        return _Outcome(answer="\n".join(lines))
+
+    def _do_market_status(self, args, context, tool_calls) -> _Outcome:
+        """PLC.F / UTS.G — Market Intelligence / coverage status (no Ollama)."""
+        from atlas.investment.market_status_chat import (
+            answer_market_allocation_question,
+            build_market_intelligence_status,
+        )
+
+        data_dir = None
+        try:
+            from atlas.config import get_config
+
+            data_dir = str(get_config().paths.data)
+        except Exception:  # noqa: BLE001
+            data_dir = None
+        # Prefer specific UTS questions when the user asked them.
+        msg = ""
+        try:
+            msg = str(
+                (args or {}).get("message")
+                or (args or {}).get("query")
+                or (context or {}).get("message")
+                or ""
+            )
+        except Exception:  # noqa: BLE001
+            msg = ""
+        special = answer_market_allocation_question(
+            msg, data_dir=data_dir, laboratory_id="india_equity_learner"
+        )
+        if special and special.get("answer"):
+            tool_calls.append(
+                {
+                    "intent": Intent.MARKET_STATUS,
+                    "action": special.get("kind") or "allocation",
+                    "capability": "market_status",
+                }
+            )
+            return _Outcome(answer=str(special.get("answer") or ""), extras=special)
+
+        doc = build_market_intelligence_status(data_dir=data_dir, goals=self._goals)
+        tool_calls.append(
+            {
+                "intent": Intent.MARKET_STATUS,
+                "action": "status",
+                "capability": "market_status",
+                "labs": doc.get("labs"),
+                "research_n": doc.get("research_n"),
+                "fundamentals_pe": doc.get("fundamentals_pe"),
+            }
+        )
+        return _Outcome(answer=str(doc.get("answer") or ""), extras=doc)
+
     def _do_manage_goal(self, args, context, tool_calls) -> _Outcome:
         """OX.3 — create / list / status durable Goals (objectives first)."""
         if self._goals is None:
@@ -1753,6 +2087,8 @@ class AssistantService:
         # Prefer the typed CapabilityRegistry (S11): it's the single source of truth
         # for what's registered, and it sees plugin capabilities registered after
         # this service is constructed (shared by reference).
+        if not capability:
+            return True
         if self._capabilities is not None:
             return self._capabilities.has(capability)
         # Fallback for callers that don't wire a registry (older tests): infer from

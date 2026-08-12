@@ -210,6 +210,7 @@ def what_changed(
     current_unknowns: list[str] | None = None,
     recent_observations: list[dict[str, Any]] | None = None,
     note: str = "",
+    checkpoint: str | None = None,
 ) -> dict[str, Any]:
     """Diff current evidence vs frozen packet beliefs (DI.2 / LI.3b revisit answers)."""
     packet = packet if isinstance(packet, dict) else {}
@@ -319,6 +320,129 @@ def what_changed(
             + (f" kinds={','.join(new_obs_kinds[:6])}" if new_obs_kinds else "")
         )
 
+    # PLC.E — open-book packs + policy + early-vs-wrong (honest unknowns OK)
+    pack_ids: list[str] = []
+    thesis_status = None
+    policy_hits = 0
+    sector_rel_pct = None
+    rs_vs_nifty = None
+    rs_source = None
+    # Prefer newest open-book pack (including already-cited) for RS densify
+    for o in list(reversed(obs_rows)) + list(reversed(new_obs)):
+        pl = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+        kind = str(o.get("kind") or "")
+        pack_kind = str(pl.get("kind") or "")
+        if pack_kind != "open_book_daily_pack" and kind != "open_book_daily_pack":
+            continue
+        mkt = pl.get("market") if isinstance(pl.get("market"), dict) else {}
+        raw_rs = mkt.get("rs_vs_nifty")
+        if raw_rs is None:
+            continue
+        try:
+            rs_vs_nifty = float(raw_rs)
+            sector_rel_pct = rs_vs_nifty
+            rs_source = "open_book_rs_vs_nifty"
+            break
+        except (TypeError, ValueError):
+            continue
+    for o in new_obs:
+        pl = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+        kind = str(o.get("kind") or "")
+        pack_kind = str(pl.get("kind") or "")
+        if pack_kind == "open_book_daily_pack" or kind == "open_book_daily_pack":
+            oid = str(o.get("id") or "")
+            if oid:
+                pack_ids.append(oid)
+            th = pl.get("thesis") if isinstance(pl.get("thesis"), dict) else {}
+            st = str(th.get("status") or "").strip().lower()
+            if st and st not in {"unknown", "n/a", ""}:
+                thesis_status = st
+        if kind in {"macro_event", "policy_event"} or pack_kind in {
+            "macro_event",
+            "policy_event",
+        }:
+            policy_hits += 1
+    if pack_ids:
+        deltas.append(f"open_book_packs={len(pack_ids)}")
+    if thesis_status:
+        deltas.append(f"thesis_status={thesis_status}")
+    if policy_hits:
+        deltas.append(f"policy_events={policy_hits}")
+    if sector_rel_pct is not None:
+        deltas.append(f"rs_vs_nifty={sector_rel_pct:+.2f}")
+
+    # Named news densify from open-book pack headlines when news_event rows absent
+    if news_delta is None:
+        pack_titles: list[str] = []
+        pack_sents: list[str] = []
+        pack_oids: list[str] = []
+        for o in obs_rows:
+            pl = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+            if str(pl.get("kind") or "") != "open_book_daily_pack":
+                continue
+            news_pl = pl.get("news") if isinstance(pl.get("news"), dict) else {}
+            for bucket in ("company", "sector", "macro", "gov"):
+                for item in news_pl.get(bucket) or []:
+                    if not isinstance(item, dict):
+                        continue
+                    t = str(item.get("title") or item.get("text") or "").strip()
+                    if t and t not in pack_titles:
+                        pack_titles.append(t[:120])
+                    s = str(item.get("sentiment") or "").strip()
+                    if s and s not in pack_sents:
+                        pack_sents.append(s)
+                    oid = str(item.get("id") or "")
+                    if oid:
+                        pack_oids.append(oid)
+            for oid in news_pl.get("observation_ids") or []:
+                if oid and str(oid) not in pack_oids:
+                    pack_oids.append(str(oid))
+        if pack_titles:
+            news_delta = {
+                "count": len(pack_titles),
+                "titles": pack_titles[:6],
+                "observation_ids": pack_oids[:12],
+                "topic_tags": [],
+                "sentiment": (
+                    pack_sents[0]
+                    if len(pack_sents) == 1
+                    else ("mixed" if len(pack_sents) > 1 else "unknown")
+                ),
+                "observed_before_move": None,
+                "open_book": True,
+                "source": "open_book_pack_headlines",
+            }
+            deltas.append(f"news_delta:{news_delta['count']} {pack_titles[0][:70]}")
+
+    # Regime densify from open-book pack + direct macro/policy observations
+    regime_tags: list[str] = []
+    from atlas.investment.decision_packets import normalize_regime_tags
+    from atlas.investment.sector_benchmarks import infer_event_regime_tags
+
+    for o in list(reversed(obs_rows)):
+        pl = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+        kind = str(o.get("kind") or "")
+        if str(pl.get("kind") or "") == "open_book_daily_pack":
+            mkt = pl.get("market") if isinstance(pl.get("market"), dict) else {}
+            raw_tags = mkt.get("regime_tags") or []
+            if isinstance(raw_tags, list) and raw_tags:
+                regime_tags = normalize_regime_tags(raw_tags)
+                if regime_tags:
+                    break
+        if kind in {"macro_event", "policy_event"}:
+            raw = list(pl.get("regime_tags") or [])
+            if not raw:
+                raw = infer_event_regime_tags(
+                    title=str(pl.get("title") or ""),
+                    detail=str(pl.get("detail") or ""),
+                    sectors=list(pl.get("sectors") or []),
+                )
+            for t in normalize_regime_tags(raw):
+                if t != "unknown" and t not in regime_tags:
+                    regime_tags.append(t)
+    if regime_tags:
+        deltas.append("regime=" + ",".join(regime_tags[:4]))
+
     thesis_improved = None
     if conf_delta is not None:
         thesis_improved = conf_delta > 0.02
@@ -326,6 +450,23 @@ def what_changed(
         thesis_improved = price_chg_pct > 0
     elif price_chg_pct is not None and packet.get("action") == "sell":
         thesis_improved = price_chg_pct < 0
+
+    cp = str(checkpoint or "").lower()
+    early_vs_wrong = None
+    if packet.get("action") == "buy" and price_chg_pct is not None:
+        if price_chg_pct <= -5.0 and cp in {"day1", "day3", "week1", ""}:
+            early_vs_wrong = "early_pain"
+            deltas.append("early_vs_wrong=early_pain")
+        elif (
+            thesis_improved is False
+            and conf_delta is not None
+            and conf_delta < -0.05
+        ):
+            early_vs_wrong = "thesis_weakening"
+            deltas.append("early_vs_wrong=thesis_weakening")
+        elif thesis_status in {"weakening", "broken", "falsified"}:
+            early_vs_wrong = "thesis_weakening"
+            deltas.append("early_vs_wrong=thesis_status")
 
     return {
         "thesis_improved": thesis_improved,
@@ -338,6 +479,15 @@ def what_changed(
         "new_observation_count": len(new_obs),
         "new_observation_kinds": new_obs_kinds,
         "new_observation_ids": [str(o.get("id")) for o in new_obs[:12] if o.get("id")],
+        "open_book_pack_ids": pack_ids[:8],
+        "thesis_status": thesis_status,
+        "policy_event_count": policy_hits,
+        "rs_vs_nifty": rs_vs_nifty,
+        "sector_rel_pct": sector_rel_pct,
+        "sector_rel_source": rs_source,
+        "regime_tags": regime_tags,
+        "early_vs_wrong": early_vs_wrong,
+        "checkpoint": cp or None,
         "resolved_unknowns": resolved,
         "new_unknowns": new_gaps,
         "deltas": deltas,
@@ -899,6 +1049,7 @@ class DecisionTimelineStore:
                 current_unknowns=unknowns,
                 recent_observations=recent_obs,
                 note=f"auto {rev.get('checkpoint')}",
+                checkpoint=str(rev.get("checkpoint") or ""),
             )
             event = self.complete_revisit(rev, diff=diff, mark=mark)
             done.append(
@@ -919,16 +1070,34 @@ class DecisionTimelineStore:
         }
 
     def learning_counts(self, *, portfolio_key: str | None = None) -> dict[str, Any]:
+        day = ist_today()
         if self._repo is not None:
             try:
                 c = self._repo.counts(portfolio_key=portfolio_key)
+                due_today = 0
+                pending_future = 0
+                try:
+                    split = self._repo.pending_due_split(
+                        as_of_ist=day, portfolio_key=portfolio_key
+                    )
+                    due_today = int(split.get("due_today") or 0)
+                    pending_future = int(split.get("pending_future") or 0)
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("pending_due_split failed", exc_info=True)
                 return {
                     "pending_revisits": c.get("pending", 0),
                     "done_revisits": c.get("done", 0),
                     "skipped_revisits": c.get("skipped", 0),
+                    "revisits_due_today": due_today,
+                    "pending_future": pending_future,
                     "open_evolution": c.get("pending", 0),
                     "closed_checkpoints": c.get("done", 0) + c.get("skipped", 0),
                     "density": "lq.2",
+                    "as_of_ist": day,
+                    "honesty": (
+                        "0 done with only future due dates ≠ mission dead — "
+                        "checkpoints wait for due_ist"
+                    ),
                 }
             except Exception:  # noqa: BLE001
                 self._logger.debug("learning_counts repo failed", exc_info=True)
@@ -943,16 +1112,32 @@ class DecisionTimelineStore:
             key = (str(r.get("decision_id") or ""), str(r.get("checkpoint") or ""))
             if key[0] and key[1]:
                 latest[key] = r
-        pending = sum(1 for r in latest.values() if r.get("status", "pending") == "pending")
+        pending_rows = [
+            r for r in latest.values() if r.get("status", "pending") == "pending"
+        ]
+        pending = len(pending_rows)
         done = sum(1 for r in latest.values() if r.get("status") == "done")
         skipped = sum(1 for r in latest.values() if r.get("status") == "skipped")
+        due_today = sum(
+            1 for r in pending_rows if str(r.get("due_ist") or "") <= day
+        )
+        pending_future = sum(
+            1 for r in pending_rows if str(r.get("due_ist") or "") > day
+        )
         return {
             "pending_revisits": pending,
             "done_revisits": done,
             "skipped_revisits": skipped,
+            "revisits_due_today": due_today,
+            "pending_future": pending_future,
             "open_evolution": pending,
             "closed_checkpoints": done + skipped,
             "density": "lq.2",
+            "as_of_ist": day,
+            "honesty": (
+                "0 done with only future due dates ≠ mission dead — "
+                "checkpoints wait for due_ist"
+            ),
             "note": "json/memory counts" if self._repo is None else None,
         }
 
@@ -978,14 +1163,26 @@ class DecisionTimelineStore:
 
 def format_evolution_section(counts: dict[str, Any] | None) -> list[str]:
     counts = counts or {}
+    due = counts.get("revisits_due_today")
+    future = counts.get("pending_future")
     lines = [
         "",
-        "Decision evolution (DI.2 / LQ.2):",
-        f"  Open revisits pending: {counts.get('pending_revisits', 0)}",
+        "Decision evolution (DI.2 / LQ.2 / PLC.E honesty):",
+        f"  Due today: {due if due is not None else '—'}",
+        f"  Pending future (not yet due): {future if future is not None else '—'}",
+        f"  Open revisits pending (total): {counts.get('pending_revisits', 0)}",
         f"  Checkpoints completed: {counts.get('done_revisits', 0)}",
     ]
     if counts.get("skipped_revisits"):
         lines.append(f"  Checkpoints skipped: {counts.get('skipped_revisits')}")
+    if (
+        int(counts.get("done_revisits") or 0) == 0
+        and int(future or 0) > 0
+        and int(due or 0) == 0
+    ):
+        lines.append(
+            "  Note: 0 done + all future due dates ≠ mission dead — waiting on due_ist"
+        )
     if counts.get("open_books") is not None:
         lines.append(
             f"  Open books with full schedule: "

@@ -212,3 +212,36 @@ class DecisionTimelineRepository(BaseRepository):
             if key in out:
                 out[key] = int(r.get("n") or 0)
         return out
+
+    def pending_due_split(
+        self, *, as_of_ist: str, portfolio_key: str | None = None
+    ) -> dict[str, int]:
+        """PLC.E — pending rows due today vs still in the future."""
+        day = str(as_of_ist)[:10]
+        if portfolio_key:
+            row = self.fetch_one(
+                """
+                SELECT
+                  COUNT(*) FILTER (WHERE due_ist <= %s)::int AS due_today,
+                  COUNT(*) FILTER (WHERE due_ist > %s)::int AS pending_future
+                FROM decision.revisits
+                WHERE status = 'pending' AND portfolio_key = %s
+                """,
+                (day, day, portfolio_key),
+            )
+        else:
+            row = self.fetch_one(
+                """
+                SELECT
+                  COUNT(*) FILTER (WHERE due_ist <= %s)::int AS due_today,
+                  COUNT(*) FILTER (WHERE due_ist > %s)::int AS pending_future
+                FROM decision.revisits
+                WHERE status = 'pending'
+                """,
+                (day, day),
+            )
+        row = row or {}
+        return {
+            "due_today": int(row.get("due_today") or 0),
+            "pending_future": int(row.get("pending_future") or 0),
+        }

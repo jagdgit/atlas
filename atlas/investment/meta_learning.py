@@ -166,12 +166,33 @@ def build_meta_learning_digest(
         )
     )
 
-    # Indicators / axes that never mattered
-    never_mattered = [
-        r["axis"]
-        for r in feature_insights
-        if r.get("never_mattered_hint") and (r.get("n") or 0) >= 3
-    ]
+    # Indicators / axes — demote only when coverage + sample sufficient;
+    # otherwise keep in "unproven" (missing news ≠ news is useless)
+    never_mattered = []
+    unproven_axes = []
+    news_obs_n = 0
+    for p in pkt_list:
+        for oid in p.get("observation_ids") or []:
+            if oid:
+                news_obs_n += 1  # citation count proxy; refined below
+    # Prefer explicit news_event counts if attrs carry news_delta
+    news_linked = 0
+    for attr in attr_list:
+        payload = attr.get("payload") if isinstance(attr.get("payload"), dict) else {}
+        wc = payload.get("what_changed") if isinstance(payload.get("what_changed"), dict) else {}
+        nd = wc.get("news_delta") if isinstance(wc.get("news_delta"), dict) else {}
+        if int(nd.get("count") or 0) > 0:
+            news_linked += 1
+    evidence_coverage_ok = news_linked >= 30 or news_obs_n >= 100
+    for r in feature_insights:
+        if not (r.get("never_mattered_hint") and (r.get("n") or 0) >= 3):
+            continue
+        axis = str(r.get("axis") or "")
+        if axis in {"news", "research", "macro", "sector", "policy", "thesis"}:
+            if not evidence_coverage_ok:
+                unproven_axes.append(axis)
+                continue
+        never_mattered.append(axis)
 
     # Strategy tag quality (never mix for edge — this is DQ only)
     strategy_quality = []
@@ -237,7 +258,7 @@ def build_meta_learning_digest(
         tot = pending + done
         revisit_done_pct = round(100.0 * done / tot, 1) if tot else None
 
-    # Intelligence score 0–100 (Atlas-the-product)
+    # Intelligence score 0–100 (Atlas-the-product) — quality weighted, not activity
     parts: list[float] = []
     if avg_comp is not None:
         parts.append(100.0 * avg_comp)
@@ -251,6 +272,27 @@ def build_meta_learning_digest(
         parts.append(10.0 * float(process_score))
     if calib_n and calibration.get("overconfidence_rate") is not None:
         parts.append(100.0 * (1.0 - float(calibration["overconfidence_rate"])))
+    exp_m = None
+    try:
+        from atlas.investment.experience_integrity import (
+            build_experience_metrics,
+            experience_quality_score,
+        )
+
+        exp_m = build_experience_metrics(
+            packets=pkt_list,
+            attributions=attr_list,
+            evolution=evo,
+        )
+        exp_q = experience_quality_score(exp_m)
+        if exp_q is not None:
+            parts.append(float(exp_q))
+            # Penalize raw packet spam vs unique decisions
+            infl = exp_m.get("activity_inflation_ratio")
+            if infl is not None and float(infl) > 0.5:
+                parts.append(max(0.0, 100.0 * (1.0 - float(infl))))
+    except Exception:  # noqa: BLE001
+        exp_m = None
     intelligence_score = round(sum(parts) / len(parts), 1) if parts else None
 
     # Appendix B answers
@@ -290,15 +332,28 @@ def build_meta_learning_digest(
 
     # Playbook proposals (never auto-apply)
     proposals: list[dict[str, Any]] = []
+    if unproven_axes:
+        proposals.append(
+            {
+                "kind": "feature_unproven",
+                "priority": "info",
+                "text": (
+                    f"Axes near-zero but evidence coverage insufficient — keep "
+                    f"UNPROVEN (do not demote): {', '.join(unproven_axes[:6])}. "
+                    f"news_linked={news_linked} obs_cites≈{news_obs_n} "
+                    f"(need linked≥30 or cites≥100 before predictive judgment)."
+                ),
+            }
+        )
     if never_mattered:
         proposals.append(
             {
                 "kind": "feature_weight_review",
                 "priority": "low",
                 "text": (
-                    f"Axes with near-zero contribution across ≥3 packets: "
-                    f"{', '.join(never_mattered[:6])} — consider demoting in "
-                    f"feature_contributions heuristics (playbook change-log)."
+                    f"Axes with near-zero contribution AND sufficient coverage/"
+                    f"sample: {', '.join(never_mattered[:6])} — consider demoting "
+                    f"in feature_contributions heuristics (playbook change-log only)."
                 ),
             }
         )
@@ -362,6 +417,7 @@ def build_meta_learning_digest(
             "dq_grade_counts": dict(dq_counts),
         },
         "intelligence_score": intelligence_score,
+        "experience_metrics": exp_m if isinstance(exp_m, dict) else None,
         "families": {
             "completeness": {
                 "avg_packet_completeness": avg_comp,
@@ -382,6 +438,9 @@ def build_meta_learning_digest(
             "learning": {
                 "feature_insights": feature_insights[:12],
                 "never_mattered_axes": never_mattered,
+                "unproven_axes": unproven_axes,
+                "evidence_coverage_ok": evidence_coverage_ok,
+                "news_linked": news_linked,
                 "missing_before_poor_dq": dict(missing_before_poor.most_common(8)),
                 "strategy_quality_by_dq": strategy_quality[:10],
             },
@@ -424,6 +483,26 @@ def format_meta_learning_section(doc: dict[str, Any] | None) -> list[str]:
         f"genealogy={ans.get('genealogy_coverage_pct')}% · "
         f"revisits done={ans.get('revisit_done_pct')}%"
     )
+    # RLD honesty — do not conflate IQ rise with trading edge
+    try:
+        from atlas.investment.experience_integrity import build_maturity_split
+
+        fam = doc.get("family") if isinstance(doc.get("family"), dict) else {}
+        gene = fam.get("genealogy") if isinstance(fam.get("genealogy"), dict) else {}
+        mat = build_maturity_split(
+            experience_metrics=doc.get("experience_metrics"),
+            system_score=doc.get("intelligence_score"),
+            genealogy_pct=ans.get("genealogy_coverage_pct")
+            or gene.get("parent_link_pct"),
+        )
+        lines.append(
+            f"  System Maturity={mat.get('system_maturity')} · "
+            f"Trading Evidence={mat.get('trading_evidence_maturity')} · "
+            f"Attribution={mat.get('attribution_maturity')} · "
+            f"Strategy Evidence={mat.get('strategy_evidence')}"
+        )
+    except Exception:  # noqa: BLE001
+        pass
     mkt = (doc.get("answers") or {}).get("markets") or {}
     if mkt.get("best_strategy_tag_by_dq"):
         lines.append(

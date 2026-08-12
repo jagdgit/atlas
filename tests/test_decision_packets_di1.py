@@ -117,7 +117,7 @@ def test_evening_report_includes_decisions_section(tmp_path: Path):
         portfolio={"cash": 1000, "decisions": packets},
         decisions=packets,
     )
-    assert "Decisions today (1)" in body
+    assert "Decisions today (1" in body
     assert "EICHERMOT.NS" in body
     assert "research_forced_hold" in body
 
@@ -137,4 +137,35 @@ def test_repo_has_no_update_or_delete():
 
 def test_format_decisions_section_empty():
     lines = format_decisions_section([])
-    assert any("Decisions today (0)" in ln for ln in lines)
+    assert any("Decisions today (0" in ln for ln in lines)
+
+
+def test_format_decisions_section_collapses_routine_holds():
+    packets = [
+        {
+            "action": "hold",
+            "symbol": f"S{i}.NS",
+            "strategy_tag": "switch_blocked_cold_start",
+            "decision_id": f"h{i}",
+            "reasons_against": ["fcf_missing"],
+        }
+        for i in range(20)
+    ]
+    packets.append(
+        {
+            "action": "buy",
+            "symbol": "BUY.NS",
+            "strategy_tag": "sma_cross_rsi",
+            "decision_id": "b1",
+            "reasons_for": ["cross"],
+        }
+    )
+    lines = format_decisions_section(packets)
+    blob = "\n".join(lines)
+    assert "21 evaluations" in blob
+    assert "Dominant state:" in blob
+    assert "Occurrences: 20" in blob
+    assert "BUY BUY.NS" in blob or "BUY.NS" in blob
+    # Should not dump 20 individual HOLD lines
+    hold_lines = [ln for ln in lines if "HOLD S" in ln]
+    assert len(hold_lines) == 0

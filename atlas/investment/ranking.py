@@ -32,7 +32,7 @@ _LEARNING_LINE = {
 }
 
 
-def rank_universe(
+def score_universe(
     members: list[dict[str, Any]],
     *,
     bars_by_symbol: dict[str, list[dict[str, Any]]] | None = None,
@@ -40,18 +40,16 @@ def rank_universe(
     policy_delta_by_symbol: dict[str, float] | None = None,
     experience_bias_by_symbol: dict[str, float] | None = None,
     research_bias_by_symbol: dict[str, float] | None = None,
-    max_watchlist: int = 15,
     weights: dict[str, float] | None = None,
     lookback_short: int = 5,
     lookback_long: int = 20,
     min_bars: int = 5,
     cold_start_coverage: float = 0.25,
 ) -> list[dict[str, Any]]:
-    """Score membership → top ``max_watchlist`` with WHY ± lines.
+    """Score **all** membership rows with WHY ± lines and assign ranks 1..N.
 
-    Cold start (IL-Q10): when fewer than ``cold_start_coverage`` of members have
-    enough bars, scores stay neutral, order follows membership, and every row is
-    labeled ``phase=learning`` / ``confidence=very_low``.
+    UTS.A — full ladder for triage memory. Watchlist truncation is
+    ``rank_universe`` / caller responsibility.
     """
     rows = [dict(m) for m in (members or [])]
     if not rows:
@@ -63,7 +61,6 @@ def rank_universe(
     exp_map = experience_bias_by_symbol or {}
     research_map = research_bias_by_symbol or {}
     w = _normalize_weights(weights or DEFAULT_WEIGHTS)
-    max_n = max(1, int(max_watchlist))
     short_n = max(2, int(lookback_short))
     long_n = max(short_n, int(lookback_long))
     need = max(2, int(min_bars))
@@ -234,6 +231,13 @@ def rank_universe(
             phase = PHASE_ACTIVE
             confidence = _confidence_for(has_bars=has_bars, coverage=coverage)
 
+        last_price = None
+        if bars:
+            try:
+                last_price = float(bars[-1].get("close"))
+            except (TypeError, ValueError, AttributeError):
+                last_price = None
+
         scored.append(
             {
                 "symbol": sym,
@@ -248,6 +252,7 @@ def rank_universe(
                 "reason": _reason_from(explanations),
                 "confidence": confidence,
                 "phase": phase,
+                "last_price": last_price,
                 "_member_idx": i,
                 "_has_bars": has_bars,
             }
@@ -256,12 +261,54 @@ def rank_universe(
     # Sort: score desc, then membership order (stable cold-start / ties).
     scored.sort(key=lambda r: (-float(r["score"]), int(r["_member_idx"])))
     out: list[dict[str, Any]] = []
-    for rank, row in enumerate(scored[:max_n], start=1):
+    for rank, row in enumerate(scored, start=1):
         row["rank"] = rank
         row.pop("_member_idx", None)
         row.pop("_has_bars", None)
         out.append(row)
     return out
+
+
+def rank_universe(
+    members: list[dict[str, Any]],
+    *,
+    bars_by_symbol: dict[str, list[dict[str, Any]]] | None = None,
+    quality_by_symbol: dict[str, dict[str, Any]] | None = None,
+    policy_delta_by_symbol: dict[str, float] | None = None,
+    experience_bias_by_symbol: dict[str, float] | None = None,
+    research_bias_by_symbol: dict[str, float] | None = None,
+    max_watchlist: int = 15,
+    weights: dict[str, float] | None = None,
+    lookback_short: int = 5,
+    lookback_long: int = 20,
+    min_bars: int = 5,
+    cold_start_coverage: float = 0.25,
+) -> list[dict[str, Any]]:
+    """Score membership → top ``max_watchlist`` with WHY ± lines.
+
+    Cold start (IL-Q10): when fewer than ``cold_start_coverage`` of members have
+    enough bars, scores stay neutral, order follows membership, and every row is
+    labeled ``phase=learning`` / ``confidence=very_low``.
+
+    UTS.A: full ladder via ``score_universe``; this truncates for the deep watchlist.
+    """
+    scored = score_universe(
+        members,
+        bars_by_symbol=bars_by_symbol,
+        quality_by_symbol=quality_by_symbol,
+        policy_delta_by_symbol=policy_delta_by_symbol,
+        experience_bias_by_symbol=experience_bias_by_symbol,
+        research_bias_by_symbol=research_bias_by_symbol,
+        weights=weights,
+        lookback_short=lookback_short,
+        lookback_long=lookback_long,
+        min_bars=min_bars,
+        cold_start_coverage=cold_start_coverage,
+    )
+    if not scored:
+        return []
+    max_n = max(1, int(max_watchlist))
+    return scored[:max_n]
 
 
 def summarize_phase(ranked: list[dict[str, Any]]) -> dict[str, Any]:

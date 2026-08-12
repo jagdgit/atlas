@@ -71,6 +71,27 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
         "require_thesis": True,
         "research_auto_mvr": True,
         "mos_mode": "soft",
+        # PLC.A — fund sanity + explicit thesis trigger (SMA/RSI remains A1)
+        "plc_a_gates": True,
+        "plc_a_require_fundamentals": True,
+        "plc_a_require_thesis_trigger": True,
+        "plc_d_hypothesis": True,
+        "plc_b_exits": True,
+        "plc_b_stop_loss_pct": 0.08,
+        "plc_b_time_stop_days": 90,
+        # UTS.D — opportunity-cost hold-vs-challenger (learner default on)
+        "opportunity_switch_enabled": True,
+        "opportunity_switch_execute": True,
+        "max_switches_per_tick": 1,
+        "switching_threshold": 0.02,
+        "cold_start_switch_threshold": 0.05,
+        "switch_cost_bps": 100,
+        "confidence_penalty_k": 0.02,
+        "confidence_penalty_m": 0.01,
+        "exploratory_turnover_ok": True,
+        "missed_opportunity_ledger": True,
+        "missed_opportunity_top_n": 5,
+        "missed_opportunity_horizon_d": 20,
         # Hard ceiling for one name. Each buy targets the persona per-name budget
         # (~18% for medium risk) so a day's other candidates still have room.
         "max_exposure_pct": 40.0,
@@ -88,6 +109,10 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             # IL.5 — live Yahoo .NS bars for ranking (when market.yahoo_enabled)
             "provider": "yahoo",
             "use_quality_seed": True,
+            # UTS.A/B — full ladder persist + opportunity queue
+            "universe_triage_persist": True,
+            "opportunity_queue_enabled": True,
+            "acceleration_rank_boost": False,
         },
         "decision_simulation": dict(sim),
         "paper_trading": dict(sim),
@@ -101,9 +126,15 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
         },
         "market_observer": {
             "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
             "symbols": [],
             "instruments": [],
             "provider": "yahoo",
+            "open_book_daily_packs": True,
+            "open_book_pack_budget": 5,
+            "open_book_pack_budget_reduced": 2,
+            "mark_snapshot_budget": 20,
+            "mark_snapshot_budget_reduced": 5,
         },
         "company_intelligence": {
             "program_id": "market_intelligence",
@@ -115,11 +146,19 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "headlines": [],
             "items": [],
             "seed_from_watchlist": True,
+            # E1 / OI-EVID-NET0 — PIB RSS verified XML 2026-08-10 (A1); SEBI/RBI stay off
+            "use_rss_allowlist": True,
+            "rss_enable": ["pib_press"],
+            "rss_include_defaults": True,
         },
         "government_intelligence": {
             "program_id": "market_intelligence",
             "include_defaults": True,
             "items": [],
+            # E1 — same PIB allow-list → policy catalog (kinds policy|gov|budget)
+            "fetch_policy_rss": True,
+            "rss_enable": ["pib_press"],
+            "rss_include_defaults": True,
         },
         "opportunity_discovery": {
             "program_id": "market_intelligence",
@@ -140,7 +179,18 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
         },
         "fundamentals_enrich": {
             "program_id": "market_intelligence",
-            "max_symbols": 20,
+            "max_symbols": 3,
+            "batch_size": 3,
+            "prefer_open_books": True,
+            # E2 / A9 — daily open books only; weekly universe tick sets open_books_only=false
+            "open_books_only": True,
+            "universe_weekly": {
+                "enabled": True,
+                "ist_weekday": 6,
+                "hour_start": 3,
+                "hour_end": 5,
+            },
+            "portfolio_key": "india_equity_learner",
         },
         "thesis_outcome": {
             "program_id": "market_intelligence",
@@ -153,6 +203,10 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "program_id": "market_intelligence",
             "portfolio_key": "india_equity_learner",
             "max_revisits": 20,
+            "plc_d_hypothesis": True,
+            "missed_opportunity_ledger": True,
+            "missed_opportunity_top_n": 5,
+            "missed_opportunity_horizon_d": 20,
         },
     }
 
@@ -259,9 +313,17 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 role="Investor Reports",
                 template="investor_reports",
                 kind="maintenance",
-                cadence="morning IST",
+                cadence="morning + hourly 08–20 IST + evening",
                 status=MEMBER_ENABLED,
-                description="Email daily plan + trade decision reports (Gmail)",
+                description="Email daily plan, hourly activity digests, EOD judgment report",
+            ),
+            ProgramMember(
+                role="Historical Bars Bootstrap",
+                template="historical_bars_bootstrap",
+                kind="learning",
+                cadence="every 20m (budgeted)",
+                status=MEMBER_ENABLED,
+                description="J1 — 5–10y daily OHLCV into durable bar store (Yahoo history job)",
             ),
             ProgramMember(
                 role="Research Freshness",

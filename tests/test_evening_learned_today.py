@@ -65,7 +65,12 @@ def test_learned_today_section_in_evening():
                 {"symbol": "CIPLA.NS", "quantity": 1, "avg_price": 1400, "mark": 1477, "unrealized_pnl": 77}
             ],
             "kpis": {"sells_today": 0, "phase": "learning"},
-            "evolution": {"pending_revisits": 16, "done_revisits": 0},
+            "evolution": {
+                "pending_revisits": 16,
+                "done_revisits": 0,
+                "revisits_due_today": 0,
+                "pending_future": 16,
+            },
             "fundamentals_coverage": {
                 "symbols": 0,
                 "with_pe": 0,
@@ -82,7 +87,8 @@ def test_learned_today_section_in_evening():
     assert "When Atlas sells" in text
     assert "CIPLA.NS" in text
     assert "Import PE/FCF" in text
-    assert "Decision Evolution" in text
+    assert "not dead" in text.lower() or "not yet due" in text.lower()
+    assert "Start/confirm Decision Evolution mission" not in text
 
     _subj, body = format_evening_report(
         plan={"as_of": "2026-08-06", "summary": "x", "phase": "learning", "confidence": "very_low"},

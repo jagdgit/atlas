@@ -2445,7 +2445,88 @@ async function loadLearner(opts = {}) {
   loadLearnerDiDashboards();
   loadInvestorEmailStatus();
   loadLearnerResearchList();
+  loadLearnerLedgers();
   startLearnerPoll();
+}
+
+async function loadLearnerLedgers() {
+  const box = $("#learner-ledgers");
+  if (!box) return;
+  box.textContent = "Loading ledgers…";
+  try {
+    const data = await api("/v1/market/labs/ledgers");
+    renderLearnerLedgers(box, data);
+  } catch (err) {
+    box.textContent = `Ledgers unavailable: ${err && err.message ? err.message : err}`;
+  }
+}
+
+function renderLearnerLedgers(box, data) {
+  box.innerHTML = "";
+  const labs = (data && data.labs) || [];
+  if (!labs.length) {
+    box.append(el("div", { class: "learner-empty", text: "No laboratory books found." }));
+    return;
+  }
+  for (const lab of labs) {
+    const key = lab.portfolio_key || "?";
+    const wrap = el("div", { class: "learner-ledger-block", style: "margin-bottom:14px" });
+    wrap.append(el("div", { class: "sym", text: key }));
+    if (lab.error) {
+      wrap.append(el("div", { class: "muted small", text: String(lab.error) }));
+      box.append(wrap);
+      continue;
+    }
+    const st = lab.statement || lab.snapshot || lab;
+    const cash = st.cash != null ? Number(st.cash) : null;
+    const equity = st.equity != null ? Number(st.equity) : null;
+    const dayPnl = st.day_pnl != null ? Number(st.day_pnl) : null;
+    const totalPnl = st.total_pnl != null ? Number(st.total_pnl) : null;
+    const trades = st.trade_count != null ? st.trade_count : (st.recent_trades || []).length;
+    wrap.append(el("div", {
+      class: "muted small",
+      text: `Cash ₹${cash != null ? cash.toLocaleString("en-IN") : "—"}`
+        + ` · Equity ₹${equity != null ? equity.toLocaleString("en-IN") : "—"}`
+        + ` · Today ${dayPnl != null ? (dayPnl >= 0 ? "+" : "") + "₹" + dayPnl.toLocaleString("en-IN") : "—"}`
+        + ` · Total ${totalPnl != null ? (totalPnl >= 0 ? "+" : "") + "₹" + totalPnl.toLocaleString("en-IN") : "—"}`
+        + ` · trades ${trades}`,
+    }));
+    const table = el("table", { class: "learner-ledger-table", style: "width:100%;font-size:12px;margin-top:6px" });
+    const thead = el("tr", {});
+    for (const h of ["Symbol", "Qty", "Avg", "Mark", "uPnL"]) {
+      thead.append(el("th", { text: h, style: "text-align:left;padding:2px 4px" }));
+    }
+    table.append(thead);
+    for (const p of (st.positions || []).slice(0, 12)) {
+      const tr = el("tr", {});
+      const pnl = Number(p.unrealized_pnl || 0);
+      tr.append(el("td", { text: String(p.symbol || ""), style: "padding:2px 4px" }));
+      tr.append(el("td", { text: String(p.quantity ?? ""), style: "padding:2px 4px" }));
+      tr.append(el("td", { text: Number(p.avg_price || 0).toFixed(2), style: "padding:2px 4px" }));
+      tr.append(el("td", { text: Number(p.mark || 0).toFixed(2), style: "padding:2px 4px" }));
+      tr.append(el("td", {
+        text: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`,
+        style: "padding:2px 4px",
+      }));
+      table.append(tr);
+    }
+    if (!(st.positions || []).length) {
+      wrap.append(el("div", { class: "muted small", text: "No open positions." }));
+    } else {
+      wrap.append(table);
+    }
+    const blotter = el("div", { class: "muted small", style: "margin-top:4px" });
+    blotter.append(document.createTextNode("Recent trades: "));
+    const rt = (st.recent_trades || []).slice(0, 8);
+    if (!rt.length) blotter.append(document.createTextNode("(none)"));
+    else {
+      blotter.append(document.createTextNode(
+        rt.map((t) => `${t.side || "?"} ${t.symbol || ""}×${t.quantity ?? ""}`).join(" · "),
+      ));
+    }
+    wrap.append(blotter);
+    box.append(wrap);
+  }
 }
 
 async function loadLearnerLabStatus() {
@@ -5897,6 +5978,8 @@ function _wireUi() {
   if (learnerRefresh) learnerRefresh.addEventListener("click", () => loadLearner());
   const learnerLabRefresh = $("#learner-lab-refresh");
   if (learnerLabRefresh) learnerLabRefresh.addEventListener("click", () => loadLearnerLabStatus());
+  const learnerLedgersRefresh = $("#learner-ledgers-refresh");
+  if (learnerLedgersRefresh) learnerLedgersRefresh.addEventListener("click", () => loadLearnerLedgers());
   const learnerDiRefresh = $("#learner-di-refresh");
   if (learnerDiRefresh) learnerDiRefresh.addEventListener("click", () => loadLearnerDiDashboards());
   const iipRefresh = $("#iip-refresh");

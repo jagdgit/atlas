@@ -26,6 +26,20 @@ SOURCE_OPERATOR = "operator_import"
 SOURCE_SCREENER_EXPORT = "screener_export"
 SOURCE_YAHOO = "yahoo_fundamentals"
 
+# DI.4 / LQ.7 — watchlist gap defaults (Tier C Yahoo).
+DEFAULT_CRITICAL_FIELDS: tuple[str, ...] = ("pe", "fcf", "roe", "debt_to_equity")
+# J2 / Judgment Month — open holdings densify (Yahoo fills pe/pb/roe/fcf/debt;
+# roic + promoter_holding usually need Screener import; stay honest unknowns).
+OPEN_BOOK_CRITICAL_FIELDS: tuple[str, ...] = (
+    "pe",
+    "pb",
+    "roe",
+    "roic",
+    "fcf",
+    "debt_to_equity",
+    "promoter_holding",
+)
+
 # Schema v2 — importable fields (never invent missing ones).
 # Industry/peer medians are optional operator evidence only — never computed.
 SCHEMA_FIELDS: tuple[str, ...] = (
@@ -57,13 +71,14 @@ SCHEMA_FIELDS: tuple[str, ...] = (
 LEARNER_TEMPLATE_COLUMNS: tuple[str, ...] = (
     "symbol",
     "pe",
+    "pb",
     "fcf",
     "roe",
     "roce",
+    "roic",
     "debt_to_equity",
     "operating_margin",
     "promoter_holding",
-    "pb",
     "price",
     "shares",
     "sector",
@@ -611,14 +626,16 @@ def learner_fundamentals_gaps(
     symbols: list[str],
     *,
     program_id: str = DEFAULT_PROGRAM,
-    critical_fields: tuple[str, ...] = ("pe", "fcf", "roe", "debt_to_equity"),
+    critical_fields: tuple[str, ...] = DEFAULT_CRITICAL_FIELDS,
 ) -> dict[str, Any]:
-    """DI.4 honesty — which learner symbols still lack PE/FCF/etc. Never invent."""
+    """DI.4 / J2 honesty — which learner symbols still lack PE/FCF/etc. Never invent."""
     want = [str(s).strip() for s in symbols if str(s).strip()]
     gaps: list[dict[str, Any]] = []
     present = 0
     missing_pe = 0
     missing_fcf = 0
+    missing_roe = 0
+    missing_pb = 0
     with_industry_pe = 0
     for sym in want:
         row = get_symbol(data_dir, sym, program_id=program_id) or {}
@@ -631,6 +648,10 @@ def learner_fundamentals_gaps(
         if not row:
             missing_pe += 1
             missing_fcf += 1
+            if "roe" in critical_fields:
+                missing_roe += 1
+            if "pb" in critical_fields:
+                missing_pb += 1
             gaps.append(
                 {
                     "symbol": sym,
@@ -645,6 +666,10 @@ def learner_fundamentals_gaps(
             missing_pe += 1
         if row.get("fcf") is None and row.get("free_cash_flow") is None:
             missing_fcf += 1
+        if row.get("roe") is None and "roe" in critical_fields:
+            missing_roe += 1
+        if row.get("pb") is None and "pb" in critical_fields:
+            missing_pb += 1
         if missing:
             gaps.append(
                 {
@@ -662,12 +687,14 @@ def learner_fundamentals_gaps(
         "symbols_with_gaps": len(gaps),
         "missing_pe": missing_pe,
         "missing_fcf": missing_fcf,
+        "missing_roe": missing_roe,
+        "missing_pb": missing_pb,
         "with_industry_pe_median": with_industry_pe,
         "critical_fields": list(critical_fields),
         "gaps": gaps[:80],
         "honesty": (
-            "Missing PE/FCF are real gaps — Atlas must not invent industry averages. "
-            "Import Screener CSV or drop into imports/fundamentals/. "
+            "Missing PE/FCF/ROE/P/B/ROIC/promoter are real gaps — Atlas must not invent. "
+            "Yahoo Tier C fills what it can; Screener CSV for ROIC/promoter/earnings. "
             "Optional industry_*_median columns are operator evidence only."
         ),
         "import_hint": (
@@ -820,6 +847,7 @@ def enrich_from_yahoo(
     enabled: bool = True,
     opener: Any | None = None,
     only_gaps: bool = True,
+    critical_fields: tuple[str, ...] = DEFAULT_CRITICAL_FIELDS,
     batch_size: int | None = None,
 ) -> dict[str, Any]:
     """LI.2 — fetch Yahoo fundamentals as medium-confidence evidence and upsert.
@@ -841,7 +869,10 @@ def enrich_from_yahoo(
 
     gate = None if opener is not None else get_yahoo_rate_gate(data_dir)
     rate_status = gate.status() if gate else {"ready": True, "cooldown_remaining_s": 0}
-    if gate is not None and gate.remaining_cooldown_s() > 0:
+    # Hard-pause on cooldown: do not probe chart/HTML either (shared IP budget).
+    if gate is not None and float(rate_status.get("cooldown_remaining_s") or 0) > 0:
+        pending = [normalize_symbol(s) for s in symbols if str(s).strip()]
+        pending = [s for s in pending if s]
         return {
             "version": VERSION,
             "provider": SOURCE_YAHOO,
@@ -852,12 +883,15 @@ def enrich_from_yahoo(
             "evidence_attached": 0,
             "errors": [],
             "symbols": [],
+            "remaining_symbols": pending,
+            "remaining": len(pending),
+            "paused": True,
             "reason": "yahoo_cooldown",
-            "remaining_symbols": [normalize_symbol(s) for s in symbols if normalize_symbol(s)],
             "rate_gate": rate_status,
+            "batch_size": 0,
             "honesty": (
-                "Yahoo cooldown active — not hammering. Worker/UI will resume "
-                f"after ~{rate_status.get('cooldown_remaining_s')}s."
+                "Yahoo enrich hard-paused while rate gate cooldown is active. "
+                "Gaps stay unknown; resume after cooldown (prefer Screener for FCF)."
             ),
         }
 
@@ -889,18 +923,31 @@ def enrich_from_yahoo(
                 remaining.extend(pending[idx:])
                 break
             existing = symbols_doc.get(sym) or {}
-            if only_gaps and not _row_missing_critical(existing):
+            if only_gaps and not _row_missing_critical(existing, critical_fields=critical_fields):
                 skipped += 1
                 continue
             if limit_n is not None and attempted >= limit_n:
                 remaining.extend(pending[idx:])
                 break
-            if gate is not None and gate.remaining_cooldown_s() > 0:
-                remaining.extend(pending[idx:])
-                paused = True
-                break
+            # Crumb cooldown must not skip the whole batch — chart/HTML fallbacks
+            # still fill PE/price while quoteSummary is cooling down.
             attempted += 1
             parsed = provider.fetch_symbol(sym)
+            fields = dict(parsed.get("fields") or {})
+            if fields:
+                row = {"symbol": sym, "source": SOURCE_YAHOO, **fields}
+                merged = dict(existing)
+                for ev in parsed.get("evidence") or []:
+                    if isinstance(ev, dict):
+                        merged = append_evidence(merged, ev)
+                        evidence_attached += 1
+                for k, v in fields.items():
+                    if merged.get(k) is None:
+                        merged[k] = v
+                symbols_doc[sym] = merged
+                rows_for_upsert.append(row)
+                fetched += 1
+                continue
             if parsed.get("rate_limited") or (
                 parsed.get("error") and is_yahoo_rate_block_error(str(parsed.get("error")))
             ):
@@ -909,25 +956,10 @@ def enrich_from_yahoo(
                 remaining.extend(pending[idx + 1 :])
                 paused = True
                 break
-            if parsed.get("error") and not parsed.get("fields"):
+            if parsed.get("error"):
                 errors.append({"symbol": sym, "error": str(parsed.get("error"))})
                 continue
-            fields = dict(parsed.get("fields") or {})
-            if not fields:
-                errors.append({"symbol": sym, "error": "no_fields"})
-                continue
-            row = {"symbol": sym, "source": SOURCE_YAHOO, **fields}
-            merged = dict(existing)
-            for ev in parsed.get("evidence") or []:
-                if isinstance(ev, dict):
-                    merged = append_evidence(merged, ev)
-                    evidence_attached += 1
-            for k, v in fields.items():
-                if merged.get(k) is None:
-                    merged[k] = v
-            symbols_doc[sym] = merged
-            rows_for_upsert.append(row)
-            fetched += 1
+            errors.append({"symbol": sym, "error": "no_fields"})
     finally:
         try:
             provider.close()
@@ -993,7 +1025,7 @@ def enrich_from_yahoo(
 def _row_missing_critical(
     row: dict[str, Any] | None,
     *,
-    critical_fields: tuple[str, ...] = ("pe", "fcf", "roe", "debt_to_equity"),
+    critical_fields: tuple[str, ...] = DEFAULT_CRITICAL_FIELDS,
 ) -> bool:
     """True when any learner-critical field is absent (LQ.7 / DI.4 gaps)."""
     if not isinstance(row, dict) or not row:
@@ -1074,22 +1106,55 @@ def enrich_watchlist_gaps(
     limit: int = 40,
     batch_size: int | None = None,
     symbols: list[str] | None = None,
+    priority_symbols: list[str] | None = None,
+    open_books_only: bool = False,
+    critical_fields: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """LQ.7 — auto Tier C enrich for watchlist symbols missing critical fields.
 
     Runs only when ``enabled`` (typically ``market.yahoo_enabled``). Never invents;
     medium confidence; conflicts flagged by LI.2 reconcile. Processes a small
     batch per call so Yahoo rate limits are respected; remaining gaps resume later.
+
+    ``priority_symbols`` (e.g. open holdings) are enriched before other watchlist gaps.
+    ``open_books_only`` (E2 / A9) restricts work to open books — no watchlist rest.
     """
     from atlas.investment.yahoo_fundamentals import (
         DEFAULT_BATCH_SIZE,
         get_yahoo_rate_gate,
     )
 
+    prio = [normalize_symbol(s) for s in (priority_symbols or []) if str(s).strip()]
+    prio = [s for s in prio if s]
     want = [normalize_symbol(s) for s in (symbols or []) if str(s).strip()]
     want = [s for s in want if s]
-    if not want:
-        want = watchlist_symbols(program_id, limit=limit)
+    if open_books_only:
+        want = list(prio) if prio else list(want)
+        if not want:
+            return {
+                "version": VERSION,
+                "provider": SOURCE_YAHOO,
+                "ok": True,
+                "fetched": 0,
+                "skipped_already_covered": 0,
+                "gap_symbols": [],
+                "reason": "no_open_books",
+                "open_books_only": True,
+                "honesty": (
+                    "E2 open_books_only — no open holdings to enrich; "
+                    "watchlist rest waits for weekly universe window."
+                ),
+            }
+    else:
+        if not want:
+            want = watchlist_symbols(program_id, limit=limit)
+        # Merge priority names into the check set (holdings may not be top-ranked)
+        if prio:
+            seen = set(want)
+            for s in prio:
+                if s not in seen:
+                    want.append(s)
+                    seen.add(s)
     if not want:
         return {
             "version": VERSION,
@@ -1102,12 +1167,26 @@ def enrich_watchlist_gaps(
             "honesty": "No symbols to enrich — watchlist empty or not provided.",
         }
 
-    gaps_doc = learner_fundamentals_gaps(data_dir, want, program_id=program_id)
-    gap_syms = [
-        str(g.get("symbol"))
-        for g in (gaps_doc.get("gaps") or [])
-        if isinstance(g, dict) and g.get("symbol")
+    crit = critical_fields
+    if crit is None:
+        crit = OPEN_BOOK_CRITICAL_FIELDS if open_books_only else DEFAULT_CRITICAL_FIELDS
+    gaps_doc = learner_fundamentals_gaps(
+        data_dir, want, program_id=program_id, critical_fields=tuple(crit)
+    )
+    gap_rows = [
+        g for g in (gaps_doc.get("gaps") or []) if isinstance(g, dict) and g.get("symbol")
     ]
+
+    def _gap_priority(g: dict[str, Any]) -> tuple[int, int, str]:
+        """Open-book + FCF holes first (DAV densify feeder)."""
+        sym = str(g.get("symbol") or "")
+        missing = {str(x) for x in (g.get("missing") or [])}
+        open_rank = 0 if (prio and sym in set(prio)) else 1
+        fcf_rank = 0 if "fcf" in missing else 1
+        return (open_rank, fcf_rank, sym)
+
+    gap_rows.sort(key=_gap_priority)
+    gap_syms = [str(g.get("symbol")) for g in gap_rows]
     if not gap_syms:
         return {
             "version": VERSION,
@@ -1118,6 +1197,7 @@ def enrich_watchlist_gaps(
             "gap_symbols": [],
             "symbols_checked": len(want),
             "reason": "no_gaps",
+            "open_books_only": open_books_only,
             "gaps": gaps_doc,
             "honesty": (
                 "Watchlist already has PE/FCF/ROE/D/E for checked symbols — "
@@ -1135,6 +1215,7 @@ def enrich_watchlist_gaps(
             "gap_symbols": gap_syms[:limit],
             "symbols_checked": len(want),
             "reason": "yahoo_disabled",
+            "open_books_only": open_books_only,
             "gaps": gaps_doc,
             "honesty": (
                 "Tier C auto-enrich is gated on market.yahoo_enabled — "
@@ -1143,7 +1224,9 @@ def enrich_watchlist_gaps(
         }
 
     bs = DEFAULT_BATCH_SIZE if batch_size is None else max(1, int(batch_size))
-    work = gap_syms[: max(bs, min(int(limit), len(gap_syms)))]
+    # Cap work list to one batch — enrich_from_yahoo also enforces, but avoid
+    # looking like we intend to fetch the whole gap list in one call.
+    work = gap_syms[:bs]
     out = enrich_from_yahoo(
         data_dir,
         work,
@@ -1152,16 +1235,21 @@ def enrich_watchlist_gaps(
         opener=opener,
         only_gaps=True,
         batch_size=bs if opener is None else None,
+        critical_fields=tuple(crit),
     )
     out["ok"] = True
     out["gap_symbols"] = gap_syms[:limit]
     out["symbols_checked"] = len(want)
+    out["priority_symbols"] = prio[:20]
+    out["open_books_only"] = open_books_only
     out["gaps_before"] = {
         "symbols_with_gaps": gaps_doc.get("symbols_with_gaps"),
         "missing_pe": gaps_doc.get("missing_pe"),
         "missing_fcf": gaps_doc.get("missing_fcf"),
     }
-    out["mode"] = "lq.7_watchlist_gaps"
+    out["mode"] = (
+        "lq.7_open_books_only" if open_books_only else "lq.7_watchlist_gaps"
+    )
     if opener is None:
         out["rate_gate"] = out.get("rate_gate") or get_yahoo_rate_gate(data_dir).status()
     rem = list(out.get("remaining_symbols") or [])
@@ -1226,6 +1314,17 @@ def fundamentals_view(
         if isinstance(r, dict)
         and (r.get("fcf") is not None or r.get("free_cash_flow") is not None)
     )
+    all_roe = sum(
+        1 for r in symbols.values() if isinstance(r, dict) and r.get("roe") is not None
+    )
+    all_pb = sum(
+        1 for r in symbols.values() if isinstance(r, dict) and r.get("pb") is not None
+    )
+    all_roic = sum(
+        1
+        for r in symbols.values()
+        if isinstance(r, dict) and r.get("roic") is not None
+    )
     all_ind = sum(
         1
         for r in symbols.values()
@@ -1245,6 +1344,9 @@ def fundamentals_view(
             "symbols": len(symbols),
             "with_pe": all_pe,
             "with_fcf": all_fcf,
+            "with_roe": all_roe,
+            "with_pb": all_pb,
+            "with_roic": all_roic,
             "with_industry_pe_median": all_ind,
             "pe_coverage_pct": round(100.0 * all_pe / max(1, len(symbols)), 1)
             if symbols

@@ -123,6 +123,9 @@ class TradingInstrument(BaseModel):
     symbol: str = Field(min_length=1)
     asset: str = ""
     asset_class: str = ""
+    # PLC.E / F&O — optional contract metadata (ignored by cash equity path)
+    lot_size: int | None = Field(default=None, ge=1)
+    note: str = ""
 
 
 class TradingStrategyParams(BaseModel):
@@ -153,6 +156,11 @@ class PortfolioPersonaConfig(BaseModel):
     allowed_assets: list[str] = Field(default_factory=lambda: ["cash_equity"])
     strategy: dict[str, Any] = Field(default_factory=dict)
     currency: str = "INR"
+    # LI.1b / PLC.E laboratory personality (optional; ignored by older configs)
+    mentor: str = ""
+    holding_philosophy: str = ""
+    style: str = ""
+    risk_posture: str = ""
 
 
 class PaperTradingConfig(BaseModel):
@@ -198,8 +206,8 @@ class PaperTradingConfig(BaseModel):
     asset_class: str = "cash_equity"
     program_id: str = "market_intelligence"
     base_currency: str = "INR"
-    # IL.2 — empty instruments → M0 watchlist
-    auto_max_instruments: int = Field(default=10, ge=1, le=100)
+    # IL.2 — empty instruments → M0 watchlist. 0 = never auto-pull (F&O operator list only).
+    auto_max_instruments: int = Field(default=10, ge=0, le=100)
     universe_index: str = "NIFTY50"
     # When primary names hold / cannot size, try next ranked watchlist symbols.
     prefer_next_alternatives: bool = True

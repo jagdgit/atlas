@@ -52,6 +52,11 @@ from atlas.api.schemas import (
     ResearchManagementPackRequest,
     CreateGoalRequest,
     UpdateGoalRequest,
+    BeliefConsultRequest,
+    BeliefReviseRequest,
+    BeliefPromoteRequest,
+    BeliefCandidateRequest,
+    LearningLoopRequest,
     StartProgramRequest,
     ApprovalActionRequest,
     CreateMissionRequest,
@@ -806,7 +811,48 @@ def experience_journal(request: Request, body: dict | None = None) -> dict:
         recommendations=list(payload.get("recommendations") or []),
         metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
         strict=bool(payload.get("strict", True)),
+        prediction=payload.get("prediction")
+        if isinstance(payload.get("prediction"), dict)
+        else None,
+        outcome_structured=payload.get("outcome_structured")
+        if isinstance(payload.get("outcome_structured"), dict)
+        else None,
+        affected_beliefs=list(payload.get("affected_beliefs") or []) or None,
+        no_belief_link_reason=payload.get("no_belief_link_reason"),
+        require_belief_link=bool(payload.get("require_belief_link", False)),
     )
+
+
+@v1_router.post("/experience/learning-loop", tags=["experience"])
+def experience_learning_loop(request: Request, body: LearningLoopRequest) -> dict:
+    """OI-SELF-EXP — write experience with prediction/delta and ingest Belief Core."""
+    try:
+        eos = _app(request).container.resolve("experience_os")
+        rs = _app(request).container.resolve("reasoning")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"learning-loop unavailable: {exc}") from exc
+    kwargs = {
+        "title": body.title,
+        "observation": body.observation,
+        "decision": body.decision,
+        "outcome": body.outcome,
+        "reflection": body.reflection,
+        "lesson": body.lesson,
+        "reasoning": body.reasoning,
+        "domain": body.domain,
+        "tags": list(body.tags or ["learning_loop", "self0_exp"]),
+        "prediction": body.prediction or {},
+        "outcome_structured": body.outcome_structured or {},
+        "affected_beliefs": list(body.affected_beliefs or []),
+        "no_belief_link_reason": body.no_belief_link_reason,
+        "require_belief_link": True,
+    }
+    out = rs.close_experience_loop(
+        eos, kwargs, ingest_beliefs=body.ingest_beliefs, actor="api"
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=out)
+    return out
 
 
 @v1_router.get("/experience/recall", tags=["experience"])
@@ -3352,38 +3398,65 @@ def get_market_fundamentals(
 
 @v1_router.get("/market/fundamentals/learner-template", tags=["programs"])
 def get_market_fundamentals_learner_template(
+    request: Request,
     program_id: str = "market_intelligence",
     only_gaps: bool = True,
     limit: int = 40,
+    open_books_only: bool = False,
+    portfolio_key: str = "india_equity_learner",
 ) -> dict:
-    """DI.4 — CSV gap-fill template for learner watchlist PE/FCF (never invent)."""
+    """DI.4 / E2 — CSV gap-fill template for learner PE/FCF (never invent).
+
+    ``open_books_only=true`` restricts rows to current holdings (Screener densify).
+    """
     from atlas.config import get_config
     from atlas.investment.fundamentals import learner_gap_fill_template
 
     data_dir = str(get_config().paths.data)
     symbols: list[str] = []
-    try:
-        from atlas.investment import watchlists as wl
+    if open_books_only:
+        try:
+            from atlas.investment.open_book_packs import resolve_open_symbols
 
-        snap = wl.latest(program_id)
-        if isinstance(snap, dict):
-            symbols = list(snap.get("watchlist_symbols") or [])
-            if not symbols:
-                watch = snap.get("watchlist") or snap.get("ranked") or []
-                symbols = [
-                    str(w.get("symbol"))
-                    for w in watch
-                    if isinstance(w, dict) and w.get("symbol")
-                ]
-    except Exception:  # noqa: BLE001
-        symbols = []
+            portfolio_svc = None
+            try:
+                portfolio_svc = _app(request).container.resolve("portfolio")
+            except Exception:  # noqa: BLE001
+                portfolio_svc = None
+            if portfolio_svc is not None:
+                symbols = resolve_open_symbols(
+                    portfolio=portfolio_svc,
+                    portfolio_key=str(portfolio_key or "india_equity_learner"),
+                    limit=max(1, min(int(limit or 40), 80)),
+                )
+        except Exception:  # noqa: BLE001
+            symbols = []
+    if not symbols:
+        try:
+            from atlas.investment import watchlists as wl
+
+            snap = wl.latest(program_id)
+            if isinstance(snap, dict):
+                symbols = list(snap.get("watchlist_symbols") or [])
+                if not symbols:
+                    watch = snap.get("watchlist") or snap.get("ranked") or []
+                    symbols = [
+                        str(w.get("symbol"))
+                        for w in watch
+                        if isinstance(w, dict) and w.get("symbol")
+                    ]
+        except Exception:  # noqa: BLE001
+            symbols = []
     lim = max(1, min(int(limit or 40), 80))
-    return learner_gap_fill_template(
+    out = learner_gap_fill_template(
         data_dir,
         symbols[:lim],
         program_id=program_id,
         only_gaps=bool(only_gaps),
     )
+    out["open_books_only"] = bool(open_books_only)
+    out["portfolio_key"] = portfolio_key
+    return out
 
 
 @v1_router.post("/market/fundamentals/import", tags=["programs"])
@@ -3823,6 +3896,46 @@ def get_market_decision_packet(request: Request, decision_id: str) -> dict:
         "mirror_path": mirror,
         "version": packet.get("version") or PACKET_VERSION,
     }
+
+
+@v1_router.get("/market/decisions/{decision_id}/genealogy", tags=["programs"])
+def get_market_decision_genealogy(
+    request: Request,
+    decision_id: str,
+    laboratory_id: str | None = None,
+    persist: bool = True,
+) -> dict:
+    """GENE.1 / OI-GENE0 — assemble Decision→…→lesson→next with honest gaps."""
+    from atlas.investment.decision_genealogy import VERSION, build_genealogy
+
+    packets = None
+    attrs = None
+    data_dir = None
+    try:
+        packets = _app(request).container.resolve("decision_packets")
+        data_dir = getattr(packets, "data_dir", None)
+    except Exception:  # noqa: BLE001
+        packets = None
+    try:
+        attrs = _app(request).container.resolve("decision_attributions")
+    except Exception:  # noqa: BLE001
+        attrs = None
+    if packets is None and not data_dir:
+        raise HTTPException(status_code=503, detail="decision packets unavailable")
+    doc = build_genealogy(
+        decision_id,
+        data_dir=data_dir,
+        packets_store=packets,
+        attributions_store=attrs,
+        laboratory_id=laboratory_id,
+        persist=bool(persist),
+    )
+    hops = doc.get("hops") or []
+    if hops and hops[0].get("hop") == "decision" and not hops[0].get("present"):
+        raise HTTPException(
+            status_code=404, detail=f"decision packet {decision_id} not found"
+        )
+    return {"genealogy": doc, "version": doc.get("version") or VERSION}
 
 
 @v1_router.get("/market/decisions/{decision_id}/replay", tags=["programs"])
@@ -5176,6 +5289,82 @@ def list_virtual_portfolios(
     return {"portfolios": rows, "count": len(rows), "version": "il.10"}
 
 
+@v1_router.get("/market/labs/ledgers", tags=["programs"])
+def list_lab_ledgers(request: Request) -> dict:
+    """OI-LEDGER-UI0 — portfolio + ledger statement for all known labs."""
+    from atlas.investment import portfolios as vp
+    from atlas.investment.laboratory import (
+        DEFAULT_INTRADAY_LAB,
+        DEFAULT_SWING_LAB,
+    )
+
+    try:
+        _rehydrate_virtual_portfolios(request)
+    except Exception:  # noqa: BLE001
+        pass
+    keys = [
+        DEFAULT_SWING_LAB,
+        DEFAULT_INTRADAY_LAB,
+        "india_fno_learner",
+    ]
+    for row in vp.list_portfolios() or []:
+        if isinstance(row, dict) and row.get("portfolio_key"):
+            k = str(row["portfolio_key"])
+            if k not in keys:
+                keys.append(k)
+    labs: list[dict] = []
+    for key in keys:
+        try:
+            doc = portfolio_ledger_statement(key, request)
+            labs.append({"portfolio_key": key, **doc})
+        except HTTPException as exc:
+            labs.append(
+                {
+                    "portfolio_key": key,
+                    "error": getattr(exc, "detail", str(exc)),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            labs.append({"portfolio_key": key, "error": str(exc)})
+    return {"labs": labs, "count": len(labs), "version": "jdg.ledger_ui.v1"}
+
+
+@v1_router.post("/market/bars/bootstrap", tags=["programs"])
+def post_bars_bootstrap(
+    request: Request,
+    max_symbols: int = 8,
+    range: str = "10y",
+) -> dict:
+    """OI-HIST-BARS — kick a budgeted historical bootstrap batch now."""
+    from atlas.config import get_config
+    from atlas.investment.historical_bars import (
+        bootstrap_batch,
+        default_priority_symbols,
+        load_progress,
+    )
+
+    data_dir = str(get_config().paths.data)
+    try:
+        mr = _app(request).container.resolve("market_reader")
+        yahoo = (getattr(mr, "_adapters", None) or {}).get("yahoo")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"market_reader unavailable: {exc}") from exc
+    if yahoo is None:
+        raise HTTPException(status_code=503, detail="yahoo adapter unavailable")
+
+    def _fetch(symbol: str, **kwargs):
+        return list(yahoo.fetch_bars(symbol, **kwargs) or [])
+
+    out = bootstrap_batch(
+        data_dir,
+        default_priority_symbols(data_dir, limit=80),
+        fetch_bars=_fetch,
+        max_n=max(1, min(20, int(max_symbols))),
+        range_=str(range or "10y"),
+    )
+    return {"bootstrap": out, "progress": load_progress(data_dir), "version": "jdg.hist_bars.v1"}
+
+
 def _rehydrate_virtual_portfolios(request: Request) -> int:
     """Rebuild / refresh registry from *active* paper books + sim cash.
 
@@ -5277,39 +5466,15 @@ def _rehydrate_virtual_portfolios(request: Request) -> int:
         pass
     return rebound
 
-@v1_router.post("/market/portfolios", tags=["programs"])
-def create_virtual_portfolio(
-    request: Request,
-    body: CreateVirtualPortfolioRequest,
-) -> dict:
-    """IL.10 — create a virtual portfolio book (one Decision Simulation per book)."""
+@v1_router.post("/market/portfolios/{portfolio_ref}/repair-lab", tags=["programs"])
+def post_repair_laboratory_pack(portfolio_ref: str) -> dict:
+    """PLC.E — align F&O/intraday persona + return suggested Decision Simulation config."""
     from atlas.investment import portfolios as vp
 
-    templates = None
-    if body.instantiate:
-        try:
-            templates = _app(request).container.resolve("templates")
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=503, detail=f"templates unavailable: {exc}"
-            ) from exc
-    try:
-        row = vp.create_book(
-            label=body.label,
-            persona=body.persona,
-            capital=body.capital,
-            program_id=body.program_id,
-            portfolio_key=body.portfolio_key,
-            universe=body.universe,
-            broker_profile=body.broker_profile,
-            asset_class=body.asset_class,
-            instantiate=body.instantiate,
-            templates=templates,
-            activate=body.activate,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"portfolio": row, "version": "il.10"}
+    out = vp.repair_laboratory_pack_alignment(portfolio_ref)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"unknown portfolio: {portfolio_ref}")
+    return {"version": "plc.e", **out}
 
 
 @v1_router.get("/market/portfolios/{portfolio_ref}", tags=["programs"])
@@ -5896,6 +6061,206 @@ def goal_progress(goal_id: str, request: Request, persist: bool = True) -> dict:
     if not report.get("ok"):
         raise HTTPException(status_code=404, detail=report.get("error") or "goal_not_found")
     return report
+
+
+def _reasoning(request: Request):
+    try:
+        return _app(request).container.resolve("reasoning")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"reasoning unavailable: {exc}"
+        ) from exc
+
+
+@v1_router.get("/reasoning/identity", tags=["reasoning"])
+def reasoning_identity(request: Request) -> dict:
+    """OI-SELF0 — current Atlas identity document."""
+    rs = _reasoning(request)
+    identity = rs.identity()
+    if identity is None:
+        raise HTTPException(status_code=404, detail="identity_not_seeded")
+    return {"identity": identity, "version": getattr(rs, "VERSION", "self0")}
+
+
+@v1_router.post("/reasoning/reflect", tags=["reasoning"])
+def reasoning_reflect(
+    request: Request,
+    laboratory_id: str | None = None,
+    allow_llm_narrative: bool = True,
+) -> dict:
+    """OI-SELF-REFLECT — run nightly Belief Core reflection (advice-only)."""
+    from atlas.reasoning.reflection import run_nightly_reflection
+
+    return run_nightly_reflection(
+        _reasoning(request),
+        laboratory_id=laboratory_id,
+        allow_llm_narrative=allow_llm_narrative,
+    )
+
+
+@v1_router.post("/reasoning/living-rag", tags=["reasoning"])
+def reasoning_living_rag(request: Request, q: str, limit: int = 8) -> dict:
+    """OI-SELF-ID — preview Living RAG bundle for a query (no model call)."""
+    if not (q or "").strip():
+        raise HTTPException(status_code=400, detail="q required")
+    from atlas.reasoning.retrieval import build_living_rag_bundle
+
+    eos = None
+    knowledge = None
+    memory = None
+    try:
+        eos = _app(request).container.resolve("experience_os")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        knowledge = _app(request).container.resolve("knowledge")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        memory = _app(request).container.resolve("memory")
+    except Exception:  # noqa: BLE001
+        pass
+    return build_living_rag_bundle(
+        _reasoning(request),
+        q,
+        experience_os=eos,
+        knowledge=knowledge,
+        memory=memory,
+        belief_limit=limit,
+    )
+
+
+@v1_router.post("/reasoning/seed", tags=["reasoning"])
+def reasoning_seed(request: Request) -> dict:
+    """OI-SELF-SEED — idempotent identity + operator worldview seed."""
+    return _reasoning(request).ensure_seeded()
+
+
+@v1_router.get("/beliefs", tags=["reasoning"])
+def list_beliefs(
+    request: Request,
+    domain: str | None = None,
+    status: str | None = None,
+    theme: str | None = None,
+    limit: int = 50,
+) -> dict:
+    rs = _reasoning(request)
+    rows = rs.list_beliefs(
+        domain=domain, status=status, theme=theme, limit=limit
+    )
+    return {"beliefs": rows, "count": len(rows), "version": getattr(rs, "VERSION", "self0")}
+
+
+@v1_router.post("/beliefs/consult", tags=["reasoning"])
+def consult_beliefs(request: Request, body: BeliefConsultRequest) -> dict:
+    """OI-SELF0 — consult Belief Core (increments Belief Consultations metric)."""
+    return _reasoning(request).consult(
+        domain=body.domain,
+        theme=body.theme,
+        query=body.query,
+        limit=body.limit,
+    )
+
+
+@v1_router.get("/beliefs/why", tags=["reasoning"])
+def belief_why(request: Request, q: str) -> dict:
+    """Benchmark: Why do you believe X?"""
+    if not (q or "").strip():
+        raise HTTPException(status_code=400, detail="q required")
+    out = _reasoning(request).why(q)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail=out.get("error") or "not_found")
+    return out
+
+
+@v1_router.get("/beliefs/what-changed", tags=["reasoning"])
+def belief_what_changed(request: Request, q: str) -> dict:
+    """Benchmark: What changed your mind?"""
+    if not (q or "").strip():
+        raise HTTPException(status_code=400, detail="q required")
+    out = _reasoning(request).what_changed_your_mind(q)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail=out.get("error") or "not_found")
+    return out
+
+
+@v1_router.get("/beliefs/metrics", tags=["reasoning"])
+def belief_metrics(request: Request) -> dict:
+    """Belief Consultations today + Revisions/7d."""
+    return _reasoning(request).metrics()
+
+
+@v1_router.get("/beliefs/project/{symbol}", tags=["reasoning"])
+def project_beliefs_for_symbol(
+    symbol: str, request: Request, laboratory_id: str | None = None
+) -> dict:
+    """WSO projection read-path — Belief Core slice for a symbol (advice-only)."""
+    return _reasoning(request).project_for_symbol(
+        symbol, laboratory_id=laboratory_id
+    )
+
+
+@v1_router.get("/beliefs/{belief_id}", tags=["reasoning"])
+def get_belief(belief_id: str, request: Request) -> dict:
+    row = _reasoning(request).get_belief(belief_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="belief_not_found")
+    return {"belief": row}
+
+
+@v1_router.post("/beliefs/candidates", tags=["reasoning"])
+def propose_belief_candidate(request: Request, body: BeliefCandidateRequest) -> dict:
+    rs = _reasoning(request)
+    try:
+        row = rs.propose_candidate(
+            statement=body.statement,
+            domain=body.domain,
+            confidence=body.confidence,
+            themes=body.themes,
+            open_questions=body.open_questions,
+            evidence_summary=body.evidence_summary,
+            origin=body.origin,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"belief": row, "version": getattr(rs, "VERSION", "self0")}
+
+
+@v1_router.post("/beliefs/{belief_id}/promote", tags=["reasoning"])
+def promote_belief(
+    belief_id: str, request: Request, body: BeliefPromoteRequest
+) -> dict:
+    rs = _reasoning(request)
+    try:
+        out = rs.promote(
+            belief_id, reason=body.reason, confidence=body.confidence
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return out
+
+
+@v1_router.post("/beliefs/{belief_id}/revise", tags=["reasoning"])
+def revise_belief(belief_id: str, request: Request, body: BeliefReviseRequest) -> dict:
+    rs = _reasoning(request)
+    try:
+        out = rs.revise(
+            belief_id,
+            reason=body.reason,
+            evidence_summary=body.evidence_summary,
+            new_statement=body.new_statement,
+            new_confidence=body.new_confidence,
+            new_status=body.new_status,
+            open_questions=body.open_questions,
+            use_llm=body.use_llm,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return out
 
 
 @v1_router.get("/learner/status", tags=["programs"])

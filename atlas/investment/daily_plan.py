@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-VERSION = "il.6b"
+VERSION = "il.6c"
 KIND = "daily_investment_plan"
 
 
@@ -79,7 +79,15 @@ def build_daily_plan(
             "suggested_weight": round(weight, 4),
             "phase": r.get("phase") or phase,
             "confidence": r.get("confidence") or confidence,
+            "components": dict(r.get("components") or {}),
         }
+        # UTS.C — E[R] × confidence when computable (null under cold-start)
+        try:
+            from atlas.investment.opportunity_switch import attach_opportunity_metrics
+
+            attach_opportunity_metrics(cand, r)
+        except Exception:  # noqa: BLE001
+            pass
         # IRA.13 — cite dossier/thesis/coverage when available
         aw = research_map.get(sym) or research_map.get(sym.upper()) or {}
         if not aw and isinstance(r.get("research"), dict):

@@ -467,6 +467,7 @@ def build_packet(
     overall_confidence_hint: float | None = None,
     process_flags: list[dict[str, Any]] | None = None,
     process_context: dict[str, Any] | None = None,
+    meta_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an immutable ``di.packet.1`` payload (does not persist)."""
     act = str(action or "").strip().lower()
@@ -568,6 +569,10 @@ def build_packet(
             flags = []
     if flags:
         meta["process_flags"] = flags
+    if isinstance(meta_extra, dict):
+        for k, v in meta_extra.items():
+            if v is not None and k not in meta:
+                meta[k] = v
     payload["meta"] = meta
     return payload
 
@@ -928,15 +933,89 @@ def emit_plan_watch_packets(
 
 
 def format_decisions_section(packets: list[dict[str, Any]] | None) -> list[str]:
-    """Evening-mail lines for Decisions today."""
-    packets = list(packets or [])
-    lines = ["", f"Decisions today ({len(packets)}):"]
+    """Evening-mail lines for Decisions today.
+
+    OI-RLD0 / D3: collapse routine HOLD spam into a dominant-state summary;
+    list buy/sell (and other material) packets individually.
+    """
+    packets = [p for p in (packets or []) if isinstance(p, dict)]
+    lines = ["", f"Decisions today ({len(packets)} evaluations):"]
     if not packets:
         lines.append("  (no decision packets recorded)")
         return lines
-    for p in packets[:40]:
-        if not isinstance(p, dict):
-            continue
+
+    try:
+        from atlas.investment.experience_integrity import (
+            is_routine_hold,
+            material_decision_state,
+        )
+    except Exception:  # noqa: BLE001
+        is_routine_hold = None  # type: ignore[assignment]
+        material_decision_state = None  # type: ignore[assignment]
+
+    material: list[dict[str, Any]] = []
+    routine: list[dict[str, Any]] = []
+    for p in packets:
+        act = str(p.get("action") or "").lower()
+        tag = str(p.get("strategy_tag") or "")
+        if act in {"buy", "sell"}:
+            material.append(p)
+        elif is_routine_hold is not None and is_routine_hold(
+            action=act, strategy_tag=tag
+        ):
+            routine.append(p)
+        else:
+            material.append(p)
+
+    if routine and material_decision_state is not None:
+        from collections import Counter
+
+        state_counts = Counter(material_decision_state(p) for p in routine)
+        unique_states = len(state_counts)
+        lines.append(
+            f"  Unique routine states: {unique_states} · "
+            f"routine evaluations: {len(routine)} · "
+            f"material buy/sell listed: {len(material)}"
+        )
+        # Dominant state
+        dominant, n_dom = state_counts.most_common(1)[0]
+        parts = dominant.split("|")
+        # hold|tag|reason
+        if len(parts) >= 3:
+            action_s, tag_s, reason_s = parts[0], parts[1], parts[2]
+        elif len(parts) == 2:
+            action_s, tag_s, reason_s = parts[0], parts[1], "—"
+        else:
+            action_s, tag_s, reason_s = dominant, "—", "—"
+        lines.append("  Dominant state:")
+        lines.append(
+            f"    {(action_s or '?').upper()} / {tag_s or '—'} / {reason_s or '—'}"
+        )
+        lines.append(f"    Occurrences: {n_dom}")
+        # Affected symbols (sample)
+        by_state = [p for p in routine if material_decision_state(p) == dominant]
+        syms: list[str] = []
+        seen: set[str] = set()
+        for p in by_state:
+            s = str(p.get("symbol") or "").upper()
+            if s and s not in seen:
+                seen.add(s)
+                syms.append(s)
+            if len(syms) >= 8:
+                break
+        if syms:
+            lines.append(f"    Affected (sample): {', '.join(syms)}")
+        if unique_states > 1:
+            lines.append("  Other routine states:")
+            for st, n in state_counts.most_common(5)[1:]:
+                lines.append(f"    · {st} ×{n}")
+    elif routine:
+        lines.append(f"  Routine HOLD/switch_blocked evaluations: {len(routine)}")
+
+    show = material[:40]
+    if show:
+        lines.append("  Material decisions:")
+    for p in show:
         reasons = p.get("reasons_for") or []
         why = f" — {reasons[0]}" if reasons else ""
         lines.append(
@@ -946,5 +1025,9 @@ def format_decisions_section(packets: list[dict[str, Any]] | None) -> list[str]:
         )
         unknowns = p.get("unknowns") or []
         if unknowns:
-            lines.append(f"     unknowns: {', '.join(unknowns[:6])}")
+            lines.append(f"     unknowns: {', '.join(str(u) for u in unknowns[:6])}")
+    if not material and not routine:
+        lines.append("  (no classified packets)")
+    elif not material and routine:
+        lines.append("  (no buy/sell packets — routine checks only)")
     return lines

@@ -37,7 +37,7 @@ JSON:
 
 Optional: `"push_to_ira": true`, `"evidence_confidence": "estimated"`.
 
-Status: `GET /v1/market/fundamentals` (includes `coverage` PE/FCF/industry-median counts and optional `learner_gaps` for the current watchlist — **missing fields stay missing**; never invent industry averages). Gap-fill CSV: `GET /v1/market/fundamentals/learner-template`.
+Status: `GET /v1/market/fundamentals` (includes `coverage` PE/FCF/industry-median counts and optional `learner_gaps` for the current watchlist — **missing fields stay missing**; never invent industry averages). Gap-fill CSV: `GET /v1/market/fundamentals/learner-template`. Open-book densify (E2): `GET /v1/market/fundamentals/learner-template?open_books_only=true`.
 
 ### 3. Drop folder
 

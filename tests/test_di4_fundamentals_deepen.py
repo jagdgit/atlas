@@ -81,7 +81,7 @@ def test_learner_gap_fill_template_prefills_and_leaves_holes(tmp_path):
     assert infy["pe"] == 25.0 or infy["pe"] == 25
     assert infy["fcf"] == ""  # never invent
     assert "fill:" in str(infy.get("note") or "")
-    assert "csv" in tpl and "symbol,pe,fcf" in tpl["csv"]
+    assert "csv" in tpl and "symbol,pe,pb,fcf" in tpl["csv"]
     gaps = tpl["gaps"]
     assert gaps["missing_fcf"] >= 1
     assert gaps["symbols_with_gaps"] >= 2

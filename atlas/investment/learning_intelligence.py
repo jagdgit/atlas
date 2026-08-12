@@ -328,6 +328,121 @@ def build_confidence_calibration_curve(
     }
 
 
+def build_revision_calibration(
+    wsos: list[dict[str, Any]] | None,
+    *,
+    min_n: int = 5,
+) -> dict[str, Any]:
+    """IQ.1 — WSO revision status mix + flip rate (deterministic).
+
+    Flip = later material revision on same symbol that contradicts prior
+    strengthen/weaken (e.g. strengthened then weakened/falsified).
+    """
+    material = {"strengthened", "weakened", "falsified"}
+    status_counts: dict[str, int] = {}
+    flips = 0
+    sequences = 0
+    linked: list[str] = []
+    for w in wsos or []:
+        if not isinstance(w, dict) or w.get("kind") == "global":
+            continue
+        sym = str(w.get("symbol") or "").strip()
+        if not sym or sym == "_GLOBAL":
+            continue
+        hist = [
+            r
+            for r in (w.get("revision_history") or [])
+            if isinstance(r, dict)
+            and str(r.get("status") or "").lower() in material
+        ]
+        if not hist:
+            continue
+        linked.append(sym)
+        sequences += 1
+        for r in hist:
+            st = str(r.get("status") or "").lower()
+            status_counts[st] = int(status_counts.get(st) or 0) + 1
+        prior = None
+        for r in hist:
+            st = str(r.get("status") or "").lower()
+            if prior == "strengthened" and st in {"weakened", "falsified"}:
+                flips += 1
+            if prior in {"weakened", "falsified"} and st == "strengthened":
+                flips += 1
+            prior = st
+
+    n = sum(status_counts.values())
+    flip_rate = round(flips / sequences, 3) if sequences else None
+    visible = n >= max(1, int(min_n))
+    return {
+        "version": "iq.1.revision_calibration",
+        "visible": visible,
+        "n": n,
+        "min_n": int(min_n),
+        "symbols": len(set(linked)),
+        "status_counts": status_counts,
+        "flip_events": flips,
+        "sequences": sequences,
+        "flip_rate": flip_rate if visible else None,
+        "sample_note": None
+        if visible
+        else (
+            f"Revision calibration hidden until ≥{min_n} material WSO "
+            f"revisions (have {n})."
+        ),
+        "honesty": (
+            "Flip rate = mind-changes that later reversed; not trading PnL. "
+            "Confidence-vs-outcome remains LQ.5."
+        ),
+    }
+
+
+def format_calibration_section(
+    *,
+    confidence_curve: dict[str, Any] | None = None,
+    revision_calibration: dict[str, Any] | None = None,
+) -> list[str]:
+    """IQ.1 evening — dedicated calibration slice (always prints honesty)."""
+    lines = ["", "--- Calibration (IQ.1) ---"]
+    curve = confidence_curve if isinstance(confidence_curve, dict) else {}
+    rev = revision_calibration if isinstance(revision_calibration, dict) else {}
+
+    if curve:
+        if curve.get("visible"):
+            lines.append(
+                f"  Confidence vs thesis (LQ.5): n={curve.get('n')} "
+                f"ECE={curve.get('ece')}"
+            )
+        else:
+            lines.append(
+                f"  Confidence vs thesis: "
+                f"{curve.get('sample_note') or 'hidden until sample'}"
+            )
+    else:
+        lines.append("  Confidence vs thesis: (no scored exits yet)")
+
+    if rev:
+        if rev.get("visible"):
+            lines.append(
+                f"  Revision mind-change: n={rev.get('n')} "
+                f"symbols={rev.get('symbols')} flip_rate={rev.get('flip_rate')}"
+            )
+            sc = rev.get("status_counts") or {}
+            if sc:
+                bits = ", ".join(f"{k}={v}" for k, v in list(sc.items())[:5])
+                lines.append(f"    statuses: {bits}")
+        else:
+            lines.append(
+                f"  Revision mind-change: "
+                f"{rev.get('sample_note') or 'hidden until sample'}"
+            )
+        if rev.get("honesty"):
+            lines.append(f"  Honesty: {rev.get('honesty')}")
+    else:
+        lines.append("  Revision mind-change: (no WSO revisions yet)")
+    return lines
+
+
 def format_evolution_narrative(
     events: list[dict[str, Any]] | None,
     *,
@@ -385,11 +500,42 @@ def build_atlas_iq_proxies(
     research = _clamp_score(pe_pct)
 
     with_unknowns = sum(1 for p in pkts if (p.get("unknowns") or []))
+    # OI-EXP0 — do not treat routine HOLD spam as decision skill
+    try:
+        from atlas.investment.experience_integrity import (
+            build_experience_metrics,
+            experience_quality_score,
+            is_routine_hold,
+        )
+
+        material_pkts = [
+            p
+            for p in pkts
+            if not is_routine_hold(
+                action=p.get("action"), strategy_tag=str(p.get("strategy_tag") or "")
+            )
+        ]
+        exp_m = build_experience_metrics(
+            packets=pkts,
+            attributions=attrs,
+            evolution={
+                "done_revisits": done_revisits,
+                "pending_revisits": pending_revisits,
+            },
+        )
+        exp_q = experience_quality_score(exp_m)
+    except Exception:  # noqa: BLE001
+        material_pkts = pkts
+        exp_m = {}
+        exp_q = None
+
+    n_material = len(material_pkts)
     decision = _clamp_score(
         55.0
-        + (10.0 if n_packets else 0)
+        + (10.0 if n_material else 0)
         - min(25.0, with_unknowns * 2.0)
-        + min(15.0, observation_count)
+        + min(10.0, observation_count)  # capped — obs alone ≠ intelligence
+        + (min(15.0, float(exp_q) * 0.15) if exp_q is not None else 0)
     )
 
     risk = _clamp_score(float(process_score) * 10.0 if process_score is not None else 40.0)
@@ -400,8 +546,12 @@ def build_atlas_iq_proxies(
 
     rev_total = pending_revisits + done_revisits
     rev_rate = (100.0 * done_revisits / rev_total) if rev_total else 0.0
+    # Learning axis: revisits + attributed causes; observation spam capped hard
     learning = _clamp_score(
-        0.5 * rev_rate + min(40.0, observation_count * 4.0) + min(20.0, n_attr * 5.0)
+        0.55 * rev_rate
+        + min(25.0, observation_count * 2.0)
+        + min(25.0, n_attr * 5.0)
+        + (float(exp_q) * 0.2 if exp_q is not None else 0)
     )
 
     with_cause = sum(1 for a in attrs if _extract_failure_cause(a))
@@ -467,6 +617,10 @@ def build_atlas_iq_proxies(
     snap = {
         "version": VERSION,
         "laboratory_id": lab,
+        "experience_metrics": exp_m if isinstance(exp_m, dict) else None,
+        "experience_quality_score": exp_q,
+        "material_packets": n_material,
+        "packets_raw": n_packets,
         "program_id": program_id,
         "as_of": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "axes": axes,
@@ -491,6 +645,35 @@ def build_atlas_iq_proxies(
         "axis_hidden_until_sample": axis_hidden,
         "failure_root_causes": list(FAILURE_ROOT_CAUSES),
     }
+    try:
+        from atlas.investment.experience_integrity import build_maturity_split
+
+        ready_grade = None
+        durable_ok = None
+        if data_dir:
+            try:
+                from pathlib import Path
+                import json as _json
+
+                wl = Path(str(data_dir)) / "market" / "watchlists" / f"{program_id}.json"
+                if wl.is_file():
+                    extra = (
+                        _json.loads(wl.read_text(encoding="utf-8")).get("extra") or {}
+                    )
+                    dur = extra.get("durable_bars") or extra.get("readiness") or {}
+                    if isinstance(dur, dict):
+                        ready_grade = dur.get("readiness_grade")
+                        durable_ok = dur.get("durable_bars_ok")
+            except Exception:  # noqa: BLE001
+                pass
+        snap["maturity_split"] = build_maturity_split(
+            experience_metrics=exp_m if isinstance(exp_m, dict) else None,
+            system_score=overall,
+            readiness_grade=str(ready_grade) if ready_grade else None,
+            durable_bars_ok=bool(durable_ok) if durable_ok is not None else None,
+        )
+    except Exception:  # noqa: BLE001
+        snap["maturity_split"] = None
     if data_dir:
         try:
             path = iq_snapshot_path(data_dir, lab)
@@ -601,6 +784,19 @@ def format_atlas_iq_section(snap: dict[str, Any] | None) -> list[str]:
         "Atlas IQ skill axes (LI.5b — Learning Intelligence):",
         f"  Laboratory: {snap.get('laboratory_id')} · overall={snap.get('overall')}",
     ]
+    mat = snap.get("maturity_split") if isinstance(snap.get("maturity_split"), dict) else None
+    if mat:
+        lines.append(
+            f"  System Maturity: {mat.get('system_maturity')} · "
+            f"Trading Evidence Maturity: {mat.get('trading_evidence_maturity')} · "
+            f"Data Readiness: {mat.get('data_readiness')}"
+        )
+        lines.append(
+            f"  Strategy Evidence: {mat.get('strategy_evidence')} · "
+            f"Attribution Maturity: {mat.get('attribution_maturity')}"
+        )
+        if mat.get("honesty"):
+            lines.append(f"  Honesty: {mat.get('honesty')}")
     report = snap.get("axis_report") or {}
     if report:
         for name, row in report.items():

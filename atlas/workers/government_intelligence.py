@@ -126,14 +126,22 @@ class GovernmentIntelligenceWorker(PersistentWorker):
                     )
                     # LI.3b — also a macro_event when policy touch rate/budget/election-ish sectors
                     sectors_l = [str(s).lower() for s in (state.get("sector_deltas") or {})]
-                    macro_hit = any(
+                    from atlas.investment.sector_benchmarks import infer_event_regime_tags
+
+                    event_tags = infer_event_regime_tags(
+                        title=f"policy catalog items={state['item_count']}",
+                        detail=",".join(list(state.get("sector_deltas") or [])[:12]),
+                        sectors=list(state.get("sector_deltas") or [])[:20],
+                    )
+                    macro_hit = bool(event_tags) or any(
                         any(k in s for k in ("bank", "rate", "financ", "budget", "psu"))
                         for s in sectors_l
                     )
                     if macro_hit or int(state["item_count"] or 0) >= 3:
                         self._observations.record_macro_event(
                             title=f"policy/macro pulse items={state['item_count']}",
-                            regime_tags=["unknown"] if not macro_hit else ["geopolitical"],
+                            regime_tags=event_tags
+                            or (["geopolitical"] if macro_hit else ["unknown"]),
                             detail=f"sectors={','.join(list(state['sector_deltas'])[:8])}",
                             source="government_intelligence",
                             extra={"updated_at": state.get("updated_at")},

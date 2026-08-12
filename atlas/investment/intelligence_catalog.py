@@ -128,10 +128,12 @@ def websites_and_sources() -> list[dict[str, Any]]:
             "url": None,
             "purpose": "Official news/policy feeds only (PIB/SEBI/etc. when verified)",
             "status": "operator_enable",
-            "needs": "Enable feed ids via POST /v1/market/news-feeds/fetch or mission config",
+            "needs": (
+                "E1: learner overrides enable pib_press; SEBI/RBI stay off until verified"
+            ),
             "operator_help": (
-                "Feeds are disabled by default. Verify each URL serves RSS/Atom XML — "
-                "HTML pages are refused (no scrape)."
+                "DEFAULT_ALLOWLIST stays disabled. Mission rss_enable=['pib_press'] "
+                "(XML verified 2026-08-10). HTML pages are refused (no scrape)."
             ),
         },
         {

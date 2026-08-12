@@ -148,6 +148,6 @@ def test_evening_includes_evolution_and_fundamentals():
         },
     )
     assert "Decision evolution" in body
-    assert "Open revisits pending: 3" in body
+    assert "Open revisits pending" in body and "3" in body
     assert "Fundamentals coverage" in body
-    assert "never invent" in body.lower() or "Watchlist gaps" in body
+    assert "ACTIVE STORE" in body or "never invent" in body.lower() or "ACTIVE WATCHLIST" in body

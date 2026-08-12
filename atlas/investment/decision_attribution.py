@@ -450,6 +450,65 @@ class DecisionAttributionStore:
                     drivers = [{"feature": "news", "contrib": int(nd.get("count") or 1)}, *drivers][
                         :5
                     ]
+
+        # DAV.1 — helped / hurt / unknown factor outcomes (fail-closed)
+        causal_factors: dict[str, Any] | None = None
+        try:
+            from atlas.investment.causal_attribution import evaluate_causal_factors
+
+            wc = what_changed if isinstance(what_changed, dict) else {}
+            nd = wc.get("news_delta") if isinstance(wc.get("news_delta"), dict) else {}
+            sector_rel = wc.get("sector_rel_pct")
+            if sector_rel is None:
+                sector_rel = wc.get("sector_relative_pct")
+            if sector_rel is None:
+                sector_rel = wc.get("rs_vs_nifty")
+            if sector_rel is None and isinstance(extra_payload.get("sector_rel_pct"), (int, float)):
+                sector_rel = extra_payload.get("sector_rel_pct")
+            if sector_rel is None and isinstance(extra_payload.get("rs_vs_nifty"), (int, float)):
+                sector_rel = extra_payload.get("rs_vs_nifty")
+            # Densify on material exits always; on revisits when price moved enough
+            densify = material or (
+                trig == "revisit"
+                and grades.get("price_change_pct") is not None
+                and abs(float(grades.get("price_change_pct") or 0)) >= MATERIAL_ABS_PCT
+            )
+            if densify or trig == "exit":
+                causal_factors = evaluate_causal_factors(
+                    pkt if isinstance(pkt, dict) else None,
+                    price_change_pct=price_change_pct
+                    if price_change_pct is not None
+                    else grades.get("price_change_pct"),
+                    pnl=pnl,
+                    sector_rel_pct=float(sector_rel) if sector_rel is not None else None,
+                    news_count=int(nd.get("count") or 0) if nd else int(wc.get("news_count") or 0),
+                    news_sentiment=(
+                        str(nd.get("sentiment") or wc.get("news_sentiment") or "")
+                        or None
+                    ),
+                    news_titles=list(nd.get("titles") or [])[:4] if nd else None,
+                    regime_tags=list(wc.get("regime_tags") or [])[:6],
+                    thesis_correct=str(grades.get("thesis_correct") or "") or None,
+                    exit_reason_code=str(
+                        extra_payload.get("exit_reason_code")
+                        or extra_payload.get("exit_reason")
+                        or ""
+                    )
+                    or None,
+                    grades=grades,
+                )
+                if causal_factors:
+                    extra_payload["causal_factors"] = {
+                        "version": causal_factors.get("version"),
+                        "narrative": causal_factors.get("narrative"),
+                        "helped": causal_factors.get("helped"),
+                        "hurt": causal_factors.get("hurt"),
+                        "unknown": causal_factors.get("unknown"),
+                        "missing_evidence": causal_factors.get("missing_evidence"),
+                    }
+        except Exception:  # noqa: BLE001
+            _log.debug("DAV.1 causal densify skipped", exc_info=True)
+            causal_factors = None
         from atlas.investment.laboratory import (
             extract_experiment_id,
             normalize_experiment_id,
@@ -509,13 +568,14 @@ class DecisionAttributionStore:
                 "extra": extra_payload,
                 "failure_cause": cause,
                 "feature_drivers": drivers,
+                "causal_factors": causal_factors,
                 "experiment_id": exp,
                 "laboratory_id": lab,
                 "regime_tags": regime_tags or None,
                 "lq": (
-                    "lq.6"
-                    if regime_tags
-                    else ("lq.4" if (cause or drivers) else None)
+                    "dav.1"
+                    if causal_factors
+                    else ("lq.6" if regime_tags else ("lq.4" if (cause or drivers) else None))
                 ),
             },
             "payload_version": ATTR_VERSION,
@@ -858,6 +918,11 @@ def format_attribution_section(attrs: list[dict[str, Any]] | None) -> list[str]:
             ]
             if bits:
                 lines.append(f"     Drivers: {', '.join(bits)}")
+        causal = payload.get("causal_factors")
+        if not isinstance(causal, dict) and isinstance(payload.get("extra"), dict):
+            causal = payload["extra"].get("causal_factors")
+        if isinstance(causal, dict) and causal.get("narrative"):
+            lines.append(f"     Causes: {causal.get('narrative')}")
         if g.get("priors_block_reason"):
             lines.append(f"     {g.get('priors_block_reason')}")
     return lines

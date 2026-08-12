@@ -82,6 +82,13 @@ class ExperienceJournal:
     tags: list[str] = field(default_factory=list)
     recommendations: list[Any] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # OI-SELF-EXP learning loop (payload contract; no second Experience DB)
+    prediction: dict[str, Any] = field(default_factory=dict)
+    outcome_structured: dict[str, Any] = field(default_factory=dict)
+    delta: dict[str, Any] = field(default_factory=dict)
+    affected_beliefs: list[str] = field(default_factory=list)
+    no_belief_link_reason: str | None = None
+    require_belief_link: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -97,8 +104,18 @@ class ExperienceJournal:
                 missing.append(str(step["field"]))
         return missing
 
+    def validate_belief_link(self) -> dict[str, Any]:
+        from atlas.reasoning.experience_loop import validate_belief_link
+
+        return validate_belief_link(
+            affected_beliefs=self.affected_beliefs,
+            no_belief_link_reason=self.no_belief_link_reason,
+        )
+
     def to_store_payload(self) -> dict[str, Any]:
         """Map journal fields onto learning.experiences columns + payload."""
+        from atlas.reasoning.experience_loop import compute_delta, learning_metadata
+
         problem_lines = [f"Observation: {self.observation.strip()}"]
         if self.reasoning.strip():
             problem_lines.append(f"Reasoning: {self.reasoning.strip()}")
@@ -115,6 +132,19 @@ class ExperienceJournal:
             "reflection": self.reflection.strip(),
             "lesson": self.lesson.strip(),
         }
+        pred = dict(self.prediction or {})
+        out_s = dict(self.outcome_structured or {})
+        delta = dict(self.delta or {}) or compute_delta(pred, out_s)
+        loop_meta = learning_metadata(
+            prediction=pred,
+            outcome_structured=out_s,
+            delta=delta,
+            affected_beliefs=list(self.affected_beliefs or []),
+            no_belief_link_reason=self.no_belief_link_reason,
+            extra=dict(self.metadata or {}),
+        )
+        if loop_meta.get("belief_link_ok"):
+            tags = list(dict.fromkeys([*tags, "learning_loop", "self0_exp"]))
         payload: dict[str, Any] = {
             "title": self.title.strip() or self.lesson.strip()[:80],
             "problem": "\n".join(problem_lines),
@@ -124,6 +154,12 @@ class ExperienceJournal:
             "tags": tags,
             "journal": journal,
             "experience_os": True,
+            "learning_loop": loop_meta,
+            "prediction": pred,
+            "outcome_structured": out_s,
+            "delta": delta,
+            "affected_beliefs": list(loop_meta.get("affected_beliefs") or []),
+            "no_belief_link_reason": loop_meta.get("no_belief_link_reason"),
         }
         if self.recommendations:
             payload["recommendations"] = list(self.recommendations)
@@ -133,7 +169,6 @@ class ExperienceJournal:
             if src_ids:
                 payload["source_experience_ids"] = list(src_ids)
         return payload
-
 
 def parse_journal_text(*parts: str) -> dict[str, str]:
     """Extract labeled journal fields from free-form experience text."""
@@ -179,6 +214,12 @@ def journal_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "domain": row.get("domain"),
         "tags": list(row.get("tags") or []),
         "journal": journal,
+        "prediction": payload.get("prediction") or {},
+        "outcome_structured": payload.get("outcome_structured") or {},
+        "delta": payload.get("delta") or {},
+        "affected_beliefs": list(payload.get("affected_beliefs") or []),
+        "no_belief_link_reason": payload.get("no_belief_link_reason"),
+        "learning_loop": payload.get("learning_loop"),
         "complete": all(
             str(journal.get(s) or "").strip()
             for s in ("observation", "decision", "outcome", "reflection", "lesson")
@@ -192,10 +233,10 @@ def journal_from_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 class ExperienceOS:
-    """First-class Experience OS over LearningService (EX.1)."""
+    """First-class Experience OS over LearningService (EX.1 / OI-SELF-EXP)."""
 
     name = "experience_os"
-    VERSION = "ex.1"
+    VERSION = "ex.2-self0"
 
     def __init__(
         self,
@@ -212,8 +253,16 @@ class ExperienceOS:
             "fields": list(SHAPE),
             "rule": (
                 "Observation→Reasoning→Decision→Outcome→Reflection→Lesson; "
-                "Outcome without Lesson = history; Lesson unused without Improve"
+                "Outcome without Lesson = history; Lesson unused without Improve; "
+                "Learning loop requires affected_beliefs[] or no_belief_link_reason"
             ),
+            "learning_loop": {
+                "prediction": "dict — what Atlas expected",
+                "outcome_structured": "dict — what happened",
+                "delta": "dict — prediction vs outcome",
+                "affected_beliefs": "belief_id list",
+                "no_belief_link_reason": "honest archive reason when no beliefs",
+            },
             "store": "learning.experiences",
             "version": self.VERSION,
         }
@@ -233,6 +282,12 @@ class ExperienceOS:
         recommendations: list[Any] | None = None,
         metadata: dict[str, Any] | None = None,
         strict: bool = True,
+        prediction: dict[str, Any] | None = None,
+        outcome_structured: dict[str, Any] | None = None,
+        delta: dict[str, Any] | None = None,
+        affected_beliefs: list[str] | None = None,
+        no_belief_link_reason: str | None = None,
+        require_belief_link: bool = False,
     ) -> dict[str, Any]:
         """Write a structured Experience Journal entry."""
         entry = ExperienceJournal(
@@ -247,6 +302,12 @@ class ExperienceOS:
             tags=list(tags or []),
             recommendations=list(recommendations or []),
             metadata=dict(metadata or {}),
+            prediction=dict(prediction or {}),
+            outcome_structured=dict(outcome_structured or {}),
+            delta=dict(delta or {}),
+            affected_beliefs=[str(b) for b in (affected_beliefs or []) if b],
+            no_belief_link_reason=no_belief_link_reason,
+            require_belief_link=require_belief_link,
         )
         missing = entry.validate()
         if missing and strict:
@@ -256,6 +317,20 @@ class ExperienceOS:
                 "missing": missing,
                 "shape": self.shape(),
             }
+        # Learning-loop writes must inherit; legacy journals stay backward-compatible
+        # unless require_belief_link or prediction/affected_beliefs are present.
+        needs_link = require_belief_link or bool(
+            prediction or affected_beliefs or outcome_structured
+        )
+        if needs_link:
+            link = entry.validate_belief_link()
+            if not link.get("ok"):
+                return {
+                    "ok": False,
+                    "error": link.get("error") or "belief_link_required",
+                    "detail": link.get("detail"),
+                    "shape": self.shape(),
+                }
         if self._learning is None:
             return {"ok": False, "error": "learning_unavailable"}
         payload = entry.to_store_payload()
@@ -269,8 +344,8 @@ class ExperienceOS:
             "journal": entry.as_dict(),
             "result": result if isinstance(result, dict) else {"applied": True},
             "version": self.VERSION,
+            "learning_loop": payload.get("learning_loop"),
         }
-
     def recall(self, query: str, *, limit: int | None = None) -> list[dict[str, Any]]:
         if self._learning is None:
             return []

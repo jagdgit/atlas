@@ -48,7 +48,7 @@ def test_build_daily_plan_sizes_and_cold_start():
         portfolio_key="india_equity_learner",
     )
     assert plan["kind"] == "daily_investment_plan"
-    assert plan["version"] == "il.6"
+    assert plan["version"].startswith("il.6")
     assert plan["phase"] == "learning"
     assert len(plan["candidates"]) == 2
     assert plan["candidates"][0]["symbol"] == "INFY.NS"

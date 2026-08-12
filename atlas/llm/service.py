@@ -141,6 +141,35 @@ class LLMService:
         """Return a role-bound client (chat/planner/researcher/...)."""
         return RoleClient(self, role, self.model_for_role(role))
 
+    def lane_busy(self) -> bool:
+        """PLC.F6 — True when the inference lane is currently held (non-blocking probe)."""
+        if self._resources is not None:
+            try:
+                decision = self._resources.can_admit(cost_units=0, llm_slots=1)
+                if not getattr(decision, "allowed", True):
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+        # Probe local semaphore without waiting.
+        acquired = self._lane.acquire(blocking=False)
+        if not acquired:
+            return True
+        self._lane.release()
+        return False
+
+    def lane_status(self) -> dict[str, Any]:
+        busy = self.lane_busy()
+        return {
+            "busy": busy,
+            "max_concurrency": self._max_concurrency,
+            "honesty": (
+                "LLM lane saturated — fail fast for interactive chat; "
+                "use status phrases or background research"
+                if busy
+                else "LLM lane free"
+            ),
+        }
+
     @property
     def roles(self) -> dict[str, str]:
         return dict(self._roles)

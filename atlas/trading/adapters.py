@@ -95,7 +95,11 @@ class AssetReplayAdapter:
 
 
 class YahooFinanceAdapter:
-    """Opt-in live tape via Yahoo chart API (no API key; network required)."""
+    """Opt-in live tape via Yahoo chart API (no API key; network required).
+
+    Shares the fundamentals rate gate / cooldown so chart bursts do not starve
+    quoteSummary (OI-RLD Yahoo IP budget).
+    """
 
     name = "yahoo"
     CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -106,17 +110,44 @@ class YahooFinanceAdapter:
         enabled: bool = False,
         timeout: float = 20.0,
         opener: Any | None = None,
+        cache_ttl_s: float = 300.0,
+        data_dir: str | None = None,
+        rate_gate: Any | None = None,
+        chart_interval_s: float = 0.85,
         logger: logging.Logger | None = None,
     ) -> None:
         self._enabled = bool(enabled)
         self._timeout = float(timeout)
         self._opener = opener  # injectable for tests: callable(url) -> dict
+        # TTL cache cuts chart storms (paper ticks every ~15s) so fundamentals
+        # crumb recovery is not starved by the same IP.
+        self._cache_ttl_s = max(0.0, float(cache_ttl_s))
+        self._cache: dict[str, tuple[float, list[Bar]]] = {}
+        self._data_dir = data_dir
+        self._chart_interval_s = max(0.05, float(chart_interval_s))
         self._logger = logger or logging.getLogger("atlas.trading.adapters.yahoo")
+        self._gate = rate_gate
+        if self._gate is None and opener is None and data_dir:
+            try:
+                from atlas.investment.yahoo_fundamentals import get_yahoo_rate_gate
+
+                self._gate = get_yahoo_rate_gate(data_dir)
+            except Exception:  # noqa: BLE001
+                self._gate = None
 
     def fetch_bars(
         self, symbol: str, *, limit: int = 100, **kwargs: Any
     ) -> list[Bar]:
-        sym = (symbol or "").strip()
+        import time
+
+        from atlas.investment.symbol_aliases import resolve_yahoo_symbol
+
+        requested = (symbol or "").strip()
+        if not requested:
+            return []
+        resolved = resolve_yahoo_symbol(requested)
+        sym = resolved.yahoo
+        cache_key = f"{resolved.canonical or sym}|{kwargs.get('range') or '3mo'}|{kwargs.get('interval') or '1d'}"
         if not sym:
             return []
         if not self._enabled:
@@ -124,7 +155,34 @@ class YahooFinanceAdapter:
                 "market_data:yahoo",
                 "yahoo provider disabled — set market.yahoo_enabled: true to opt in (OI-D1)",
             )
-        url = self.CHART_URL.format(symbol=sym) + f"?interval=1d&range=3mo"
+        now = time.time()
+        hit = self._cache.get(cache_key)
+        if (
+            self._cache_ttl_s > 0
+            and hit is not None
+            and (now - hit[0]) < self._cache_ttl_s
+        ):
+            bars = list(hit[1])
+            if limit > 0:
+                bars = bars[-limit:]
+            return bars
+        # During fundamentals 429 cooldown: refuse network (caller uses durable).
+        if self._gate is not None and self._opener is None:
+            rem = float(self._gate.remaining_cooldown_s() or 0)
+            if rem > 0:
+                raise CapabilityGap(
+                    "market_data:yahoo",
+                    f"yahoo chart paused — rate-gate cooldown {rem:.0f}s "
+                    "(prefer durable market/bars)",
+                )
+            try:
+                self._gate.wait_chart(chart_interval_s=self._chart_interval_s)
+            except Exception:  # noqa: BLE001
+                pass
+        url = self.CHART_URL.format(symbol=sym) + (
+            f"?interval={str(kwargs.get('interval') or '1d')}"
+            f"&range={str(kwargs.get('range') or '3mo')}"
+        )
         try:
             payload = self._fetch_json(url)
         except CapabilityGap:
@@ -135,6 +193,8 @@ class YahooFinanceAdapter:
                 f"fetch failed for {sym}: {exc}",
             ) from exc
         bars = self._parse_chart(payload)
+        if self._cache_ttl_s > 0:
+            self._cache[cache_key] = (now, list(bars))
         if limit > 0:
             bars = bars[-limit:]
         return bars
@@ -151,6 +211,11 @@ class YahooFinanceAdapter:
             headers={"User-Agent": "AtlasMarketReader/1.0"},
         ) as client:
             resp = client.get(url)
+            if resp.status_code in {429, 401, 403} and self._gate is not None:
+                try:
+                    self._gate.on_block(resp.status_code)
+                except Exception:  # noqa: BLE001
+                    pass
             if resp.status_code >= 400:
                 raise CapabilityGap(
                     "market_data:yahoo",

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlas Console</title>
-  <link rel="stylesheet" href="./styles.css?v=dash69" />
+  <link rel="stylesheet" href="./styles.css?v=dash70" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🜨</text></svg>" />
 </head>
 <body>
@@ -351,6 +351,17 @@
 
         <div class="learner-panel">
           <div class="panel-head">
+            <h3 class="section-h">Books &amp; ledgers (all labs)</h3>
+            <button id="learner-ledgers-refresh" class="link" type="button">refresh</button>
+          </div>
+          <p class="muted small">
+            Cash · equity · day/total P&amp;L · positions · recent trades for swing / intraday / F&amp;O (sim only).
+          </p>
+          <div id="learner-ledgers" class="learner-body">Loading ledgers…</div>
+        </div>
+
+        <div class="learner-panel">
+          <div class="panel-head">
             <h3 class="section-h">Laboratory status (LQ)</h3>
             <button id="learner-lab-refresh" class="link" type="button">refresh</button>
           </div>
@@ -532,7 +543,7 @@
 
   <div id="toast" class="toast hidden"></div>
   <!-- App shell first so window.tryConnect exists before the emergency fallback. -->
-  <script src="./app.js?v=dash69"></script>
+  <script src="./app.js?v=dash70"></script>
   <!-- Minimal bootstrap: works even if app.js fails to load/parse, and survives late DOM. -->
   <script>
   (function () {

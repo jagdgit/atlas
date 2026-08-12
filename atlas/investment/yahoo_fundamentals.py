@@ -26,7 +26,8 @@ VERSION = "li.2.yahoo_fundamentals"
 PROVIDER_ID = "yahoo_fundamentals"
 QUOTE_SUMMARY_URL = (
     "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-    "?modules=defaultKeyStatistics,financialData,summaryDetail,price"
+    "?modules=defaultKeyStatistics,financialData,summaryDetail,price,"
+    "cashflowStatementHistory"
 )
 CRUMB_URLS = (
     "https://query1.finance.yahoo.com/v1/test/getcrumb",
@@ -42,9 +43,10 @@ YAHOO_USER_AGENT = (
 _crumb_lock = threading.Lock()
 _cached_crumb: str | None = None
 
-# Slow-and-steady Yahoo pacing (shared process + durable cooldown file)
-DEFAULT_MIN_INTERVAL_S = 3.0
-DEFAULT_BACKOFF_START_S = 90.0
+# Slow-and-steady Yahoo pacing (shared process + durable cooldown file).
+# 429 storms on getcrumb are common — prefer longer gaps over hammering.
+DEFAULT_MIN_INTERVAL_S = 8.0
+DEFAULT_BACKOFF_START_S = 120.0
 DEFAULT_BACKOFF_MAX_S = 900.0  # 15 minutes
 DEFAULT_BACKOFF_MULT = 2.0
 DEFAULT_BATCH_SIZE = 3
@@ -144,14 +146,31 @@ class YahooRateGate:
                 ),
             }
 
-    def wait(self) -> float:
-        """Block until it is polite to hit Yahoo. Returns seconds waited."""
+    def wait(self, *, respect_cooldown: bool = True) -> float:
+        """Block until it is polite to hit Yahoo. Returns seconds waited.
+
+        ``respect_cooldown=False`` only enforces min-interval (legacy fallbacks).
+        Prefer hard-pausing enrich / chart network while cooldown is active.
+        """
         with self._lock:
             now = time.time()
-            target = max(
-                self._cooldown_until,
-                self._last_request_at + self.min_interval_s,
-            )
+            target = self._last_request_at + self.min_interval_s
+            if respect_cooldown:
+                target = max(self._cooldown_until, target)
+            delay = max(0.0, target - now)
+        if delay > 0:
+            time.sleep(delay)
+        with self._lock:
+            self._last_request_at = time.time()
+            self._save()
+        return delay
+
+    def wait_chart(self, *, chart_interval_s: float = 0.85) -> float:
+        """Pace chart API on the shared IP budget; honor fundamentals cooldown."""
+        interval = max(0.05, float(chart_interval_s))
+        with self._lock:
+            now = time.time()
+            target = max(self._cooldown_until, self._last_request_at + interval)
             delay = max(0.0, target - now)
         if delay > 0:
             time.sleep(delay)
@@ -261,13 +280,51 @@ def parse_quote_summary(payload: dict[str, Any], *, symbol: str) -> dict[str, An
             # debtToEquity sometimes as percent-like 40 meaning 0.4 — keep as reported
             fields[key] = val
 
+    # Earnings calendar timestamp when Yahoo exposes it (never invent commentary).
+    earn_raw = stats.get("earningsTimestamp") or stats.get("earningsTimestampStart")
+    earn_ts = None
+    if isinstance(earn_raw, dict):
+        earn_ts = _f(earn_raw.get("raw"))
+    else:
+        earn_ts = _f(earn_raw)
+    if earn_ts is not None and earn_ts > 0:
+        try:
+            from datetime import datetime, timezone
+
+            fields["earnings_date"] = datetime.fromtimestamp(
+                float(earn_ts), tz=timezone.utc
+            ).date().isoformat()
+        except (OSError, OverflowError, ValueError):
+            pass
+
+    # Derive FCF from cashflow statement when freeCashflow module is empty
+    # (common for some .NS names). Capex is typically negative on Yahoo.
+    fcf_derived = False
+    if fields.get("fcf") is None:
+        cash_hist = row.get("cashflowStatementHistory") or {}
+        statements = cash_hist.get("cashflowStatements") or []
+        if statements and isinstance(statements[0], dict):
+            st0 = statements[0]
+            op_cf = _f(st0.get("totalCashFromOperatingActivities"))
+            capex = _f(st0.get("capitalExpenditures"))
+            if op_cf is not None and capex is not None:
+                fields["fcf"] = op_cf + capex
+                fcf_derived = True
+
     evidence = [
         make_evidence_value(
             field=k,
             value=v,
             provider=PROVIDER_ID,
             source=PROVIDER_ID,
-            raw_ref={"symbol": normalize_symbol(symbol), "module": "quoteSummary"},
+            raw_ref={
+                "symbol": normalize_symbol(symbol),
+                "module": (
+                    "cashflowStatementHistory"
+                    if (k == "fcf" and fcf_derived)
+                    else "quoteSummary"
+                ),
+            },
             ttl_hours=168,
         )
         for k, v in fields.items()
@@ -423,16 +480,16 @@ class YahooFundamentalsProvider:
         # Hermetic tests: no live pacing
         self._gate = None if opener is not None else (rate_gate or get_yahoo_rate_gate(data_dir))
 
-    def _pace(self) -> None:
+    def _pace(self, *, respect_cooldown: bool = True) -> None:
         if self._gate is not None:
-            self._gate.wait()
+            self._gate.wait(respect_cooldown=respect_cooldown)
 
-    def _note_http(self, status_code: int) -> None:
+    def _note_http(self, status_code: int, *, clears_cooldown: bool = True) -> None:
         if self._gate is None:
             return
         if status_code in {429, 401, 403}:
             self._gate.on_block(status_code)
-        elif status_code < 400:
+        elif status_code < 400 and clears_cooldown:
             self._gate.on_success()
 
     def fetch_symbol(self, symbol: str) -> dict[str, Any]:
@@ -447,16 +504,6 @@ class YahooFundamentalsProvider:
                 "error": "yahoo_fundamentals_disabled",
                 "hint": "Enable market.yahoo_enabled or pass enabled=True for enrich",
             }
-        if self._gate is not None and self._gate.remaining_cooldown_s() > 0:
-            rem = self._gate.remaining_cooldown_s()
-            return {
-                "symbol": sym,
-                "fields": {},
-                "evidence": [],
-                "error": f"yahoo_cooldown ({rem:.0f}s remaining)",
-                "rate_limited": True,
-                "hint": "Yahoo cooldown active — worker/API will resume after pause.",
-            }
         # Hermetic tests inject opener — keep quoteSummary-only path
         if self._opener is not None:
             url = QUOTE_SUMMARY_URL.format(symbol=sym)
@@ -470,6 +517,23 @@ class YahooFundamentalsProvider:
             if not parsed.get("fields"):
                 parsed["error"] = "empty_quote_summary"
             return parsed
+
+        # Hard-pause while cooldown is armed — do not burn shared IP on fallbacks.
+        cooldown = (
+            self._gate.remaining_cooldown_s() if self._gate is not None else 0.0
+        )
+        if cooldown > 0:
+            return {
+                "symbol": sym,
+                "fields": {},
+                "evidence": [],
+                "error": f"yahoo_cooldown ({cooldown:.0f}s)",
+                "rate_limited": True,
+                "hint": (
+                    "Yahoo enrich paused during rate-gate cooldown. "
+                    "Prefer Screener/CSV for FCF; resume after cooldown."
+                ),
+            }
 
         primary_err: str | None = None
         try:
@@ -491,15 +555,16 @@ class YahooFundamentalsProvider:
                     "error": primary_err,
                     "rate_limited": True,
                     "hint": (
-                        "Yahoo rate/auth blocked — cooldown armed; remaining gaps "
-                        "resume on next tick. Or import Screener CSV (Tier B)."
+                        "Yahoo quoteSummary blocked — cooldown armed; "
+                        "no chart/HTML probes this tick."
                     ),
                 }
 
-        # Fallbacks when Yahoo auth/rate-limits block quoteSummary
+        # Fallbacks only when quoteSummary returned empty (not rate-blocked).
         merged: dict[str, Any] = {}
         evidence: list[dict[str, Any]] = []
         used: list[str] = []
+        fallback_blocked = False
         try:
             chart = self._fetch_chart(sym)
             if chart.get("fields"):
@@ -509,13 +574,7 @@ class YahooFundamentalsProvider:
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("yahoo chart fallback failed %s: %s", sym, exc)
             if is_yahoo_rate_block_error(str(exc)):
-                return {
-                    "symbol": sym,
-                    "fields": {},
-                    "evidence": [],
-                    "error": str(exc)[:180],
-                    "rate_limited": True,
-                }
+                fallback_blocked = True
         try:
             html_doc = self._fetch_quote_html(sym)
             if html_doc.get("fields"):
@@ -526,14 +585,8 @@ class YahooFundamentalsProvider:
                 used.append("quote_html")
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("yahoo html fallback failed %s: %s", sym, exc)
-            if is_yahoo_rate_block_error(str(exc)) and not merged:
-                return {
-                    "symbol": sym,
-                    "fields": {},
-                    "evidence": [],
-                    "error": str(exc)[:180],
-                    "rate_limited": True,
-                }
+            if is_yahoo_rate_block_error(str(exc)):
+                fallback_blocked = True
 
         if not merged:
             return {
@@ -541,6 +594,7 @@ class YahooFundamentalsProvider:
                 "fields": {},
                 "evidence": [],
                 "error": primary_err or "yahoo_fundamentals_unavailable",
+                "rate_limited": fallback_blocked,
                 "hint": (
                     "Yahoo JSON APIs blocked (401/429). Retry later, or import "
                     "Screener CSV on Invest intel (Tier B)."
@@ -627,8 +681,7 @@ class YahooFundamentalsProvider:
                 break
             crumb = ""
         if not crumb:
-            if last_status in {429, 401, 403}:
-                self._note_http(int(last_status))
+            # Rate/auth already noted inside the loop — do not double-arm cooldown.
             raise RuntimeError(
                 f"HTTP {last_status or '?'} from Yahoo getcrumb "
                 "(fundamentals auth blocked — cooldown armed; resume later)"
@@ -676,7 +729,8 @@ class YahooFundamentalsProvider:
             f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
             "?interval=1d&range=5d"
         )
-        self._pace()
+        # Share IP budget with fundamentals gate; honor cooldown (prefer durable bars).
+        self._pace(respect_cooldown=True)
         with httpx.Client(
             timeout=self._timeout,
             follow_redirects=True,
@@ -684,21 +738,29 @@ class YahooFundamentalsProvider:
         ) as client:
             resp = client.get(url)
             if resp.status_code in {429, 401, 403}:
-                self._note_http(resp.status_code)
+                self._note_http(resp.status_code, clears_cooldown=False)
                 raise RuntimeError(f"HTTP {resp.status_code} from Yahoo chart")
             if resp.status_code >= 400:
                 raise RuntimeError(f"HTTP {resp.status_code} from Yahoo chart")
-            self._note_http(resp.status_code)
+            # Chart success must not clear crumb cooldown (different Yahoo surface).
             return parse_chart_meta(resp.json(), symbol=symbol)
 
     def _fetch_quote_html(self, symbol: str) -> dict[str, Any]:
         client = self._ensure_client()
-        self._pace()
+        self._pace(respect_cooldown=True)
         resp = client.get(f"https://finance.yahoo.com/quote/{symbol}")
-        if resp.status_code in {429, 401, 403}:
-            self._note_http(resp.status_code)
-            raise RuntimeError(f"HTTP {resp.status_code} from Yahoo quote page")
-        if resp.status_code >= 400:
-            raise RuntimeError(f"HTTP {resp.status_code} from Yahoo quote page")
-        self._note_http(resp.status_code)
-        return parse_quote_html(resp.text, symbol=symbol)
+        status = int(getattr(resp, "status_code", 0) or 0)
+        body = resp.text or ""
+        # Yahoo often soft-blocks with tiny HTTP 404 bodies (not a real missing page).
+        soft_404 = status == 404 and len(body) < 2000
+        if status in {429, 401, 403} or soft_404:
+            self._note_http(429 if soft_404 else status, clears_cooldown=False)
+            raise RuntimeError(
+                f"HTTP {status} from Yahoo quote page"
+                + (" (soft block)" if soft_404 else "")
+            )
+        if status >= 400:
+            raise RuntimeError(f"HTTP {status} from Yahoo quote page")
+        # HTML success must not clear crumb cooldown.
+        self._note_http(status, clears_cooldown=False)
+        return parse_quote_html(body, symbol=symbol)

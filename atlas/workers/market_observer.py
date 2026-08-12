@@ -32,6 +32,10 @@ class MarketObserverWorker(PersistentWorker):
         capabilities: Any | None = None,
         observations: Any | None = None,
         host_guard: Any | None = None,
+        portfolio: Any | None = None,
+        data_dir: str | None = None,
+        decision_packets: Any | None = None,
+        investment_research: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._reader = market_reader
@@ -40,6 +44,10 @@ class MarketObserverWorker(PersistentWorker):
         self._capabilities = capabilities
         self._observations = observations
         self._host_guard = host_guard
+        self._portfolio = portfolio
+        self._data_dir = data_dir
+        self._packets = decision_packets
+        self._investment_research = investment_research
         self._logger = logger or logging.getLogger("atlas.workers.market_observer")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -74,6 +82,58 @@ class MarketObserverWorker(PersistentWorker):
         state["observation_cadence"] = cadence
         mark_budget = int(cadence.get("budget") or 0)
         record_marks = bool(cfg.get("record_mark_snapshots", True))
+
+        # PLC.C — open-book daily packs first (prefer holdings over vanity watchlist)
+        open_book_note = ""
+        if (
+            self._observations is not None
+            and bool(cfg.get("open_book_daily_packs", True))
+            and self._portfolio is not None
+        ):
+            pack_cadence = observation_cadence_budget(
+                self._host_guard,
+                worker_type=self.type,
+                requested=int(cfg.get("open_book_pack_budget") or 5),
+                reduced=int(cfg.get("open_book_pack_budget_reduced") or 2),
+            )
+            pack_budget = int(pack_cadence.get("budget") or 0)
+            state["open_book_pack_cadence"] = pack_cadence
+            if pack_budget > 0:
+                try:
+                    from atlas.investment.open_book_packs import (
+                        record_open_book_daily_packs,
+                    )
+
+                    pack_out = record_open_book_daily_packs(
+                        observations=self._observations,
+                        portfolio=self._portfolio,
+                        market_reader=self._reader,
+                        data_dir=self._data_dir
+                        or str(cfg.get("data_dir") or "")
+                        or None,
+                        packets=self._packets,
+                        investment_research=self._investment_research,
+                        portfolio_key=str(
+                            cfg.get("portfolio_key") or "india_equity_learner"
+                        ),
+                        program_id=str(
+                            cfg.get("program_id") or "market_intelligence"
+                        ),
+                        budget=pack_budget,
+                        provider=str(cfg.get("provider") or "yahoo") or "yahoo",
+                    )
+                    state["last_open_book_packs"] = {
+                        "recorded": pack_out.get("recorded"),
+                        "skipped": pack_out.get("skipped"),
+                        "session_day": pack_out.get("session_day"),
+                        "symbols": (pack_out.get("symbols") or [])[:12],
+                    }
+                    rec = int(pack_out.get("recorded") or 0)
+                    sk = int(pack_out.get("skipped") or 0)
+                    if rec or sk:
+                        open_book_note = f"open_book_packs={rec} (skip={sk}); "
+                except Exception as exc:  # noqa: BLE001
+                    self._logger.debug("PLC.C open_book packs skipped: %s", exc)
 
         targets, auto = wl.resolve_instruments(cfg)
         state["auto_watchlist"] = auto
@@ -202,7 +262,7 @@ class MarketObserverWorker(PersistentWorker):
                 pass
 
         auto_note = f"auto watchlist ({len(targets)}); " if auto else ""
-        head = f"{auto_note}observe: {ok} ok, {gaps} gap(s)"
+        head = f"{open_book_note}{auto_note}observe: {ok} ok, {gaps} gap(s)"
         if interesting:
             head += f", {len(interesting)} interesting"
         if mark_snaps:

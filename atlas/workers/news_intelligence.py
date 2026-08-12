@@ -153,6 +153,8 @@ class NewsIntelligenceWorker(PersistentWorker):
                         ),
                         "symbol": sym,
                         "source": "open_book_seed",
+                        "seed": True,
+                        "evidence_class": "non_evidence",
                     }
                     for sym in open_syms[:15]
                 ]

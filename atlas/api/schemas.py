@@ -945,6 +945,61 @@ class UpdateGoalRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class BeliefConsultRequest(BaseModel):
+    """OI-SELF0 — consult Belief Core (inheritance)."""
+
+    domain: str | None = None
+    theme: str | None = None
+    query: str | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class BeliefReviseRequest(BaseModel):
+    """OI-SELF0 — explainable belief revision."""
+
+    reason: str = Field(..., min_length=1, max_length=2000)
+    evidence_summary: str = ""
+    new_statement: str | None = None
+    new_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    new_status: str | None = None
+    open_questions: list[str] | None = None
+    use_llm: bool = False
+
+
+class BeliefPromoteRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=2000)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class BeliefCandidateRequest(BaseModel):
+    statement: str = Field(..., min_length=1, max_length=2000)
+    domain: str = Field(..., min_length=1)
+    confidence: float = Field(default=0.35, ge=0.0, le=1.0)
+    themes: list[str] | None = None
+    open_questions: list[str] | None = None
+    evidence_summary: str = ""
+    origin: str = "llm"
+
+
+class LearningLoopRequest(BaseModel):
+    """OI-SELF-EXP — prediction/outcome experience that updates Belief Core."""
+
+    title: str = Field(..., min_length=1, max_length=500)
+    observation: str = Field(..., min_length=1)
+    decision: str = Field(..., min_length=1)
+    outcome: str = Field(..., min_length=1)
+    reflection: str = Field(..., min_length=1)
+    lesson: str = Field(..., min_length=1)
+    reasoning: str = ""
+    domain: str = "engineering"
+    prediction: dict[str, Any] | None = None
+    outcome_structured: dict[str, Any] | None = None
+    affected_beliefs: list[str] | None = None
+    no_belief_link_reason: str | None = None
+    ingest_beliefs: bool = True
+    tags: list[str] | None = None
+
+
 class MissionActionRequest(BaseModel):
     """Reason attached to a mission lifecycle action (journaled, P9)."""
 

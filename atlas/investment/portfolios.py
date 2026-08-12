@@ -639,6 +639,37 @@ def default_decision_config(row: dict[str, Any]) -> dict[str, Any]:
     """Config overrides for a Decision Simulation mission bound to this book."""
     person = normalize_persona(row.get("persona"))
     key = str(row.get("portfolio_key") or "default")
+    ac = str(row.get("asset_class") or "cash_equity").strip().lower().replace(" ", "_")
+    if not ac:
+        ac = str((person.get("allowed_assets") or ["cash_equity"])[0]).strip().lower()
+    pack = str(
+        row.get("instrument_pack") or ac or "cash_equity"
+    ).strip().lower()
+    instruments: list[dict[str, Any]] = list(row.get("instruments") or [])
+    market_session = "nse_equity"
+    auto_max = 10
+    # F&O: never auto-pull cash equity universe — operator/demo instruments only
+    if ac in {"futures", "options"} or pack in {"futures", "options", "fno"}:
+        market_session = "nse_fno"
+        auto_max = 0
+        if not instruments:
+            instruments = [
+                {
+                    "symbol": "NIFTY",
+                    "asset_class": "futures",
+                    "lot_size": 25,
+                    "note": "plc.e_demo_seed — underlier ^NSEI via alias; replace with operator contracts",
+                },
+                {
+                    "symbol": "BANKNIFTY",
+                    "asset_class": "futures",
+                    "lot_size": 15,
+                    "note": "plc.e_demo_seed — optional second underlier",
+                },
+            ]
+    elif "intraday" in key.lower():
+        market_session = "nse_equity"
+        auto_max = 15
     return {
         "portfolio_key": key,
         "portfolio_label": row.get("label") or key,
@@ -647,17 +678,98 @@ def default_decision_config(row: dict[str, Any]) -> dict[str, Any]:
         "program_id": row.get("program_id") or DEFAULT_PROGRAM,
         "universe_index": row.get("universe") or "NIFTY50",
         "broker_profile": row.get("broker_profile") or "paper_demo",
-        "asset_class": row.get("asset_class") or "cash_equity",
-        "instrument_pack": row.get("instrument_pack")
-        or row.get("asset_class")
-        or "cash_equity",
-        "instruments": [],
+        "asset_class": ac,
+        "instrument_pack": pack,
+        "instruments": instruments,
         "feed_mode": "live",
         "live_provider": "yahoo",
-        "market_session": "nse_equity",
+        "market_session": market_session,
         "respect_market_hours": True,
-        "auto_max_instruments": 10,
+        "auto_max_instruments": auto_max,
     }
+
+
+def enrich_decision_config_from_book(
+    cfg: dict[str, Any] | None,
+    book: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """PLC.E / lab wake — fill missing mission config so F&O/intraday can tick.
+
+    Does not invent prices. Seeds demo F&O instruments when ``auto_max=0`` and
+    instruments are empty. Safe to call every tick (idempotent merges).
+    """
+    out = dict(cfg or {})
+    if not isinstance(book, dict):
+        return out
+    suggested = default_decision_config(book)
+    ac = str(
+        out.get("asset_class")
+        or book.get("asset_class")
+        or suggested.get("asset_class")
+        or "cash_equity"
+    ).strip().lower()
+    key = str(book.get("portfolio_key") or out.get("portfolio_key") or "")
+
+    for field in (
+        "portfolio_key",
+        "asset_class",
+        "instrument_pack",
+        "market_session",
+        "feed_mode",
+        "live_provider",
+        "respect_market_hours",
+        "auto_max_instruments",
+        "broker_profile",
+        "program_id",
+        "universe_index",
+    ):
+        if out.get(field) in (None, "", []):
+            if suggested.get(field) is not None:
+                out[field] = suggested[field]
+
+    if not out.get("persona") and suggested.get("persona"):
+        out["persona"] = suggested["persona"]
+
+    instruments = out.get("instruments")
+    if not isinstance(instruments, list):
+        instruments = []
+    # F&O: never idle forever on empty instruments when pack is futures
+    if ac in {"futures", "options"} or str(out.get("instrument_pack") or "").lower() in {
+        "futures",
+        "options",
+        "fno",
+    }:
+        out["auto_max_instruments"] = 0
+        out["market_session"] = str(out.get("market_session") or "nse_fno")
+        if not instruments:
+            instruments = list(suggested.get("instruments") or [])
+            out["_lab_seeded_instruments"] = True
+        # Ensure asset_class stamped on rows so persona filter keeps them
+        fixed: list[dict[str, Any]] = []
+        for inst in instruments:
+            if not isinstance(inst, dict):
+                continue
+            row = dict(inst)
+            row.setdefault("asset_class", ac or "futures")
+            if not row.get("lot_size"):
+                try:
+                    from atlas.investment.packs.derivatives import default_lot_size
+
+                    row["lot_size"] = default_lot_size(str(row.get("symbol") or ""))
+                except Exception:  # noqa: BLE001
+                    row["lot_size"] = 25
+            fixed.append(row)
+        out["instruments"] = fixed
+    elif "intraday" in key.lower():
+        out.setdefault("market_session", "nse_equity")
+        out.setdefault("respect_market_hours", True)
+        if not instruments:
+            out["instruments"] = list(instruments)
+        # Keep auto_max so M0 watchlist can load when empty
+        if out.get("auto_max_instruments") is None:
+            out["auto_max_instruments"] = int(suggested.get("auto_max_instruments") or 15)
+
+    return out
 
 
 def create_book(
@@ -673,9 +785,31 @@ def create_book(
     instantiate: bool = False,
     templates: Any = None,
     activate: bool = True,
+    personality_kind: str | None = None,
 ) -> dict[str, Any]:
     """Register a virtual portfolio; optionally spawn its Decision Simulation mission."""
-    person = normalize_persona(persona, capital=capital)
+    ac = str(asset_class or "cash_equity").strip().lower().replace(" ", "_")
+    kind = personality_kind
+    if not kind:
+        key_l = str(portfolio_key or label or "").lower()
+        if ac in {"futures", "options"}:
+            kind = ac
+        elif "intraday" in key_l:
+            kind = "intraday"
+        elif "fno" in key_l or "futures" in key_l:
+            kind = "futures"
+        else:
+            kind = None
+    raw_person = dict(persona or {})
+    # Align allowed_assets with asset_class (F&O must not stay cash_equity)
+    if ac in {"futures", "options"}:
+        allowed = raw_person.get("allowed_assets")
+        if not allowed or allowed == ["cash_equity"] or allowed == "cash_equity":
+            raw_person["allowed_assets"] = [ac]
+    if kind:
+        person = apply_laboratory_personality(raw_person, kind=kind, capital=capital)
+    else:
+        person = normalize_persona(raw_person, capital=capital)
     if capital is not None:
         person["capital"] = float(capital)
     row = register(
@@ -685,8 +819,11 @@ def create_book(
         portfolio_key=portfolio_key,
         universe=universe,
         broker_profile=broker_profile,
-        asset_class=asset_class or (person["allowed_assets"][0] if person["allowed_assets"] else "cash_equity"),
+        asset_class=ac or (person["allowed_assets"][0] if person["allowed_assets"] else "cash_equity"),
     )
+    row = stamp_laboratory_row(row)
+    if kind:
+        row["personality_kind"] = kind
     if not instantiate or templates is None:
         return row
     cfg = default_decision_config(row)
@@ -712,7 +849,9 @@ def create_book(
     if mid:
         bound = bind_mission(row["portfolio_key"], mission_id=mid)
         if bound:
-            row = bound
+            row = stamp_laboratory_row(bound)
+            if kind:
+                row["personality_kind"] = kind
     row = dict(row)
     row["mission"] = {
         "id": mid,
@@ -721,3 +860,38 @@ def create_book(
     }
     row["instantiated"] = True
     return row
+
+
+def repair_laboratory_pack_alignment(portfolio_key: str) -> dict[str, Any] | None:
+    """PLC.E — fix F&O/intraday registry rows created with cash defaults.
+
+    Updates durable registry persona. Returns suggested decision_simulation config
+    (mission config may still need a PATCH to pick up instruments/session).
+    """
+    row = get(portfolio_key)
+    if not row:
+        return None
+    key = str(row.get("portfolio_key") or portfolio_key)
+    ac = str(row.get("asset_class") or "cash_equity").strip().lower()
+    person = dict(row.get("persona") or {})
+    changed = False
+    if ac in {"futures", "options"}:
+        if list(person.get("allowed_assets") or []) != [ac]:
+            person["allowed_assets"] = [ac]
+            changed = True
+        if not person.get("mentor"):
+            person = apply_laboratory_personality(person, kind=ac)
+            changed = True
+    elif "intraday" in key.lower() and not person.get("mentor"):
+        person = apply_laboratory_personality(person, kind="intraday")
+        changed = True
+    if changed:
+        row = dict(row)
+        row["persona"] = normalize_persona(person, capital=person.get("capital"))
+        row = stamp_laboratory_row(row)
+        with _LOCK:
+            _ensure_loaded()
+            _STORE[key] = row
+            _write_disk()
+    suggested = default_decision_config(row)
+    return {"portfolio": row, "suggested_decision_config": suggested, "changed": changed}

@@ -42,11 +42,13 @@ class EngineeringMentorWorker(PersistentWorker):
         learning: Any,
         experience_os: Any | None = None,
         events: Any | None = None,
+        reasoning: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._learning = learning
         self._experience_os = experience_os
         self._events = events
+        self._reasoning = reasoning
         self._logger = logger or logging.getLogger("atlas.workers.engineering_mentor")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -131,6 +133,28 @@ class EngineeringMentorWorker(PersistentWorker):
                     note=f"mentor write failed: {exc}",
                 )
 
+        # OI-SELF-EXP — emit belief candidate from engineering lesson (advice-only).
+        belief_candidate_id: str | None = None
+        if (
+            wrote
+            and self._reasoning is not None
+            and cfg.get("emit_belief_candidates", True)
+            and not cfg.get("dry_run")
+        ):
+            try:
+                cand = self._reasoning.ingest_experience_lesson(
+                    lesson=lesson.lesson,
+                    domain="engineering",
+                    experience_id=experience_id,
+                    delta_label="mentor",
+                    evidence_summary=f"engineering_mentor:{lesson.title[:120]}",
+                )
+                if cand.get("ok") and cand.get("candidate"):
+                    belief_candidate_id = str(cand["candidate"].get("id") or "")
+                    state["last_belief_candidate_id"] = belief_candidate_id
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("belief candidate emit skipped: %s", exc)
+
         if (
             wrote
             and experience_id
@@ -164,9 +188,10 @@ class EngineeringMentorWorker(PersistentWorker):
                 pass
 
         rec = "; ".join(lesson.recommendations[:2])
+        cand_note = f" candidate={belief_candidate_id[:8]}" if belief_candidate_id else ""
         return TickResult(
             state=state,
             note=(
-                f"mentor[{focus}]: wrote={wrote} {lesson.title[:50]} | {rec}"
+                f"mentor[{focus}]: wrote={wrote} {lesson.title[:50]} | {rec}{cand_note}"
             ),
         )

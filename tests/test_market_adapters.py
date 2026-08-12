@@ -84,6 +84,39 @@ def test_yahoo_opener_parses_chart():
     assert bars[1]["close"] == 11.5
 
 
+def test_yahoo_chart_ttl_cache_avoids_second_fetch():
+    calls = {"n": 0}
+    payload = {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1, 2],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [10.0, 11.0],
+                                "high": [11.0, 12.0],
+                                "low": [9.0, 10.0],
+                                "close": [10.5, 11.5],
+                                "volume": [100, 200],
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    }
+
+    def opener(_url):
+        calls["n"] += 1
+        return payload
+
+    adapter = YahooFinanceAdapter(enabled=True, opener=opener, cache_ttl_s=60.0)
+    assert len(adapter.fetch_bars("CACHE.NS")) == 2
+    assert len(adapter.fetch_bars("CACHE.NS")) == 2
+    assert calls["n"] == 1
+
+
 def test_keyed_provider_missing_key():
     adapter = KeyedProviderAdapter("nse", api_key_env="ATLAS_TEST_NO_KEY_XYZ")
     with pytest.raises(CapabilityGap) as exc:

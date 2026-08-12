@@ -38,6 +38,15 @@ def persist_dir() -> Path:
     data = (os.environ.get("ATLAS_DATA_DIR") or "").strip()
     if data:
         return Path(data) / "market" / "watchlists"
+    # Prefer configured data root (same as triage / fundamentals) over CWD.
+    try:
+        from atlas.config import get_config
+
+        cfg_data = str(get_config().paths.data or "").strip()
+        if cfg_data:
+            return Path(cfg_data) / "market" / "watchlists"
+    except Exception:  # noqa: BLE001
+        pass
     return Path("data") / "market" / "watchlists"
 
 
@@ -400,6 +409,8 @@ def resolve_news_items(
                 ),
                 "symbol": sym,
                 "source": "watchlist_seed",
+                "seed": True,
+                "evidence_class": "non_evidence",
             }
         )
     return out, bool(out)

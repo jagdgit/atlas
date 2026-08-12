@@ -28,8 +28,11 @@ DEFAULT_ALLOWLIST: list[dict[str, Any]] = [
         "url": "https://www.pib.gov.in/RssMain.aspx?ModId=6&Lang=1",
         "kind": "policy",
         "label": "PIB Press Releases",
+        # Stay False in defaults; E1 missions enable via rss_enable=["pib_press"].
+        # Verified text/xml RSS 2026-08-10 (A1).
         "enabled": False,
         "max_items": 15,
+        "note": "Verified RSS/Atom XML 2026-08-10 — enable via mission rss_enable.",
     },
     {
         "id": "rbi_press",

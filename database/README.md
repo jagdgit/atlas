@@ -11,6 +11,7 @@ PostgreSQL is Atlas' brain. All schema changes are versioned SQL migrations.
 | `scheduler` | Tasks and task runs |
 | `knowledge` | Documents, chunks, embeddings (pgvector) |
 | `memory` | Working and long-term memory (future) |
+| `beliefs` | Persistent Self — identity docs, Belief Core, revisions, consultations (OI-SELF0) |
 
 ## Migration Roles (Important)
 

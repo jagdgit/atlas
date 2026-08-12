@@ -949,6 +949,35 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     assistant_service._goals = goal_service  # noqa: SLF001
 
+    # OI-SELF0 Phase 1 — Belief Core + ReasoningService (mandatory cognitive façade).
+    from atlas.reasoning import BeliefRepository, ReasoningService
+
+    belief_repo = BeliefRepository(db_manager)
+    reasoning_service = ReasoningService(
+        belief_repo,
+        llm=llm_service,
+        goals=goal_service,
+        logger=get_logger("atlas.reasoning"),
+    )
+    try:
+        seed_report = reasoning_service.ensure_seeded()
+        get_logger("atlas.reasoning").info(
+            "OI-SELF0 seed: identity_created=%s beliefs_created=%s skipped=%s",
+            seed_report.get("identity_created"),
+            seed_report.get("beliefs_created"),
+            seed_report.get("beliefs_skipped"),
+        )
+    except Exception:  # noqa: BLE001 — migrate 0050 may be pending on first boot
+        get_logger("atlas.reasoning").warning(
+            "OI-SELF0 seed deferred (beliefs schema unavailable? run atlas-db migrate)",
+            exc_info=True,
+        )
+    # OI-SELF-ID — identity-first Living RAG chat
+    if hasattr(assistant_service, "bind_reasoning"):
+        assistant_service.bind_reasoning(
+            reasoning_service, experience_os=experience_os
+        )
+
     # Planning OS (PA.1 / OI-PA-PLAN) — goal → gaps → compare → risk → decide.
     planning_service = PlanningService(
         mission_context=mission_context_service,
@@ -1526,6 +1555,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         yahoo_enabled=cfg.market.yahoo_enabled,
         polygon_api_key_env=cfg.market.polygon_api_key_env,
         alphavantage_api_key_env=cfg.market.alphavantage_api_key_env,
+        data_dir=str(cfg.paths.data),
         logger=get_logger("atlas.trading.market_reader"),
     )
     company_data_service = CompanyDataService(
@@ -1551,6 +1581,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     if hasattr(investor_mailer, "bind_research"):
         investor_mailer.bind_research(investment_research)
+    if hasattr(investor_mailer, "bind_llm"):
+        investor_mailer.bind_llm(llm_service)
+    if hasattr(investor_mailer, "bind_reasoning"):
+        investor_mailer.bind_reasoning(reasoning_service)
 
     # DI.1/DI.2 — Decision Packets + Market Timeline (Postgres + JSON mirrors).
     from atlas.investment.decision_packets import DecisionPacketStore
@@ -1626,7 +1660,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )
-    # MI.3 / LI.3a — Market Observer (interesting events; Host Guard cadence).
+    # MI.3 / LI.3a / PLC.C — Market Observer (interesting events; open-book packs).
     worker_manager.register_worker_type(
         MarketObserverWorker(
             market_reader=market_reader_service,
@@ -1635,6 +1669,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             capabilities=capabilities,
             observations=decision_observation_store,
             host_guard=host_guard,
+            portfolio=portfolio_service,
+            data_dir=str(cfg.paths.data),
+            decision_packets=decision_packet_store,
+            investment_research=investment_research,
             logger=get_logger("atlas.workers.market_observer"),
         )
     )
@@ -1678,6 +1716,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         FundamentalsEnrichWorker(
             data_dir=str(cfg.paths.data),
             yahoo_enabled=bool(cfg.market.yahoo_enabled),
+            portfolio=portfolio_service,
             logger=get_logger("atlas.workers.fundamentals_enrich"),
         )
     )
@@ -1703,6 +1742,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             observations=decision_observation_store,
             portfolio=portfolio_service,
             host_guard=host_guard,
+            llm=llm_service,
+            experience_os=experience_os,
+            reasoning=reasoning_service,
             logger=get_logger("atlas.workers.decision_evolution"),
         )
     )
@@ -1729,6 +1771,22 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             market_reader=market_reader_service,
             data_dir=str(cfg.paths.data),
             logger=get_logger("atlas.workers.investor_reports"),
+        )
+    )
+    from atlas.workers.historical_bars_bootstrap import HistoricalBarsBootstrapWorker
+
+    yahoo_adapter = None
+    try:
+        yahoo_adapter = (market_reader_service._adapters or {}).get("yahoo")  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        yahoo_adapter = None
+    worker_manager.register_worker_type(
+        HistoricalBarsBootstrapWorker(
+            data_dir=str(cfg.paths.data),
+            market_reader=market_reader_service,
+            yahoo_adapter=yahoo_adapter,
+            host_guard=host_guard,
+            logger=get_logger("atlas.workers.historical_bars_bootstrap"),
         )
     )
     # MI.2 — shared stub worker for remaining planned Program members.
@@ -1990,6 +2048,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             learning=learning_service,
             experience_os=experience_os,
             events=events,
+            data_dir=str(cfg.paths.data),
             logger=get_logger("atlas.workers.investment_mentor"),
         )
     )
@@ -1998,6 +2057,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             learning=learning_service,
             experience_os=experience_os,
             events=events,
+            reasoning=reasoning_service,
             logger=get_logger("atlas.workers.engineering_mentor"),
         )
     )
@@ -2067,6 +2127,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("policy", policy_service)
     container.register_instance("policy_engine", policy_engine)
     container.register_instance("goals", goal_service)
+    container.register_instance("beliefs", belief_repo)
+    container.register_instance("reasoning", reasoning_service)
     container.register_instance("personal", personal_service)
     container.register_instance("arbiter", mission_arbiter)
     container.register_instance("decision", decision_engine)

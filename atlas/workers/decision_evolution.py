@@ -15,7 +15,7 @@ from atlas.workers.base import PersistentWorker, TickContext, TickResult
 
 class DecisionEvolutionWorker(PersistentWorker):
     type = "decision_evolution"
-    VERSION = 3
+    VERSION = 6
     journal_ticks = True
 
     def __init__(
@@ -29,6 +29,9 @@ class DecisionEvolutionWorker(PersistentWorker):
         observations: Any | None = None,
         portfolio: Any | None = None,
         host_guard: Any | None = None,
+        llm: Any | None = None,
+        experience_os: Any | None = None,
+        reasoning: Any | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._timeline = timeline
@@ -39,6 +42,9 @@ class DecisionEvolutionWorker(PersistentWorker):
         self._observations = observations
         self._portfolio = portfolio
         self._host_guard = host_guard
+        self._llm = llm
+        self._experience_os = experience_os
+        self._reasoning = reasoning
         self._logger = logger or logging.getLogger("atlas.workers.decision_evolution")
 
     def do_tick(self, ctx: TickContext) -> TickResult:
@@ -223,7 +229,311 @@ class DecisionEvolutionWorker(PersistentWorker):
             "revisits_with_new_observations": obs_hits,
             "cadence": budget,
         }
+
+        # PLC.D — drain due 7d/30d/90d hypothesis checks
+        hyp_meta: dict[str, Any] = {}
+        try:
+            from atlas.investment.plc_hypothesis import (
+                plc_d_enabled,
+                run_due_hypothesis_checks,
+            )
+
+            if plc_d_enabled(cfg, portfolio_key):
+                data_dir = None
+                if self._packets is not None:
+                    data_dir = getattr(self._packets, "data_dir", None)
+                if not data_dir:
+                    try:
+                        from atlas.config import get_config
+
+                        data_dir = str(get_config().paths.data)
+                    except Exception:  # noqa: BLE001
+                        data_dir = None
+                hyp_meta = run_due_hypothesis_checks(
+                    data_dir,
+                    laboratory_id=portfolio_key,
+                    portfolio_key=portfolio_key,
+                    as_of_ist=result.get("as_of_ist"),
+                    limit=max(1, min(10, limit or 5)),
+                    observations=self._observations,
+                )
+                state["last_evolution"]["hypothesis_checks"] = {
+                    "due": hyp_meta.get("due"),
+                    "completed": hyp_meta.get("completed"),
+                }
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("PLC.D hypothesis checks skipped: %s", exc)
+
+        # UTS.E — drain due switch counterfactual horizons (1/5/20/60d)
+        switch_meta: dict[str, Any] = {}
+        try:
+            from atlas.investment.opportunity_switch import opportunity_switch_enabled
+            from atlas.investment.switch_learning import (
+                list_switch_decisions,
+                propose_threshold_adjustments,
+                run_due_switch_horizons,
+            )
+
+            if opportunity_switch_enabled(cfg, portfolio_key):
+                data_dir = None
+                if self._packets is not None:
+                    data_dir = getattr(self._packets, "data_dir", None)
+                if not data_dir:
+                    try:
+                        from atlas.config import get_config
+
+                        data_dir = str(get_config().paths.data)
+                    except Exception:  # noqa: BLE001
+                        data_dir = None
+                price_fn = None
+                if self._market is not None:
+
+                    def _px(symbol: str, ist_day: str) -> float | None:
+                        try:
+                            # Best-effort mark; adapters vary — missing → None.
+                            if hasattr(self._market, "price_on"):
+                                return self._market.price_on(symbol, ist_day)
+                            if hasattr(self._market, "last_price"):
+                                # Only valid for as-of≈today; else leave missing.
+                                from atlas.investment.switch_learning import ist_today
+
+                                if str(ist_day)[:10] == ist_today():
+                                    return float(self._market.last_price(symbol))
+                        except Exception:  # noqa: BLE001
+                            return None
+                        return None
+
+                    price_fn = _px
+                switch_meta = run_due_switch_horizons(
+                    data_dir,
+                    laboratory_id=portfolio_key,
+                    as_of_ist=result.get("as_of_ist"),
+                    price_fn=price_fn,
+                    limit=max(1, min(20, limit or 5)),
+                )
+                try:
+                    thr = float(cfg.get("switching_threshold") or 0.02)
+                except (TypeError, ValueError):
+                    thr = 0.02
+                props = propose_threshold_adjustments(
+                    list_switch_decisions(
+                        data_dir, laboratory_id=portfolio_key, limit=80
+                    ),
+                    current_threshold=thr,
+                )
+                state["last_evolution"]["switch_horizons"] = {
+                    "completed": switch_meta.get("completed"),
+                    "missing_prices": switch_meta.get("missing_prices"),
+                    "threshold_proposals": props[:2],
+                }
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("UTS.E switch horizons skipped: %s", exc)
+
+        # CF.1 — drain due counterfactual horizons (+30d)
+        try:
+            from atlas.investment.counterfactual_learning import evaluate_due_cfs
+
+            data_dir = None
+            if self._packets is not None:
+                data_dir = getattr(self._packets, "data_dir", None)
+            if not data_dir:
+                try:
+                    from atlas.config import get_config
+
+                    data_dir = str(get_config().paths.data)
+                except Exception:  # noqa: BLE001
+                    data_dir = None
+            price_fn = None
+            try:
+                from atlas.investment.counterfactual_learning import default_price_fn
+
+                price_fn = default_price_fn(data_dir)
+            except Exception:  # noqa: BLE001
+                price_fn = None
+            cf_meta = evaluate_due_cfs(
+                data_dir,
+                laboratory_id=portfolio_key,
+                as_of_ist=result.get("as_of_ist"),
+                price_fn=price_fn,
+                limit=max(1, min(20, limit or 5)),
+            )
+            if isinstance(state.get("last_evolution"), dict):
+                state["last_evolution"]["counterfactuals"] = {
+                    "completed": cf_meta.get("completed"),
+                    "missing_prices": cf_meta.get("missing_prices"),
+                }
+            # OI-SELF-EXP — close learning loops for completed CF horizons (advice-only).
+            if (
+                int(cf_meta.get("completed") or 0) > 0
+                and self._reasoning is not None
+                and self._experience_os is not None
+            ):
+                loops = 0
+                for row in list(cf_meta.get("rows") or [])[:5]:
+                    if not isinstance(row, dict):
+                        continue
+                    done_h = [
+                        h
+                        for h in (row.get("horizons") or [])
+                        if isinstance(h, dict) and h.get("status") == "done"
+                    ]
+                    if not done_h:
+                        continue
+                    h = done_h[-1]
+                    packet = {
+                        "symbol": row.get("symbol"),
+                        "action": "buy",
+                        "decision_id": row.get("decision_id") or row.get("cf_id"),
+                        "expected": {
+                            "vs_index": "outperform",
+                            "entry_price": row.get("entry_price"),
+                        },
+                    }
+                    outcome = {
+                        "actual_return": h.get("actual_return"),
+                        "index_return": h.get("index_return"),
+                        "verdict": h.get("verdict"),
+                    }
+                    try:
+                        closed = self._reasoning.close_packet_outcome(
+                            self._experience_os,
+                            packet,
+                            outcome,
+                            no_belief_link_reason=(
+                                "CF horizon closed; belief mapping deferred until "
+                                "packet↔belief links densify"
+                            ),
+                            lesson=(
+                                f"CF {row.get('symbol')}: verdict={h.get('verdict')} "
+                                f"actual={h.get('actual_return')} vs index="
+                                f"{h.get('index_return')}"
+                            ),
+                        )
+                        if closed.get("ok"):
+                            loops += 1
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("CF learning loop skipped", exc_info=True)
+                if isinstance(state.get("last_evolution"), dict):
+                    state["last_evolution"]["learning_loops"] = loops
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("CF.1 evaluate skipped: %s", exc)
+
+        # BRE.3 — drain async decide-time LLM rationales (never on fill path)
+        try:
+            from atlas.investment.decide_rationale import (
+                DEFAULT_DECIDE_LLM_PASSES,
+                drain_pending_rationales,
+            )
+
+            data_dir = None
+            if self._packets is not None:
+                data_dir = getattr(self._packets, "data_dir", None)
+            if not data_dir:
+                try:
+                    from atlas.config import get_config
+
+                    data_dir = str(get_config().paths.data)
+                except Exception:  # noqa: BLE001
+                    data_dir = None
+            max_passes = max(
+                1, min(int(cfg.get("decide_rationale_passes") or DEFAULT_DECIDE_LLM_PASSES), 5)
+            )
+            bre3 = drain_pending_rationales(
+                data_dir,
+                laboratory_id=portfolio_key,
+                llm=self._llm,
+                max_passes=max_passes,
+                limit=max(1, min(20, limit or 5)),
+            )
+            if isinstance(state.get("last_evolution"), dict):
+                state["last_evolution"]["decide_rationale"] = {
+                    "done": bre3.get("done"),
+                    "deferred": bre3.get("deferred"),
+                    "skipped": bre3.get("skipped"),
+                    "pending": bre3.get("pending"),
+                }
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("BRE.3 drain skipped: %s", exc)
+
+        # UTS.F — Missed Opportunity Ledger (T+20)
+        missed_meta: dict[str, Any] = {}
+        try:
+            miss_cfg = cfg.get("missed_opportunity_ledger")
+            miss_enabled = (
+                bool(miss_cfg)
+                if miss_cfg is not None
+                else ("learner" in portfolio_key.lower())
+            )
+            if miss_enabled:
+                from atlas.investment.missed_opportunity import run_missed_opportunity_job
+
+                data_dir = None
+                if self._packets is not None:
+                    data_dir = getattr(self._packets, "data_dir", None)
+                if not data_dir:
+                    try:
+                        from atlas.config import get_config
+
+                        data_dir = str(get_config().paths.data)
+                    except Exception:  # noqa: BLE001
+                        data_dir = None
+                price_fn = None
+                if self._market is not None:
+
+                    def _px_m(symbol: str, ist_day: str) -> float | None:
+                        try:
+                            if hasattr(self._market, "price_on"):
+                                return self._market.price_on(symbol, ist_day)
+                        except Exception:  # noqa: BLE001
+                            return None
+                        return None
+
+                    price_fn = _px_m
+                # Book return: optional from cfg/state; fail-closed if absent.
+                book_ret = cfg.get("missed_opportunity_book_return_20d")
+                if book_ret is None:
+                    book_ret = state.get("book_return_20d")
+                try:
+                    book_ret_f = float(book_ret) if book_ret is not None else None
+                except (TypeError, ValueError):
+                    book_ret_f = None
+                held = set(open_symbols or [])
+                # Prefer holdings as-of T if stored; else current open (honesty gap).
+                missed_meta = run_missed_opportunity_job(
+                    data_dir,
+                    laboratory_id=portfolio_key,
+                    program_id=program_id,
+                    as_of_ist=result.get("as_of_ist"),
+                    horizon_d=int(cfg.get("missed_opportunity_horizon_d") or 20),
+                    top_n=int(cfg.get("missed_opportunity_top_n") or 5),
+                    max_watchlist=int(cfg.get("max_watchlist") or 15),
+                    price_fn=price_fn,
+                    held_on_t=held,
+                    book_return_20d=book_ret_f,
+                    persist=True,
+                )
+                state["last_evolution"]["missed_opportunities"] = {
+                    "ok": missed_meta.get("ok"),
+                    "n": len(missed_meta.get("rows") or []),
+                    "honesty": missed_meta.get("honesty"),
+                    "decision_ist": missed_meta.get("decision_ist"),
+                }
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("UTS.F missed opportunities skipped: %s", exc)
+
         thinned = "" if budget.get("allowed") else f" thinned={budget.get('reason')}"
+        hyp_note = ""
+        if hyp_meta.get("completed"):
+            hyp_note = f"; hyp_checks={hyp_meta.get('completed')}"
+        sw_note = ""
+        if switch_meta.get("completed") or switch_meta.get("missing_prices"):
+            sw_note = (
+                f"; switch_cf={switch_meta.get('completed') or 0}"
+                f"/{switch_meta.get('missing_prices') or 0}miss"
+            )
+        miss_note = ""
+        if missed_meta.get("ok") and missed_meta.get("rows"):
+            miss_note = f"; missed_opp={len(missed_meta.get('rows') or [])}"
         return TickResult(
             state=state,
             note=(
@@ -231,7 +541,7 @@ class DecisionEvolutionWorker(PersistentWorker):
                 f"pending={counts.get('pending_revisits', '?')} "
                 f"done={counts.get('done_revisits', '?')} attr={attr_n} "
                 f"new_obs={obs_hits} ensured={ensure_meta.get('books_ensured', 0)}"
-                f"{thinned}"
+                f"{thinned}{hyp_note}{sw_note}{miss_note}"
             ),
         )
 

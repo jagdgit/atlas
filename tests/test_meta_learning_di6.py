@@ -12,6 +12,45 @@ from atlas.investment.meta_learning import (
 from atlas.investment.reports import format_evening_report, format_weekly_research_report
 
 
+def test_meta_learning_news_stays_unproven_without_coverage():
+    packets = []
+    attrs = []
+    for i in range(3):
+        packets.append(
+            {
+                "decision_id": f"d{i}",
+                "action": "hold",
+                "symbol": f"S{i}.NS",
+                "strategy_tag": "engine_hold",
+                "feature_contributions": {"news": 0.01, "technical": 0.4},
+                "observation_ids": [],
+            }
+        )
+        attrs.append(
+            {
+                "decision_id": f"d{i}",
+                "grades": {"decision_quality": "B"},
+                "payload": {"what_changed": {"news_delta": {"count": 0}}},
+            }
+        )
+    digest = build_meta_learning_digest(
+        portfolio_key="india_equity_learner",
+        packets=packets,
+        attributions=attrs,
+        process_proxies={"process_score": 5.0, "counts": {}},
+        evolution={"pending_revisits": 0, "done_revisits": 0},
+        week="2026-W32",
+    )
+    learn = digest["families"]["learning"]
+    assert "news" in (learn.get("unproven_axes") or [])
+    assert "news" not in (learn.get("never_mattered_axes") or [])
+    assert any(p.get("kind") == "feature_unproven" for p in digest["proposals"])
+    assert not any(
+        p.get("kind") == "feature_weight_review" and "news" in (p.get("text") or "")
+        for p in digest["proposals"]
+    )
+
+
 def test_week_key_shape():
     assert week_key().count("-W") == 1
 

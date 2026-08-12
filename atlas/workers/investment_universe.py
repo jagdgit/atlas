@@ -11,7 +11,7 @@ from typing import Any
 
 from atlas.investment import watchlists as wl
 from atlas.investment.quality_seed import resolve_quality_seed
-from atlas.investment.ranking import rank_universe, summarize_phase
+from atlas.investment.ranking import score_universe, summarize_phase
 from atlas.investment.universe import INDEX_NIFTY50, as_instruments
 from atlas.investment.universe_manager import resolve_members
 from atlas.workers.base import PersistentWorker, TickContext, TickResult
@@ -21,7 +21,7 @@ EVENT_UNIVERSE_UPDATED = "InvestmentUniverseUpdated"
 
 class InvestmentUniverseWorker(PersistentWorker):
     type = "investment_universe"
-    VERSION = 4
+    VERSION = 5
     journal_ticks = True
 
     def __init__(
@@ -45,6 +45,28 @@ class InvestmentUniverseWorker(PersistentWorker):
         self._decision_packets = decision_packets
         self._logger = logger or logging.getLogger("atlas.workers.investment_universe")
 
+    def _resolve_bars_provider(self, cfg: dict[str, Any]) -> str | None:
+        """Mission provider → MarketReader; empty + yahoo_enabled → yahoo.
+
+        Never hard-codes Yahoo as the only source: explicit ``provider`` wins;
+        when unset and Yahoo is opted in, use Yahoo so ranking matches open-book
+        marks. Otherwise leave None so MarketReader uses its configured default.
+        """
+        explicit = str(cfg.get("provider") or "").strip()
+        if explicit:
+            return explicit
+        try:
+            from atlas.config import get_config
+
+            if bool(getattr(get_config().market, "yahoo_enabled", False)):
+                return "yahoo"
+        except Exception:  # noqa: BLE001
+            self._logger.debug(
+                "yahoo_enabled lookup failed; leaving provider unset",
+                exc_info=True,
+            )
+        return None
+
     def do_tick(self, ctx: TickContext) -> TickResult:
         cfg = ctx.config or {}
         state = dict(ctx.state or {})
@@ -61,7 +83,10 @@ class InvestmentUniverseWorker(PersistentWorker):
         program_id = str(cfg.get("program_id") or wl.DEFAULT_PROGRAM)
         pinned = [str(s).strip() for s in (cfg.get("pinned_symbols") or []) if str(s).strip()]
         lookback = max(5, int(cfg.get("lookback_bars") or 40))
-        provider = str(cfg.get("provider") or "").strip() or None
+        # OI-MKT-COV Phase 1A — empty provider must not silently fall through to
+        # asset_replay when Yahoo is enabled (ledger already uses Yahoo marks).
+        # Keep provider abstraction: explicit cfg.provider always wins.
+        provider = self._resolve_bars_provider(cfg)
         weights = cfg.get("rank_weights") if isinstance(cfg.get("rank_weights"), dict) else None
         use_default_seed = cfg.get("use_quality_seed")
         if use_default_seed is None:
@@ -160,6 +185,27 @@ class InvestmentUniverseWorker(PersistentWorker):
             provider=provider,
             state=state,
         )
+        # OI-MKT-COV Phase 1B — durable OHLCV (learning foundation; not live-only)
+        durable_meta: dict[str, Any] = {}
+        if self._data_dir and bars_by_symbol:
+            try:
+                from atlas.investment.bar_store import (
+                    persist_bars_batch,
+                    readiness_for_symbols,
+                )
+
+                persist_bars_batch(
+                    self._data_dir,
+                    bars_by_symbol,
+                    provider=provider,
+                )
+                durable_meta = readiness_for_symbols(
+                    self._data_dir,
+                    [str(m["symbol"]) for m in members],
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("durable bar persist skipped", exc_info=True)
+                durable_meta = {"durable_bars_ok": False, "reason": "persist_error"}
         # IL.8 — merge operator screener snapshot (+ optional computed) into quality
         use_screener = cfg.get("use_screener_signals")
         if use_screener is None:
@@ -197,20 +243,64 @@ class InvestmentUniverseWorker(PersistentWorker):
         research_bias = self._research_bias(pool)
         research_by_symbol = self._research_awareness_map(pool)
 
-        ranked = rank_universe(
+        ranked_all = score_universe(
             pool,
             bars_by_symbol=bars_by_symbol,
             quality_by_symbol=quality_seed or None,
             policy_delta_by_symbol=policy_deltas or None,
             experience_bias_by_symbol=experience_bias or None,
             research_bias_by_symbol=research_bias or None,
-            max_watchlist=top_n,
             weights=weights,
             lookback_short=int(cfg.get("lookback_short") or 5),
             lookback_long=int(cfg.get("lookback_long") or 20),
             min_bars=int(cfg.get("min_bars") or 5),
             cold_start_coverage=float(cfg.get("cold_start_coverage") or 0.25),
         )
+        # Deep watchlist = truncate; full ladder persisted for UTS triage memory.
+        ranked = ranked_all[: max(1, int(top_n))]
+
+        triage_meta: dict[str, Any] = {}
+        persist_triage = cfg.get("universe_triage_persist")
+        if persist_triage is None:
+            persist_triage = True
+        if persist_triage and self._data_dir:
+            try:
+                from atlas.investment.triage_memory import persist_triage_day
+
+                triage_meta = persist_triage_day(
+                    self._data_dir,
+                    program_id,
+                    ranked_all,
+                    membership=len(members),
+                    max_watchlist=max_watch,
+                    opportunity_queue_enabled=bool(
+                        cfg.get("opportunity_queue_enabled", True)
+                    ),
+                    enrich_acceleration=True,
+                    extra={
+                        "index": index_label,
+                        "universes": state.get("universes") or [index],
+                        "max_watchlist": max_watch,
+                        "mission_id": str(ctx.mission_id) if ctx.mission_id else None,
+                        "durable_bars": durable_meta,
+                    },
+                )
+                # Fold readiness into coverage for evening trust banner
+                if isinstance(triage_meta.get("coverage"), dict) and durable_meta:
+                    cov = dict(triage_meta["coverage"])
+                    cov["durable_bars_ok"] = bool(durable_meta.get("durable_bars_ok"))
+                    cov["readiness_grade"] = durable_meta.get("readiness_grade")
+                    cov["durable_priced_pct"] = durable_meta.get("priced_pct")
+                    cov["durable_history_ok_pct"] = durable_meta.get("history_ok_pct")
+                    cov["durable_fresh_pct"] = durable_meta.get("fresh_pct")
+                    cov["durable_session_fresh_pct"] = durable_meta.get(
+                        "session_fresh_pct"
+                    )
+                    cov["durable_ready_pct"] = durable_meta.get("ready_pct")
+                    triage_meta["coverage"] = cov
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("UTS.A triage persist skipped: %s", exc)
+                triage_meta = {"ok": False, "reason": type(exc).__name__}
 
         watch = [
             {
@@ -277,9 +367,16 @@ class InvestmentUniverseWorker(PersistentWorker):
                 "feed_failures": int(state.get("feed_failure_count") or 0),
                 "quality_seed_count": len(quality_seed),
                 "provider": provider or "",
+                "durable_bars": durable_meta,
                 "daily_plan": daily_plan,
                 "screener": screener_meta,
-                "ranking": "il.3+il.8" if screener_meta.get("merged_count") else "il.3",
+                "ranking": "il.3+il.8+uts.a" if screener_meta.get("merged_count") else "il.3+uts.a",
+                "triage": {
+                    "persisted": bool(triage_meta.get("ok")),
+                    "count": triage_meta.get("count"),
+                    "path": triage_meta.get("path"),
+                    "coverage": triage_meta.get("coverage"),
+                },
             },
         )
 
@@ -288,11 +385,22 @@ class InvestmentUniverseWorker(PersistentWorker):
         state["program_id"] = program_id
         state["watchlist_symbols"] = [r["symbol"] for r in ranked]
         state["universe_size"] = len(members)
+        state["triage_count"] = len(ranked_all)
+        state["triage"] = {
+            "persisted": bool(triage_meta.get("ok")),
+            "count": triage_meta.get("count") or len(ranked_all),
+            "coverage": triage_meta.get("coverage"),
+            "path": triage_meta.get("path"),
+            "opportunity_queue": (triage_meta.get("opportunity_queue") or [])[:12],
+            "evening": triage_meta.get("evening"),
+            "acceleration": triage_meta.get("acceleration"),
+        }
         state["updated_at"] = snap["updated_at"]
         state["phase"] = phase_info["phase"]
         state["confidence"] = phase_info["confidence"]
         state["quality_seed_count"] = len(quality_seed)
         state["provider"] = provider or ""
+        state["durable_bars"] = durable_meta
         state["screener_merged"] = int(screener_meta.get("merged_count") or 0)
         state["daily_plan_summary"] = daily_plan.get("summary")
         state["ranked"] = ranked
@@ -351,12 +459,19 @@ class InvestmentUniverseWorker(PersistentWorker):
         fail_n = int(state.get("feed_failure_count") or 0)
         fbit = f", feed_failures={fail_n}" if fail_n else ""
         plan_bit = f"; plan={daily_plan.get('summary')}" if daily_plan.get("summary") else ""
+        triage_bit = ""
+        if triage_meta:
+            tc = triage_meta.get("count") or len(ranked_all)
+            ok = "ok" if triage_meta.get("ok") else "skip"
+            qn = len(triage_meta.get("opportunity_queue") or [])
+            accel = (triage_meta.get("coverage") or {}).get("acceleration_status") or "—"
+            triage_bit = f"; triage={tc}/{len(members)} ({ok}, queue={qn}, accel={accel})"
         return TickResult(
             state=state,
             note=(
                 f"{index_label}: {len(members)} constituents → watchlist {len(ranked)} "
                 f"(mode={mode}, phase={phase}, confidence={conf}{qbit}{pbit}{sbit}{fbit}); top={top}"
-                f"{plan_bit}"
+                f"{plan_bit}{triage_bit}"
             ),
         )
 
@@ -375,6 +490,38 @@ class InvestmentUniverseWorker(PersistentWorker):
 
         out: dict[str, list[dict[str, Any]]] = {}
         failures = 0
+        # CAP.1 — during Yahoo cooldown, do not hammer every symbol (one note).
+        yahoo_cooldown = False
+        cooldown_rem = 0.0
+        if (provider or "").strip().lower() in {"yahoo", ""} and self._data_dir:
+            try:
+                from atlas.investment.yahoo_fundamentals import get_yahoo_rate_gate
+
+                gate = get_yahoo_rate_gate(self._data_dir)
+                cooldown_rem = float(gate.remaining_cooldown_s() or 0)
+                yahoo_cooldown = cooldown_rem > 0
+            except Exception:  # noqa: BLE001
+                yahoo_cooldown = False
+        if yahoo_cooldown:
+            if state is not None:
+                state["yahoo_cooldown_s"] = cooldown_rem
+                state["feed_failure_count"] = 0
+                state["yahoo_cooldown_batch_skip"] = True
+            self._logger.info(
+                "IU bars: yahoo cooldown %.0fs — durable-only, no per-symbol failure spam",
+                cooldown_rem,
+            )
+            # Still try durable via reader (prefer_durable); skip live gaps.
+            for sym in symbols:
+                try:
+                    result = self._reader.bars_for(sym, provider=provider, limit=lookback)
+                except Exception:  # noqa: BLE001
+                    continue
+                bars = list((result or {}).get("bars") or [])
+                if bars:
+                    out[sym] = bars
+            return out
+
         for sym in symbols:
             try:
                 result = self._reader.bars_for(sym, provider=provider, limit=lookback)

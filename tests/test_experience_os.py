@@ -68,7 +68,9 @@ def test_shape():
     s = eos.shape()
     assert s["steps"][0] == "observation"
     assert s["steps"][-1] == "lesson"
-    assert s["version"] == "ex.1"
+    assert s["version"] == "ex.2-self0"
+    assert "learning_loop" in s
+    assert "affected_beliefs" in s["learning_loop"]
 
 
 def test_journal_strict_and_store():
