@@ -171,6 +171,13 @@ class SimTradingRepository(BaseRepository):
             or 0
         )
 
+    def delete_trades(self, portfolio_id: UUID | str) -> int:
+        """Operator void — drop blotter rows for this sim book."""
+        return self.execute(
+            "DELETE FROM sim.trades WHERE portfolio_id = %s",
+            (str(portfolio_id),),
+        )
+
     def record_cash_movement(
         self,
         *,

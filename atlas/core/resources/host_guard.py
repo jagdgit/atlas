@@ -19,7 +19,7 @@ class HostGuardService:
     """Admit / defer / resume worker activity against host limits."""
 
     name = "host_guard"
-    VERSION = "hg.1"
+    VERSION = "hg.1.1-stab0"
 
     def __init__(
         self,
@@ -30,9 +30,11 @@ class HostGuardService:
         missions: Any | None = None,
         max_concurrent_ticks: int = 4,
         max_archive_workers: int = 1,
+        archive_one_in_rth: bool = True,
         host_ram_reserve_mb: int = 2048,
         tick_ram_mb: int = 512,
         logger: logging.Logger | None = None,
+        clock: Any | None = None,
     ) -> None:
         self._resources = resources
         self._workers = workers
@@ -40,9 +42,11 @@ class HostGuardService:
         self._missions = missions
         self._max_ticks = max(1, int(max_concurrent_ticks or 4))
         self._max_archive = max(1, int(max_archive_workers or 1))
+        self._archive_one_in_rth = bool(archive_one_in_rth)
         self._ram_reserve_mb = max(256, int(host_ram_reserve_mb or 2048))
         self._tick_ram_mb = max(64, int(tick_ram_mb or 512))
         self._logger = logger or logging.getLogger("atlas.host_guard")
+        self._clock = clock
         self._deferred_ticks = 0
         self._resumed = 0
         self._queued_starts = 0
@@ -68,9 +72,22 @@ class HostGuardService:
 
     # --- archive / spawn queueing ----------------------------------------
 
+    def _effective_max_archive(self) -> int:
+        """OI-STAB0: force archive lane ≤1 during NSE cash RTH."""
+        if self._archive_one_in_rth:
+            try:
+                from atlas.trading.sessions import is_session_open
+
+                now = self._clock() if callable(self._clock) else None
+                if is_session_open("nse_equity", now=now):
+                    return 1
+            except Exception:  # noqa: BLE001
+                self._logger.debug("RTH archive clamp check failed", exc_info=True)
+        return self._max_archive
+
     def archive_slots_free(self) -> int:
         active = self._count_workers(type_name="owner_knowledge", statuses={WORKER_RUNNING})
-        return max(0, self._max_archive - active)
+        return max(0, self._effective_max_archive() - active)
 
     def should_queue_archive_start(self) -> bool:
         return self.archive_slots_free() <= 0
@@ -152,11 +169,15 @@ class HostGuardService:
             type_name="owner_knowledge", statuses={WORKER_RUNNING}
         )
         queued = len(self._list_capacity_queued())
+        eff_archive = self._effective_max_archive()
         return {
             "version": self.VERSION,
             "policy": "slow_but_reliable",
             "max_concurrent_ticks": self._max_ticks,
-            "max_archive_workers": self._max_archive,
+            "max_archive_workers": eff_archive,
+            "configured_max_archive_workers": self._max_archive,
+            "archive_one_in_rth": self._archive_one_in_rth,
+            "archive_rth_clamped": eff_archive < self._max_archive,
             "host_ram_reserve_mb": self._ram_reserve_mb,
             "tick_ram_mb": self._tick_ram_mb,
             "running_workers": running,
@@ -171,7 +192,8 @@ class HostGuardService:
             "note": (
                 "Work is accepted and kept durable; ticks run only when host "
                 "capacity and global tick slots allow. Under pressure Atlas "
-                "defers — it does not drop the job."
+                "defers — it does not drop the job. OI-STAB0: archive lane "
+                "forced to 1 during NSE cash RTH."
             ),
         }
 

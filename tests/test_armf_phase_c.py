@@ -15,6 +15,28 @@ def test_market_floor_at_least_one_on_eff_4():
     assert pol.floor_slots("engineering_intelligence", 4) >= 1
 
 
+def test_nse_rth_raises_market_floor_for_paper_labs():
+    pol = ProgramCapacityPolicy()
+    assert pol.floor_slots("market_intelligence", 4) == 1
+    assert pol.floor_slots("market_intelligence", 4, nse_rth=True) == 3
+    # Claiming own RTH floor is never blocked (equity + intraday + FNO).
+    assert (
+        pol.blocks_admit(
+            admit_program="market_intelligence",
+            effective_slots=4,
+            total_inflight=2,
+            program_inflight={"market_intelligence": 2},
+            programs_with_demand={
+                "market_intelligence",
+                "engineering_intelligence",
+                "personal_intelligence",
+            },
+            nse_rth=True,
+        )
+        is None
+    )
+
+
 def test_idle_eng_share_is_borrowable():
     pol = ProgramCapacityPolicy()
     reserved = pol.reserved_for_others(

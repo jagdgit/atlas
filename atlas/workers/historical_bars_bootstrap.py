@@ -53,6 +53,19 @@ class HistoricalBarsBootstrapWorker(PersistentWorker):
         if not self._data_dir:
             return TickResult(state=state, note="idle: no data_dir")
 
+        try:
+            from atlas.investment.yahoo_fundamentals import (
+                yahoo_background_should_yield_to_live,
+            )
+
+            if yahoo_background_should_yield_to_live():
+                return TickResult(
+                    state=state,
+                    note="idle: yield yahoo to live session (RTH)",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
         from atlas.investment.historical_bars import (
             bootstrap_batch,
             default_priority_symbols,

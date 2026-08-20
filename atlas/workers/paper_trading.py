@@ -28,6 +28,25 @@ from atlas.workers.base import PersistentWorker, TickContext, TickResult
 MISSION_TYPE_PAPER_TRADING = "paper_trading"
 ASSET_KIND_MARKET_DATA = "market_data"
 
+# LOOP0 L0 — HBLPOWER is a dead Yahoo ticker; do not inject as a cash alt.
+_SKIP_CASH_ALT_REQUESTED = frozenset({"HBLPOWER", "HBLPOWER.NS"})
+
+
+def skip_cash_alts_for_lab(
+    cfg: dict[str, Any] | None,
+    *,
+    pack_id: str = "",
+    portfolio_key: str = "",
+) -> bool:
+    """True when this lab must not inject cash-equity watchlist alternatives.
+
+    FNO isolation is the lab contract (buy/switch/replace). This helper still
+    skips cash ``next_alt`` for FNO and the intraday Yahoo 5m budget.
+    """
+    from atlas.investment.lab_contracts import skip_cash_alts_for_lab as _skip
+
+    return _skip(cfg, pack_id=pack_id, portfolio_key=portfolio_key)
+
 
 def _f_peak(state: dict[str, Any], symbol: str, price: float) -> float | None:
     """Track per-symbol peak mark in worker state (for PLC.B trailing_stop)."""
@@ -73,6 +92,7 @@ class PaperTradingWorker(PersistentWorker):
         decision_packets: Any | None = None,
         observations: Any | None = None,
         attributions: Any | None = None,
+        reasoning: Any | None = None,
         clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -91,6 +111,9 @@ class PaperTradingWorker(PersistentWorker):
         self._decision_packets = decision_packets
         self._observations = observations
         self._attributions = attributions
+        self._reasoning = reasoning
+        self._consult_book_fp = ""
+        self._consult_by_day: dict[str, dict[str, Any]] = {}
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._logger = logger or logging.getLogger("atlas.workers.paper_trading")
 
@@ -104,6 +127,19 @@ class PaperTradingWorker(PersistentWorker):
             book_early = vp.ensure_from_config(
                 cfg, mission_id=str(ctx.mission_id) if ctx.mission_id else None
             )
+            pk_early = str(book_early.get("portfolio_key") or "")
+            ac_early = str(book_early.get("asset_class") or "").lower()
+            if pk_early and (
+                "intraday" in pk_early.lower()
+                or "fno" in pk_early.lower()
+                or ac_early in {"futures", "options"}
+            ):
+                try:
+                    repaired = vp.repair_laboratory_pack_alignment(pk_early)
+                    if repaired and isinstance(repaired.get("portfolio"), dict):
+                        book_early = repaired["portfolio"]
+                except Exception:  # noqa: BLE001
+                    pass
             cfg = vp.enrich_decision_config_from_book(cfg, book_early)
             if cfg.get("_lab_seeded_instruments") and not state.get("_lab_seed_noted"):
                 state["_lab_seed_noted"] = True
@@ -163,6 +199,34 @@ class PaperTradingWorker(PersistentWorker):
 
         book = vp.ensure_from_config(cfg, mission_id=str(ctx.mission_id) if ctx.mission_id else None)
         portfolio_key = str(book.get("portfolio_key") or "default")
+        # OI-STAB0 Lock 1 — FNO pause is opt-in (ATLAS_STAB0_PAUSE_FNO=1)
+        if portfolio_key.strip().lower() in {"india_fno_learner", "fno_learner"}:
+            from atlas.investment.session_readiness import fno_lab_paused
+
+            if fno_lab_paused():
+                try:
+                    from atlas.activity import record_activity
+
+                    record_activity(
+                        domain="market",
+                        worker="paper_trading",
+                        action="fno_paused_stab0",
+                        target=portfolio_key,
+                        result="skipped",
+                        summary=(
+                            "FNO lab paused (ATLAS_STAB0_PAUSE_FNO) — equity-only"
+                        ),
+                        evidence={"portfolio_key": portfolio_key},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                return TickResult(
+                    state=state,
+                    note=(
+                        "india_fno_learner paused (ATLAS_STAB0_PAUSE_FNO=1). "
+                        "Unset the env to resume F&O ticks."
+                    ),
+                )
         persona = vp.normalize_persona(book.get("persona"))
         state["portfolio_key"] = portfolio_key
         state["persona"] = persona
@@ -208,6 +272,20 @@ class PaperTradingWorker(PersistentWorker):
             )
         if filtered:
             instruments = filtered
+
+        try:
+            from atlas.investment.lab_contracts import (
+                LAB_FNO,
+                filter_symbols_for_lab,
+                lab_kind as _lab_kind,
+            )
+
+            if _lab_kind(portfolio_key, cfg=cfg) == LAB_FNO:
+                instruments = filter_symbols_for_lab(
+                    portfolio_key, instruments, cfg=cfg, path="buy"
+                )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("lab instrument filter skipped", exc_info=True)
 
         # Live operator inputs: block/unblock a symbol ("don't trade SYM"), or force a tick.
         blocked = {str(s).lower() for s in (state.get("blocked_symbols") or [])}
@@ -260,6 +338,32 @@ class PaperTradingWorker(PersistentWorker):
             "pack": pack.id,
         }
 
+        try:
+            from atlas.investment.lab_contracts import (
+                LAB_INTRADAY,
+                flatten_session_date,
+                intraday_must_be_flat,
+                lab_kind as _lab_kind,
+            )
+
+            if _lab_kind(portfolio_key, cfg=cfg) == LAB_INTRADAY:
+                now_c = self._clock()
+                must_flat = bool(intraday_must_be_flat(now_c))
+                state["intraday_must_be_flat"] = must_flat
+                state["intraday_eod_session"] = flatten_session_date(now_c)
+                if must_flat:
+                    self._eod_flatten_intraday(
+                        cfg=cfg,
+                        portfolio_id=portfolio_id,
+                        portfolio_key=portfolio_key,
+                        marks=dict(state.get("last_marks") or {}),
+                        state=state,
+                        mission_id=ctx.mission_id,
+                        pack=pack,
+                    )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("intraday EOD flatten skipped", exc_info=True)
+
         cursors: dict[str, int] = dict(state.get("cursors") or {})
         last_bar_keys: dict[str, str] = dict(state.get("last_bar_keys") or {})
         bars_per_tick = max(1, int(cfg.get("bars_per_tick", 1)))
@@ -281,6 +385,54 @@ class PaperTradingWorker(PersistentWorker):
         instruments = self._order_tradeable_first(
             instruments, cash=cash_hint, marks=prev_marks
         )
+        # Session-fresh Yahoo budget is tiny — refresh open positions first.
+        try:
+            snap0 = self._portfolio.snapshot(portfolio_id, prices=prev_marks)
+            self._refresh_consult_book(snap0)
+            open_syms = {
+                str(p.get("symbol") or "").strip().upper()
+                for p in (snap0.get("positions") or [])
+                if abs(float(p.get("quantity") or 0)) > 1e-12
+            }
+            if open_syms:
+                head = [
+                    i
+                    for i in instruments
+                    if str(i.get("symbol") or "").strip().upper() in open_syms
+                ]
+                tail = [
+                    i
+                    for i in instruments
+                    if str(i.get("symbol") or "").strip().upper() not in open_syms
+                ]
+                instruments = head + tail
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from atlas.investment.intraday_bars import (
+                MAX_SYMBOLS,
+                clamp_intraday_universe,
+                is_intraday_lab,
+            )
+
+            if is_intraday_lab(cfg, portfolio_key):
+                open_now = {
+                    str(p.get("symbol") or "").strip().upper()
+                    for p in (
+                        (self._portfolio.snapshot(portfolio_id, prices=prev_marks) or {}).get(
+                            "positions"
+                        )
+                        or []
+                    )
+                    if abs(float(p.get("quantity") or 0)) > 1e-12
+                }
+                instruments = clamp_intraday_universe(
+                    instruments, open_symbols=open_now, max_n=MAX_SYMBOLS
+                )
+                state["intraday_universe_cap"] = MAX_SYMBOLS
+                state["live_interval"] = "5m"
+        except Exception:  # noqa: BLE001
+            pass
         primary_count = len(instruments)
 
         totals = {
@@ -297,7 +449,7 @@ class PaperTradingWorker(PersistentWorker):
         last_actions: list[str] = []
         reason_counts: dict[str, int] = {}
         feed_gap_days: float | None = None
-        from atlas.investment.session_notes import classify_action
+        from atlas.investment.session_notes import classify_action, samples_for_notes
 
         def _record_action(action: str | None) -> None:
             if not action:
@@ -502,10 +654,23 @@ class PaperTradingWorker(PersistentWorker):
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("opportunity switch review skipped: %s", exc)
 
-        # No fill yet → try next ranked alternatives (cheaper / next in watchlist).
+        # No fill yet → try next ranked alternatives (cash equity only).
+        # FNO / futures: cash alts contaminate the lab (LOOP0 L0).
         prefer_alt = cfg.get("prefer_next_alternatives")
         if prefer_alt is None:
             prefer_alt = True
+        if skip_cash_alts_for_lab(
+            cfg,
+            pack_id=str(getattr(pack, "id", "") or ""),
+            portfolio_key=str(state.get("portfolio_key") or ""),
+        ):
+            prefer_alt = False
+            if int(totals.get("buys") or 0) == 0:
+                pk_now = str(state.get("portfolio_key") or "").lower()
+                if "intraday" in pk_now:
+                    _record_action("next_alt: skipped (intraday_yahoo_budget)")
+                else:
+                    _record_action("next_alt: skipped (fno_no_cash_alts)")
         if (
             session_open
             and prefer_alt
@@ -539,7 +704,52 @@ class PaperTradingWorker(PersistentWorker):
         state["feed_mode"] = feed_mode
         if feed_gap_days is not None:
             state["feed_gap_days"] = feed_gap_days
+        snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
+        state["equity"] = snapshot["equity"]
+        # OI-STAB0 honesty: durable tips with multi-day gap are not "latest" marks
+        basis = snapshot.get("valuation_basis")
+        try:
+            from atlas.investment.index_proxy_lot import VALUATION_BASIS, is_fno_lab
+            from atlas.investment.intraday_bars import (
+                VALUATION_BASIS as INTRADAY_BASIS,
+                is_intraday_lab,
+            )
 
+            if is_fno_lab(cfg, portfolio_key):
+                basis = VALUATION_BASIS
+                snapshot = dict(snapshot)
+                snapshot["valuation_basis"] = basis
+            elif is_intraday_lab(cfg, portfolio_key):
+                basis = INTRADAY_BASIS
+                snapshot = dict(snapshot)
+                snapshot["valuation_basis"] = basis
+        except Exception:  # noqa: BLE001
+            pass
+        if feed_gap_days is not None:
+            try:
+                gap_f = float(feed_gap_days)
+            except (TypeError, ValueError):
+                gap_f = None
+            if gap_f is not None and gap_f >= 1.0 and marks:
+                gap_note = f"feed_gap≈{gap_f:.0f}d — not session-fresh"
+                fno_now = False
+                try:
+                    from atlas.investment.index_proxy_lot import (
+                        VALUATION_BASIS as _VB,
+                        is_fno_lab as _fno,
+                    )
+
+                    fno_now = _fno(cfg, portfolio_key)
+                except Exception:  # noqa: BLE001
+                    _VB = "index_proxy daily underlier"
+                if fno_now:
+                    basis = f"{_VB} ({gap_note})"
+                else:
+                    basis = f"durable bars ({gap_note})"
+                snapshot = dict(snapshot)
+                snapshot["valuation_basis"] = basis
+        state["valuation_basis"] = basis
+        state["marks_pct"] = snapshot.get("marks_pct")
         # Persist hold/feed reasons for evening honesty + outage catch-up digests.
         try:
             from zoneinfo import ZoneInfo
@@ -549,19 +759,44 @@ class PaperTradingWorker(PersistentWorker):
 
             ist_date = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
             data_dir = str(get_config().paths.data)
+            extra: dict[str, Any] = {
+                "valuation_basis": snapshot.get("valuation_basis"),
+                "marks_pct": snapshot.get("marks_pct"),
+                "marks_available": snapshot.get("marks_available"),
+                "marks_total": snapshot.get("marks_total"),
+                "session_open": bool(session_open) if respect_hours else True,
+            }
+            try:
+                from atlas.investment.index_proxy_lot import KPI_LABEL, is_fno_lab
+
+                if is_fno_lab(cfg, portfolio_key):
+                    extra["kpi_label"] = KPI_LABEL
+            except Exception:  # noqa: BLE001
+                pass
+            if feed_gap_days is not None:
+                extra["feed_gap_days"] = feed_gap_days
             merge_day_notes(
                 data_dir,
                 portfolio_key=portfolio_key,
                 ist_date=ist_date,
                 reason_counts=reason_counts,
-                samples=last_actions[-12:],
-                extra={"feed_gap_days": feed_gap_days} if feed_gap_days is not None else None,
+                samples=samples_for_notes(last_actions),
+                extra=extra,
             )
         except Exception:  # noqa: BLE001
             self._logger.debug("session notes merge skipped", exc_info=True)
 
-        snapshot = self._portfolio.snapshot(portfolio_id, prices=marks)
-        state["equity"] = snapshot["equity"]
+        try:
+            from zoneinfo import ZoneInfo as _ISTZone
+
+            self._maybe_open_book_l3(
+                portfolio_key=portfolio_key,
+                snapshot=snapshot,
+                marks=marks,
+                ist_date=datetime.now(_ISTZone("Asia/Kolkata")).strftime("%Y-%m-%d"),
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("LOOP0 L3 open-book skipped", exc_info=True)
 
         # Live tape never "exhausts"; replay completes when every feed is spent.
         done = (
@@ -593,6 +828,43 @@ class PaperTradingWorker(PersistentWorker):
             f"{session_bit}{action_bit}"
             + (" | DONE: all feeds exhausted (fixture replay complete)" if done else "")
         ).strip()
+        try:
+            from atlas.activity import record_activity
+
+            top_idle = ""
+            if reason_counts:
+                top_idle = max(reason_counts.items(), key=lambda kv: int(kv[1] or 0))[0]
+            record_activity(
+                domain="market",
+                worker="paper_trading",
+                action="paper_tick",
+                target=portfolio_key,
+                result="completed",
+                summary=(
+                    f"Paper tick on {portfolio_key}: "
+                    f"+{totals.get('buys', 0)} buy / +{totals.get('sells', 0)} sell / "
+                    f"{totals.get('holds', 0)} hold"
+                    + (f"; top idle={top_idle}" if top_idle else "")
+                    + (
+                        f"; feed_gap={feed_gap_days}d"
+                        if feed_gap_days is not None
+                        else ""
+                    )
+                ),
+                evidence={
+                    "portfolio_key": portfolio_key,
+                    "buys": totals.get("buys"),
+                    "sells": totals.get("sells"),
+                    "holds": totals.get("holds"),
+                    "reason_counts": reason_counts,
+                    "feed_gap_days": feed_gap_days,
+                    "session_open": session_open,
+                    "valuation_basis": snapshot.get("valuation_basis"),
+                    "marks_pct": snapshot.get("marks_pct"),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("activity journal paper tick skipped", exc_info=True)
         return TickResult(state=state, done=done, note=note)
 
     # --- instrument ordering / next-best alternatives --------------------
@@ -637,12 +909,11 @@ class PaperTradingWorker(PersistentWorker):
         try:
             from atlas.investment.portfolio_optimizer import target_name_pct
 
-            ceiling = cfg.get("max_name_pct") or cfg.get("max_exposure_pct")
-            if ceiling is not None:
-                ceiling = float(ceiling)
-                if ceiling > 1.0:
-                    ceiling /= 100.0
-            return target_name_pct(persona, {"max_name_pct": ceiling})
+            port_cfg = {
+                "max_name_pct": cfg.get("max_name_pct"),
+                "max_exposure_pct": cfg.get("max_exposure_pct"),
+            }
+            return target_name_pct(persona, port_cfg)
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("name target sizing skipped: %s", exc)
             return None
@@ -662,6 +933,7 @@ class PaperTradingWorker(PersistentWorker):
         from atlas.investment.universe import as_instruments
 
         have_l = {str(s).strip().upper() for s in have if s}
+        skip_req = _SKIP_CASH_ALT_REQUESTED
         pool: list[dict[str, Any]] = []
         try:
             rows = wl.ranked_rows(program_id, max_n=max(40, max_n * 3))
@@ -671,7 +943,7 @@ class PaperTradingWorker(PersistentWorker):
             if not isinstance(row, dict):
                 continue
             sym = str(row.get("symbol") or "").strip()
-            if not sym or sym.upper() in have_l:
+            if not sym or sym.upper() in have_l or sym.upper() in skip_req:
                 continue
             pool.append(
                 {
@@ -685,7 +957,7 @@ class PaperTradingWorker(PersistentWorker):
         if not pool:
             for inst in as_instruments(fallback_index, limit=40):
                 sym = str(inst.get("symbol") or "").strip()
-                if not sym or sym.upper() in have_l:
+                if not sym or sym.upper() in have_l or sym.upper() in skip_req:
                     continue
                 pool.append({**inst, "alt": True})
         ordered = self._order_tradeable_first(pool, cash=cash, marks=marks)
@@ -780,19 +1052,70 @@ class PaperTradingWorker(PersistentWorker):
             pass
 
         # Enrich holds with ranked evidence for E[R]×confidence.
+        from atlas.investment.expected_return_prototype import overlay_fundamentals_for_er
+
+        fund_cache: dict[str, dict[str, Any] | None] = {}
+        data_dir_er: str | None = None
+        try:
+            from atlas.config import get_config
+
+            data_dir_er = str(get_config().paths.data)
+        except Exception:  # noqa: BLE001
+            data_dir_er = None
+
+        def _fund_for(sym: str) -> dict[str, Any] | None:
+            key = str(sym or "").strip().upper()
+            if not key or not data_dir_er:
+                return None
+            if key in fund_cache:
+                return fund_cache[key]
+            row = None
+            try:
+                from atlas.investment.fundamentals import get_symbol as fund_get
+
+                row = fund_get(data_dir_er, key, program_id=program_id)
+            except Exception:  # noqa: BLE001
+                row = None
+            fund_cache[key] = row if isinstance(row, dict) else None
+            return fund_cache[key]
+
+        _er_copy = (
+            "score",
+            "confidence",
+            "phase",
+            "components",
+            "momentum",
+            "pe",
+            "industry_pe_median",
+            "pe_sector_median",
+            "roe",
+            "debt_to_equity",
+            "rs_vs_benchmark_pct",
+            "sector",
+            "belief_adj",
+            "closed_trade_n",
+            "closed_trade_hit_rate",
+        )
         holds: list[dict[str, Any]] = []
         for pos in open_pos:
             row = dict(pos)
             sym = str(row.get("symbol") or "").strip().upper()
             src = ranked_by.get(sym) or ranked_by.get(sym.replace(".NS", "") + ".NS")
             if src:
-                for k in ("score", "confidence", "phase", "components", "momentum"):
+                for k in _er_copy:
                     if row.get(k) is None and src.get(k) is not None:
                         row[k] = src.get(k)
-                if isinstance(src.get("components"), dict) and row.get("components") is None:
+                if isinstance(src.get("components"), dict) and not isinstance(
+                    row.get("components"), dict
+                ):
                     row["components"] = src["components"]
-            attach_opportunity_metrics(row, src if src is not None else row)
+            overlay_fundamentals_for_er(row, _fund_for(sym))
+            attach_opportunity_metrics(row, row)
             holds.append(row)
+        for chal in challengers:
+            csym = str(chal.get("symbol") or "").strip().upper()
+            overlay_fundamentals_for_er(chal, _fund_for(csym))
+            attach_opportunity_metrics(chal, chal)
 
         # PLC.A gate map for challengers (fail-closed when enabled).
         plc_ok: dict[str, bool] = {}
@@ -839,6 +1162,7 @@ class PaperTradingWorker(PersistentWorker):
                         require_thesis_trigger=bool(
                             cfg.get("plc_a_require_thesis_trigger", True)
                         ),
+                        symbol=csym,
                     )
                     plc_ok[csym] = bool(gate.get("allowed"))
                     chal["plc_a"] = gate
@@ -880,8 +1204,42 @@ class PaperTradingWorker(PersistentWorker):
             penalty_m=float(cfg.get("confidence_penalty_m") or DEFAULT_PENALTY_M),
             exploratory=exploratory,
             challenger_plc_a_ok=plc_ok or None,
+            laboratory_id=portfolio_key,
+            cfg=cfg,
         )
         state["opportunity_switch_reviews"] = reviews[:20]
+
+        try:
+            from atlas.investment.capital_allocation import (
+                build_challenger_table,
+                persist_allocation_table,
+            )
+
+            cash_amt = float(snapshot.get("cash") or 0)
+            alloc_table = build_challenger_table(
+                holds=holds,
+                challengers=challengers,
+                cash=cash_amt,
+                reviews=reviews,
+                laboratory_id=portfolio_key,
+                threshold=threshold,
+                cold_start_threshold=cold_thr,
+                transaction_cost=transaction_cost,
+                penalty_k=float(cfg.get("confidence_penalty_k") or DEFAULT_PENALTY_K),
+                penalty_m=float(cfg.get("confidence_penalty_m") or DEFAULT_PENALTY_M),
+                exploratory=exploratory,
+                cfg=cfg,
+            )
+            if data_dir_er:
+                persist_allocation_table(data_dir_er, alloc_table)
+            state["challenger_table"] = {
+                "as_of_ist": alloc_table.get("as_of_ist"),
+                "rows": len(alloc_table.get("rows") or []),
+                "best_deploy": alloc_table.get("best_deploy"),
+                "holdings_n": alloc_table.get("holdings_n"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("challenger table skipped: %s", exc)
 
         execute = bool(
             cfg.get("opportunity_switch_execute")
@@ -913,6 +1271,20 @@ class PaperTradingWorker(PersistentWorker):
                 + ")"
             )
             actions.append(line)
+            if switch_data_dir and decision == "switch":
+                try:
+                    from atlas.investment.learning_objects import (
+                        record_challenger_threshold_event,
+                    )
+
+                    record_challenger_threshold_event(
+                        switch_data_dir,
+                        laboratory_id=portfolio_key,
+                        review=rev,
+                        executed=False,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             did_execute = False
             # Packet on the hold symbol (silence = bug).
             try:
@@ -929,6 +1301,27 @@ class PaperTradingWorker(PersistentWorker):
                     plan_link={
                         "opportunity_switch": rev,
                         "version": rev.get("version"),
+                        **(
+                            {
+                                "allocation": {
+                                    "best_challenger": rev.get("challenger_symbol"),
+                                    "challenger_advantage": rev.get("expected_advantage"),
+                                    "allocation_action": (
+                                        "ROTATE"
+                                        if decision == "switch"
+                                        else (
+                                            "HOLD"
+                                            if reason
+                                            in {
+                                                "switch_blocked_costs",
+                                                "switch_blocked_missing_er",
+                                            }
+                                            else "KEEP"
+                                        )
+                                    ),
+                                }
+                            }
+                        ),
                     },
                 )
             except Exception:  # noqa: BLE001
@@ -984,6 +1377,67 @@ class PaperTradingWorker(PersistentWorker):
                 except Exception:  # noqa: BLE001
                     pass
                 continue
+
+            # OI-LINT0 — never replace an FNO/index-proxy position with cash equity.
+            try:
+                from atlas.investment.lab_contracts import (
+                    is_instrument_permitted,
+                    reject_message,
+                )
+
+                chal_ok = is_instrument_permitted(
+                    portfolio_key, chal_sym, cfg=cfg, path="switch"
+                )
+                if not chal_ok.allowed:
+                    msg = reject_message(chal_ok)
+                    actions.append(f"{hold_sym}: switch_blocked_lab →{chal_sym} ({msg})")
+                    try:
+                        self._record_di_packet(
+                            action="hold",
+                            symbol=hold_sym,
+                            strategy_tag="lab_instrument_rejected",
+                            portfolio_key=portfolio_key,
+                            mission_id=mission_id,
+                            price=hold_px,
+                            cfg=cfg,
+                            reasons_against=[msg],
+                            plan_link={"opportunity_switch": rev},
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        from atlas.activity import record_activity
+
+                        record_activity(
+                            domain="market",
+                            worker="paper_trading",
+                            action="lab_instrument_rejected",
+                            target=chal_sym,
+                            result="skipped",
+                            summary=msg,
+                            evidence={
+                                "path": "switch",
+                                "hold": hold_sym,
+                                "laboratory_id": portfolio_key,
+                            },
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        from atlas.investment.switch_learning import record_switch_decision
+
+                        record_switch_decision(
+                            switch_data_dir,
+                            rev,
+                            laboratory_id=portfolio_key,
+                            portfolio_key=portfolio_key,
+                            executed=False,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+            except Exception:  # noqa: BLE001
+                self._logger.debug("lab contract switch gate skipped", exc_info=True)
 
             # Pre-check research gate before selling (avoid orphan cash).
             if self._investment_research is not None:
@@ -1081,6 +1535,8 @@ class PaperTradingWorker(PersistentWorker):
                     fees=fees_sell,
                     mission_id=mission_id,
                     decision_id=None,
+                    laboratory_id=portfolio_key,
+                    instrument_path="switch",
                 )
             except Exception as exc:  # noqa: BLE001
                 actions.append(f"{hold_sym}: switch_sell_rejected ({exc})")
@@ -1197,6 +1653,8 @@ class PaperTradingWorker(PersistentWorker):
                     fees=fees_buy,
                     mission_id=mission_id,
                     decision_id=None,
+                    laboratory_id=portfolio_key,
+                    instrument_path="switch",
                 )
             except Exception as exc:  # noqa: BLE001
                 actions.append(f"{chal_sym}: switch_buy_rejected ({exc})")
@@ -1268,6 +1726,106 @@ class PaperTradingWorker(PersistentWorker):
 
         return actions
 
+    def _refresh_consult_book(self, snapshot: dict[str, Any] | None) -> None:
+        """Book fingerprint for unique-state consult (material change = new state)."""
+        from atlas.reasoning.decision_consult import book_fingerprint
+
+        snap = snapshot if isinstance(snapshot, dict) else {}
+        held: list[str] = []
+        for p in snap.get("positions") or []:
+            if not isinstance(p, dict):
+                continue
+            try:
+                q = float(p.get("qty") or p.get("quantity") or p.get("shares") or 0)
+            except (TypeError, ValueError):
+                q = 0.0
+            if q > 0 and p.get("symbol"):
+                held.append(str(p.get("symbol")))
+        equity = snap.get("equity")
+        cash = snap.get("cash")
+        cash_pct = None
+        try:
+            if equity and float(equity) > 0 and cash is not None:
+                cash_pct = float(cash) / float(equity)
+        except (TypeError, ValueError):
+            cash_pct = None
+        self._consult_book_fp = book_fingerprint(held, cash_pct)
+
+    def _belief_context_for_packet(
+        self,
+        *,
+        action: str,
+        symbol: str,
+        strategy_tag: str,
+        portfolio_key: str,
+        thesis_trigger: str | None,
+        plan_link: dict[str, Any] | None,
+        expected_doc: dict[str, Any] | None,
+        research_gate: dict[str, Any] | None,
+        portfolio_gate: dict[str, Any] | None,
+        indicators: dict[str, Any] | None,
+        fundamentals: dict[str, Any] | None,
+        sector: str | None,
+        ist_day: str,
+    ) -> dict[str, Any]:
+        """LOOP0 L2 — consult unique decision state; advice-only; no LLM."""
+        from atlas.reasoning.decision_consult import (
+            consult_unique_decision,
+            evidence_fingerprint,
+            load_day_cache,
+            regime_bucket,
+        )
+
+        data_dir = None
+        try:
+            from atlas.config import get_config
+
+            data_dir = str(get_config().paths.data)
+        except Exception:  # noqa: BLE001
+            data_dir = None
+        plink = plan_link if isinstance(plan_link, dict) else {}
+        sw = plink.get("opportunity_switch") if isinstance(plink.get("opportunity_switch"), dict) else {}
+        rg = research_gate if isinstance(research_gate, dict) else {}
+        pg = portfolio_gate if isinstance(portfolio_gate, dict) else {}
+        fund = fundamentals if isinstance(fundamentals, dict) else {}
+        exp = expected_doc if isinstance(expected_doc, dict) else {}
+        cache_key = f"{portfolio_key}|{ist_day}"
+        mem = getattr(self, "_consult_by_day", None)
+        if not isinstance(mem, dict):
+            mem = {}
+            self._consult_by_day = mem
+        if cache_key not in mem:
+            mem[cache_key] = load_day_cache(data_dir, portfolio_key, ist_day)
+        snap_tags = None
+        try:
+            snap_tags = list((indicators or {}).get("regime_tags") or [])
+        except Exception:  # noqa: BLE001
+            snap_tags = None
+        return consult_unique_decision(
+            self._reasoning,
+            symbol=symbol,
+            laboratory_id=portfolio_key,
+            action_kind=action,
+            strategy_tag=strategy_tag,
+            ist_day=ist_day,
+            cache=mem[cache_key],
+            data_dir=data_dir,
+            experience_os=self._experience_os,
+            thesis_id=str(thesis_trigger or plink.get("thesis_id") or sw.get("thesis_id") or ""),
+            rank=plink.get("rank"),
+            book_fp=str(getattr(self, "_consult_book_fp", "") or ""),
+            evidence_fp=evidence_fingerprint(
+                research_ok=rg.get("allowed"),
+                portfolio_ok=pg.get("allowed"),
+                pe_present=fund.get("pe") is not None,
+                plc_reason=str(rg.get("reason") or pg.get("action") or strategy_tag or ""),
+                er_completeness=exp.get("er_completeness"),
+            ),
+            regime=regime_bucket(indicators, snap_tags),
+            sector=str(sector or ""),
+            persist=True,
+        )
+
     def _record_di_packet(
         self,
         *,
@@ -1291,11 +1849,13 @@ class PaperTradingWorker(PersistentWorker):
         portfolio_gate: dict[str, Any] | None = None,
         as_alt: bool = False,
         sector: str | None = None,
+        expected: dict[str, Any] | None = None,
         plan_link: dict[str, Any] | None = None,
         gap_pct: float | None = None,
         bars: list[dict[str, Any]] | None = None,
         cursor: int | None = None,
         thesis_trigger: str | None = None,
+        position_qty: float | None = None,
     ) -> dict[str, Any] | None:
         """DI.1 — freeze a Decision Packet (best-effort; never raises).
 
@@ -1333,13 +1893,6 @@ class PaperTradingWorker(PersistentWorker):
                 reason_code=reason_code,
                 ist_day_s=day,
             )
-            if not ok:
-                return {
-                    "skipped": True,
-                    "reason": skip_reason,
-                    "symbol": symbol,
-                    "strategy_tag": strategy_tag,
-                }
 
             from atlas.investment.decision_packets import (
                 empty_market_snapshot,
@@ -1458,6 +2011,77 @@ class PaperTradingWorker(PersistentWorker):
             if gap is not None:
                 prices_doc["gap_pct"] = gap
 
+            expected_doc = dict(expected) if isinstance(expected, dict) else None
+            if expected_doc is None and isinstance(plink, dict):
+                sw = plink.get("opportunity_switch")
+                if isinstance(sw, dict) and isinstance(sw.get("hold_metrics"), dict):
+                    try:
+                        from atlas.investment.expected_return_prototype import (
+                            expected_block_from_metrics,
+                        )
+
+                        expected_doc = expected_block_from_metrics(sw.get("hold_metrics"))
+                    except Exception:  # noqa: BLE001
+                        expected_doc = None
+
+            belief_ctx = self._belief_context_for_packet(
+                action=action,
+                symbol=symbol,
+                strategy_tag=tag,
+                portfolio_key=portfolio_key or "india_equity_learner",
+                thesis_trigger=thesis_trigger,
+                plan_link=plink if isinstance(plink, dict) else None,
+                expected_doc=expected_doc,
+                research_gate=research_gate,
+                portfolio_gate=portfolio_gate,
+                indicators=indicators,
+                fundamentals=fundamentals if isinstance(fundamentals, dict) else None,
+                sector=sector,
+                ist_day=day,
+            )
+            if not ok:
+                return {
+                    "skipped": True,
+                    "reason": skip_reason,
+                    "symbol": symbol,
+                    "strategy_tag": strategy_tag,
+                    "belief_context": belief_ctx,
+                }
+
+            _decomp: dict[str, Any] | None = None
+            try:
+                from atlas.investment.lab_contracts import decompose_decision
+
+                aw_d = {}
+                if isinstance(valuation, dict):
+                    aw_d["valuation"] = valuation
+                _decomp = decompose_decision(
+                    laboratory_id=portfolio_key,
+                    symbol=symbol,
+                    action=action,
+                    cfg=cfg,
+                    awareness=aw_d or None,
+                    held=float(position_qty or 0),
+                    research_confidence=(
+                        (research_gate or {}).get("confidence")
+                        if isinstance(research_gate, dict)
+                        else None
+                    ),
+                    risk_gate=(
+                        "PASS"
+                        if not portfolio_gate
+                        or (isinstance(portfolio_gate, dict) and portfolio_gate.get("allowed", True))
+                        else "FAIL"
+                    ),
+                    path="buy" if str(action).lower() == "buy" else str(action or "hold"),
+                )
+                if isinstance(plink, dict) and plink.get("opportunity_switch"):
+                    _decomp["challenger_vs_book"] = str(
+                        (plink.get("opportunity_switch") or {}).get("decision") or ""
+                    ) or None
+            except Exception:  # noqa: BLE001
+                _decomp = None
+
             # PLC.D — hypothesis on every buy (learner default)
             hypothesis_id: str | None = None
             data_dir: str | None = None
@@ -1527,6 +2151,23 @@ class PaperTradingWorker(PersistentWorker):
                 except Exception:  # noqa: BLE001
                     parent_decision_id = None
 
+            _alloc_meta: dict[str, Any] = {}
+            if data_dir:
+                try:
+                    from atlas.investment.capital_allocation import (
+                        load_allocation_table,
+                        packet_allocation_fields,
+                    )
+
+                    _alloc_meta = packet_allocation_fields(
+                        load_allocation_table(
+                            data_dir, portfolio_key or "india_equity_learner"
+                        ),
+                        symbol,
+                    )
+                except Exception:  # noqa: BLE001
+                    _alloc_meta = {}
+
             saved = store.record(
                 action=action,
                 symbol=symbol,
@@ -1551,6 +2192,8 @@ class PaperTradingWorker(PersistentWorker):
                 portfolio_gate=portfolio_gate,
                 research_coverage=float(coverage) if coverage is not None else None,
                 plan_link=plink,
+                expected=expected_doc,
+                belief_context=belief_ctx,
                 process_context={
                     "plan": plan_doc if isinstance(plan_doc, dict) else None,
                     "recent_losses": set(),
@@ -1578,6 +2221,12 @@ class PaperTradingWorker(PersistentWorker):
                         if str(action or "").lower() in {"buy", "sell"}
                         else {}
                     ),
+                    **(
+                        {"decision_decomposition": _decomp}
+                        if _decomp
+                        else {}
+                    ),
+                    **({"allocation": _alloc_meta} if _alloc_meta else {}),
                 },
             )
             # Link packet id back onto hypothesis after durable write
@@ -1644,6 +2293,42 @@ class PaperTradingWorker(PersistentWorker):
                     )
                 except Exception:  # noqa: BLE001
                     self._logger.debug("BRE.3 schedule skipped", exc_info=True)
+            # OI-LINT0 Phase 3 — queue research-scientist (never LLM on the fill path)
+            if saved and not saved.get("skipped"):
+                try:
+                    from atlas.reasoning.research_scientist import (
+                        enqueue_unreviewed,
+                        is_scientist_event,
+                    )
+
+                    pkt_saved = (saved or {}).get("packet") or {}
+                    decomp = {}
+                    meta = pkt_saved.get("meta") if isinstance(pkt_saved, dict) else {}
+                    if isinstance(meta, dict) and isinstance(meta.get("decision_decomposition"), dict):
+                        decomp = meta["decision_decomposition"]
+                    if is_scientist_event(
+                        action=action,
+                        strategy_tag=tag,
+                        contradictions=list(decomp.get("contradictions") or []),
+                    ):
+                        enqueue_unreviewed(
+                            data_dir,
+                            laboratory_id=portfolio_key or "india_equity_learner",
+                            packet={
+                                "symbol": symbol,
+                                "laboratory": portfolio_key or "india_equity_learner",
+                                "action": action,
+                                "strategy_tag": tag,
+                                "decomposition": decomp,
+                                "ts_ist": day,
+                                "price": {"mark": price, "fill": fill_price},
+                                "fundamentals": fundamentals if isinstance(fundamentals, dict) else {},
+                                "expected": expected_doc if isinstance(expected_doc, dict) else {},
+                            },
+                            reason="pending_event",
+                        )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("research scientist schedule skipped", exc_info=True)
             return saved
         except Exception:  # noqa: BLE001
             self._logger.debug("DI.1 packet write skipped", exc_info=True)
@@ -1681,6 +2366,12 @@ class PaperTradingWorker(PersistentWorker):
         held = float(position.get("quantity", 0.0))
         snapshot = self._portfolio.snapshot(portfolio_id, prices={symbol: price})
         inst_row = instrument if isinstance(instrument, dict) else {}
+        er_src = dict(inst_row)
+        er_src["symbol"] = symbol
+        if len(closes) >= 21 and closes[-21]:
+            er_src.setdefault("pct_move", closes[-1] / closes[-21] - 1.0)
+        elif len(closes) >= 2 and closes[0]:
+            er_src.setdefault("pct_move", closes[-1] / closes[0] - 1.0)
 
         mentor_advice = ""
         mission_ctx_summary = ""
@@ -1830,6 +2521,16 @@ class PaperTradingWorker(PersistentWorker):
             for er in extra_reasons or []:
                 if er and er not in reasons:
                     reasons.append(er)
+            expected_doc = None
+            try:
+                from atlas.investment.expected_return_prototype import (
+                    compute_prototype_er,
+                    expected_block_from_metrics,
+                )
+
+                expected_doc = expected_block_from_metrics(compute_prototype_er(er_src))
+            except Exception:  # noqa: BLE001
+                expected_doc = None
             self._record_di_packet(
                 action=action,
                 symbol=symbol,
@@ -1854,6 +2555,8 @@ class PaperTradingWorker(PersistentWorker):
                 bars=bars,
                 cursor=cursor,
                 thesis_trigger=thesis_trigger_for_packet if action == "buy" else None,
+                expected=expected_doc,
+                position_qty=held,
             )
 
         # PLC.B — evaluate richer exits while holding (SMA remains a separate lane)
@@ -1919,6 +2622,17 @@ class PaperTradingWorker(PersistentWorker):
             rationale = str(plc_b_prop.get("rationale") or code)
             return code, q, rationale
 
+        kind: str | None = None
+        qty = 0.0
+        index_proxy_tag: str | None = None
+        fno_lab = False
+        try:
+            from atlas.investment.index_proxy_lot import is_fno_lab as _is_fno_lab
+
+            fno_lab = _is_fno_lab(cfg, portfolio_key)
+        except Exception:  # noqa: BLE001
+            fno_lab = False
+
         if decision.action_kind != ACTION_RECOMMEND:
             if plc_b_prop:
                 exit_reason_code, qty, why = _force_plc_b_sell()
@@ -1930,10 +2644,8 @@ class PaperTradingWorker(PersistentWorker):
                 _pkt("hold", strategy_tag="capability_gap", line=line)
                 return line
             else:
-                totals["holds"] += 1
-                line = f"{symbol}: hold @ {price:.2f}"
-                _pkt("hold", strategy_tag="engine_hold", line=line)
-                return line
+                kind = None
+                qty = 0.0
         else:
             # The engine wraps the chosen option under action["payload"].
             payload = (decision.action or {}).get("payload") or {}
@@ -1949,16 +2661,172 @@ class PaperTradingWorker(PersistentWorker):
                 exit_reason_code, qty, why = _force_plc_b_sell()
                 why_short = (why[:80] + "…") if len(why) > 80 else why
                 kind = "sell"
-            if kind not in ("buy", "sell"):
-                totals["holds"] += 1
-                line = f"{symbol}: hold @ {price:.2f}"
-                _pkt("hold", strategy_tag="engine_hold", line=line)
-                return line
-            if qty <= 0:
-                totals["holds"] += 1
-                line = f"{symbol}: hold @ {price:.2f}"
-                _pkt("hold", strategy_tag="engine_hold", line=line)
-                return line
+            if kind not in ("buy", "sell") or qty <= 0:
+                kind = None
+                qty = 0.0
+
+        # LOOP0 L4 — NIFTY index-proxy 1 lot (margin, not cash-equity 1 share).
+        if fno_lab and kind != "sell":
+            try:
+                from atlas.investment.index_proxy_lot import (
+                    STRATEGY_TAG as INDEX_PROXY_TAG,
+                    is_nifty_underlier,
+                    size_one_lot,
+                    underlier_family,
+                )
+
+                if underlier_family(symbol) is not None:
+                    sized = size_one_lot(
+                        symbol=symbol,
+                        price=price,
+                        cash=float(snapshot.get("cash") or 0),
+                        held=held,
+                        instrument=inst_row,
+                        cfg=cfg,
+                    )
+                    if kind == "buy":
+                        if sized.get("ok"):
+                            qty = float(sized["qty"])
+                            kind = "buy"
+                            index_proxy_tag = INDEX_PROXY_TAG
+                            why_short = (
+                                "L4 index-proxy laboratory lot "
+                                "(daily underlier; not live futures)"
+                            )
+                        elif str(sized.get("reason") or "").startswith("already_open"):
+                            kind = None
+                            qty = 0.0
+                        else:
+                            totals["holds"] += 1
+                            line = f"{symbol}: margin ({sized.get('reason')})"
+                            _pkt(
+                                "hold",
+                                strategy_tag="margin",
+                                line=line,
+                                against=[str(sized.get("reason") or "margin")],
+                            )
+                            return line
+                    elif is_nifty_underlier(symbol) and held <= 0:
+                        if sized.get("ok"):
+                            qty = float(sized["qty"])
+                            kind = "buy"
+                            index_proxy_tag = INDEX_PROXY_TAG
+                            why_short = (
+                                "L4 index-proxy laboratory lot "
+                                "(daily underlier; not live futures)"
+                            )
+                        else:
+                            totals["holds"] += 1
+                            line = f"{symbol}: margin ({sized.get('reason')})"
+                            _pkt(
+                                "hold",
+                                strategy_tag="margin",
+                                line=line,
+                                against=[str(sized.get("reason") or "margin")],
+                            )
+                            return line
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("L4 index-proxy overlay skipped: %s", exc)
+
+        if kind == "buy":
+            try:
+                from atlas.investment.lab_contracts import (
+                    decompose_decision,
+                    is_instrument_permitted,
+                    reject_message,
+                    thesis_stance_from_awareness,
+                )
+
+                inst_v = is_instrument_permitted(
+                    portfolio_key,
+                    symbol,
+                    cfg=cfg,
+                    instrument=inst_row,
+                    path="buy",
+                )
+                if not inst_v.allowed:
+                    totals["holds"] += 1
+                    line = reject_message(inst_v)
+                    try:
+                        from atlas.activity import record_activity
+
+                        record_activity(
+                            domain="market",
+                            worker="paper_trading",
+                            action="lab_instrument_rejected",
+                            target=symbol,
+                            result="skipped",
+                            summary=line,
+                            evidence={
+                                "path": "buy",
+                                "laboratory_id": portfolio_key,
+                            },
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _pkt(
+                        "hold",
+                        strategy_tag="lab_instrument_rejected",
+                        line=line,
+                        against=[line],
+                    )
+                    return line
+                if state.get("intraday_must_be_flat"):
+                    totals["holds"] += 1
+                    line = f"{symbol}: eod_flatten (no new intraday buys after 15:20 IST)"
+                    _pkt(
+                        "hold",
+                        strategy_tag="eod_flatten",
+                        line=line,
+                        against=[line],
+                    )
+                    return line
+                aw_row = None
+                if self._investment_research is not None:
+                    try:
+                        aw_row = self._investment_research.awareness(
+                            symbol,
+                            program_id=str(
+                                cfg.get("program_id") or "market_intelligence"
+                            ),
+                        )
+                    except Exception:  # noqa: BLE001
+                        aw_row = None
+                decomp = decompose_decision(
+                    laboratory_id=portfolio_key,
+                    symbol=symbol,
+                    action="buy",
+                    cfg=cfg,
+                    awareness=aw_row if isinstance(aw_row, dict) else None,
+                    held=held,
+                    path="buy",
+                    instrument=inst_row,
+                )
+                if str(decomp.get("final_decision") or "") != "BUY":
+                    totals["holds"] += 1
+                    stance = decomp.get("fundamental_thesis") or thesis_stance_from_awareness(
+                        aw_row if isinstance(aw_row, dict) else None
+                    )
+                    line = (
+                        f"{symbol}: lab_policy_hold "
+                        f"(technical=BUY thesis={stance} "
+                        f"policy={decomp.get('lab_policy')})"
+                    )
+                    _pkt(
+                        "hold",
+                        strategy_tag="lab_policy_hold",
+                        line=line,
+                        against=list(decomp.get("contradictions") or [line]),
+                    )
+                    return line
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("lab contract buy gate skipped: %s", exc)
+
+        if kind not in ("buy", "sell") or qty <= 0:
+            totals["holds"] += 1
+            line = f"{symbol}: hold @ {price:.2f}"
+            _pkt("hold", strategy_tag="engine_hold", line=line)
+            return line
 
         if self._policy_engine is not None:
             try:
@@ -1994,7 +2862,8 @@ class PaperTradingWorker(PersistentWorker):
                 self._logger.debug("policy_engine evaluate skipped: %s", exc)
 
         # IRA — research-based buy gate (learner books default on).
-        if kind == "buy" and self._investment_research is not None:
+        # FNO index-proxy lots skip cash MVR/thesis (NIFTY is not a stock).
+        if kind == "buy" and not fno_lab and self._investment_research is not None:
             gate_note = self._research_buy_gate(
                 symbol=symbol,
                 cfg=cfg,
@@ -2075,6 +2944,7 @@ class PaperTradingWorker(PersistentWorker):
                         require_thesis_trigger=bool(
                             cfg.get("plc_a_require_thesis_trigger", True)
                         ),
+                        symbol=symbol,
                     )
                     if not plc_a_result.get("allowed"):
                         blocks = ",".join(plc_a_result.get("blocks") or []) or "plc_a"
@@ -2095,7 +2965,8 @@ class PaperTradingWorker(PersistentWorker):
                 self._logger.debug("PLC.A buy gate skipped: %s", exc)
 
         # IIP.7 — portfolio optimizer pre-trade gate (buys)
-        if kind == "buy" and cfg.get("portfolio_gate", True):
+        # FNO uses margin (pack), not cash-equity concentration 0%.
+        if kind == "buy" and not fno_lab and cfg.get("portfolio_gate", True):
             try:
                 from atlas.investment.portfolio_optimizer import pre_trade_check
 
@@ -2115,20 +2986,13 @@ class PaperTradingWorker(PersistentWorker):
                         score = None
                 port_cfg = {
                     "max_names": cfg.get("max_names"),
-                    "max_name_pct": cfg.get("max_name_pct") or cfg.get("max_exposure_pct"),
+                    "max_name_pct": cfg.get("max_name_pct"),
+                    "max_exposure_pct": cfg.get("max_exposure_pct"),
                     "sector_cap_pct": cfg.get("sector_cap_pct"),
                     "min_cash_pct": cfg.get("min_cash_pct"),
                     "min_investment_confidence": cfg.get("min_investment_confidence") or "low",
                     "mos_pct": mos_pct,
                 }
-                # max_exposure_pct historically 0–100
-                if port_cfg.get("max_name_pct") is not None:
-                    try:
-                        m = float(port_cfg["max_name_pct"])
-                        if m > 1.0:
-                            port_cfg["max_name_pct"] = m / 100.0
-                    except (TypeError, ValueError):
-                        pass
                 pcheck = pre_trade_check(
                     side="buy",
                     symbol=symbol,
@@ -2290,6 +3154,8 @@ class PaperTradingWorker(PersistentWorker):
                 fees=fees_doc,
                 mission_id=mission_id,
                 decision_id=decision.id,
+                laboratory_id=portfolio_key,
+                instrument_path="buy",
             )
         except Exception as exc:  # noqa: BLE001 - a rejected sim fill is reported, never fatal
             totals["errors"] += 1
@@ -2331,11 +3197,12 @@ class PaperTradingWorker(PersistentWorker):
         sell_tag = "sma_cross_rsi"
         if kind == "sell" and exit_reason_code and exit_reason_code != "sma_crossunder":
             sell_tag = f"plc_b_{exit_reason_code}"
+        buy_tag = index_proxy_tag or "sma_cross_rsi"
         _pkt(
             kind,
             strategy_tag="next_alternative"
             if as_alt
-            else (sell_tag if kind == "sell" else "sma_cross_rsi"),
+            else (sell_tag if kind == "sell" else buy_tag),
             line=line,
             qty_v=qty,
             filled=qty,
@@ -2344,6 +3211,11 @@ class PaperTradingWorker(PersistentWorker):
             trade_id=trade_id,
             rg=research_gate_result,
             pg=portfolio_gate_result,
+            extra_reasons=(
+                ["index-proxy paper lot on daily underlier — not live futures"]
+                if index_proxy_tag
+                else None
+            ),
         )
         if self._investor_mailer is not None:
             try:
@@ -2365,6 +3237,23 @@ class PaperTradingWorker(PersistentWorker):
                             pass
                 decision_doc["research_gate"] = research_gate_result
                 decision_doc["portfolio_gate"] = portfolio_gate_result
+                lab_books = None
+                try:
+                    from zoneinfo import ZoneInfo
+
+                    from atlas.config import get_config
+                    from atlas.workers.investor_reports import load_mail_lab_books
+
+                    ist_date = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+                    lab_books = load_mail_lab_books(
+                        portfolio=self._portfolio,
+                        market_reader=self._live_market,
+                        data_dir=str(get_config().paths.data),
+                        ist_date=ist_date,
+                        logger=self._logger,
+                    )
+                except Exception:  # noqa: BLE001
+                    lab_books = None
                 self._investor_mailer.send_trade(
                     side=kind,
                     symbol=symbol,
@@ -2386,6 +3275,7 @@ class PaperTradingWorker(PersistentWorker):
                         or cfg.get("portfolio_key")
                         or "india_equity_learner"
                     ),
+                    lab_books=lab_books or None,
                 )
             except Exception:  # noqa: BLE001 - never fail a fill on email
                 self._logger.debug("investor trade email failed", exc_info=True)
@@ -2399,7 +3289,170 @@ class PaperTradingWorker(PersistentWorker):
             )
         return line
 
-    # --- IRA research gate + daily learning ------------------------------
+    def _eod_flatten_intraday(
+        self,
+        *,
+        cfg: dict[str, Any],
+        portfolio_id: Any,
+        portfolio_key: str,
+        marks: dict[str, float],
+        state: dict[str, Any],
+        mission_id: Any,
+        pack: Any,
+    ) -> None:
+        """Hard gate: equity_intraday_learner is cash-only overnight.
+
+        Sells every open qty, records sell packet + experience/outcome, stamps
+        ``eod_flatten``. Idempotent per IST flatten session date.
+        """
+        from atlas.investment.lab_contracts import (
+            REASON_EOD_FLATTEN,
+            flatten_session_date,
+        )
+
+        sess_day = flatten_session_date(self._clock())
+        if str(state.get("intraday_eod_flat_ist") or "") == sess_day:
+            return
+        snapshot = self._portfolio.snapshot(portfolio_id, prices=marks or None)
+        positions = [
+            p
+            for p in (snapshot.get("positions") or [])
+            if isinstance(p, dict)
+            and abs(float(p.get("quantity") or p.get("qty") or 0)) > 1e-12
+        ]
+        outcomes: list[dict[str, Any]] = list(state.get("eod_flatten_outcomes") or [])
+        if not positions:
+            state["intraday_eod_flat_ist"] = sess_day
+            state["eod_flatten_outcomes"] = outcomes
+            return
+
+        from types import SimpleNamespace
+
+        profile_id = (
+            str(cfg.get("broker_profile") or "").strip()
+            or (pack.default_broker_profile() if pack is not None else "")
+        )
+        for pos in positions:
+            symbol = str(pos.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            qty = float(pos.get("quantity") or pos.get("qty") or 0)
+            mark = float(pos.get("mark") or marks.get(symbol) or pos.get("avg_price") or 0)
+            mark_source = str(pos.get("mark_source") or "avg_cost")
+            if qty <= 0 or mark <= 0:
+                continue
+            fee = 0.0
+            fees_doc: dict[str, Any] = {}
+            try:
+                if profile_id:
+                    bd = compute_fees(
+                        get_broker_profile(profile_id),
+                        side="sell",
+                        quantity=qty,
+                        price=mark,
+                    )
+                    fee = float(bd.total)
+                    fees_doc = bd.as_dict()
+            except Exception:  # noqa: BLE001
+                fee = 0.0
+            try:
+                trade = self._portfolio.apply_trade(
+                    portfolio_id,
+                    symbol=symbol,
+                    side="sell",
+                    quantity=qty,
+                    price=mark,
+                    fee=fee,
+                    fees=fees_doc,
+                    mission_id=mission_id,
+                    decision_id=None,
+                    laboratory_id=portfolio_key,
+                    instrument_path="eod_flatten",
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("intraday EOD flatten sell rejected %s: %s", symbol, exc)
+                continue
+            pnl = float(trade.get("realized_pnl") or 0.0)
+            line = (
+                f"{symbol}: eod_flatten sell {qty:g} @ {mark:.2f} "
+                f"(realized {pnl:+.2f}; mark_source={mark_source})"
+            )
+            try:
+                self._record_di_packet(
+                    action="sell",
+                    symbol=symbol,
+                    strategy_tag=REASON_EOD_FLATTEN,
+                    portfolio_key=portfolio_key,
+                    mission_id=mission_id,
+                    price=mark,
+                    cfg=cfg,
+                    qty=qty,
+                    filled_qty=qty,
+                    fill_price=mark,
+                    fees=fee,
+                    fill_trade_id=trade.get("id") or trade.get("trade_id"),
+                    reasons_for=[line],
+                    position_qty=qty,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            decision = SimpleNamespace(
+                id=None,
+                why="intraday EOD flatten — lab contract (flat overnight)",
+            )
+            learn_cfg = dict(cfg)
+            learn_cfg.setdefault("portfolio_key", portfolio_key)
+            learn_cfg["strategy_tag"] = REASON_EOD_FLATTEN
+            try:
+                self._remember_outcome(
+                    symbol, trade, decision, indicators=None, cfg=learn_cfg
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("EOD flatten experience skipped", exc_info=True)
+            try:
+                from atlas.activity import record_activity
+
+                record_activity(
+                    domain="market",
+                    worker="paper_trading",
+                    action="eod_flatten",
+                    target=symbol,
+                    result="completed",
+                    summary=line,
+                    evidence={
+                        "laboratory_id": portfolio_key,
+                        "qty": qty,
+                        "price": mark,
+                        "realized_pnl": pnl,
+                        "mark_source": mark_source,
+                        "session_date": sess_day,
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            outcomes.append(
+                {
+                    "symbol": symbol,
+                    "qty": qty,
+                    "price": mark,
+                    "realized_pnl": pnl,
+                    "mark_source": mark_source,
+                    "trade_id": trade.get("id") or trade.get("trade_id"),
+                    "session_date": sess_day,
+                }
+            )
+
+        snap2 = self._portfolio.snapshot(portfolio_id, prices=marks or None)
+        leftover = [
+            p
+            for p in (snap2.get("positions") or [])
+            if isinstance(p, dict)
+            and abs(float(p.get("quantity") or 0)) > 1e-12
+        ]
+        if not leftover:
+            state["intraday_eod_flat_ist"] = sess_day
+        state["eod_flatten_outcomes"] = outcomes
+
     def _research_buy_gate(
         self,
         *,
@@ -2408,6 +3461,13 @@ class PaperTradingWorker(PersistentWorker):
         portfolio_key: str,
     ) -> str | None:
         """Return a hold note when research gate blocks; None if buy may proceed."""
+        try:
+            from atlas.investment.index_proxy_lot import is_fno_lab, underlier_family
+
+            if is_fno_lab(cfg, portfolio_key) and underlier_family(symbol):
+                return None
+        except Exception:  # noqa: BLE001
+            pass
         research = self._investment_research
         if research is None:
             return None
@@ -2774,6 +3834,21 @@ class PaperTradingWorker(PersistentWorker):
             difference=difference,
             logger=self._logger,
         )
+        try:
+            from atlas.config import get_config
+            from atlas.investment.learning_objects import record_from_trade_close
+
+            data_dir = str(get_config().paths.data)
+            record_from_trade_close(
+                data_dir,
+                symbol=symbol,
+                trade=trade,
+                laboratory_id=portfolio_key or "india_equity_learner",
+                strategy_tag=str(cfg.get("strategy_tag") or ""),
+                packet=cfg.get("_learning_packet") if isinstance(cfg.get("_learning_packet"), dict) else None,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("Phase 4 learning object skipped", exc_info=True)
 
     # --- notifications ---------------------------------------------------
     def _check_drawdown(
@@ -2866,6 +3941,65 @@ class PaperTradingWorker(PersistentWorker):
         except Exception:  # noqa: BLE001
             self._logger.debug("feed failure log skipped", exc_info=True)
 
+    def _maybe_open_book_l3(
+        self,
+        *,
+        portfolio_key: str,
+        snapshot: dict[str, Any],
+        marks: dict[str, float],
+        ist_date: str,
+    ) -> dict[str, Any]:
+        """LOOP0 L3 — write today's open-book outcome_check without waiting on day14 / 86400s evolution."""
+        empty = {"wrote": 0, "skipped": 0, "items": []}
+        packets = self._decision_packets
+        timeline = getattr(packets, "timeline", None) if packets is not None else None
+        if timeline is None or not hasattr(timeline, "record_open_book_outcomes"):
+            return empty
+        open_syms: list[str] = []
+        for pos in snapshot.get("positions") or []:
+            if not isinstance(pos, dict):
+                continue
+            try:
+                qty = float(pos.get("qty") or pos.get("quantity") or pos.get("shares") or 0)
+            except (TypeError, ValueError):
+                qty = 0.0
+            sym = str(pos.get("symbol") or "").strip()
+            if qty > 0 and sym:
+                open_syms.append(sym)
+        if not open_syms:
+            return empty
+        prices = {str(k): float(v) for k, v in (marks or {}).items() if v is not None}
+
+        def _mark(sym: str) -> float | None:
+            key = str(sym or "").strip()
+            if key in prices:
+                return prices[key]
+            alt = key.upper() if not key.endswith(".NS") else key
+            if alt in prices:
+                return prices[alt]
+            return None
+
+        out = timeline.record_open_book_outcomes(
+            portfolio_key=portfolio_key,
+            open_symbols=open_syms,
+            as_of_ist=ist_date,
+            mark_fn=_mark,
+        )
+        try:
+            from atlas.reasoning.outcome_revision import record_belief_candidate
+
+            for item in out.get("items") or []:
+                oc = item.get("outcome_check")
+                if isinstance(oc, dict):
+                    recorded = record_belief_candidate(
+                        self._reasoning, oc, actor="outcome_loop"
+                    )
+                    item["belief_candidate"] = recorded.get("belief_candidate")
+                    item["belief_candidate_skip"] = recorded.get("skip_reason")
+        except Exception:  # noqa: BLE001
+            self._logger.debug("LOOP0 L3 belief candidate skipped", exc_info=True)
+        return out
+
     def _load_live_bars(self, symbol: str, cfg: dict[str, Any]) -> list[dict[str, Any]]:
         if self._live_market is None:
             raise CapabilityGap(
@@ -2874,7 +4008,27 @@ class PaperTradingWorker(PersistentWorker):
             )
         provider = str(cfg.get("live_provider") or "yahoo").strip() or "yahoo"
         limit = max(5, int(cfg.get("live_bars_limit", 100)))
-        out = self._live_market.bars_for(symbol, provider=provider, limit=limit)
+        interval = str(cfg.get("live_interval") or "1d").strip() or "1d"
+        range_s = str(cfg.get("live_range") or "").strip() or None
+        try:
+            from atlas.investment.intraday_bars import is_intraday_lab
+
+            pk = str(cfg.get("portfolio_key") or "").strip()
+            if is_intraday_lab(cfg, pk):
+                interval = str(cfg.get("live_interval") or "5m").strip() or "5m"
+                range_s = str(cfg.get("live_range") or "1d").strip() or "1d"
+                limit = max(limit, 80)
+        except Exception:  # noqa: BLE001
+            pass
+        kwargs: dict[str, Any] = {
+            "provider": provider,
+            "limit": limit,
+        }
+        if interval and interval != "1d":
+            kwargs["interval"] = interval
+            if range_s:
+                kwargs["range"] = range_s
+        out = self._live_market.bars_for(symbol, **kwargs)
         return list(out.get("bars") or [])
 
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:

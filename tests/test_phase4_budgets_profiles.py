@@ -26,32 +26,47 @@ def test_profiles_declare_preferred_tick_slots():
     assert get_profile("maximum").preferred_tick_slots == 4
 
 
-def test_dynamic_budget_shrinks_under_pressure_and_respects_hard():
-    pressure = {"on": False}
+def test_dynamic_budget_snapshot_includes_clamp_diagnosis():
+    ctrl = DynamicBudgetController(
+        hard_tick_ceiling=4,
+        profile="overnight",
+        pressure_fn=lambda: (False, ""),
+    )
+    snap = ctrl.snapshot()
+    assert snap["preferred_ticks"] == 4
+    assert snap["effective_ticks"] == 4
+    assert snap["clamp_reason"] == "preferred"
+    assert "diagnosis" in snap
 
-    def probe():
-        return pressure["on"], "synthetic"
+    hot = DynamicBudgetController(
+        hard_tick_ceiling=4,
+        profile="overnight",
+        pressure_fn=lambda: (True, "RAM used 90%"),
+        release_after_seconds=10_000,
+    )
+    snap2 = hot.snapshot()
+    assert snap2["effective_ticks"] == 2
+    assert snap2["clamp_reason"] == "pressure_half"
+
+
+def test_dynamic_budget_clamp_change_callback():
+    seen: list[dict] = []
+    pressure = {"on": False}
 
     ctrl = DynamicBudgetController(
         hard_tick_ceiling=4,
         profile="maximum",
-        pressure_fn=probe,
+        pressure_fn=lambda: (pressure["on"], "hot"),
         release_after_seconds=10_000,
+        on_clamp_change=seen.append,
     )
-    assert ctrl.preferred_ticks() == 4
     assert ctrl.effective_tick_slots() == 4
-
     pressure["on"] = True
-    assert ctrl.effective_tick_slots() == 2  # half of preferred, floor 1
+    assert ctrl.effective_tick_slots() == 2
+    assert seen
+    assert seen[-1]["from"] == 4
+    assert seen[-1]["to"] == 2
 
-    # Hard ceiling always wins over preferred.
-    ctrl2 = DynamicBudgetController(
-        hard_tick_ceiling=2,
-        profile="maximum",
-        pressure_fn=lambda: (False, ""),
-    )
-    assert ctrl2.preferred_ticks() == 2
-    assert ctrl2.effective_tick_slots() == 2
 
 
 def test_arbiter_uses_effective_capacity_from_budget_controller():

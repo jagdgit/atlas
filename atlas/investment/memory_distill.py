@@ -299,20 +299,25 @@ def _apply_llm_text(
     }
     try:
         client = llm.for_role("researcher") if hasattr(llm, "for_role") else llm
+        from atlas.llm.provider import ChatMessage
+
         messages = [
-            {
-                "role": "system",
-                "content": (
+            ChatMessage(
+                role="system",
+                content=(
                     "You are Atlas's memory cortex. Distill episodic revisions into "
                     "semantic concepts and procedural tips. One JSON object only."
                 ),
-            },
-            {"role": "user", "content": json.dumps(prompt, default=str)},
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(prompt, default=str),
+            ),
         ]
         resp = client.chat(messages)
         text = getattr(resp, "text", None) or getattr(resp, "content", None) or str(resp)
     except Exception as exc:  # noqa: BLE001
-        return layers, f"MEM.1 LLM failed: {type(exc).__name__}"
+        return layers, f"MEM.1 LLM failed: {type(exc).__name__}: {exc}"
 
     parsed = _parse_json_blob(str(text))
     if not parsed:
@@ -392,6 +397,39 @@ def run_memory_distill(
     }
     if data_dir:
         save_distill(data_dir, doc)
+    try:
+        from atlas.activity import record_activity
+
+        n_ep = int(doc.get("episodic_n") or 0)
+        n_c = len(doc.get("concepts") or [])
+        n_p = len(doc.get("procedures") or [])
+        result = "completed"
+        if skip and doc.get("status") in {"empty", "skipped"}:
+            result = "skipped"
+        elif skip and "failed" in str(skip).lower():
+            result = "failed"
+        record_activity(
+            domain="market",
+            worker="memory_distill",
+            action="mem1_distill",
+            target=lab,
+            summary=(
+                f"MEM.1 distill {lab}: episodic={n_ep} concepts={n_c} "
+                f"procedures={n_p} llm={llm_used}"
+                + (f" ({skip})" if skip else "")
+            )[:500],
+            result=result,
+            evidence={
+                "laboratory_id": lab,
+                "episodic_n": n_ep,
+                "concepts": n_c,
+                "procedures": n_p,
+                "llm": llm_used,
+                "skip_reason": skip,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        _log.debug("MEM.1 activity journal emit failed", exc_info=True)
     return doc
 
 

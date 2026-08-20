@@ -1040,6 +1040,9 @@ class OpsCleanupRequest(BaseModel):
 
     dry_run: bool = True
     include_protected: bool = False
+    include_duplicates: bool = False  # OI-STAB0 P1.4 — retire same-type extras
+    duplicate_types: list[str] | None = None
+    duplicate_keep: str = Field(default="oldest", max_length=16)
     zombie_types: list[str] | None = None
     min_starvation_age_seconds: float | None = Field(default=None, ge=0)
     worker_ids: list[str] | None = None

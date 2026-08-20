@@ -185,7 +185,7 @@ class PaperTradingConfig(BaseModel):
     starting_cash: float = Field(default=100_000.0, gt=0)
     strategy: TradingStrategyParams = Field(default_factory=TradingStrategyParams)
     max_position_qty: float = Field(default=0.0, ge=0)     # 0 = unbounded
-    max_exposure_pct: float = Field(default=0.0, ge=0)     # 0 = unbounded (percent of equity)
+    max_exposure_pct: float = Field(default=0.0, ge=0)     # 0 = unset → persona default (LOOP0 L0; not a 0% cap)
     bars_per_tick: int = Field(default=1, ge=1)
     drawdown_alert_pct: float = Field(default=0.0, ge=0)   # 0 = no drawdown alert
     tick_interval_seconds: int = Field(default=300, ge=1)

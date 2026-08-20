@@ -51,14 +51,14 @@ def test_drain_starts_ira_and_persists(tmp_path):
     loaded = load_queue(tmp_path, "2026-08-11")
     statuses = {i.get("status") for i in (loaded.get("items") or []) if isinstance(i, dict)}
     assert "ira_started" in statuses
-    # news stays queued (no fake completion)
+    # OI-LINT0 Phase 5: news drains to evidence or explicit unknown (not fake queued forever)
     news = [
         i
         for i in (loaded.get("items") or [])
         if isinstance(i, dict) and str(i.get("unknown") or "").lower() == "news"
     ]
     if news:
-        assert news[0].get("status") == "queued"
+        assert news[0].get("status") in {"unknown_explicit", "resolved"}
 
 
 def test_cws_research_quota_only_after_real_work(tmp_path):

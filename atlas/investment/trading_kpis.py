@@ -11,13 +11,43 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 _log = logging.getLogger("atlas.investment.trading_kpis")
+_IST = ZoneInfo("Asia/Kolkata")
 
 VERSION = "trading.kpis.1"
 STORE_REL = Path("market") / "trading_kpis"
+
+
+def tag_trades_ist_day(
+    trades: list[dict[str, Any]] | None, *, ist_date: str
+) -> list[dict[str, Any]]:
+    """Stamp ``ist_day_match`` so KPIs never treat a historical blotter as today."""
+    out: list[dict[str, Any]] = []
+    for t in trades or []:
+        if not isinstance(t, dict):
+            continue
+        row = dict(t)
+        ts = row.get("created_at") or row.get("ts") or row.get("filled_at") or row.get("t")
+        match = False
+        if ts is not None:
+            try:
+                if isinstance(ts, datetime):
+                    dt = ts
+                else:
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                match = dt.astimezone(_IST).strftime("%Y-%m-%d") == ist_date
+            except Exception:  # noqa: BLE001
+                match = False
+        row["ist_day_match"] = match
+        out.append(row)
+    return out
 
 # Canonical operator KPI set (keep in sync with docs/TRADING_STRATEGY_PLAYBOOK.md).
 KPI_KEYS = (
@@ -108,6 +138,20 @@ def save_day_kpis(
     return doc
 
 
+def _kpi_label_for(port: dict[str, Any], notes: dict[str, Any]) -> str | None:
+    pk = str(
+        port.get("portfolio_key") or notes.get("portfolio_key") or ""
+    ).strip()
+    try:
+        from atlas.investment.index_proxy_lot import KPI_LABEL, is_fno_lab
+
+        if is_fno_lab({}, pk):
+            return KPI_LABEL
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def build_trading_kpis(
     *,
     portfolio: dict[str, Any] | None = None,
@@ -128,19 +172,18 @@ def build_trading_kpis(
         positions = list(positions.values())
     positions = [p for p in positions if isinstance(p, dict)]
 
-    trades = [
-        t
-        for t in (port.get("recent_trades") or [])
-        if isinstance(t, dict)
-        and (t.get("ist_day_match") is True or "ist_day_match" not in t)
-    ]
-    # Prefer explicit IST-day tags when any trade carries them.
-    if any(isinstance(t, dict) and "ist_day_match" in t for t in (port.get("recent_trades") or [])):
+    raw_trades = [t for t in (port.get("recent_trades") or []) if isinstance(t, dict)]
+    # Untagged blotter is not "today" — require explicit IST match (OI-STAB0 honesty).
+    if any("ist_day_match" in t for t in raw_trades):
+        trades = [t for t in raw_trades if t.get("ist_day_match")]
+    elif ist_date:
         trades = [
             t
-            for t in (port.get("recent_trades") or [])
-            if isinstance(t, dict) and t.get("ist_day_match")
+            for t in tag_trades_ist_day(raw_trades, ist_date=ist_date)
+            if t.get("ist_day_match")
         ]
+    else:
+        trades = []
     buys = [t for t in trades if str(t.get("side") or "").lower() == "buy"]
     sells = [t for t in trades if str(t.get("side") or "").lower() == "sell"]
 
@@ -205,9 +248,13 @@ def build_trading_kpis(
         "lessons_count": len(list(digest.get("lessons") or [])),
         "research_studied": len(list(digest.get("studied") or [])),
         "valuation_basis": port.get("valuation_basis"),
+        "marks_pct": port.get("marks_pct"),
+        "marks_available": port.get("marks_available"),
+        "marks_total": port.get("marks_total"),
         "ist_date": ist_date,
         "filled_symbols": sorted(filled_syms),
         "planned_symbols": sorted(planned_syms),
+        "kpi_label": _kpi_label_for(port, notes),
     }
 
 
@@ -215,7 +262,8 @@ def format_kpi_section(kpis: dict[str, Any] | None) -> list[str]:
     """Plain-text block for morning/evening emails."""
     if not isinstance(kpis, dict) or not kpis:
         return []
-    lines = ["", "Trading KPIs (operator scorecard):"]
+    header = str(kpis.get("kpi_label") or "").strip() or "Trading KPIs (operator scorecard)"
+    lines = ["", f"{header}:"]
 
     def money(v: Any) -> str:
         if v is None:
@@ -265,6 +313,16 @@ def format_kpi_section(kpis: dict[str, Any] | None) -> list[str]:
         f"  Learning: phase={kpis.get('phase') or '—'} · confidence={kpis.get('confidence') or '—'} "
         f"· researched {kpis.get('research_studied')} · lessons {kpis.get('lessons_count')}"
     )
+    basis = kpis.get("valuation_basis")
+    if basis:
+        marks_pct = kpis.get("marks_pct")
+        marks_bit = (
+            f" · marks {kpis.get('marks_available')}/{kpis.get('marks_total')}"
+            f" ({float(marks_pct):.0f}%)"
+            if marks_pct is not None and kpis.get("marks_total") is not None
+            else ""
+        )
+        lines.append(f"  Valuation: {basis}{marks_bit}")
     reasons = kpis.get("top_no_fill_reasons") or []
     if reasons:
         lines.append("  Top no-fill / hold reasons:")

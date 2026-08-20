@@ -116,6 +116,7 @@ def build_symbol_timeline(
     sym = str(symbol or "").strip().upper()
     unknowns: list[str] = []
     pack = open_book_pack if isinstance(open_book_pack, dict) else {}
+    from atlas.investment.market_events import living_lane, rsi_regime_analogues
 
     # --- Price ---
     closes: list[float] = []
@@ -150,6 +151,7 @@ def build_symbol_timeline(
             "last_date": last_date,
             "return_1d_pct": ret_1d,
             "bar_count": len(closes),
+            "rsi_analogues": rsi_regime_analogues(closes),
         }
 
     # --- Technical ---
@@ -234,30 +236,60 @@ def build_symbol_timeline(
         pack.get("news") if isinstance(pack.get("news"), dict) else {}
     )
     company_n = len(news_doc.get("company") or [])
-    if company_n or news_doc.get("observation_ids"):
+    raw_news_items = list(news_doc.get("company") or []) + list(news_doc.get("sector") or [])
+    news_living = living_lane(raw_news_items, as_of=day, lane="company_news")
+    if company_n or news_doc.get("observation_ids") or news_living.get("count"):
         news_lane: dict[str, Any] = {
-            "status": "ok" if company_n else "partial",
+            "status": news_living.get("status") if news_living.get("count") else (
+                "ok" if company_n else "partial"
+            ),
             "company_headlines": (news_doc.get("company") or [])[:3],
             "sector_headlines": (news_doc.get("sector") or [])[:2],
             "unknowns": list(news_doc.get("unknowns") or []),
+            "freshness": news_living.get("freshness"),
+            "source_tiers": sorted(
+                {
+                    int(x.get("source_tier"))
+                    for x in (news_living.get("items") or [])
+                    if isinstance(x, dict) and x.get("source_tier") is not None
+                }
+            ),
         }
-        if not company_n:
-            unknowns.append("news")
+        if news_lane["status"] in {"unknown", "stale"} or not company_n:
+            if news_lane["status"] == "unknown":
+                unknowns.append("news")
+            elif not company_n:
+                unknowns.append("news")
     else:
         news_lane = _lane_unknown("company_news", "sector_news")
+        news_lane["freshness"] = "unknown"
         unknowns.append("news")
 
     # --- Policy ---
     pol = policy if isinstance(policy, dict) else {}
-    gov_items = news_doc.get("gov") if isinstance(news_doc, dict) else None
-    if pol or gov_items:
+    gov_items = list(news_doc.get("gov") or []) if isinstance(news_doc, dict) else []
+    pol_events = list(pol.get("events") or []) if pol else []
+    policy_living = living_lane(gov_items or pol_events, as_of=day, lane="policy_events")
+    if policy_living.get("count"):
         policy_lane: dict[str, Any] = {
-            "status": "ok" if (pol or gov_items) else "unknown",
-            "events": list(gov_items or [])[:3],
-            **({k: pol[k] for k in list(pol)[:6]} if pol else {}),
+            "status": policy_living.get("status"),
+            "events": list(gov_items or pol_events)[:3],
+            "freshness": policy_living.get("freshness"),
+            **({k: pol[k] for k in list(pol)[:6] if k != "events"} if pol else {}),
         }
+        if policy_lane["status"] == "stale":
+            unknowns.append("policy")
+    elif pol or gov_items:
+        policy_lane = {
+            "status": "unknown",
+            "events": list(gov_items or [])[:3],
+            "freshness": "unknown",
+            "note": "catalog_or_non_evidence",
+        }
+        unknowns.append("policy")
     else:
         policy_lane = _lane_unknown("policy_events")
+        policy_lane["freshness"] = "unknown"
         unknowns.append("policy")
 
     # --- Atlas belief / decision ---
@@ -608,6 +640,8 @@ def format_market_timeline_evening_lines(
             if rs is not None and bench
             else (f"rs={rs}" if rs is not None else "rs=—")
         )
+        news_f = (lanes.get("news") or {}).get("freshness") or "unknown"
+        pol_f = (lanes.get("policy") or {}).get("freshness") or "unknown"
         lines.append(
             f"  · {r.get('symbol')}: px={px if px is not None else '—'} "
             f"ret1d={ret if ret is not None else '—'}% "
@@ -616,6 +650,7 @@ def format_market_timeline_evening_lines(
             f"fcf={'yes' if fcf is not None else 'missing'} "
             f"{rs_bit} "
             f"atlas={action or '—'} "
+            f"news={news_f} policy={pol_f} "
             f"unknowns={len(unk)}"
         )
         if unk:

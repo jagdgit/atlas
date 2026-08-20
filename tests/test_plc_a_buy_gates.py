@@ -12,10 +12,12 @@ from atlas.investment.plc_buy_gates import (
 
 def test_plc_a_enabled_learner_default():
     assert plc_a_enabled({}, "india_equity_learner") is True
-    assert plc_a_enabled({}, "equity_intraday_learner") is True
+    assert plc_a_enabled({}, "equity_intraday_learner") is False
+    assert plc_a_enabled({}, "india_fno_learner") is False
     assert plc_a_enabled({}, "some_other_book") is False
     assert plc_a_enabled({"plc_a_gates": False}, "india_equity_learner") is False
     assert plc_a_enabled({"plc_a_gates": True}, "manual") is True
+    assert plc_a_enabled({"plc_a_gates": True}, "equity_intraday_learner") is True
 
 
 def test_fundamental_sanity_requires_pe_roe_de_sector():

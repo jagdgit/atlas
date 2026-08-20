@@ -454,8 +454,6 @@ def format_learned_today_section(
     )
 
     kpis = port.get("kpis") if isinstance(port.get("kpis"), dict) else {}
-    prox = port.get("process_proxies") if isinstance(port.get("process_proxies"), dict) else {}
-    meta = port.get("meta_learning") if isinstance(port.get("meta_learning"), dict) else {}
     evo = port.get("evolution") if isinstance(port.get("evolution"), dict) else {}
     cov = (
         port.get("fundamentals_coverage")
@@ -505,49 +503,116 @@ def format_learned_today_section(
         "══════════════════════════════════════",
         f"  Day learning grade: {day_grade}",
     ]
-    # OI-RLD0 — truth table first (evaluations ≠ unique states ≠ experiences)
+    data_dir: str | None = None
     try:
-        from atlas.investment.experience_integrity import (
-            build_experience_metrics,
-            format_experience_metrics_lines,
+        from atlas.config import get_config
+
+        data_dir = str(get_config().paths.data)
+    except Exception:  # noqa: BLE001
+        data_dir = None
+
+    # OI-LINT0 Phase 6 — learning-first header (allocation → experiences → …)
+    exp_doc: dict[str, Any] | None = None
+    try:
+        from atlas.investment.evening_learning_header import (
+            BELOW_FOLD_MARKER,
+            format_learning_first_header,
+            format_process_metrics_below_fold,
+        )
+        from atlas.investment.session_notes import (
+            format_session_tick_histogram,
+            load_day_notes,
         )
 
-        exp_doc = (
-            port.get("experience_metrics")
-            if isinstance(port.get("experience_metrics"), dict)
-            else None
+        header_lines, _alloc, _learn = format_learning_first_header(
+            port=port,
+            plan=plan,
+            decision_rows=decision_rows,
+            day_trades=day_trades,
+            buys=buys,
+            sells=sells,
+            evo=evo,
+            data_dir=data_dir,
         )
-        if exp_doc is None:
-            exp_doc = build_experience_metrics(
-                packets=decision_rows,
-                attributions=port.get("attributions")
-                or port.get("recent_attributions"),
-                observations=obs,
-                evolution=evo,
-                positions=pos,
-                fills_buy=len(buys),
-                fills_sell=len(sells),
+        lines.extend(header_lines)
+        try:
+            from atlas.investment.experience_integrity import build_experience_metrics
+
+            exp_doc = (
+                port.get("experience_metrics")
+                if isinstance(port.get("experience_metrics"), dict)
+                else build_experience_metrics(
+                    packets=decision_rows,
+                    attributions=port.get("attributions")
+                    or port.get("recent_attributions"),
+                    observations=obs,
+                    evolution=evo,
+                    positions=pos,
+                    fills_buy=len(buys),
+                    fills_sell=len(sells),
+                )
             )
-        lines.extend(format_experience_metrics_lines(exp_doc))
-        lines.append(
-            f"  Packet breakdown (raw activity): buy={buys_n} sell={sells_n} "
-            f"hold/watch={holds_n} total={len(decision_rows)}"
-        )
-        if int(exp_doc.get("decision_evaluations") or 0) > 20 and int(
+        except Exception:  # noqa: BLE001
+            exp_doc = None
+        if isinstance(exp_doc, dict) and int(exp_doc.get("decision_evaluations") or 0) > 20 and int(
             exp_doc.get("trading_experiences") or 0
         ) == 0:
             lines.append(
                 "  Note: high evaluation count with 0 trading experiences = "
                 "routine checks / open hypotheses — not proven learning."
             )
-    except Exception:  # noqa: BLE001
         lines.extend(
             [
-                f"  Decisions frozen: {len(decision_rows)} "
-                f"(buy={buys_n} sell={sells_n} hold/watch={holds_n})",
-                f"  Sim fills: buys={len(buys)} sells={len(sells)}",
+                "",
+                BELOW_FOLD_MARKER,
             ]
         )
+        lab_key = str(port.get("portfolio_key") or "india_equity_learner")
+        ist_day = str(plan.get("as_of") or port.get("ist_date") or "")[:10]
+        session_notes = port.get("session_note") if isinstance(port.get("session_note"), dict) else None
+        if session_notes is None and data_dir and ist_day:
+            session_notes = load_day_notes(
+                data_dir, portfolio_key=lab_key, ist_date=ist_day
+            )
+        lines.extend(format_session_tick_histogram(session_notes))
+        lines.extend(format_process_metrics_below_fold(port=port, plan=plan))
+    except Exception:  # noqa: BLE001
+        # Fallback — preserve pre-Phase-6 experience block if header import fails
+        try:
+            from atlas.investment.experience_integrity import (
+                build_experience_metrics,
+                format_experience_metrics_lines,
+            )
+
+            exp_doc = (
+                port.get("experience_metrics")
+                if isinstance(port.get("experience_metrics"), dict)
+                else None
+            )
+            if exp_doc is None:
+                exp_doc = build_experience_metrics(
+                    packets=decision_rows,
+                    attributions=port.get("attributions")
+                    or port.get("recent_attributions"),
+                    observations=obs,
+                    evolution=evo,
+                    positions=pos,
+                    fills_buy=len(buys),
+                    fills_sell=len(sells),
+                )
+            lines.extend(format_experience_metrics_lines(exp_doc))
+        except Exception:  # noqa: BLE001
+            lines.extend(
+                [
+                    f"  Decisions frozen: {len(decision_rows)} "
+                    f"(buy={buys_n} sell={sells_n} hold/watch={holds_n})",
+                    f"  Sim fills: buys={len(buys)} sells={len(sells)}",
+                ]
+            )
+    lines.append(
+        f"  Packet breakdown (raw activity): buy={buys_n} sell={sells_n} "
+        f"hold/watch={holds_n} total={len(decision_rows)}"
+    )
     lines.extend(
         [
         f"  Packets still missing PE/FCF/MoS: {with_unk}/{len(decision_rows) or 0}",
@@ -569,23 +634,6 @@ def format_learned_today_section(
         lines.append(
             f"  Evolution Host Guard thinned: {evo.get('host_guard_reason')} "
             "(pending kept — not invented done)"
-        )
-    lines.extend(
-        [
-        f"  Process score: {prox.get('process_score', '—')}/10 · "
-        f"Learning maturity (Atlas IQ / System): {meta.get('intelligence_score', '—')}",
-        ]
-    )
-    mat = port.get("maturity_split") if isinstance(port.get("maturity_split"), dict) else None
-    if not mat:
-        iq = port.get("atlas_iq") if isinstance(port.get("atlas_iq"), dict) else None
-        mat = iq.get("maturity_split") if isinstance(iq, dict) else None
-    if isinstance(mat, dict) and mat.get("trading_evidence_maturity") is not None:
-        lines.append(
-            f"  Trading Evidence Maturity: {mat.get('trading_evidence_maturity')} · "
-            f"Attribution: {mat.get('attribution_maturity')} · "
-            f"Strategy Evidence: {mat.get('strategy_evidence')} · "
-            f"Data: {mat.get('data_readiness')}"
         )
     lines.extend(
         [
@@ -829,34 +877,38 @@ def format_learned_today_section(
         )
     except Exception:  # noqa: BLE001
         pass
+    # Atlas IQ detail stays below operational ranking noise (Phase 6)
     iq = port.get("atlas_iq") if isinstance(port.get("atlas_iq"), dict) else None
     if iq:
-        from atlas.investment.learning_intelligence import (
-            format_atlas_iq_section,
-            format_evolution_narrative_section,
-        )
+        try:
+            from atlas.investment.learning_intelligence import (
+                format_atlas_iq_section,
+                format_evolution_narrative_section,
+            )
 
-        lines.extend(format_atlas_iq_section(iq))
-        narr = port.get("evolution_narrative")
-        events = port.get("evolution_events")
-        if narr or events:
-            lines.extend(
-                format_evolution_narrative_section(
-                    events if isinstance(events, list) else None,
-                    narrative=narr if isinstance(narr, list) else None,
+            lines.extend(format_atlas_iq_section(iq))
+            narr = port.get("evolution_narrative")
+            events = port.get("evolution_events")
+            if narr or events:
+                lines.extend(
+                    format_evolution_narrative_section(
+                        events if isinstance(events, list) else None,
+                        narrative=narr if isinstance(narr, list) else None,
+                    )
                 )
-            )
-        readiness = port.get("readiness") if isinstance(port.get("readiness"), dict) else None
-        if readiness is None and isinstance(iq.get("readiness"), dict):
-            readiness = iq.get("readiness")
-        if isinstance(readiness, dict):
-            blocking = readiness.get("blocking") or []
-            lines.append(
-                f"  Dataset readiness: "
-                f"{'READY' if readiness.get('ready') else 'NOT READY'}"
-                f"{(' · blocking=' + ','.join(blocking)) if blocking else ''}"
-                f" · live_nn=False"
-            )
+            readiness = port.get("readiness") if isinstance(port.get("readiness"), dict) else None
+            if readiness is None and isinstance(iq.get("readiness"), dict):
+                readiness = iq.get("readiness")
+            if isinstance(readiness, dict):
+                blocking = readiness.get("blocking") or []
+                lines.append(
+                    f"  Dataset readiness: "
+                    f"{'READY' if readiness.get('ready') else 'NOT READY'}"
+                    f"{(' · blocking=' + ','.join(blocking)) if blocking else ''}"
+                    f" · live_nn=False"
+                )
+        except Exception:  # noqa: BLE001
+            pass
     lines.extend(
         [
             "",
@@ -1046,6 +1098,76 @@ def _laboratory_label(portfolio: dict[str, Any] | None, laboratory_id: str | Non
     return normalize_laboratory_id()
 
 
+def _lab_books_arg(
+    portfolio: dict[str, Any] | None,
+    lab_books: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    if lab_books:
+        return [b for b in lab_books if isinstance(b, dict)]
+    if isinstance(portfolio, dict) and isinstance(portfolio.get("lab_books"), list):
+        return [b for b in portfolio["lab_books"] if isinstance(b, dict)]
+    return []
+
+
+def format_three_lab_books_section(
+    lab_books: list[dict[str, Any]] | None,
+) -> list[str]:
+    """Compact cash / positions board for all three paper laboratories."""
+    from atlas.investment.laboratory import MAIL_LAB_TITLES
+
+    books = [b for b in (lab_books or []) if isinstance(b, dict)]
+    if not books:
+        return []
+    lines = ["", "══ Three laboratories (paper books) ══"]
+    for book in books:
+        key = str(
+            book.get("portfolio_key") or book.get("laboratory_id") or "lab"
+        ).strip()
+        title = MAIL_LAB_TITLES.get(key) or str(book.get("label") or key)
+        cash = book.get("cash")
+        equity = book.get("equity")
+        if equity is None:
+            equity = book.get("equity_value")
+        lines.append(f"{title} [{key}]")
+        lines.append(
+            f"  Cash {_money(cash)} · holdings {_money(book.get('holdings_value'))} "
+            f"· equity {_money(equity)}"
+        )
+        pnl = book.get("day_pnl")
+        tot = book.get("total_pnl")
+        if pnl is not None or tot is not None:
+            lines.append(
+                f"  P&L today {_signed_money(pnl)} · total {_signed_money(tot)}"
+            )
+        basis = book.get("valuation_basis")
+        if basis:
+            lines.append(f"  Valuation: {basis}")
+        pos = book.get("positions") or book.get("holdings") or []
+        if isinstance(pos, dict):
+            pos = [
+                {"symbol": k, **(v if isinstance(v, dict) else {})}
+                for k, v in pos.items()
+            ]
+        pos_rows = [p for p in pos if isinstance(p, dict)]
+        if not pos_rows:
+            lines.append("  Positions: (none)")
+        else:
+            lines.append(f"  Positions ({len(pos_rows)}):")
+            for p in pos_rows[:12]:
+                lines.append(
+                    f"    · {p.get('symbol')}: qty={p.get('quantity') or p.get('qty')} "
+                    f"avg={p.get('avg_price') or p.get('avg_cost')} "
+                    f"mark={p.get('mark')} uPnL={_signed_money(p.get('unrealized_pnl'))}"
+                )
+        reasons = book.get("no_fill_reasons")
+        if isinstance(reasons, list) and reasons:
+            lines.append(f"  Idle/hold: {reasons[0]}")
+    lines.append(
+        "Books are isolated laboratories — do not add the three equities into one P&L."
+    )
+    return lines
+
+
 def format_morning_report(
     *,
     plan: dict[str, Any] | None,
@@ -1073,6 +1195,7 @@ def format_morning_report(
         lines.append(
             "Note: catch-up send — morning window was missed (offline / internet / restart)."
         )
+    lines.extend(format_three_lab_books_section(_lab_books_arg(portfolio)))
     lines.extend(
         [
             "",
@@ -1246,6 +1369,7 @@ def format_evening_report(
         lines.append(
             "Note: catch-up send — report delayed (host offline / internet / Atlas restart)."
         )
+    lines.extend(format_three_lab_books_section(_lab_books_arg(portfolio)))
 
     # Operator-first: learning grade, sell rule, under observation
     try:
@@ -1413,6 +1537,19 @@ def format_evening_report(
                     lines.append(
                         f"  {it.get('symbol')}: {it.get('unknown')} [{it.get('status')}]"
                     )
+        if isinstance(cq, dict) and (
+            cq.get("news_drain")
+            or cq.get("allocation_filtered_skipped")
+            or cq.get("work_started_n")
+        ):
+            try:
+                from atlas.investment.research_intelligence import (
+                    format_research_intelligence_lines,
+                )
+
+                lines.extend(format_research_intelligence_lines(cq))
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         lines.extend(
             [
@@ -1640,7 +1777,18 @@ def format_evening_report(
 
     if portfolio:
         lines.append("")
-        lines.append("End-of-day portfolio snapshot:")
+        lab_note = None
+        try:
+            from atlas.investment.index_proxy_lot import KPI_LABEL, VALUATION_BASIS
+
+            basis = str(portfolio.get("valuation_basis") or "")
+            if VALUATION_BASIS in basis or portfolio.get("kpi_label"):
+                lab_note = str(portfolio.get("kpi_label") or KPI_LABEL)
+        except Exception:  # noqa: BLE001
+            lab_note = None
+        lines.append(
+            f"End-of-day portfolio snapshot{f' — {lab_note}' if lab_note else ''}:"
+        )
         equity_val = portfolio.get("equity")
         if equity_val is None:
             equity_val = portfolio.get("equity_value")
@@ -1823,6 +1971,7 @@ def format_trade_report(
     thesis: dict[str, Any] | None = None,
     laboratory_id: str | None = None,
     portfolio_key: str | None = None,
+    lab_books: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     side_u = (side or "").upper()
     from atlas.investment.laboratory import normalize_laboratory_id
@@ -1898,6 +2047,9 @@ def format_trade_report(
     if policy_note:
         lines.append("")
         lines.append(f"Policy / government context: {policy_note}")
+    lines.extend(
+        format_three_lab_books_section(_lab_books_arg(None, lab_books))
+    )
     lines.append("")
     lines.append("Not a live broker order. Simulation Program only (P10).")
     return subject, "\n".join(lines)
@@ -1921,9 +2073,14 @@ def format_hourly_activity_report(
         f"Date: {day} · Hour: {hour:02d}:00 IST",
         f"Program: {program_id}",
         f"Laboratory: {lab}",
-        "",
-        "══ Activity this hour (operator awareness) ══",
     ]
+    lines.extend(format_three_lab_books_section(_lab_books_arg(port)))
+    lines.extend(
+        [
+            "",
+            "══ Activity this hour (operator awareness) ══",
+        ]
+    )
     cash = port.get("cash")
     equity = port.get("equity") or port.get("equity_value")
     lines.append(f"Book: cash={_money(cash)} · equity={_money(equity)}")
@@ -2343,6 +2500,24 @@ class InvestorReportMailer:
         if ok:
             self._sent_morning_dates.add(self._lab_day_key(lab, today))
             self._persist_sent_flags()
+        try:
+            from atlas.activity import record_activity
+
+            record_activity(
+                domain="market",
+                worker="investor_mailer",
+                action="send_morning_plan",
+                target=lab,
+                result="completed" if ok else "failed",
+                summary=(
+                    f"Sent morning investor plan for {lab}"
+                    if ok
+                    else f"Morning investor plan failed for {lab}"
+                ),
+                evidence={"laboratory_id": lab, "as_of": today, "sent": ok},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {
             "sent": ok,
             "as_of": today,
@@ -2464,11 +2639,25 @@ class InvestorReportMailer:
                 )
                 # CUR.1 / J4 — unknowns → curiosity queue + real IRA work (persist statuses)
                 try:
+                    from atlas.investment.capital_allocation import (
+                        load_allocation_table,
+                        merge_allocation_curiosity,
+                    )
                     from atlas.investment.curiosity import (
                         drain_queue_work,
                         save_queue,
                     )
 
+                    alloc_tbl = load_allocation_table(self._data_dir, lab)
+                    blockers = []
+                    try:
+                        from atlas.investment.capital_allocation import (
+                            allocation_blocking_unknowns,
+                        )
+
+                        blockers = allocation_blocking_unknowns(alloc_tbl)
+                    except Exception:  # noqa: BLE001
+                        blockers = []
                     qdoc = drain_queue_work(
                         self._data_dir,
                         laboratory_id=lab,
@@ -2477,7 +2666,10 @@ class InvestorReportMailer:
                         open_symbols=set(syms),
                         max_starts=2,
                         trigger="evening_curiosity",
+                        allocation_blockers=blockers,
                     )
+                    qdoc = merge_allocation_curiosity(qdoc, alloc_tbl)
+                    save_queue(self._data_dir, qdoc)
                     port["curiosity_queue"] = qdoc
                     started = list(qdoc.get("work_started") or [])
                     if started:
@@ -2492,7 +2684,6 @@ class InvestorReportMailer:
                             or ed.get("research")
                         )
                         port["evidence_delta"] = ed
-                    save_queue(self._data_dir, qdoc)
                 except Exception:  # noqa: BLE001
                     self._logger.debug("curiosity enqueue skipped", exc_info=True)
                 # BRE.3 — last-chance drain of decide-time rationales before BRE.2
@@ -2754,6 +2945,24 @@ class InvestorReportMailer:
         if ok:
             self._sent_evening_dates.add(self._lab_day_key(lab, today))
             self._persist_sent_flags()
+        try:
+            from atlas.activity import record_activity
+
+            record_activity(
+                domain="market",
+                worker="investor_mailer",
+                action="send_evening_digest",
+                target=lab,
+                result="completed" if ok else "failed",
+                summary=(
+                    f"Sent evening EOD digest for {lab}"
+                    if ok
+                    else f"Evening EOD digest failed for {lab}"
+                ),
+                evidence={"laboratory_id": lab, "as_of": today, "sent": ok},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {
             "sent": ok,
             "as_of": today,
@@ -2861,6 +3070,24 @@ class InvestorReportMailer:
         if ok:
             self._sent_hourly_keys.add(key)
             self._persist_sent_flags()
+        try:
+            from atlas.activity import record_activity
+
+            record_activity(
+                domain="market",
+                worker="investor_mailer",
+                action="send_hourly_digest",
+                target=lab,
+                result="completed" if ok else "failed",
+                summary=(
+                    f"Sent hourly {h:02d}:00 IST digest for {lab}"
+                    if ok
+                    else f"Hourly digest failed for {lab} hour={h}"
+                ),
+                evidence={"laboratory_id": lab, "as_of": today, "hour": h, "sent": ok},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {
             "sent": ok,
             "as_of": today,

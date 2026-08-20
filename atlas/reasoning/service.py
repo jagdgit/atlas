@@ -103,8 +103,14 @@ class ReasoningService:
         statuses: list[str] | None = None,
         limit: int = 20,
         purpose: str = "consult",
+        record_mode: str = "per_belief",
     ) -> dict[str, Any]:
-        """Retrieve beliefs for inheritance. Always increments consultation metrics."""
+        """Retrieve beliefs for inheritance. Always increments consultation metrics.
+
+        ``record_mode``:
+        * ``per_belief`` — one metric row per returned belief (default; chat/why).
+        * ``once`` — one metric row per call (LOOP0 L2 unique decision states).
+        """
         statuses = statuses or ["active", "weakened"]
         rows: list[dict[str, Any]]
         if query:
@@ -127,8 +133,21 @@ class ReasoningService:
                 limit=limit,
             )
         enriched = [with_effective(r) for r in rows]
-        # One consultation per returned belief (plus a domain rollup if empty)
-        if enriched:
+        mode = str(record_mode or "per_belief").strip().lower()
+        if mode == "once":
+            self._record_consult(
+                enriched[0] if enriched else None,
+                domain=domain or (enriched[0].get("domain") if enriched else None) or "market",
+                purpose=purpose,
+            )
+            # Touch the rest so last-consulted is honest without inflating the metric.
+            for b in enriched[1:]:
+                try:
+                    if b.get("id"):
+                        self._repo.touch_consulted(b["id"])
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("touch_consulted skipped", exc_info=True)
+        elif enriched:
             for b in enriched:
                 self._record_consult(b, domain=b.get("domain"), purpose=purpose)
         else:
@@ -140,6 +159,7 @@ class ReasoningService:
             "identity": self.identity(),
             "goals": self.goals_snapshot(limit=10),
             "consultations_today": self.consultation_metrics(),
+            "record_mode": mode,
         }
 
     def get_belief(self, belief_id: str, *, purpose: str = "consult") -> dict[str, Any] | None:
@@ -296,6 +316,7 @@ class ReasoningService:
         evidence_summary: str = "",
         origin: str = "llm",
         actor: str = "reasoning",
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         row = self._repo.create_belief(
             statement=statement,
@@ -306,6 +327,7 @@ class ReasoningService:
             themes=themes or [],
             open_questions=open_questions or [],
             actor=actor,
+            metadata=metadata,
         )
         if evidence_summary:
             self._repo.add_evidence(

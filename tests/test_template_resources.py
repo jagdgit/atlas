@@ -35,6 +35,7 @@ def test_market_is_realtime_archive_is_batch():
     assert resources_for("market_observer").service_class == SERVICE_REALTIME
     assert resources_for("decision_simulation").service_class == SERVICE_REALTIME
     assert resources_for("owner_knowledge").service_class == SERVICE_BATCH
+    assert resources_for("historical_bars_bootstrap").service_class == SERVICE_BATCH
     assert resources_for("market_observer").deadline_policy == "signal_ttl"
     assert service_class_rank("REALTIME") < service_class_rank("BATCH")
 

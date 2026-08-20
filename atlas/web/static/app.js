@@ -1679,6 +1679,7 @@ function renderProgramChat(p) {
 
 /* ---------- learner dashboard ---------- */
 let learnerPoll = null;
+let lastLedgersFp = "";
 
 function stopLearnerPoll() {
   if (learnerPoll) { clearInterval(learnerPoll); learnerPoll = null; }
@@ -1692,9 +1693,69 @@ function startLearnerPoll() {
     if (state.view !== "learner") return stopLearnerPoll();
     const auto = $("#learner-auto");
     if (auto && !auto.checked) return stopLearnerPoll();
-    loadLearner({ quiet: true });
+    if (learnerPageBusy()) return;
+    loadLearnerLedgers({ quiet: true });
   }, 15000);
 }
+
+function learnerPageBusy() {
+  const view = $("#view-learner");
+  if (!view) return false;
+  const ae = document.activeElement;
+  if (
+    ae
+    && view.contains(ae)
+    && ae.matches
+    && ae.matches("input, textarea, select")
+    && ae.id !== "learner-auto"
+  ) {
+    return true;
+  }
+  const sel = window.getSelection && window.getSelection();
+  if (
+    sel
+    && !sel.isCollapsed
+    && String(sel.toString() || "").trim()
+    && sel.anchorNode
+    && view.contains(sel.anchorNode)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function inrAmt(n, digits) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const d = digits == null ? 0 : digits;
+  return "₹" + Number(n).toLocaleString("en-IN", {
+    minimumFractionDigits: d,
+    maximumFractionDigits: d,
+  });
+}
+
+function signedInrAmt(n, digits) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const v = Number(n);
+  const d = digits == null ? 0 : digits;
+  const body = Math.abs(v).toLocaleString("en-IN", {
+    minimumFractionDigits: d,
+    maximumFractionDigits: d,
+  });
+  if (v > 0) return "+₹" + body;
+  if (v < 0) return "−₹" + body;
+  return "₹" + body;
+}
+
+const LAB_BOOK_TITLES = {
+  india_equity_learner: "India equity (swing)",
+  india_fno_learner: "NIFTY index-proxy (F&O lab)",
+  equity_intraday_learner: "India equity (intraday 5m)",
+};
+const LAB_BOOK_ORDER = [
+  "india_equity_learner",
+  "india_fno_learner",
+  "equity_intraday_learner",
+];
 
 async function loadIip() {
   const failBox = $("#iip-failures");
@@ -2436,97 +2497,183 @@ async function loadLearner(opts = {}) {
     );
   } catch (_) { /* plan optional */ }
 
+  const view = $("#view-learner");
+  const scroll = quiet && view ? view.scrollTop : null;
+
   renderLearnerSummary(summary, { status, plan, watch, ledger });
   renderLearnerPlan(planBox, plan);
   renderLearnerWatchlist(wlBox, watch);
   renderLearnerChecklist(checkBox, status);
   renderLearnerBook(bookBox, { status, portfolios, missions, plan, ledger });
-  loadLearnerLabStatus();
-  loadLearnerDiDashboards();
-  loadInvestorEmailStatus();
-  loadLearnerResearchList();
-  loadLearnerLedgers();
-  startLearnerPoll();
+  if (!quiet) {
+    loadLearnerLabStatus();
+    loadLearnerDiDashboards();
+    loadInvestorEmailStatus();
+    loadLearnerResearchList();
+  }
+  loadLearnerLedgers({ quiet });
+  if (!quiet) startLearnerPoll();
+  if (scroll != null && view) view.scrollTop = scroll;
 }
 
-async function loadLearnerLedgers() {
+async function loadLearnerLedgers(opts = {}) {
+  const quiet = !!(opts && opts.quiet);
   const box = $("#learner-ledgers");
   if (!box) return;
-  box.textContent = "Loading ledgers…";
+  if (quiet && learnerPageBusy()) return;
+  if (!quiet && !box.querySelector(".learner-lab-card")) {
+    box.textContent = "Loading books…";
+  }
   try {
     const data = await api("/v1/market/labs/ledgers");
+    const fp = JSON.stringify(data || {});
+    if (quiet && fp === lastLedgersFp && box.querySelector(".learner-lab-card")) {
+      const stamp = $("#learner-ledgers-stamp");
+      if (stamp) {
+        const now = new Date();
+        stamp.textContent = "updated "
+          + now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false });
+      }
+      return;
+    }
+    lastLedgersFp = fp;
+    const view = $("#view-learner");
+    const scroll = view ? view.scrollTop : 0;
     renderLearnerLedgers(box, data);
+    if (view) view.scrollTop = scroll;
+    const stamp = $("#learner-ledgers-stamp");
+    if (stamp) {
+      const now = new Date();
+      stamp.textContent = "updated "
+        + now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false });
+    }
   } catch (err) {
-    box.textContent = `Ledgers unavailable: ${err && err.message ? err.message : err}`;
+    if (!quiet || !box.querySelector(".learner-lab-card")) {
+      box.textContent = `Ledgers unavailable: ${err && err.message ? err.message : err}`;
+    }
   }
 }
 
 function renderLearnerLedgers(box, data) {
-  box.innerHTML = "";
-  const labs = (data && data.labs) || [];
+  const labs = Array.isArray(data && data.labs) ? data.labs.slice() : [];
   if (!labs.length) {
+    box.innerHTML = "";
     box.append(el("div", { class: "learner-empty", text: "No laboratory books found." }));
     return;
   }
+  labs.sort((a, b) => {
+    const ia = LAB_BOOK_ORDER.indexOf(a.portfolio_key);
+    const ib = LAB_BOOK_ORDER.indexOf(b.portfolio_key);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  box.innerHTML = "";
   for (const lab of labs) {
-    const key = lab.portfolio_key || "?";
-    const wrap = el("div", { class: "learner-ledger-block", style: "margin-bottom:14px" });
-    wrap.append(el("div", { class: "sym", text: key }));
-    if (lab.error) {
-      wrap.append(el("div", { class: "muted small", text: String(lab.error) }));
-      box.append(wrap);
-      continue;
-    }
-    const st = lab.statement || lab.snapshot || lab;
-    const cash = st.cash != null ? Number(st.cash) : null;
-    const equity = st.equity != null ? Number(st.equity) : null;
-    const dayPnl = st.day_pnl != null ? Number(st.day_pnl) : null;
-    const totalPnl = st.total_pnl != null ? Number(st.total_pnl) : null;
-    const trades = st.trade_count != null ? st.trade_count : (st.recent_trades || []).length;
+    box.append(renderLearnerLabCard(lab));
+  }
+}
+
+function renderLearnerLabCard(lab) {
+  const key = lab.portfolio_key || "?";
+  const title = lab.title || LAB_BOOK_TITLES[key] || lab.label || key;
+  const wrap = el("div", { class: "learner-lab-card", "data-lab": key });
+  wrap.append(el("div", { class: "lab-title", text: title }));
+  wrap.append(el("div", { class: "lab-key", text: key }));
+  if (lab.error) {
+    wrap.append(el("div", { class: "muted small", text: String(lab.error) }));
+    return wrap;
+  }
+  const st = lab.statement || lab.snapshot || lab;
+  const cash = st.cash != null ? Number(st.cash) : null;
+  const equity = st.equity != null ? Number(st.equity) : null;
+  const dayPnl = st.day_pnl != null ? Number(st.day_pnl) : null;
+  const totalPnl = st.total_pnl != null ? Number(st.total_pnl) : null;
+  const kpis = lab.kpis || st.kpis || {};
+  const todayFills = kpis.fills_today != null
+    ? Number(kpis.fills_today)
+    : (st.fills_today != null ? Number(st.fills_today) : null);
+  const trades = todayFills != null
+    ? todayFills
+    : (st.trade_count != null ? st.trade_count : (st.recent_trades || []).length);
+
+  function metric(lbl, val, cls) {
+    return el("div", { class: "learner-lab-metric" },
+      el("span", { class: "lbl", text: lbl }),
+      el("span", { class: "val" + (cls ? " " + cls : ""), text: val }),
+    );
+  }
+  const metrics = el("div", { class: "learner-lab-metrics" });
+  metrics.append(metric("Cash", inrAmt(cash)));
+  metrics.append(metric("Equity", inrAmt(equity)));
+  metrics.append(metric(
+    "Today P&L",
+    signedInrAmt(dayPnl),
+    dayPnl > 0 ? "up" : dayPnl < 0 ? "down" : "",
+  ));
+  metrics.append(metric(
+    "Total P&L",
+    signedInrAmt(totalPnl),
+    totalPnl > 0 ? "up" : totalPnl < 0 ? "down" : "",
+  ));
+  wrap.append(metrics);
+  wrap.append(el("div", {
+    class: "lab-basis",
+    text: (st.valuation_basis ? `Valuation: ${st.valuation_basis}` : "Valuation: average cost")
+      + (st.marks_pct != null ? ` · marks ${st.marks_available || 0}/${st.marks_total || 0}` : "")
+      + ` · today fills ${trades}`
+      + (kpis.buys_today != null ? ` (${kpis.buys_today} buy / ${kpis.sells_today || 0} sell)` : ""),
+  }));
+
+  const noteSn = lab.session_note || {};
+  const reasonCounts = noteSn.reason_counts || {};
+  const reasonKeys = Object.keys(reasonCounts);
+  if (reasonKeys.length) {
+    const top = reasonKeys
+      .map((k) => [k, Number(reasonCounts[k] || 0)])
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k, n]) => `${k}=${n}`)
+      .join(" · ");
     wrap.append(el("div", {
-      class: "muted small",
-      text: `Cash ₹${cash != null ? cash.toLocaleString("en-IN") : "—"}`
-        + ` · Equity ₹${equity != null ? equity.toLocaleString("en-IN") : "—"}`
-        + ` · Today ${dayPnl != null ? (dayPnl >= 0 ? "+" : "") + "₹" + dayPnl.toLocaleString("en-IN") : "—"}`
-        + ` · Total ${totalPnl != null ? (totalPnl >= 0 ? "+" : "") + "₹" + totalPnl.toLocaleString("en-IN") : "—"}`
-        + ` · trades ${trades}`,
+      class: "lab-idle",
+      text: (todayFills === 0 || (!todayFills && !(st.positions || []).length))
+        ? `Idle today: ${top}`
+        : `Session: ${top}`,
     }));
-    const table = el("table", { class: "learner-ledger-table", style: "width:100%;font-size:12px;margin-top:6px" });
+  }
+
+  const positions = st.positions || [];
+  if (!positions.length) {
+    wrap.append(el("div", { class: "lab-idle", text: "No open positions." }));
+  } else {
+    const table = el("table", { class: "learner-ledger-table" });
     const thead = el("tr", {});
     for (const h of ["Symbol", "Qty", "Avg", "Mark", "uPnL"]) {
-      thead.append(el("th", { text: h, style: "text-align:left;padding:2px 4px" }));
+      thead.append(el("th", { text: h }));
     }
     table.append(thead);
-    for (const p of (st.positions || []).slice(0, 12)) {
+    for (const p of positions.slice(0, 12)) {
       const tr = el("tr", {});
       const pnl = Number(p.unrealized_pnl || 0);
-      tr.append(el("td", { text: String(p.symbol || ""), style: "padding:2px 4px" }));
-      tr.append(el("td", { text: String(p.quantity ?? ""), style: "padding:2px 4px" }));
-      tr.append(el("td", { text: Number(p.avg_price || 0).toFixed(2), style: "padding:2px 4px" }));
-      tr.append(el("td", { text: Number(p.mark || 0).toFixed(2), style: "padding:2px 4px" }));
+      tr.append(el("td", { text: String(p.symbol || "") }));
+      tr.append(el("td", { text: String(p.quantity ?? p.qty ?? "") }));
+      tr.append(el("td", { text: Number(p.avg_price || p.avg_cost || 0).toFixed(2) }));
+      tr.append(el("td", { text: Number(p.mark || 0).toFixed(2) }));
       tr.append(el("td", {
-        text: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`,
-        style: "padding:2px 4px",
+        class: pnl > 0 ? "up" : pnl < 0 ? "down" : "",
+        text: signedInrAmt(pnl, 2),
       }));
       table.append(tr);
     }
-    if (!(st.positions || []).length) {
-      wrap.append(el("div", { class: "muted small", text: "No open positions." }));
-    } else {
-      wrap.append(table);
-    }
-    const blotter = el("div", { class: "muted small", style: "margin-top:4px" });
-    blotter.append(document.createTextNode("Recent trades: "));
-    const rt = (st.recent_trades || []).slice(0, 8);
-    if (!rt.length) blotter.append(document.createTextNode("(none)"));
-    else {
-      blotter.append(document.createTextNode(
-        rt.map((t) => `${t.side || "?"} ${t.symbol || ""}×${t.quantity ?? ""}`).join(" · "),
-      ));
-    }
-    wrap.append(blotter);
-    box.append(wrap);
+    wrap.append(table);
   }
+  const blotter = el("div", { class: "lab-blotter" });
+  const rt = (st.recent_trades || []).slice(0, 6);
+  blotter.textContent = "Recent: "
+    + (rt.length
+      ? rt.map((t) => `${t.side || "?"} ${t.symbol || ""}×${t.quantity ?? ""}`).join(" · ")
+      : "(none)");
+  wrap.append(blotter);
+  return wrap;
 }
 
 async function loadLearnerLabStatus() {
@@ -4146,7 +4293,7 @@ function renderLearnerBook(box, { status, portfolios, missions, plan, ledger }) 
     box.append(el("div", {
       class: "muted small",
       style: "margin-bottom:6px",
-      text: `Paper ledger · ${pkey}`,
+      text: `Swing cash ops · ${pkey} — three-lab books are at the top of this page.`,
     }));
     const cash = st.cash != null ? Number(st.cash) : null;
     const equity = st.equity != null ? Number(st.equity) : null;

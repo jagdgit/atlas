@@ -129,3 +129,29 @@ def test_fno_auto_max_zero_seeds_via_enrich(tmp_path, monkeypatch):
     assert all(i.get("asset_class") == "futures" for i in cfg["instruments"])
     # Still must not fall back to cash auto-universe
     assert not any(str(i.get("symbol") or "").endswith(".NS") for i in cfg["instruments"])
+
+
+def test_repair_intraday_persona_character(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATLAS_DATA_DIR", str(tmp_path))
+    with vp._LOCK:  # noqa: SLF001
+        vp._STORE.clear()  # noqa: SLF001
+        vp._LOADED = False  # noqa: SLF001
+    vp.register(
+        label="India Intraday Lab",
+        portfolio_key="equity_intraday_learner",
+        persona={
+            "capital": 50000,
+            "allowed_assets": ["cash_equity"],
+            "risk": "medium",
+            "time_horizon": "medium",
+            "mentor": "session_risk",
+            "holding_philosophy": "flat_eod",
+        },
+        asset_class="cash_equity",
+    )
+    out = vp.repair_laboratory_pack_alignment("equity_intraday_learner")
+    assert out is not None
+    person = (out.get("portfolio") or {}).get("persona") or {}
+    assert person.get("risk") == "high"
+    assert person.get("time_horizon") == "intraday"
+    assert person.get("mentor") == "session_risk"

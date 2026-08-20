@@ -1,9 +1,9 @@
 """UTS.C/D — Opportunity-cost switching: E[R]×confidence + hold-vs-challenger review.
 
-Deterministic only. Never invents expected returns or confidence — missing
-inputs yield ``switch_blocked_missing_er`` / ``switch_blocked_cold_start``
-(fail-closed). Portfolio review (UTS.D) always returns one decision per open
-hold; sim execution is wired in ``paper_trading``.
+LOOP0 L1: E[R] is the versioned prototype (``er_model=prototype_v1``). Missing
+terms contribute 0 and lower completeness; the number is still emitted so
+switch math can run. ``evaluate_switch`` still fail-closes if a caller passes
+``None``. Honesty lives on the packet snapshot, not by refusing to score.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ REASON_BLOCKED_PLC_A = "switch_blocked_plc_a"
 REASON_BLOCKED_COLD_START = "switch_blocked_cold_start"
 REASON_HOLD_INCUMBENT = "hold_incumbent"
 REASON_EXPLORATORY = "switch_exploratory"
+REASON_BLOCKED_LAB_CONTRACT = "lab_instrument_rejected"
 
 # Label → numeric confidence. very_low is insufficient for switching.
 _CONF_FROM_LABEL: dict[str, float | None] = {
@@ -228,37 +229,15 @@ def expected_return_from_row(
     *,
     er_scale: float = _DEFAULT_ER_SCALE,
 ) -> float | None:
-    """Deterministic E[R] heuristic from ranked row — None when evidence thin.
+    """Versioned prototype E[R] — always numeric for a dict row (LOOP0 L1).
 
-    Uses active-phase score (and optional momentum component). Never invents a
-    number under cold-start / missing score.
+    ``er_scale`` is accepted for call-site compatibility; prototype_v1 uses its
+    own stack scale. Prefer ``estimate_opportunity_metrics`` for the snapshot.
     """
-    if not isinstance(row, dict):
-        return None
-    phase = str(row.get("phase") or "").strip().lower()
-    conf_label = str(row.get("confidence") or "").strip().lower()
-    if phase == "learning" or conf_label in {"very_low", "very-low"}:
-        return None
-    score = row.get("score")
-    try:
-        score_f = float(score) if score is not None else None
-    except (TypeError, ValueError):
-        score_f = None
-    if score_f is None:
-        return None
-    # Prefer momentum tilt when present (already 0..1 normalized in ranker).
-    comps = row.get("components") if isinstance(row.get("components"), dict) else {}
-    mom = comps.get("momentum")
-    try:
-        mom_f = float(mom) if mom is not None else None
-    except (TypeError, ValueError):
-        mom_f = None
-    center = mom_f if mom_f is not None else score_f
-    try:
-        scale = float(er_scale)
-    except (TypeError, ValueError):
-        scale = _DEFAULT_ER_SCALE
-    return round((center - 0.5) * scale, 6)
+    del er_scale  # prototype_v1 scale is versioned in expected_return_prototype
+    from atlas.investment.expected_return_prototype import compute_prototype_er
+
+    return compute_prototype_er(row).get("expected_return")
 
 
 def estimate_opportunity_metrics(
@@ -267,28 +246,31 @@ def estimate_opportunity_metrics(
     er_scale: float = _DEFAULT_ER_SCALE,
 ) -> dict[str, Any]:
     """Attachable metrics for a ranked / plan / holding row."""
-    er = expected_return_from_row(row, er_scale=er_scale)
-    conf = confidence_from_label((row or {}).get("confidence") if row else None)
+    del er_scale
+    from atlas.investment.expected_return_prototype import compute_prototype_er
+
+    snap = compute_prototype_er(row)
+    er = snap.get("expected_return")
+    conf = snap.get("confidence")
     ras = risk_adjusted_score(er, conf)
-    missing: list[str] = []
-    if er is None:
-        missing.append("expected_return")
-    if conf is None:
-        missing.append("confidence")
+    missing = list(snap.get("missing_terms") or [])
+    computable = er is not None and conf is not None
     return {
         "version": VERSION,
+        "er_model": snap.get("er_model"),
+        "er_basis": snap.get("er_basis"),
+        "er_completeness": snap.get("er_completeness"),
+        "er_inputs": snap.get("er_inputs"),
         "expected_return": er,
         "confidence": conf,
         "risk_adjusted_score": ras,
         "missing": missing,
-        "computable": er is not None and conf is not None,
-        "honesty": (
-            None
-            if er is not None and conf is not None
-            else (
-                "E[R]/confidence not computable (cold-start or missing score/label) "
-                "— switch evaluation will fail closed."
-            )
+        "present_terms": list(snap.get("present_terms") or []),
+        "computable": computable,
+        "honesty": snap.get("honesty")
+        if computable
+        else (
+            "E[R]/confidence not computable — switch evaluation will fail closed."
         ),
     }
 
@@ -305,6 +287,10 @@ def attach_opportunity_metrics(
     target["expected_return"] = metrics["expected_return"]
     target["opportunity_confidence"] = metrics["confidence"]
     target["risk_adjusted_score"] = metrics["risk_adjusted_score"]
+    target["er_model"] = metrics.get("er_model")
+    target["er_basis"] = metrics.get("er_basis")
+    target["er_completeness"] = metrics.get("er_completeness")
+    target["er_inputs"] = metrics.get("er_inputs")
     target["opportunity_metrics"] = metrics
     return target
 
@@ -378,6 +364,8 @@ def review_hold_vs_challengers(
     exploratory: bool = False,
     challenger_plc_a_ok: dict[str, bool] | None = None,
     er_scale: float = _DEFAULT_ER_SCALE,
+    laboratory_id: str | None = None,
+    cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """UTS.D — evaluate one open hold against challenger rows (pure, no I/O).
 
@@ -407,6 +395,8 @@ def review_hold_vs_challengers(
         base["honesty"] = "No open quantity — nothing to review."
         return base
     if not hold_metrics.get("computable"):
+        # Prototype_v1 always scores a dict row; this branch is the remaining
+        # fail-closed path (malformed hold / non-numeric internals).
         conf_l = str(hold.get("confidence") or "").strip().lower()
         phase_l = str(hold.get("phase") or "").strip().lower()
         if conf_l in {"very_low", "very-low"} or phase_l == "learning":
@@ -430,6 +420,25 @@ def review_hold_vs_challengers(
         chal_sym = _sym(raw)
         if not chal_sym or chal_sym == hold_sym:
             continue
+        try:
+            from atlas.investment.lab_contracts import is_instrument_permitted
+
+            inst = is_instrument_permitted(
+                laboratory_id, chal_sym, cfg=cfg, instrument=raw, path="switch"
+            )
+            if not inst.allowed:
+                blocked = {
+                    "challenger_symbol": chal_sym,
+                    "decision": "hold",
+                    "reason_code": REASON_BLOCKED_LAB_CONTRACT,
+                    "expected_advantage": None,
+                    "challenger_metrics": None,
+                }
+                if best_blocked is None:
+                    best_blocked = blocked
+                continue
+        except Exception:  # noqa: BLE001
+            pass
         c_metrics = estimate_opportunity_metrics(raw, er_scale=er_scale)
         evaluated += 1
         if chal_sym in plc_map and not plc_map[chal_sym]:
@@ -531,6 +540,8 @@ def review_portfolio_switches(
     challenger_plc_a_ok: dict[str, bool] | None = None,
     er_scale: float = _DEFAULT_ER_SCALE,
     max_holds: int = 40,
+    laboratory_id: str | None = None,
+    cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Review every open hold (qty>0) — one decision row each."""
     out: list[dict[str, Any]] = []
@@ -551,6 +562,8 @@ def review_portfolio_switches(
                 exploratory=exploratory,
                 challenger_plc_a_ok=challenger_plc_a_ok,
                 er_scale=er_scale,
+                laboratory_id=laboratory_id,
+                cfg=cfg,
             )
         )
         if len(out) >= max(1, int(max_holds)):

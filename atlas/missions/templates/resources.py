@@ -348,6 +348,18 @@ TEMPLATE_RESOURCES: dict[str, WorkResourceProfile] = {
         expected_tick_ms=60_000,
         checkpointability=CHECKPOINT_PER_TICK,
     ),
+    "historical_bars_bootstrap": WorkResourceProfile(
+        service_class=SERVICE_BATCH,
+        latency_tolerance_seconds=86400,
+        deadline_policy=DEADLINE_SESSION,
+        criticality="high",
+        scheduling_policy="batch",
+        cpu="low",
+        ram_mb=384,
+        network="medium",
+        expected_tick_ms=90_000,
+        checkpointability=CHECKPOINT_PER_TICK,
+    ),
     "thesis_outcome": WorkResourceProfile(
         service_class=SERVICE_BATCH,
         latency_tolerance_seconds=86400,

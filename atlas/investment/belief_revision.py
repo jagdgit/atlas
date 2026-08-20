@@ -118,8 +118,8 @@ def revise_one_wso(
     if llm is None:
         append_revision(
             doc,
-            status="unchanged",
-            reason="BRE.2 skipped — no LLM (deterministic Represent only)",
+            status="unreviewed",
+            reason="LLM_UNAVAILABLE — BRE.2 not run (not belief unchanged)",
             evidence_delta=delta,
             llm=False,
         )
@@ -132,8 +132,8 @@ def revise_one_wso(
         if hasattr(llm, "lane_busy") and llm.lane_busy():
             append_revision(
                 doc,
-                status="unchanged",
-                reason="BRE.2 deferred — LLM lane busy",
+                status="unreviewed",
+                reason="LLM_UNAVAILABLE — lane busy; reschedule BRE.2",
                 evidence_delta=delta,
                 llm=False,
             )
@@ -181,8 +181,8 @@ def revise_one_wso(
     except Exception as exc:  # noqa: BLE001
         append_revision(
             doc,
-            status="unchanged",
-            reason=f"BRE.2 LLM failed: {type(exc).__name__}",
+            status="unreviewed",
+            reason=f"LLM_UNAVAILABLE — BRE.2 LLM failed: {type(exc).__name__}",
             evidence_delta=delta,
             llm=False,
         )
@@ -194,14 +194,34 @@ def revise_one_wso(
     if not parsed:
         append_revision(
             doc,
-            status="unchanged",
-            reason="BRE.2 LLM returned non-JSON — no semantic update",
+            status="unreviewed",
+            reason="LLM_UNAVAILABLE — BRE.2 returned non-JSON (not belief unchanged)",
             evidence_delta=delta,
             llm=True,
         )
         if data_dir:
             save_wso(data_dir, doc)
         return doc
+
+    fund_row: dict[str, Any] | None = None
+    if data_dir and doc.get("symbol"):
+        try:
+            from atlas.investment.fundamentals import get_symbol as fund_get
+
+            fund_row = fund_get(data_dir, str(doc.get("symbol")), program_id="market_intelligence")
+        except Exception:  # noqa: BLE001
+            fund_row = None
+    try:
+        from atlas.investment.research_intelligence import gate_belief_revision_output
+
+        gated = gate_belief_revision_output(
+            parsed, allowed, fundamentals=fund_row if isinstance(fund_row, dict) else None
+        )
+        parsed = gated.get("parsed") or parsed
+        if gated.get("rejected"):
+            doc.setdefault("verification", {})["rejected_claims"] = list(gated.get("rejected") or [])[:12]
+    except Exception:  # noqa: BLE001
+        _log.debug("belief verify gate skipped", exc_info=True)
 
     claims, rejected = _filter_cited(list(parsed.get("claims") or []), allowed)
     status = str(parsed.get("status") or "unchanged").strip().lower()
@@ -216,7 +236,7 @@ def revise_one_wso(
 
     # Apply semantic fields (LLM-authored)
     thesis = str(parsed.get("thesis_text") or "").strip()
-    if thesis:
+    if thesis and str(parsed.get("status") or "") != "insufficient_evidence":
         doc["thesis_text"] = thesis[:2000]
     ts = parsed.get("thesis_strength")
     try:

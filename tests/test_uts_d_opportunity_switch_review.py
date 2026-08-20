@@ -104,18 +104,21 @@ def test_review_plc_a_blocks_challenger():
     assert out["challenger_symbol"] == "CHAL.NS"
 
 
-def test_review_cold_start_hold_fail_closed():
+def test_review_learning_hold_uses_prototype():
     hold = {
         "symbol": "LEARN.NS",
         "qty": 5,
         "score": 0.7,
         "confidence": "very_low",
         "phase": "learning",
+        "components": {"momentum": 0.7},
     }
     chal = _active("CHAL.NS", 0.9, "high")
     out = review_hold_vs_challengers(hold, [chal], exploratory=False)
-    assert out["decision"] == "hold"
-    assert out["reason_code"] == REASON_BLOCKED_COLD_START
+    assert out["decision"] in {"hold", "switch"}
+    assert out["reason_code"] not in {REASON_BLOCKED_COLD_START, REASON_BLOCKED_MISSING_ER}
+    assert out["hold_metrics"]["er_model"] == "prototype_v1"
+    assert out["hold_metrics"]["expected_return"] is not None
 
 
 def test_review_portfolio_one_row_per_open_hold():

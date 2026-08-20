@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from atlas.investment.portfolio_optimizer import (
     max_allowed_quantity,
+    name_cap_override_fraction,
     optimize_candidate,
     pre_trade_check,
     resolve_limits,
@@ -130,6 +131,23 @@ def test_sector_cap_never_below_single_name_cap():
     # An explicit operator sector cap still wins.
     tight = resolve_limits(persona, {"max_name_pct": 0.40, "sector_cap_pct": 0.20})
     assert tight["sector_cap_pct"] == 0.20
+
+
+def test_template_max_exposure_zero_is_persona_default_not_zero_cap():
+    """LOOP0 L0 — paper template ships max_exposure_pct=0 meaning unset."""
+    persona = india_equity_learner_persona(capital=50000)
+    assert name_cap_override_fraction({"max_exposure_pct": 0}) is None
+    assert name_cap_override_fraction({"max_exposure_pct": 0.0}) is None
+    assert name_cap_override_fraction({}) is None
+    unset = resolve_limits(persona, {"max_exposure_pct": 0})
+    assert unset["max_name_pct"] == resolve_limits(persona, {})["max_name_pct"]
+    assert unset["max_name_pct"] > 0
+    explicit = resolve_limits(persona, {"max_exposure_pct": 40})
+    assert abs(explicit["max_name_pct"] - 0.40) < 1e-9
+    # max_name_pct=0 is an explicit hard cap, not template-unset.
+    assert name_cap_override_fraction({"max_name_pct": 0}) == 0.0
+    hard_zero = resolve_limits(persona, {"max_name_pct": 0})
+    assert hard_zero["max_name_pct"] == 0.0
 
 
 def test_blocked_buy_reports_trimmable_room():

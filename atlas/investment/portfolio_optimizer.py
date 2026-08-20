@@ -46,6 +46,45 @@ def _limits_for_persona(persona: dict[str, Any] | None) -> dict[str, float]:
     return dict(RISK_LIMITS.get(risk) or RISK_LIMITS["medium"])
 
 
+def _as_pct_fraction(raw: Any) -> float | None:
+    """Parse a name-cap. Values > 1 are treated as 0–100 percent."""
+    if raw is None or raw == "":
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if v > 1.0:
+        v = v / 100.0
+    return v
+
+
+def name_cap_override_fraction(cfg: dict[str, Any] | None) -> float | None:
+    """LOOP0 L0 — explicit name-cap fraction, or None to use persona default.
+
+    Semantics (do **not** treat every 0 as unset):
+
+    * ``max_name_pct`` present → honor it (including **0** as a hard 0% cap).
+    * ``max_exposure_pct`` **missing / 0** → template unset (schema: 0 = no
+      override). Paper-trading builtins ship 0; that is **not** a 0% cap.
+    * ``max_exposure_pct`` **> 0** → explicit hard cap (0–100 or 0–1).
+    """
+    cfg = cfg or {}
+    if cfg.get("max_name_pct") is not None:
+        return _as_pct_fraction(cfg.get("max_name_pct"))
+    exp = cfg.get("max_exposure_pct")
+    if exp is None or exp == "":
+        return None
+    try:
+        exp_f = float(exp)
+    except (TypeError, ValueError):
+        return None
+    # Template / schema: 0 means unbounded override — use persona default.
+    if exp_f <= 0:
+        return None
+    return _as_pct_fraction(exp_f)
+
+
 def resolve_limits(
     persona: dict[str, Any] | None, cfg: dict[str, Any] | None = None
 ) -> dict[str, float]:
@@ -58,7 +97,10 @@ def resolve_limits(
     """
     cfg = cfg or {}
     limits = _limits_for_persona(persona)
-    for key in ("max_names", "max_name_pct", "sector_cap_pct", "min_cash_pct"):
+    cap = name_cap_override_fraction(cfg)
+    if cap is not None:
+        limits["max_name_pct"] = float(cap)
+    for key in ("max_names", "sector_cap_pct", "min_cash_pct"):
         if cfg.get(key) is not None:
             try:
                 limits[key] = float(cfg[key])

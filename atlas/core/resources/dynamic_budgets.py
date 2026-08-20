@@ -24,6 +24,7 @@ class BudgetSnapshot:
     pressure_reason: str
     profile: str
     hysteresis: str  # rising | falling | steady
+    clamp_reason: str = "preferred"  # preferred | pressure_half | hard_cap | recovering
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -34,6 +35,7 @@ class BudgetSnapshot:
             "pressure_reason": self.pressure_reason,
             "profile": self.profile,
             "hysteresis": self.hysteresis,
+            "clamp_reason": self.clamp_reason,
         }
 
 
@@ -41,7 +43,7 @@ class DynamicBudgetController:
     """IR-RO4 — effective concurrency inside hard ceilings + hysteresis."""
 
     name = "dynamic_budgets"
-    VERSION = "ro4.1"
+    VERSION = "ro4.2-stab0"
 
     def __init__(
         self,
@@ -51,17 +53,20 @@ class DynamicBudgetController:
         pressure_fn: Callable[[], tuple[bool, str]] | None = None,
         release_after_seconds: float = 120.0,
         logger: logging.Logger | None = None,
+        on_clamp_change: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._hard = max(1, int(hard_tick_ceiling))
         self._profile = (profile or "conservative").strip().lower()
         self._pressure_fn = pressure_fn
         self._release_after = max(10.0, float(release_after_seconds))
         self._logger = logger or logging.getLogger("atlas.resources.budgets")
+        self._on_clamp_change = on_clamp_change
         self._lock = threading.Lock()
         self._under_pressure = False
         self._pressure_since: float | None = None
         self._clear_since: float | None = None
         self._last_reason = ""
+        self._last_effective: int | None = None
 
     def set_profile(self, profile: str) -> None:
         self._profile = (profile or "conservative").strip().lower()
@@ -92,18 +97,55 @@ class DynamicBudgetController:
                 self._clear_since = None
                 self._last_reason = reason or "pressure"
                 # Under pressure: shrink to at least 1, prefer half of preferred (floor 1).
-                return max(1, min(preferred, max(1, preferred // 2)))
-            # Clearing pressure — wait for hysteresis before growing back.
-            if self._under_pressure:
+                eff = max(1, min(preferred, max(1, preferred // 2)))
+            elif self._under_pressure:
+                # Clearing pressure — wait for hysteresis before growing back.
                 if self._clear_since is None:
                     self._clear_since = now
                 if now - self._clear_since < self._release_after:
-                    return max(1, min(preferred, max(1, preferred // 2)))
-                self._under_pressure = False
-                self._pressure_since = None
-                self._clear_since = None
-                self._last_reason = ""
-            return preferred
+                    eff = max(1, min(preferred, max(1, preferred // 2)))
+                else:
+                    self._under_pressure = False
+                    self._pressure_since = None
+                    self._clear_since = None
+                    self._last_reason = ""
+                    eff = preferred
+            else:
+                eff = preferred
+            self._maybe_note_clamp_locked(eff, preferred, hard, pressure, reason)
+            return eff
+
+    def _maybe_note_clamp_locked(
+        self,
+        effective: int,
+        preferred: int,
+        hard: int,
+        pressure: bool,
+        reason: str,
+    ) -> None:
+        prev = self._last_effective
+        self._last_effective = effective
+        if prev is None or prev == effective or self._on_clamp_change is None:
+            return
+        clamp = "preferred"
+        if effective < preferred and (pressure or self._under_pressure):
+            clamp = "pressure_half" if pressure else "recovering"
+        elif effective < preferred:
+            clamp = "hard_cap" if effective >= hard else "preferred"
+        try:
+            self._on_clamp_change(
+                {
+                    "from": prev,
+                    "to": effective,
+                    "preferred": preferred,
+                    "hard": hard,
+                    "clamp_reason": clamp,
+                    "pressure_reason": reason or self._last_reason,
+                    "profile": self._profile,
+                }
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("on_clamp_change failed", exc_info=True)
 
     def snapshot(self) -> dict[str, Any]:
         hard = self._hard
@@ -111,11 +153,16 @@ class DynamicBudgetController:
         effective = self.effective_tick_slots(hard)
         pressure, reason = self._read_pressure()
         hyst = "steady"
+        clamp = "preferred"
         with self._lock:
             if self._under_pressure and not pressure:
                 hyst = "rising"  # recovering toward preferred
+                clamp = "recovering"
             elif pressure:
                 hyst = "falling"
+                clamp = "pressure_half"
+            elif effective < preferred:
+                clamp = "hard_cap"
         return BudgetSnapshot(
             hard_tick_ceiling=hard,
             preferred_ticks=preferred,
@@ -124,4 +171,16 @@ class DynamicBudgetController:
             pressure_reason=reason or self._last_reason,
             profile=self._profile,
             hysteresis=hyst,
-        ).as_dict() | {"version": self.VERSION}
+            clamp_reason=clamp,
+        ).as_dict() | {
+            "version": self.VERSION,
+            "diagnosis": (
+                f"profile={self._profile} preferred={preferred} hard={hard} "
+                f"effective={effective} clamp={clamp}"
+                + (f" reason={reason or self._last_reason}" if (reason or self._last_reason) else "")
+            ),
+            "note": (
+                "OI-STAB0: tick-slot shrink uses host throttle only — single-tick "
+                "admit misses defer via HostGuard and do not halve the pool."
+            ),
+        }

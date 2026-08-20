@@ -66,18 +66,23 @@ def merge_day_notes(
             counts[key] = int(counts.get(key, 0)) + int(v)
         except (TypeError, ValueError):
             continue
-    sample_list = list(existing.get("samples") or [])
+    incoming: list[str] = []
+    seen_in: set[str] = set()
     for s in samples or []:
         text = str(s).strip()
-        if text and text not in sample_list:
-            sample_list.append(text)
-        if len(sample_list) >= 40:
-            break
+        if not text or text in seen_in:
+            continue
+        seen_in.add(text)
+        incoming.append(text)
+    # Recency: this tick's lines go last. An early `len>=40` break used to freeze
+    # the first 40 uniques of the day (so post-bounce switch_review never appeared).
+    prior = [str(s) for s in (existing.get("samples") or []) if str(s) not in seen_in]
+    sample_list = (prior + incoming)[-40:]
     doc: dict[str, Any] = {
         "ist_date": ist_date,
         "portfolio_key": portfolio_key or "default",
         "reason_counts": counts,
-        "samples": sample_list[-40:],
+        "samples": sample_list,
     }
     if extra:
         for k, v in extra.items():
@@ -101,6 +106,16 @@ def classify_action(action: str) -> str | None:
         return None  # fills aren't "why no fill"
     if ": sell " in a or ":sell" in a.replace(" ", ""):
         return None
+    if "switch_blocked" in a or "switch_review" in a:
+        return "switch_blocked"
+    if "plc_a_hold" in a:
+        return "plc_a_hold"
+    if "portfolio_hold" in a or "concentration_name" in a:
+        return "portfolio_hold"
+    if "fno_no_cash_alts" in a:
+        return "fno_no_cash_alts"
+    if "intraday_yahoo_budget" in a:
+        return "intraday_yahoo_budget"
     if "session_closed" in a:
         return "session_closed"
     if "empty_live_feed" in a:
@@ -117,12 +132,16 @@ def classify_action(action: str) -> str | None:
         return "pack_block"
     if "mark_only" in a:
         return "mark_only"
+    if "yahoo_cooldown" in a or "rate gate" in a or "429" in a:
+        return "yahoo_cooldown"
     if "gap (" in a or ": gap" in a:
         return "capability_gap"
     if "next_alt" in a:
         return "next_alternatives"
     if "cannot size" in a or "size_block" in a or "min lot" in a:
         return "size_block"
+    if "insufficient margin" in a or ": margin (" in a:
+        return "margin"
     if ": hold @" in a:
         # Paper trading journals engine holds as "SYM: hold @ price (why…)".
         if "cannot size" in a or "min lot" in a:
@@ -139,16 +158,83 @@ REASON_LABELS = {
     "empty_feed": "Bar feed empty",
     "feed_error": "Live feed errors while fetching bars",
     "research_hold": "Research gate held buys (MVR / thesis / MoS incomplete)",
+    "plc_a_hold": "PLC.A buy gate held (fundamentals / thesis trigger incomplete)",
+    "portfolio_hold": "Portfolio gate held (concentration / cash buffer / name cap)",
+    "switch_blocked": "Hold-vs-challenger switch blocked (missing E[R] or costs)",
     "policy_block": "Policy engine blocked the order",
     "pack_block": "Instrument pack validation blocked the order",
     "mark_only": "Same bar already decided — mark-to-market only (no new decision)",
+    "yahoo_cooldown": "Yahoo rate gate / cooldown (deferred marks; not a strategy hold)",
     "capability_gap": "Capability gap (missing feed / pack capability)",
     "strategy_hold": "Strategy decided hold (no buy/sell signal)",
     "size_block": "Buy signal existed but portfolio cash/budget cannot size 1 whole share",
+    "margin": "Index-proxy lot blocked by margin (not cash-equity concentration)",
     "next_alternatives": "Primary names idle — tried next ranked alternatives",
+    "fno_no_cash_alts": "F&O lab skipped cash-equity alternatives (operator contracts only)",
+    "intraday_yahoo_budget": "Intraday lab capped at ≤3 names (Yahoo 5m budget; no extra alts)",
     "feed_exhausted": "Replay feed exhausted",
     "other_idle": "Other idle / skip reasons",
 }
+
+# Clock / feed noise — report after decision reasons so evening is not 2000× session_closed.
+_CLOCK_REASON_KEYS = frozenset(
+    {
+        "session_closed",
+        "mark_only",
+        "next_alternatives",
+        "feed_exhausted",
+        "yahoo_cooldown",
+    }
+)
+
+
+def samples_for_notes(actions: list[str] | None, *, cap: int = 24) -> list[str]:
+    """Keep this-tick decision lines; do not let session_closed occupy the whole window."""
+    cap = max(8, int(cap))
+    raw = [str(a).strip() for a in (actions or []) if str(a).strip()]
+    if len(raw) <= cap:
+        return raw
+    decisions: list[str] = []
+    clock: list[str] = []
+    for a in raw:
+        bucket = classify_action(a)
+        if bucket in _CLOCK_REASON_KEYS or bucket is None:
+            clock.append(a)
+        else:
+            decisions.append(a)
+    keep_d = decisions[-max(8, cap // 2) :]
+    keep_c = clock[-(cap - len(keep_d)) :]
+    return keep_c + keep_d
+
+
+def format_session_tick_histogram(notes: dict[str, Any] | None) -> list[str]:
+    """Below-the-fold tick reason histogram — mark_only / session_closed last."""
+    notes = notes or {}
+    counts = notes.get("reason_counts") or {}
+    if not counts:
+        return []
+    ordered = sorted(
+        ((k, int(v)) for k, v in counts.items() if int(v) > 0),
+        key=lambda kv: (-kv[1], kv[0]),
+    )
+    decision = [(k, n) for k, n in ordered if k not in _CLOCK_REASON_KEYS]
+    clock = [(k, n) for k, n in ordered if k in _CLOCK_REASON_KEYS]
+    lines = [
+        "",
+        "── Session tick histogram (below the fold) ──",
+    ]
+    total = sum(int(v) for v in counts.values())
+    lines.append(f"  total journal buckets: {total}")
+    for key, n in (decision + clock)[:12]:
+        label = REASON_LABELS.get(key, key)
+        prefix = "clock: " if key in _CLOCK_REASON_KEYS else ""
+        lines.append(f"  {prefix}{label} ×{n}")
+    mark_n = int(counts.get("mark_only") or 0)
+    if mark_n:
+        lines.append(
+            f"  mark_only={mark_n} — same-bar re-mark only; not new decisions"
+        )
+    return lines
 
 
 def format_no_fill_reasons(notes: dict[str, Any] | None) -> list[str]:
@@ -160,15 +246,18 @@ def format_no_fill_reasons(notes: dict[str, Any] | None) -> list[str]:
             "No simulated fills in this snapshot — and no session reason counters "
             "were recorded yet (worker may have been down or outside market hours)."
         ]
-    # Prefer explanatory buckets over mark_only noise
     ordered = sorted(
         ((k, int(v)) for k, v in counts.items() if int(v) > 0),
         key=lambda kv: (-kv[1], kv[0]),
     )
+    # Prefer *decision* buckets; clock noise (session_closed / mark_only) last.
+    decision = [(k, n) for k, n in ordered if k not in _CLOCK_REASON_KEYS]
+    clock = [(k, n) for k, n in ordered if k in _CLOCK_REASON_KEYS]
     lines: list[str] = []
-    for key, n in ordered[:8]:
+    for key, n in (decision + clock)[:8]:
         label = REASON_LABELS.get(key, key)
-        lines.append(f"{label} ×{n}")
+        prefix = "" if key not in _CLOCK_REASON_KEYS else "clock: "
+        lines.append(f"{prefix}{label} ×{n}")
     gap = notes.get("feed_gap_days")
     if gap is not None:
         try:

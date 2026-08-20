@@ -24,8 +24,10 @@ _YAHOO_ALIASES: dict[str, str] = {
     "BANKNIFTY.NS": "^NSEBANK",
     "NSEBANK": "^NSEBANK",
     # HBL Power → HBL Engineering (A2 default probe target)
-    "HBLPOWER": "HBLENGINEERING.NS",
-    "HBLPOWER.NS": "HBLENGINEERING.NS",
+    "HBLPOWER": "HBLENGINE.NS",
+    "HBLPOWER.NS": "HBLENGINE.NS",
+    "HBLENGINEERING": "HBLENGINE.NS",
+    "HBLENGINEERING.NS": "HBLENGINE.NS",
 }
 
 
@@ -121,4 +123,11 @@ def news_is_evidence(row: dict[str, Any] | None) -> bool:
     )
     if is_seed_news_source(src):
         return False
+    try:
+        from atlas.investment.market_events import may_become_evidence
+
+        if not may_become_evidence(row):
+            return False
+    except Exception:  # noqa: BLE001
+        pass
     return True

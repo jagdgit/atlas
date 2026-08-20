@@ -954,6 +954,7 @@ class DecisionTimelineStore:
         *,
         diff: dict[str, Any],
         mark: float | None = None,
+        outcome_check: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         symbol = str(revisit.get("symbol") or "")
         did = revisit.get("decision_id")
@@ -966,11 +967,16 @@ class DecisionTimelineStore:
                 "checkpoint": checkpoint,
                 "due_ist": revisit.get("due_ist"),
                 "what_changed": diff,
+                "outcome_check": outcome_check,
                 "mark": mark,
                 "portfolio_key": revisit.get("portfolio_key"),
             },
         )
-        payload_update = {"what_changed": diff, "mark": mark}
+        payload_update = {
+            "what_changed": diff,
+            "mark": mark,
+            "outcome_check": outcome_check,
+        }
         done_row = {**revisit, "status": "done", "payload": {
             **(revisit.get("payload") or {}),
             **payload_update,
@@ -1051,7 +1057,20 @@ class DecisionTimelineStore:
                 note=f"auto {rev.get('checkpoint')}",
                 checkpoint=str(rev.get("checkpoint") or ""),
             )
-            event = self.complete_revisit(rev, diff=diff, mark=mark)
+            outcome = None
+            try:
+                from atlas.reasoning.outcome_revision import build_outcome_check
+
+                outcome = build_outcome_check(
+                    packet,
+                    diff,
+                    checkpoint=str(rev.get("checkpoint") or ""),
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("LOOP0 L3 outcome_check skipped", exc_info=True)
+            event = self.complete_revisit(
+                rev, diff=diff, mark=mark, outcome_check=outcome
+            )
             done.append(
                 {
                     "revisit_id": rev.get("id"),
@@ -1060,6 +1079,7 @@ class DecisionTimelineStore:
                     "checkpoint": rev.get("checkpoint"),
                     "timeline_event_id": event.get("id"),
                     "what_changed": diff,
+                    "outcome_check": outcome,
                 }
             )
         return {
@@ -1068,6 +1088,97 @@ class DecisionTimelineStore:
             "completed": len(done),
             "items": done,
         }
+
+    def record_open_book_outcomes(
+        self,
+        *,
+        portfolio_key: str,
+        open_symbols: list[str] | None = None,
+        as_of_ist: str | None = None,
+        mark_fn: Any | None = None,
+    ) -> dict[str, Any]:
+        """LOOP0 L3 — one outcome_check per open book per IST day when no buy-checkpoint is due.
+
+        Swing holds do not enter SCHEDULE_ACTIONS, so CIPLA/Eicher would otherwise
+        wait until day14 of the entry buy. This does not invent a trade.
+        """
+        day = as_of_ist or ist_today()
+        pk = str(portfolio_key or "").strip()
+        items: list[dict[str, Any]] = []
+        skipped = 0
+        for raw in open_symbols or []:
+            sym = str(raw or "").strip()
+            if not sym:
+                continue
+            if self._has_outcome_check_today(sym, day):
+                skipped += 1
+                continue
+            packet = self._latest_buy_packet(sym, portfolio_key=pk)
+            if not packet:
+                skipped += 1
+                continue
+            mark = None
+            if mark_fn is not None:
+                try:
+                    mark = mark_fn(sym)
+                except Exception:  # noqa: BLE001
+                    mark = None
+            diff = what_changed(
+                packet,
+                current_mark=mark,
+                note="LOOP0 L3 open-book session mark",
+                checkpoint="open_book",
+            )
+            outcome = None
+            try:
+                from atlas.reasoning.outcome_revision import build_outcome_check
+
+                outcome = build_outcome_check(
+                    packet, diff, checkpoint="open_book"
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("LOOP0 L3 open-book outcome_check skipped", exc_info=True)
+            event = self.append_event(
+                symbol=sym,
+                kind="revisit",
+                decision_id=str(packet.get("decision_id") or "") or None,
+                payload={
+                    "checkpoint": "open_book",
+                    "due_ist": day,
+                    "what_changed": diff,
+                    "outcome_check": outcome,
+                    "mark": mark,
+                    "portfolio_key": pk,
+                    "note": "open-book session mark (buy schedule had no due row)",
+                },
+            )
+            items.append(
+                {
+                    "decision_id": packet.get("decision_id"),
+                    "symbol": sym,
+                    "checkpoint": "open_book",
+                    "timeline_event_id": event.get("id"),
+                    "what_changed": diff,
+                    "outcome_check": outcome,
+                }
+            )
+        return {
+            "as_of_ist": day,
+            "wrote": len(items),
+            "skipped": skipped,
+            "items": items,
+        }
+
+    def _has_outcome_check_today(self, symbol: str, day: str) -> bool:
+        for ev in self.list_symbol(symbol=symbol, limit=40, kind="revisit"):
+            pl = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+            if not isinstance(pl, dict) or not isinstance(pl.get("outcome_check"), dict):
+                continue
+            due = str(pl.get("due_ist") or "")[:10]
+            created = str(ev.get("created_at") or "")[:10]
+            if due == day or created == day:
+                return True
+        return False
 
     def learning_counts(self, *, portfolio_key: str | None = None) -> dict[str, Any]:
         day = ist_today()

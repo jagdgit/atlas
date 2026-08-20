@@ -30,6 +30,9 @@ def test_aliases_zomato_tatamotors_nifty():
     n = resolve_yahoo_symbol("NIFTY")
     assert n.yahoo == "^NSEI"
     assert resolve_yahoo_symbol("^NSEI").yahoo == "^NSEI"
+    hbl = resolve_yahoo_symbol("HBLPOWER.NS")
+    assert hbl.yahoo == "HBLENGINE.NS" and hbl.aliased
+    assert resolve_yahoo_symbol("HBLENGINEERING.NS").yahoo == "HBLENGINE.NS"
 
 
 def test_seed_news_is_non_evidence():

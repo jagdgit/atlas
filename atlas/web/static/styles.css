@@ -649,6 +649,87 @@ button { cursor: pointer; font: inherit; }
 .learner-chip .val { display: block; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .learner-chip.warn .val { color: var(--warn); }
 .learner-chip.ok .val { color: var(--ok); }
+.learner-lab-books-panel {
+  margin: 0 22px 16px;
+  overflow: visible;
+  min-height: 0;
+}
+.learner-lab-books-note { padding: 0 14px 8px; margin: 0; }
+.learner-lab-books {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 14px 14px;
+  max-height: none;
+  overflow: visible;
+}
+@media (max-width: 1100px) {
+  .learner-lab-books { grid-template-columns: 1fr; }
+}
+.learner-lab-card {
+  background: var(--bg-elev2, rgba(0,0,0,.12));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 12px 10px;
+  min-height: 0;
+}
+.learner-lab-card .lab-title {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+.learner-lab-card .lab-key {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin: 2px 0 8px;
+}
+.learner-lab-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+  margin: 0 0 10px;
+}
+.learner-lab-metric .lbl {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.learner-lab-metric .val {
+  display: block;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+.learner-lab-metric .val.up { color: var(--ok); }
+.learner-lab-metric .val.down { color: var(--fail); }
+.learner-lab-card .lab-basis,
+.learner-lab-card .lab-idle,
+.learner-lab-card .lab-blotter {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0 0 6px;
+}
+.learner-ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+}
+.learner-ledger-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.learner-ledger-table td { padding: 4px; border-top: 1px solid var(--border); }
+.learner-ledger-table td.up { color: var(--ok); }
+.learner-ledger-table td.down { color: var(--fail); }
 .learner-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 22px 24px;
   align-items: start;

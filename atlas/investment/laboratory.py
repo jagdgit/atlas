@@ -13,7 +13,20 @@ VERSION = "li.1a.laboratory"
 
 DEFAULT_SWING_LAB = "india_equity_learner"
 DEFAULT_INTRADAY_LAB = "equity_intraday_learner"
+DEFAULT_FNO_LAB = "india_fno_learner"
 DEFAULT_EXPERIMENT_ID = "default"
+
+# Operator mail / hourly board — three paper laboratories, never pooled P&L.
+MAIL_SNAPSHOT_LABS: tuple[str, ...] = (
+    DEFAULT_SWING_LAB,
+    DEFAULT_FNO_LAB,
+    DEFAULT_INTRADAY_LAB,
+)
+MAIL_LAB_TITLES: dict[str, str] = {
+    DEFAULT_SWING_LAB: "India equity (swing)",
+    DEFAULT_FNO_LAB: "NIFTY index-proxy (F&O lab)",
+    DEFAULT_INTRADAY_LAB: "India equity (intraday 5m)",
+}
 
 # Transfer classes (world may cross labs; strategy/returns must not).
 TRANSFER_WORLD = "world"

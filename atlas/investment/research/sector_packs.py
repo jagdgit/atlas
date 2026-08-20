@@ -129,6 +129,42 @@ _SYMBOL_HINTS: dict[str, dict[str, Any]] = {
         "watch_items": ["Order book", "Execution delays", "Working capital", "Program concentration"],
         "source": "atlas_midcap_hint",
     },
+    "CIPLA.NS": {
+        "name": "Cipla",
+        "sector": "Pharma",
+        "subsector": "Pharmaceuticals / branded generics",
+        "pack": "pharma",
+        "facts": [
+            "Indian pharmaceutical company (formulations / generics), not a hospital network.",
+            "Economics driven by product mix, India branded generics, respiratory franchise, "
+            "and US/ANDA execution — not hospital occupancy or ARPOB.",
+        ],
+        "watch_items": [
+            "India branded-generics growth",
+            "US generics / ANDA pipeline",
+            "Respiratory franchise",
+            "Gross margin / mix",
+            "Working capital",
+        ],
+        "source": "atlas_midcap_hint",
+    },
+    "EICHERMOT.NS": {
+        "name": "Eicher Motors",
+        "sector": "Automobile",
+        "subsector": "Royal Enfield motorcycles + VECV commercial vehicles",
+        "pack": "manufacturing",
+        "facts": [
+            "Automobile OEM (Royal Enfield two-wheelers and commercial vehicles via VECV).",
+            "Not a hospital or healthcare-services business.",
+        ],
+        "watch_items": [
+            "Royal Enfield volumes / mix",
+            "VECV cycle",
+            "Margin and mix",
+            "Capacity / dealer network",
+        ],
+        "source": "atlas_midcap_hint",
+    },
 }
 
 

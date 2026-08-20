@@ -8,7 +8,7 @@
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-08-11 night — **OI-SELF0 Phase 4 landed** (Living RAG / identity-first chat). Soft influence (Phase 5) still deferred.
+> **Last updated:** 2026-08-20 — OI-LINT0 Phase 1–6 in code (locked plan complete).
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
 · **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
@@ -31,7 +31,7 @@ These were introduced during Phase C and are the most likely to be picked up nex
 | OI-C11 | 🟢 | P2 | **Personal auto-inference: proficiency + timeline years + heuristic professional.** Skills get graded `proficiency`; stated `years` feed timeline tenure; role/publication heuristics from Experience text. Full CV / Research-finding professional auto-inference still deferred. | C.7b | closed OI-C11 |
 | OI-C9 | 🟢 | P3 | **Policy scoping beyond `global`.** Retrieval, Decision Engine, planning notes, and Policy Engine admit `domain:*` / `mission:*` / `mission_type:*` scopes (plus always-`global`). Search accepts optional `policy_scope` / `mission_id`. Hard-`DELETE` via `DELETE /v1/policy/rules/{id}` and `atlas policy delete`. | C.5b/C.5d | closed OI-C9 |
 | OI-C6 | 🟢 | — | **Prose "distilled findings" from documents.** Was deferred from C.2 by design (must flow through the Consolidator). ✅ Resolved by C.3g (`ProseKnowledgeExtractor` → `CandidateConsumer` → `consolidate`). | C.2c | closed C.3g |
-| OI-C7 | 🟢 | P3 | **Migration-number placeholders.** Registry through `0050` (OI-SELF0 Belief Core). Prior: `0049` LQ.2 timeline density. **Next free slot: `0051`**. | C.2 | updated SELF 2026-08-11 |
+| OI-C7 | 🟢 | P3 | **Migration-number placeholders.** Registry through `0051` (OI-STAB0 Activity Journal). Prior: `0050` Belief Core. **Next free slot: `0052`**. | C.2 | updated STAB 2026-08-12 |
 
 | OI-C12 | 🟢 | P3 | **Personal/Owner SPA dashboard view.** Console `/ui` Personal panel: coverage bars, skills/timeline/professional/identity with P9 "why", Confirm/Reject for inferred facts, Infer + draft-resume actions over `/v1/personal/*`. | C.8d | closed OI-C12 |
 | OI-C13 | 🟢 | P3 | **Conversation → experience extraction.** `build_conversation_experiences` distills owner-stated skills from user turns; `IngestionService` writes them when `source=conversation` + `extract_findings` (Owner Knowledge). | C.8a | closed OI-C13 |
@@ -97,17 +97,22 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-DI0 | 🟢 | P1 | **Decision Intelligence** — **DI.1→DI.7 shipped** (migrations `0045`–`0048`). Full stack: packets→timeline→obs→attr→KPIs→fundamentals→process→meta→gated ML export. DI.7 blocked until ≥300 trusted closed per strategy_tag (or override). **No live NN trading.** | [`DECISION_INTELLIGENCE_LEARNING_PLAN.md`](DECISION_INTELLIGENCE_LEARNING_PLAN.md) · playbook | 2026-08-05 |
 | OI-LI0 | 🟢 | P1 | **Learning Intelligence & Market Laboratories** — **PLAN LOCKED · LI.1a–LI.6 ✅**. Labs, evidence, observations, DI hardening, Learning Intelligence, AtlasNet **prep only** (`live_nn_trading=False`). New ideas → new OI items. Hermeticity §0.2. | [`LEARNING_INTELLIGENCE_AND_MULTI_LEDGER_PLAN.md`](LEARNING_INTELLIGENCE_AND_MULTI_LEDGER_PLAN.md) · `tests/test_laboratory_li*.py` | 2026-08-08 |
 | OI-MLQ0 | 🟢 | P1 | **Market Laboratory Evidence & Attribution Quality** — PLAN LOCKED. **LQ.1–LQ.9** ✅ (sector · timelines · news · causal · calibration · regime · Tier C · KPI honesty · AtlasNet hard-gate). AtlasNet remains prep-only until §8.2 clears in prod. Does **not** reopen DI/LI. | [`MARKET_LABORATORY_EVIDENCE_AND_ATTRIBUTION_PLAN.md`](MARKET_LABORATORY_EVIDENCE_AND_ATTRIBUTION_PLAN.md) | 2026-08-08 |
-| OI-PLC0 | 🟡 | P1 | **Professional Laboratory Cycle** — code ✅. **PLC.E wake ✅** (caret `^NSEI` durable load · F&O/intraday config self-heal · BANKNIFTY alias). Ops: restart Atlas; Mon open verify F&O marks + intraday session ticks. | [`PROFESSIONAL_LABORATORY_CYCLE_PLAN.md`](PROFESSIONAL_LABORATORY_CYCLE_PLAN.md) · `test_plc_e_lab_wake` | 2026-08-10 |
+| OI-STAB0 | 🟡 | P0 | **18 Aug first clean LOOP0 equity day** (journal + session-fresh marks + 0 Yahoo 429 + no `missing_er`). 13+17 observed earlier; 17 RTH was LOOP0-dirty. 2nd **consecutive** clean still open. | [`ATLAS_STABILIZATION_SPRINT_ONE_MARKET_DAY.md`](ATLAS_STABILIZATION_SPRINT_ONE_MARKET_DAY.md) | 2026-08-18 |
+| OI-PLC0 | 🟡 | P1 | **Professional Laboratory Cycle** — code ✅. Labs **tick**. L0 cap/alts. **L4** NIFTY index-proxy lot. **L5** 5m ≤3 names. | [`PROFESSIONAL_LABORATORY_CYCLE_PLAN.md`](PROFESSIONAL_LABORATORY_CYCLE_PLAN.md) · LOOP0 | 2026-08-18 |
 | OI-UTS0 | 🟢 | P1 | **Universe Triage & Opportunity Switching** — **UTS.A–G ✅** (allocator + memory + learning loop). Improvement plots deferred. | [`UNIVERSE_TRIAGE_AND_OPPORTUNITY_SWITCHING_PLAN.md`](UNIVERSE_TRIAGE_AND_OPPORTUNITY_SWITCHING_PLAN.md) | 2026-08-09 |
 | OI-DAV0 | 🟢 | P1 | **Decision Attribution densify (causes)** — **complete.** DAV.1 helped/hurt/unknown · evening operator brief · RS vs sector Yahoo index (NIFTY fallback) · FCF cashflow-derive + priority enrich · named news · bar+event regimes · sizing **journal** (proposals only). Strategy edits stay proposals-only. Sizing *policy* learning waits for sample growth (see OI-DAV-SIZE). | `causal_attribution` · `sector_benchmarks` · `sizing_learning` · evening | 2026-08-09 |
 | OI-EXP0 | 🟡 | P0 | **Experience Integrity** — write-path: 1 identical routine HOLD/switch_blocked per symbol+reason per IST day. Evening still overstated “Decisions frozen” until OI-RLD0 metrics land. News demotion → unproven (not demote) until coverage. Folded into OI-RLD0. | `experience_integrity.py` · paper_trading · evening · meta/IQ | 2026-08-09 |
 | OI-CWS0 | 🟡 | P0 | **Cognitive Work Scheduler** — IRA-gated research_task ✅ · DCA drain ✅ (structural ≠ agenda done). | `cognitive_work.py` · JUDGMENT §4b–4c | 2026-08-11 |
-| OI-DCA0 | 🟡 | P0 | **Daily Cognitive Agenda** — morning publish + CWS progress + evening section ✅. Live verify next morning mail. | `daily_cognitive_agenda.py` · `test_judgment_dca_jis` | 2026-08-11 |
-| OI-HOURLY0 | 🟡 | P0 | **Hourly digests IST 08–20** — code + IR config `hourly_digests` ✅ · Atlas restarted. Verify first live hourly mail next IST hour. | investor_reports · `format_hourly_activity_report` | 2026-08-11 |
-| OI-LEDGER-UI0 | 🟢 | P0 | **Market UI ledger tables (all labs)** — `GET /v1/market/labs/ledgers` + Market panel ✅ (3 labs live). | app.js · routes | 2026-08-11 |
-| OI-HIST-BARS | 🟡 | P0 | **Historical bar bootstrap** — ~43 dense · NIFTY50 seeds · soft-defer · skip permanent fails. | `historical_bars*` · JUDGMENT §0b | 2026-08-11 |
+| OI-DCA0 | 🟢 | P0 | **Daily Cognitive Agenda** — morning publish + CWS progress + evening section. **Live verified 2026-08-13** (`cognitive_agenda` + morning mail). | `daily_cognitive_agenda.py` · `test_judgment_dca_jis` | 2026-08-13 |
+| OI-HOURLY0 | 🟢 | P0 | **Hourly digests IST 08–20** (independent of morning window — 08/09 no longer skipped). Three-lab book board on morning/evening/hourly/fill mail. | investor_reports · `format_hourly_activity_report` | 2026-08-18 |
+| OI-LEDGER-UI0 | 🟢 | P0 | **Market UI ledger tables (all labs)** — three lab cards at top of Market; auto-refresh books-only (no full-page jump). | app.js · routes | 2026-08-18 |
+| OI-HIST-BARS | 🟡 | P0 | **Historical bar bootstrap** — 1mo tip-refresh when dense-but-stale. **BATCH** (was mis-seeded REALTIME). **Yields Yahoo during NSE RTH** so paper marks keep the IP. Overnight/after-close continues. | `historical_bars*` · JUDGMENT §0b | 2026-08-13 |
 | OI-JDG0 | 🟡 | P0 | **Judgment Pivot LOCKED** (amendments B+C). Primary metric: **Belief Revisions/week**. Next: BRE densify → full JIS → J5. | [`JUDGMENT_PIVOT_DISCUSSION.md`](JUDGMENT_PIVOT_DISCUSSION.md) §0b–0c | 2026-08-11 |
-| OI-SELF0 | 🟡 | P0 | **Persistent Self Phases 1–4 ✅** — Belief Core · Experience loop · Reflection · **Identity Living RAG chat**. Soft influence (Phase 5) deferred until ~100 trusted revisions. BRE choke-point densify still open. | plan · `test_self0_*` | 2026-08-11 |
+| OI-LOOP0 | 🟡 | P0 | **L0–L5 landed.** 19 Aug: NIFTY proxy lot + 5m fills. Integrity failures (FNO→Bosch, intraday overnight, thesis vs BUY) → OI-LINT0. 1m still OI-FEED-1M. | [`ATLAS_CLOSED_LOOP_LAB_WAKE_PLAN.md`](ATLAS_CLOSED_LOOP_LAB_WAKE_PLAN.md) | 2026-08-19 |
+| OI-LINT0 | 🟢 | P0 | Phase 1–6 in code. **Locked plan complete.** | [`ATLAS_LEARNING_INTEGRITY_PLAN.md`](ATLAS_LEARNING_INTEGRITY_PLAN.md) | 2026-08-20 |
+| OI-STAB-JOURNAL | 🟡 | P0 | **P0.0 Daily Activity Journal** — live 2026-08-13: paper_tick 494 · fno_paused 246 (pre-unlock) · hourly 9 · morning+evening. **Gaps:** research / reflection / scheduler / engineering emitters → AGENT-1 P2. MEM.1 distill failed ×14 (advice-only). | under OI-STAB0 |
+| OI-AGENT1 | 🔴 | P0 | **Persistent Operator — FROZEN** until **two consecutive** STAB0 clean equity sessions. Then: Active Agenda · Day Brief · Goal Tracker · Waiting State · Check-ins. Not Phase 5. | [`ATLAS_AGENT1_PERSISTENT_OPERATOR_PLAN.md`](ATLAS_AGENT1_PERSISTENT_OPERATOR_PLAN.md) | 2026-08-12 |
+| OI-SELF0 | 🟡 | P0 | **Persistent Self Phases 1–4 ✅**. **Phase 5 soft influence FROZEN** until ≥5 consecutive clean STAB0 sessions (stricter than AGENT-1’s two-pass gate). | plan · `test_self0_*` | 2026-08-12 |
 | OI-SELF-ID | 🟢 | P0 | Identity + Living RAG chat ✅ (`identity_chat` · assistant bind · why/mind-change benchmarks · `/v1/reasoning/living-rag`). | under OI-SELF0 |
 | OI-SELF-BELIEF | 🟡 | P0 | Postgres Belief Engine ✅ | under OI-SELF0 |
 | OI-SELF-SEED | 🟢 | P0 | 21 operator seed beliefs ✅ | under OI-SELF0 |
@@ -118,7 +123,7 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-EXP-LANE0 | 🔴 | P1 | **Measure-only experiment lanes** — V1 control vs one challenger (Judgment Month **J5**). Compare; never silent adopt. Deferred until J1–J3 signal. | under OI-JDG0 | 2026-08-11 |
 | OI-RLD0 | 🟡 | P0 | **Reliable Learning Dataset v1** — honesty ✅. Remaining folds into Judgment Month J1–J2 (history, FCF, news attribution). | RLD · [`JUDGMENT_PIVOT_DISCUSSION.md`](JUDGMENT_PIVOT_DISCUSSION.md) | 2026-08-11 |
 | OI-DAV-SIZE | 🔴 | P2 | **Sizing learning policy** — use `sizing_learning` journal (confidence→size→outcome) to propose trade_fraction bands. No auto-mutation until sample gate + operator approve. | deferred from OI-DAV0 | 2026-08-09 |
-| OI-MKT-COV | 🟡 | P0 | **Market sensor coverage** — CAP.1 ✅. J1 bootstrap **in flight** (last close densified to 2026-08-11 for kicked symbols). Live session_fresh still Yahoo-fragile. | `bar_store` · OI-HIST-BARS | 2026-08-11 |
+| OI-MKT-COV | 🟡 | P0 | **Market sensor coverage** — session-fresh tip refresh + RTH isolation: hist/enrich skip Yahoo in session; market program floor **3/4 in RTH** so equity+intraday+FNO tick together. Still one queue. Bounce to load. | `bar_store` · `market_reader` · ARMF | 2026-08-13 |
 | OI-MTL0 | 🟢 | P1 | **Market Timeline (open books MVP)** — densify ✅: durable NIFTY + sector RS (`^CNXPHARMA`/`^CNXAUTO`/…), evening NIFTY/RS lines, obs→news/policy wiring (empty headlines stay unknown). Persist `market/timelines/{lab}/{day}.jsonl`. FCF still operator/Screener. Expand watchlist later (D5). | RLD §3.6 · `tests/test_mtl0_market_timeline.py` | 2026-08-09 |
 | OI-GENE0 | 🟡 | P2 | **Decision genealogy** — **GENE.1 ✅**. Lesson→next densify under Judgment Month J3. Required before AtlasNet (B21/D6). | `decision_genealogy.py` · JDG | 2026-08-11 |
 | OI-BRE0 | 🟡 | P0 | **Belief Revision** — BRE.4 fixed ✅ · **J3 evening four-answers ✅**. Material BRE.2 revises still need real evidence_delta. | BRE plan · JUDGMENT §0b | 2026-08-11 |
@@ -191,6 +196,8 @@ Tracked for completeness; these are intentional scope cuts, not accidental debt.
 
 | ID | Item | Closed by |
 |----|------|-----------|
+| OI-HOURLY0 | Hourly digests IST 08–20 live verified (2026-08-13 hours 10–20). | 2026-08-13 session |
+| OI-DCA0 | Daily Cognitive Agenda morning publish + mail live verified. | 2026-08-13 session |
 | OI-DAV0 | Decision Attribution densify (causes) — seams complete. | 2026-08-09 densify cycle |
 
 | OI-M6 | **Video frames → OCR** — frame extract capability + reader. | `f69a439` |

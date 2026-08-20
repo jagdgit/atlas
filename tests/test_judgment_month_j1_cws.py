@@ -14,6 +14,7 @@ from atlas.investment.cognitive_work import (
 from atlas.investment.historical_bars import (
     bootstrap_batch,
     needs_bootstrap,
+    needs_tip_refresh,
 )
 from atlas.investment.morning_hypothesis import run_morning_hypothesis_batch
 from atlas.investment.reports import format_hourly_activity_report
@@ -34,6 +35,27 @@ def test_cws_quota_and_unknown_queue(tmp_path):
     assert isinstance(rem, dict)
     lines = format_cws_section(doc)
     assert any("Cognitive Work" in x for x in lines)
+
+
+def test_hist_bootstrap_worker_yields_yahoo_in_rth(monkeypatch, tmp_path):
+    from atlas.workers.base import TickContext
+    from atlas.workers.historical_bars_bootstrap import HistoricalBarsBootstrapWorker
+
+    monkeypatch.setattr(
+        "atlas.investment.yahoo_fundamentals.yahoo_background_should_yield_to_live",
+        lambda **k: True,
+    )
+    worker = HistoricalBarsBootstrapWorker(data_dir=str(tmp_path))
+    out = worker.do_tick(
+        TickContext(
+            worker_id="hb-1",
+            mission_id="m-hb",
+            config={},
+            config_version=1,
+            state={},
+        )
+    )
+    assert "yield yahoo" in (out.note or "").lower()
 
 
 def test_hist_bootstrap_skips_failed(tmp_path):
@@ -110,6 +132,58 @@ def test_hist_bootstrap_persists(tmp_path):
     )
     assert out["ok"] == 1
     assert needs_bootstrap(tmp_path, "NIFTY", min_bars=400) is False
+    assert needs_tip_refresh(tmp_path, "NIFTY") is True
+
+
+def test_hist_bootstrap_refreshes_stale_dense_tip(tmp_path):
+    from datetime import date, timedelta
+
+    from atlas.investment.bar_store import persist_symbol_bars
+
+    last_old = date(2026, 8, 1)
+    old = [
+        {
+            "date": (last_old - timedelta(days=449 - i)).isoformat(),
+            "close": 100.0 + i,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "volume": 10,
+        }
+        for i in range(450)
+    ]
+    persist_symbol_bars(tmp_path, "TCS.NS", old, provider="yahoo")
+    assert needs_bootstrap(tmp_path, "TCS.NS", min_bars=400) is False
+    assert needs_tip_refresh(tmp_path, "TCS.NS") is True
+    ranges: list[str] = []
+
+    def fetch(symbol, **kwargs):
+        ranges.append(str(kwargs.get("range") or ""))
+        from atlas.investment.bar_store import last_completed_nse_session_date
+
+        sess = last_completed_nse_session_date().isoformat()
+        return old[-5:] + [
+            {
+                "date": sess,
+                "close": 999.0,
+                "open": 999.0,
+                "high": 1000.0,
+                "low": 998.0,
+                "volume": 1,
+            }
+        ]
+
+    out = bootstrap_batch(
+        tmp_path,
+        ["TCS.NS"],
+        fetch_bars=fetch,
+        max_n=1,
+        range_="10y",
+        min_bars=400,
+    )
+    assert out["ok"] == 1
+    assert ranges == ["1mo"]
+    assert needs_tip_refresh(tmp_path, "TCS.NS") is False
 
 
 def test_bre4_uses_chatmessage(tmp_path):

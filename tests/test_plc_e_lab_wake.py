@@ -20,6 +20,18 @@ def test_banknifty_alias():
     assert r.aliased is True
 
 
+def test_fno_skips_cash_equity_alts():
+    from atlas.workers.paper_trading import skip_cash_alts_for_lab
+
+    assert skip_cash_alts_for_lab({"asset_class": "futures", "instrument_pack": "nse_fno"})
+    assert skip_cash_alts_for_lab({}, pack_id="futures")
+    assert skip_cash_alts_for_lab({}, portfolio_key="fno_paper")
+    assert skip_cash_alts_for_lab({}, portfolio_key="equity_intraday_learner")
+    assert not skip_cash_alts_for_lab(
+        {"asset_class": "cash_equity"}, pack_id="nse_cash", portfolio_key="india_equity_learner"
+    )
+
+
 def test_load_nifty_from_caret_legacy_filename(tmp_path):
     """Observer wrote ``^NSEI.json``; safe path is ``_NSEI.json`` — both must load."""
     root = tmp_path / "market" / "bars"

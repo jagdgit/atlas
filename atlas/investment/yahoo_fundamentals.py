@@ -207,6 +207,51 @@ class YahooRateGate:
                 cool,
                 self._consecutive_blocks,
             )
+            try:
+                from atlas.activity import record_activity
+
+                # Throttle journal noise: emit on first block and every 25 thereafter
+                if self._consecutive_blocks == 1 or self._consecutive_blocks % 25 == 0:
+                    record_activity(
+                        domain="market",
+                        worker="yahoo_rate_gate",
+                        action="yahoo_cooldown",
+                        result="deferred",
+                        summary=(
+                            f"Yahoo rate gate entered cooldown {cool:.0f}s "
+                            f"(HTTP {code}, consecutive_blocks={self._consecutive_blocks})"
+                        ),
+                        evidence={
+                            "status_code": code,
+                            "cooldown_s": cool,
+                            "consecutive_blocks": self._consecutive_blocks,
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+            # Append request audit line (OI-STAB0 Day 1)
+            try:
+                if self._path:
+                    audit = self._path.parent.parent / "yahoo_request_audit.jsonl"
+                    audit.parent.mkdir(parents=True, exist_ok=True)
+                    with audit.open("a", encoding="utf-8") as fh:
+                        fh.write(
+                            json.dumps(
+                                {
+                                    "ts": time.time(),
+                                    "worker": "yahoo_rate_gate",
+                                    "symbol": None,
+                                    "url_class": "rate_gate",
+                                    "status": code,
+                                    "cache_hit": False,
+                                    "cooldown_s": cool,
+                                    "consecutive_blocks": self._consecutive_blocks,
+                                }
+                            )
+                            + "\n"
+                        )
+            except Exception:  # noqa: BLE001
+                pass
             return cool
 
 
@@ -235,6 +280,19 @@ def reset_yahoo_rate_gate_for_tests() -> None:
 def is_yahoo_rate_block_error(err: str | None) -> bool:
     text = str(err or "").lower()
     return "http 429" in text or "http 401" in text or "getcrumb" in text
+
+
+def yahoo_background_should_yield_to_live(*, now=None) -> bool:
+    """True during NSE RTH — hist/enrich Yahoo must yield so paper marks can refresh.
+
+    One IP. Background jobs keep their workers running; they just skip network.
+    """
+    try:
+        from atlas.trading.sessions import is_session_open
+
+        return bool(is_session_open("nse_equity", now=now))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _f(val: Any) -> float | None:

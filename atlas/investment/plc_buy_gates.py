@@ -42,6 +42,10 @@ def plc_a_enabled(cfg: dict[str, Any] | None, portfolio_key: str | None) -> bool
     if cfg.get("plc_a_buy_gates") is not None:
         return bool(cfg.get("plc_a_buy_gates"))
     pk = (portfolio_key or "").lower()
+    # Intraday / F&O use session-risk / margin packs — swing PLC.A fundamentals
+    # otherwise idle the lab all day (OI-PLC0 / operator 2026-08-13).
+    if "intraday" in pk or "fno" in pk or pk.endswith("_futures"):
+        return False
     return "learner" in pk or "laboratory" in pk
 
 
@@ -207,6 +211,7 @@ def evaluate_plc_a_buy(
     engine_why: str | None = None,
     require_fundamentals: bool = True,
     require_thesis_trigger: bool = True,
+    symbol: str | None = None,
 ) -> dict[str, Any]:
     """Combine A2 + A3. Returns block details when not allowed."""
     sector = sector_from_sources(
@@ -224,6 +229,22 @@ def evaluate_plc_a_buy(
         if require_thesis_trigger
         else {"ok": True, "code": "thesis_skipped", "trigger": None}
     )
+    identity_check: dict[str, Any] | None = None
+    if symbol:
+        try:
+            from atlas.investment.thesis_identity import validate_thesis_identity
+
+            identity_check = validate_thesis_identity(symbol, awareness)
+            if identity_check.get("thesis_invalid"):
+                thesis = {
+                    "ok": False,
+                    "code": "thesis_invalid",
+                    "trigger": None,
+                    "reason": "thesis_invalid:"
+                    + ",".join(identity_check.get("reasons") or ["identity_mismatch"]),
+                }
+        except Exception:  # noqa: BLE001
+            identity_check = None
 
     blocks: list[str] = []
     strategy_tag = "plc_a_ok"
@@ -233,7 +254,7 @@ def evaluate_plc_a_buy(
     if not thesis.get("ok"):
         blocks.append(str(thesis.get("reason") or "thesis_trigger_missing"))
         if strategy_tag == "plc_a_ok":
-            strategy_tag = "thesis_trigger_missing"
+            strategy_tag = str(thesis.get("code") or "thesis_trigger_missing")
 
     allowed = not blocks
     return {
@@ -243,8 +264,9 @@ def evaluate_plc_a_buy(
         "blocks": blocks,
         "fundamentals": fund,
         "thesis": thesis,
-        "thesis_trigger": thesis.get("trigger"),
+        "thesis_trigger": thesis.get("trigger") if thesis.get("ok") else None,
         "sector": sector,
+        "identity_check": identity_check,
         "honesty": (
             "PLC.A: SMA/RSI remains technical trigger; PE/ROE/D/E + sector + "
             "explicit thesis reason required for learner buys when enabled."

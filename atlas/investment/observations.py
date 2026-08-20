@@ -477,6 +477,32 @@ class DecisionObservationStore:
     ) -> dict[str, Any]:
         """LQ.3 — news_event with §8.1 fields; mirrors to news/{SYM}.jsonl."""
         extra = dict(extra or {})
+        from atlas.investment.market_events import stamp_market_event
+
+        stamped = stamp_market_event(
+            {
+                **extra,
+                "text": (text or "")[:500],
+                "source": source,
+                "link": link or extra.get("link"),
+                "kind": extra.get("kind") or "news_event",
+                "published": extra.get("published") or extra.get("published_at"),
+                "seed": extra.get("seed"),
+                "evidence_class": extra.get("evidence_class"),
+                "feed_id": extra.get("feed_id"),
+            }
+        )
+        for k in (
+            "observed_at",
+            "published_at",
+            "valid_from",
+            "valid_until",
+            "retrieved_at",
+            "source_tier",
+            "evidence_class",
+            "event_class",
+        ):
+            extra.setdefault(k, stamped.get(k))
         tags = list(topic_tags) if topic_tags else infer_news_topic_tags(text)
         if extra.get("topic_tags") and not topic_tags:
             tags = list(extra.get("topic_tags") or [])[:8]
@@ -573,6 +599,32 @@ class DecisionObservationStore:
         source: str = "government_intelligence",
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        extra = dict(extra or {})
+        from atlas.investment.market_events import stamp_market_event
+
+        stamped = stamp_market_event(
+            {
+                **extra,
+                "title": (title or "")[:300],
+                "source": source,
+                "kind": extra.get("kind") or "policy_event",
+                "published": extra.get("published") or extra.get("published_at"),
+                "feed_id": extra.get("feed_id"),
+                "link": extra.get("link"),
+                "catalog_summary": extra.get("catalog_summary"),
+            }
+        )
+        for k in (
+            "observed_at",
+            "published_at",
+            "valid_from",
+            "valid_until",
+            "retrieved_at",
+            "source_tier",
+            "evidence_class",
+            "event_class",
+        ):
+            extra.setdefault(k, stamped.get(k))
         return self.record(
             kind="policy_event",
             symbol=None,
@@ -582,7 +634,7 @@ class DecisionObservationStore:
             payload={
                 "title": (title or "")[:300],
                 "sectors": list(sectors or [])[:20],
-                **(extra or {}),
+                **extra,
             },
         )
 

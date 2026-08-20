@@ -844,12 +844,18 @@ class WorkerManager:
         prog = demand.program_id
         uses_llm = demand.uses_llm
         llm_weight = demand.llm_weight
-        if not sc and wtype:
+        if wtype:
             try:
                 from atlas.missions.templates.resources import resources_for
+                from atlas.core.resources.work_profile import SERVICE_BATCH
 
                 prof = resources_for(str(wtype))
-                sc = prof.service_class
+                # Hist bootstrap was mis-seeded as market_observer REALTIME — never
+                # let that steal paper lab slots even on already-instantiated missions.
+                if str(wtype) in {"historical_bars_bootstrap", "fundamentals_enrich"}:
+                    sc = SERVICE_BATCH
+                elif not sc:
+                    sc = prof.service_class
                 if not uses_llm:
                     uses_llm, llm_weight = _llm_pair_from_profile(prof.llm)
             except Exception:  # noqa: BLE001

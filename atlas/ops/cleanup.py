@@ -25,6 +25,13 @@ from atlas.ops.worker_states import STARVE_AFTER_SECONDS, classify_worker
 # B2 defaults
 DEFAULT_ZOMBIE_TYPES: frozenset[str] = frozenset({"hello_watcher"})
 DEFAULT_MIN_STARVATION_AGE_SECONDS = STARVE_AFTER_SECONDS  # 6h — same as starved
+# OI-STAB0 P1.4 — types that commonly spawn duplicates and starve the tick pool
+DEFAULT_DUPLICATE_TYPES: frozenset[str] = frozenset(
+    {
+        "hello_watcher",
+        "decision_meta_learning",
+    }
+)
 
 # B4 — never auto-kill without checkbox
 PROTECTED_PROGRAMS: frozenset[str] = frozenset(
@@ -178,6 +185,118 @@ def select_cleanup_candidates(
     }
 
 
+def select_duplicate_workers(
+    workers: list[Any],
+    *,
+    now: datetime | None = None,
+    duplicate_types: frozenset[str] | set[str] | None = None,
+    keep: str = "oldest",
+    include_protected: bool = False,
+) -> dict[str, Any]:
+    """OI-STAB0 P1.4 — retire extra workers of the same type (keep one).
+
+    Groups by ``(type, program)``. Default types: known BATCH duplicates such as
+    ``decision_meta_learning``. Keeps the oldest (or newest) non-terminal worker;
+    others become archive/stop candidates.
+    """
+    now = _aware(now) or datetime.now(timezone.utc)
+    types = (
+        frozenset(duplicate_types)
+        if duplicate_types is not None
+        else DEFAULT_DUPLICATE_TYPES
+    )
+    keep = (keep or "oldest").strip().lower()
+    if keep not in {"oldest", "newest"}:
+        keep = "oldest"
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for w in workers:
+        row = classify_worker(w, now=now)
+        created = getattr(w, "created_at", None)
+        if created is None and isinstance(w, dict):
+            created = w.get("created_at")
+        row["created_at"] = str(created or "")
+        wtype = str(row.get("type") or "")
+        if wtype not in types:
+            continue
+        status = str(row.get("status") or "")
+        if status in _TERMINAL_WORKER:
+            continue
+        owner = row.get("owner") if isinstance(row.get("owner"), dict) else {}
+        prog = str(owner.get("program") or "") or "_"
+        groups.setdefault((wtype, prog), []).append(row)
+
+    candidates: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for (wtype, prog), rows in sorted(groups.items()):
+        if len(rows) < 2:
+            continue
+
+        def _sort_key(r: dict[str, Any]) -> str:
+            return str(
+                r.get("created_at")
+                or r.get("started_at")
+                or r.get("id")
+                or ""
+            )
+
+        ordered = sorted(rows, key=_sort_key)
+        keeper = ordered[0] if keep == "oldest" else ordered[-1]
+        keep_id = str(keeper.get("id") or "")
+        extras = [r for r in ordered if str(r.get("id") or "") != keep_id]
+        kept.append(
+            {
+                **_candidate_base(keeper),
+                "keep_reason": f"duplicate_keep_{keep}",
+                "group": f"{wtype}:{prog}",
+                "group_size": len(ordered),
+            }
+        )
+        for r in extras:
+            protected = is_protected_worker(r)
+            if protected and not include_protected:
+                skipped.append(
+                    {
+                        **_candidate_base(r),
+                        "skip_reason": "protected_requires_checkbox",
+                        "match_reason": f"duplicate_of:{keeper.get('id')}",
+                        "protected": True,
+                    }
+                )
+                continue
+            mid = str(r.get("mission_id") or "") or None
+            candidates.append(
+                {
+                    **_candidate_base(r),
+                    "reason": f"duplicate_type:{wtype}",
+                    "protected": protected,
+                    "action": "archive_mission" if mid else "stop_worker",
+                    "keep_worker_id": keeper.get("id"),
+                    "group": f"{wtype}:{prog}",
+                    "group_size": len(ordered),
+                }
+            )
+
+    return {
+        "version": "stab0.dup.v1",
+        "policy": {
+            "duplicate_types": sorted(types),
+            "keep": keep,
+            "include_protected": bool(include_protected),
+        },
+        "candidates": candidates,
+        "kept": kept,
+        "skipped": skipped[:50],
+        "counts": {
+            "candidates": len(candidates),
+            "groups": len(kept),
+            "skipped": len(skipped),
+        },
+    }
+
+
 def _candidate_base(row: dict[str, Any]) -> dict[str, Any]:
     owner = row.get("owner") if isinstance(row.get("owner"), dict) else {}
     return {
@@ -218,6 +337,9 @@ class OpsCleanupService:
         zombie_types: list[str] | None = None,
         min_starvation_age_seconds: float = DEFAULT_MIN_STARVATION_AGE_SECONDS,
         include_protected: bool = False,
+        include_duplicates: bool = False,
+        duplicate_types: list[str] | None = None,
+        duplicate_keep: str = "oldest",
         worker_ids: list[str] | None = None,
         mission_ids: list[str] | None = None,
         limit: int = 500,
@@ -227,6 +349,9 @@ class OpsCleanupService:
             zombie_types=zombie_types,
             min_starvation_age_seconds=min_starvation_age_seconds,
             include_protected=include_protected,
+            include_duplicates=include_duplicates,
+            duplicate_types=duplicate_types,
+            duplicate_keep=duplicate_keep,
             worker_ids=worker_ids,
             mission_ids=mission_ids,
             limit=limit,
@@ -239,6 +364,9 @@ class OpsCleanupService:
         zombie_types: list[str] | None = None,
         min_starvation_age_seconds: float = DEFAULT_MIN_STARVATION_AGE_SECONDS,
         include_protected: bool = False,
+        include_duplicates: bool = False,
+        duplicate_types: list[str] | None = None,
+        duplicate_keep: str = "oldest",
         worker_ids: list[str] | None = None,
         mission_ids: list[str] | None = None,
         reason: str = "",
@@ -276,6 +404,33 @@ class OpsCleanupService:
             mission_ids=set(mission_ids) if mission_ids else None,
         )
 
+        dup_block: dict[str, Any] | None = None
+        if include_duplicates:
+            dtypes = frozenset(duplicate_types) if duplicate_types else None
+            dup_block = select_duplicate_workers(
+                rows,
+                now=now,
+                duplicate_types=dtypes,
+                keep=duplicate_keep,
+                include_protected=include_protected,
+            )
+            seen_ids = {
+                str(c.get("worker_id") or "") for c in selection["candidates"]
+            }
+            for c in dup_block.get("candidates") or []:
+                wid = str(c.get("worker_id") or "")
+                if wid and wid in seen_ids:
+                    continue
+                selection["candidates"].append(c)
+                if wid:
+                    seen_ids.add(wid)
+            selection["counts"]["candidates"] = len(selection["candidates"])
+            selection["counts"]["duplicate_candidates"] = int(
+                (dup_block.get("counts") or {}).get("candidates") or 0
+            )
+            selection["duplicate_policy"] = dup_block.get("policy")
+            selection["duplicate_kept"] = dup_block.get("kept") or []
+
         # Enrich mission titles + already-archived flags when possible
         if self._missions is not None:
             for c in selection["candidates"]:
@@ -289,6 +444,14 @@ class OpsCleanupService:
                 if st == "archived":
                     c["mission_status"] = "archived"
                     c["note"] = "mission already archived — apply will stop orphan worker only"
+
+        # Recount distinct missions after merge
+        mids = {
+            str(c.get("mission_id"))
+            for c in selection["candidates"]
+            if c.get("mission_id")
+        }
+        selection["counts"]["missions"] = len(mids)
 
         out: dict[str, Any] = {
             "dry_run": bool(dry_run),
@@ -441,12 +604,12 @@ class OpsCleanupService:
             return None
 
     def _stop_worker_quiet(self, wid: str | None, reason: str) -> None:
-        if not wid or self._workers is None or not hasattr(self._workers, "stop_worker"):
+        """Stop orphan worker; raise so apply records an error if stop fails."""
+        if not wid:
             return
-        try:
-            self._workers.stop_worker(wid, reason)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("cleanup stop_worker %s: %s", wid, exc)
+        if self._workers is None or not hasattr(self._workers, "stop_worker"):
+            raise RuntimeError("workers.stop_worker unavailable")
+        self._workers.stop_worker(wid, reason)
 
     def _mission_title(self, mid: str) -> str | None:
         try:

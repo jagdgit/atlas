@@ -188,6 +188,9 @@ class NewsIntelligenceWorker(PersistentWorker):
             if len(text) < 12:
                 skipped += 1
                 continue
+            if item.get("seed") or item.get("evidence_class") == "non_evidence":
+                skipped += 1
+                continue
             digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
             if digest in seen:
                 skipped += 1
@@ -233,7 +236,18 @@ class NewsIntelligenceWorker(PersistentWorker):
                         observed_before_move=item.get("observed_before_move"),
                         link_decision_id=decision_id,
                         open_book=is_open,
-                        extra={"digest": digest, "lq": "lq.3"},
+                        extra={
+                            "digest": digest,
+                            "lq": "lq.3",
+                            "published": item.get("published") or item.get("published_at"),
+                            "published_at": item.get("published_at"),
+                            "feed_id": item.get("feed_id"),
+                            "source_tier": item.get("source_tier"),
+                            "observed_at": item.get("observed_at"),
+                            "valid_from": item.get("valid_from"),
+                            "retrieved_at": item.get("retrieved_at"),
+                            "kind": item.get("kind") or "news_event",
+                        },
                     )
                     news_obs += 1
                     if is_open:

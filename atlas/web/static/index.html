@@ -157,16 +157,31 @@
           <h2>Market</h2>
           <div class="panel-actions">
             <label class="muted small learner-auto">
-              <input type="checkbox" id="learner-auto" checked /> auto-refresh
+              <input type="checkbox" id="learner-auto" checked /> auto-refresh books
             </label>
             <button id="learner-refresh" class="link" type="button">refresh</button>
           </div>
         </div>
         <p class="muted learner-intro">
-          Market Intelligence dashboard — ranked watchlist, today's sim plan, checklist, and books.
+          Three isolated paper books sit at the top (swing · NIFTY index-proxy · intraday).
+          Auto-refresh updates those books only, so you can keep reading the rest of the page.
           If the watchlist is empty, wait for an Investment Universe tick (or refresh after one).
         </p>
         <div id="learner-summary" class="learner-summary"></div>
+
+        <div class="learner-panel learner-lab-books-panel">
+          <div class="panel-head">
+            <h3 class="section-h">Laboratory books</h3>
+            <div class="panel-actions">
+              <span id="learner-ledgers-stamp" class="muted small"></span>
+              <button id="learner-ledgers-refresh" class="link" type="button">refresh</button>
+            </div>
+          </div>
+          <p class="muted small learner-lab-books-note">
+            Cash · equity · P&amp;L · positions for each lab. Do not add the three equities into one P&amp;L.
+          </p>
+          <div id="learner-ledgers" class="learner-lab-books">Loading books…</div>
+        </div>
 
         <div class="learner-panel learner-email-panel">
           <div class="panel-head">
@@ -347,17 +362,6 @@
             <div class="panel-head"><h3 class="section-h">Sim book &amp; missions</h3></div>
             <div id="learner-book" class="learner-body"></div>
           </div>
-        </div>
-
-        <div class="learner-panel">
-          <div class="panel-head">
-            <h3 class="section-h">Books &amp; ledgers (all labs)</h3>
-            <button id="learner-ledgers-refresh" class="link" type="button">refresh</button>
-          </div>
-          <p class="muted small">
-            Cash · equity · day/total P&amp;L · positions · recent trades for swing / intraday / F&amp;O (sim only).
-          </p>
-          <div id="learner-ledgers" class="learner-body">Loading ledgers…</div>
         </div>
 
         <div class="learner-panel">

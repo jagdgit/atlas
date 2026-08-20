@@ -65,6 +65,7 @@ class Intent:
     MANAGE_GOAL = "manage_goal"
     CAREER_STATUS = "career_status"
     MARKET_STATUS = "market_status"
+    DAY_ACTIVITY = "day_activity"
     VERIFY_KNOWLEDGE = "verify_knowledge"
 
 
@@ -637,6 +638,11 @@ def _career_status_args(message: str, _m: re.Match[str] | None) -> dict[str, Any
     return {"query": (message or "").strip()[:400], "action": "status"}
 
 
+def _day_activity_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    """OI-SELF-ID — day brief from durable artifacts (no LLM)."""
+    return {"query": (message or "").strip()[:400], "action": "status"}
+
+
 def _market_status_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     """PLC.F / UTS.G — Market Intelligence / coverage status without an LLM turn."""
     text = (message or "").strip()[:400]
@@ -697,6 +703,23 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
             re.IGNORECASE,
         ),
         _query_args,
+    ),
+    (
+        Intent.DAY_ACTIVITY,
+        "",  # OI-SELF-ID — durable day artifacts; no plugin capability
+        re.compile(
+            r"\bwhat\s+did\s+you\s+do\s+today\b"
+            r"|\bwhat\s+have\s+you\s+done\s+today\b"
+            r"|\bwhat(?:'s|\s+is)\s+your\s+(?:day|activity)\s+today\b"
+            r"|\bhow\s+was\s+your\s+day\b"
+            r"|\btoday'?s\s+activity\b"
+            r"|\bsummarize\s+(?:your\s+)?(?:day|today)\b"
+            r"|\bwhat\s+happened\s+today\b"
+            r"|\bday\s+brief\b"
+            r"|\bactivity\s+(?:report|brief)\s+today\b",
+            re.IGNORECASE,
+        ),
+        _day_activity_args,
     ),
     (
         Intent.CAREER_STATUS,
@@ -960,6 +983,7 @@ _DESCRIPTIONS = {
     Intent.MANAGE_GOAL: "Create, list, or check durable Goals (OX.3 — objectives first).",
     Intent.CAREER_STATUS: "Career Intelligence status / brief (deterministic — no interactive LLM).",
     Intent.MARKET_STATUS: "Market Intelligence / lab status from durable stores + Goals DB (no interactive LLM).",
+    Intent.DAY_ACTIVITY: "What Atlas did today — durable mail/KPI/research/belief artifacts (no interactive LLM).",
 }
 
 

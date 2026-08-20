@@ -346,7 +346,9 @@ def items_as_news(result: dict[str, Any]) -> list[dict[str, Any]]:
         text = str(it.get("text") or it.get("title") or "").strip()
         if len(text) < 12:
             continue
-        out.append(
+        from atlas.investment.market_events import stamp_market_event
+
+        stamped = stamp_market_event(
             {
                 "text": text,
                 "symbol": str(it.get("symbol") or ""),
@@ -354,8 +356,11 @@ def items_as_news(result: dict[str, Any]) -> list[dict[str, Any]]:
                 "title": it.get("title"),
                 "link": it.get("link"),
                 "kind": it.get("kind"),
+                "feed_id": it.get("feed_id"),
+                "published": it.get("published"),
             }
         )
+        out.append(stamped)
     return out
 
 
@@ -367,7 +372,9 @@ def items_as_policy(result: dict[str, Any]) -> list[dict[str, Any]]:
         summary = str(it.get("summary") or it.get("text") or "").strip()
         if not title and not summary:
             continue
-        out.append(
+        from atlas.investment.market_events import stamp_market_event
+
+        stamped = stamp_market_event(
             {
                 "id": str(it.get("id") or "")[:80],
                 "title": title or summary[:80],
@@ -376,6 +383,10 @@ def items_as_policy(result: dict[str, Any]) -> list[dict[str, Any]]:
                 "source": str(it.get("source") or "rss_policy"),
                 "kind": "policy",
                 "link": it.get("link"),
+                "feed_id": it.get("feed_id"),
+                "published": it.get("published"),
+                "text": title or summary,
             }
         )
+        out.append(stamped)
     return out

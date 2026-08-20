@@ -78,7 +78,7 @@ def test_confidence_penalty_punishes_downgrade():
     assert p > p2
 
 
-def test_cold_start_row_yields_null_er():
+def test_learning_row_uses_prototype_er():
     row = {
         "symbol": "AAA.NS",
         "score": 0.7,
@@ -86,11 +86,14 @@ def test_cold_start_row_yields_null_er():
         "confidence": "very_low",
         "components": {"momentum": 0.8},
     }
-    assert expected_return_from_row(row) is None
-    assert confidence_from_label("very_low") is None
+    er = expected_return_from_row(row)
+    assert er is not None
+    assert confidence_from_label("very_low") is None  # raw label still insufficient
     m = estimate_opportunity_metrics(row)
-    assert m["computable"] is False
-    assert "expected_return" in m["missing"]
+    assert m["computable"] is True
+    assert m["er_model"] == "prototype_v1"
+    assert "expected_return" not in m["missing"]
+    assert m["confidence"] == 0.35
 
 
 def test_active_row_computable_and_attach():
@@ -149,6 +152,8 @@ def test_daily_plan_attaches_metrics_when_active():
     by = {c["symbol"]: c for c in plan["candidates"]}
     assert by["GOOD.NS"].get("expected_return") is not None
     assert by["GOOD.NS"].get("risk_adjusted_score") is not None
-    # COLD inherits learning from its own row
-    assert by["COLD.NS"].get("expected_return") is None
-    assert by["COLD.NS"].get("opportunity_metrics", {}).get("computable") is False
+    assert by["GOOD.NS"].get("er_model") == "prototype_v1"
+    # COLD still gets a prototype number (LOOP0 L1) — not silent missing_er
+    assert by["COLD.NS"].get("expected_return") is not None
+    assert by["COLD.NS"].get("opportunity_metrics", {}).get("computable") is True
+    assert by["COLD.NS"].get("er_basis") == "prototype"

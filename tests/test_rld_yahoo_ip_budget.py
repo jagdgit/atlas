@@ -15,6 +15,19 @@ from atlas.trading.adapters import YahooFinanceAdapter
 from atlas.trading.market_reader import MarketReaderService
 
 
+def test_yahoo_background_yields_during_nse_rth(monkeypatch):
+    from atlas.investment.yahoo_fundamentals import yahoo_background_should_yield_to_live
+
+    monkeypatch.setattr(
+        "atlas.trading.sessions.is_session_open", lambda *a, **k: True
+    )
+    assert yahoo_background_should_yield_to_live() is True
+    monkeypatch.setattr(
+        "atlas.trading.sessions.is_session_open", lambda *a, **k: False
+    )
+    assert yahoo_background_should_yield_to_live() is False
+
+
 def test_enrich_hard_pauses_on_cooldown(tmp_path):
     reset_yahoo_rate_gate_for_tests()
     gate = YahooRateGate(
@@ -94,10 +107,12 @@ def test_chart_adapter_refuses_network_during_cooldown(tmp_path):
 
 def test_market_reader_prefers_durable_bars(tmp_path):
     reset_yahoo_rate_gate_for_tests()
-    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    from atlas.investment.bar_store import last_completed_nse_session_date
+
+    sess = last_completed_nse_session_date()
     bars = [
         {
-            "date": (now - timedelta(days=40 - i)).date().isoformat(),
+            "date": (sess - timedelta(days=40 - i)).isoformat(),
             "open": 100 + i,
             "high": 101 + i,
             "low": 99 + i,

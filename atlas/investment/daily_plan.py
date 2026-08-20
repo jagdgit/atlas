@@ -81,7 +81,7 @@ def build_daily_plan(
             "confidence": r.get("confidence") or confidence,
             "components": dict(r.get("components") or {}),
         }
-        # UTS.C — E[R] × confidence when computable (null under cold-start)
+        # UTS.C / LOOP0 L1 — versioned prototype E[R] (always numeric)
         try:
             from atlas.investment.opportunity_switch import attach_opportunity_metrics
 

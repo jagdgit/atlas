@@ -162,6 +162,10 @@ def _news_block_from_observations(
             "title": text[:160],
             "sentiment": sent,
             "topic_tags": tags[:6],
+            "source": str(row.get("source") or pl.get("source") or "") or None,
+            "source_tier": pl.get("source_tier") or row.get("source_tier"),
+            "published_at": pl.get("published_at") or row.get("published_at"),
+            "observed_at": pl.get("observed_at") or row.get("created_at"),
         }
         if any(t in {"policy", "government", "budget", "election"} for t in tags):
             gov.append(item)

@@ -115,6 +115,10 @@ _CFG = {
     "starting_cash": 100000.0,
     "strategy": {"sma_fast": 3, "sma_slow": 5, "rsi_period": 5},
     "bars_per_tick": 100,
+    "feed_mode": "asset_replay",
+    "market_session": "always_open",
+    "respect_market_hours": False,
+    "prefer_next_alternatives": False,
 }
 
 
@@ -206,10 +210,10 @@ class _FakeLiveMarket:
         self._gap = gap
         self.calls: list[tuple[str, dict]] = []
 
-    def bars_for(self, symbol, *, provider=None, asset=None, limit=100):
+    def bars_for(self, symbol, *, provider=None, asset=None, limit=100, **kwargs):
         from atlas.decision.rules import CapabilityGap
 
-        self.calls.append((symbol, {"provider": provider, "limit": limit}))
+        self.calls.append((symbol, {"provider": provider, "limit": limit, **kwargs}))
         if self._gap:
             raise CapabilityGap("market_data:yahoo", "disabled in test")
         return {"provider": provider or "yahoo", "symbol": symbol, "bars": self._bars, "count": len(self._bars)}
@@ -231,6 +235,7 @@ def test_live_feed_decides_once_per_bar_and_never_done():
         "live_provider": "yahoo",
         "market_session": "nse_equity",
         "respect_market_hours": True,
+        "prefer_next_alternatives": False,
     }
     worker = _worker({}, events=events, live_market=live, clock=clock)
     r1 = worker.do_tick(_ctx(cfg))
@@ -251,6 +256,42 @@ def test_live_feed_decides_once_per_bar_and_never_done():
     # At least the first tick ran a decision path (hold or fill).
     assert r1.state["ticks"] == 1
     assert fills_1 or "hold" in r1.note or "buy" in r1.note or "sell" in r1.note
+
+
+def test_intraday_live_requests_5m_and_decides_per_bar(tmp_path, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    monkeypatch.setenv("ATLAS_DATA_DIR", str(tmp_path))
+    events = _FakeEvents()
+    bars = _bars(_UPDOWN)
+    bars[-1]["t"] = 1_000
+    live = _FakeLiveMarket(bars)
+    clock = lambda: datetime(2024, 1, 10, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    cfg = {
+        "instruments": [{"symbol": "RELIANCE.NS"}],
+        "starting_cash": 50000.0,
+        "strategy": {"sma_fast": 3, "sma_slow": 5, "rsi_period": 5},
+        "feed_mode": "live",
+        "live_provider": "yahoo",
+        "market_session": "nse_equity",
+        "respect_market_hours": True,
+        "portfolio_key": "equity_intraday_learner",
+        "auto_max_instruments": 3,
+        "prefer_next_alternatives": False,
+    }
+    worker = _worker({}, events=events, live_market=live, clock=clock)
+    r1 = worker.do_tick(_ctx(cfg))
+    assert live.calls and live.calls[0][1].get("interval") == "5m"
+    assert live.calls[0][1].get("range") == "1d"
+    assert r1.state.get("live_interval") == "5m"
+    key1 = (r1.state.get("last_bar_keys") or {}).get("RELIANCE.NS")
+    live._bars[-1]["t"] = 1_300
+    events.emitted.clear()
+    r2 = worker.do_tick(_ctx(cfg, state=r1.state))
+    key2 = (r2.state.get("last_bar_keys") or {}).get("RELIANCE.NS")
+    assert key2 != key1
+    assert "mark_only" not in (r2.note or "")
 
 
 def test_live_session_closed_marks_but_does_not_trade():

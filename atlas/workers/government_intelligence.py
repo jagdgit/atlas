@@ -90,6 +90,33 @@ class GovernmentIntelligenceWorker(PersistentWorker):
                     "ok_feeds": result.get("ok_feeds"),
                     "item_count": len(policy_items),
                 }
+                if self._observations is not None:
+                    seen_pol = set(state.get("seen_policy_ids") or [])
+                    recorded = 0
+                    for pit in policy_items[:8]:
+                        pid = str(pit.get("id") or pit.get("title") or "")[:80]
+                        if not pid or pid in seen_pol:
+                            continue
+                        self._observations.record_policy_event(
+                            title=str(pit.get("title") or "")[:300],
+                            source=str(pit.get("source") or "rss_policy"),
+                            extra={
+                                "link": pit.get("link"),
+                                "feed_id": pit.get("feed_id"),
+                                "published": pit.get("published") or pit.get("published_at"),
+                                "published_at": pit.get("published_at"),
+                                "source_tier": pit.get("source_tier"),
+                                "observed_at": pit.get("observed_at"),
+                                "valid_from": pit.get("valid_from"),
+                                "retrieved_at": pit.get("retrieved_at"),
+                                "kind": "policy",
+                                "living": True,
+                            },
+                        )
+                        seen_pol.add(pid)
+                        recorded += 1
+                    state["seen_policy_ids"] = list(seen_pol)[-80:]
+                    state["rss_policy"]["recorded_obs"] = recorded
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("policy rss skipped: %s", exc)
                 rss_note = f"; rss_policy skipped ({exc})"
@@ -122,7 +149,12 @@ class GovernmentIntelligenceWorker(PersistentWorker):
                         title=f"policy catalog items={state['item_count']}",
                         sectors=list(state["sector_deltas"])[:20],
                         source="government_intelligence",
-                        extra={"updated_at": state.get("updated_at")},
+                        extra={
+                            "updated_at": state.get("updated_at"),
+                            "catalog_summary": True,
+                            "evidence_class": "non_evidence",
+                            "living": False,
+                        },
                     )
                     # LI.3b — also a macro_event when policy touch rate/budget/election-ish sectors
                     sectors_l = [str(s).lower() for s in (state.get("sector_deltas") or {})]

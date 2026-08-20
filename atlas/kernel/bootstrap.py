@@ -570,21 +570,43 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     from atlas.core.resources.work_admission import WorkAdmissionPolicy
 
     def _budget_pressure() -> tuple[bool, str]:
+        # OI-STAB0 P1.1: shrink effective ticks only on *host throttle* (RAM/CPU/
+        # thermal). Do NOT treat a single-tick admit miss as global pressure —
+        # HostGuard already defers that tick; folding it into DynamicBudget caused
+        # preferred=4 → effective=2 hysteresis for minutes (Ops "2/2" mirage).
         try:
             st = resource_manager.host_guard_status(
                 reserve_mb=int(getattr(cfg.resources, "host_ram_reserve_mb", 2048) or 2048),
                 tick_ram_mb=int(getattr(cfg.resources, "tick_ram_mb", 512) or 512),
             )
-            if st.get("throttled") or st.get("tick_would_admit") is False:
+            if st.get("throttled"):
                 return True, str(
                     st.get("throttle_reason")
-                    or st.get("tick_admit_reason")
                     or st.get("reason")
                     or "host_pressure"
                 )
         except Exception:  # noqa: BLE001
             return False, ""
         return False, ""
+
+    def _on_budget_clamp(change: dict) -> None:
+        try:
+            from atlas.activity import record_activity
+
+            record_activity(
+                domain="system",
+                worker="dynamic_budgets",
+                action="tick_clamp_change",
+                summary=(
+                    f"Effective ticks {change.get('from')}→{change.get('to')} "
+                    f"(preferred={change.get('preferred')} hard={change.get('hard')} "
+                    f"clamp={change.get('clamp_reason')})"
+                )[:500],
+                result="deferred" if int(change.get("to") or 0) < int(change.get("preferred") or 0) else "completed",
+                evidence=dict(change),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     budget_controller = DynamicBudgetController(
         hard_tick_ceiling=_tick_hard,
@@ -593,6 +615,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         release_after_seconds=float(
             getattr(cfg.resources, "budget_release_after_seconds", 120) or 120
         ),
+        on_clamp_change=_on_budget_clamp,
         logger=get_logger("atlas.resources.budgets"),
     )
     machine_profile = detect_machine_profile(
@@ -951,6 +974,33 @@ def build_application(config: AtlasConfig | None = None) -> Application:
 
     # OI-SELF0 Phase 1 — Belief Core + ReasoningService (mandatory cognitive façade).
     from atlas.reasoning import BeliefRepository, ReasoningService
+
+    # OI-STAB0 P0.0 — Daily Activity Journal (ownership)
+    from atlas.activity import (
+        ActivityJournal,
+        ActivityRepository,
+        bind_journal,
+        record_activity,
+    )
+
+    try:
+        activity_journal = ActivityJournal(ActivityRepository(db_manager))
+        bind_journal(activity_journal)
+        record_activity(
+            domain="system",
+            worker="bootstrap",
+            action="kernel_bind_journal",
+            result="completed",
+            summary="Activity journal bound — Atlas owns work events from this boot",
+        )
+        get_logger("atlas.activity").info("OI-STAB0 activity journal bound")
+    except Exception:  # noqa: BLE001
+        activity_journal = None
+        bind_journal(None)
+        get_logger("atlas.activity").warning(
+            "OI-STAB0 activity journal deferred (run atlas-db migrate for 0051)",
+            exc_info=True,
+        )
 
     belief_repo = BeliefRepository(db_manager)
     reasoning_service = ReasoningService(
@@ -1548,9 +1598,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     market_data_reader = MarketDataReader(
         asset_store, derived_artifacts, logger=get_logger("atlas.readers.market_data")
     )
+    from atlas.investment.market_data_service import get_market_data_service
+
+    market_data_service = get_market_data_service(cfg.paths.data)
     market_reader_service = MarketReaderService(
         assets=asset_store,
         market_data=market_data_reader,
+        market_data_service=market_data_service,
         default_provider=cfg.market.default_provider,
         yahoo_enabled=cfg.market.yahoo_enabled,
         polygon_api_key_env=cfg.market.polygon_api_key_env,
@@ -1657,6 +1711,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             decision_packets=decision_packet_store,
             observations=decision_observation_store,
             attributions=decision_attribution_store,
+            reasoning=reasoning_service,
             logger=get_logger("atlas.workers.paper_trading"),
         )
     )
@@ -2129,6 +2184,8 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     container.register_instance("goals", goal_service)
     container.register_instance("beliefs", belief_repo)
     container.register_instance("reasoning", reasoning_service)
+    container.register_instance("activity_journal", activity_journal)
+    container.register_instance("market_data_service", market_data_service)
     container.register_instance("personal", personal_service)
     container.register_instance("arbiter", mission_arbiter)
     container.register_instance("decision", decision_engine)

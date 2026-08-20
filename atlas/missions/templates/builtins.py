@@ -403,7 +403,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             },
         ],
         "knowledge_domains": ["finance", "markets"],
-        "success_criteria": with_philosophy({}, "market_observer"),
+        "success_criteria": with_philosophy({}, "historical_bars_bootstrap"),
     },
     {
         "name": "research_freshness",

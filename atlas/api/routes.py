@@ -283,6 +283,9 @@ def ops_cleanup(body: OpsCleanupRequest, request: Request) -> dict:
     return svc.run(
         dry_run=bool(body.dry_run),
         include_protected=bool(body.include_protected),
+        include_duplicates=bool(getattr(body, "include_duplicates", False)),
+        duplicate_types=getattr(body, "duplicate_types", None),
+        duplicate_keep=str(getattr(body, "duplicate_keep", None) or "oldest"),
         zombie_types=body.zombie_types,
         min_starvation_age_seconds=min_age,
         worker_ids=body.worker_ids,
@@ -5293,20 +5296,13 @@ def list_virtual_portfolios(
 def list_lab_ledgers(request: Request) -> dict:
     """OI-LEDGER-UI0 — portfolio + ledger statement for all known labs."""
     from atlas.investment import portfolios as vp
-    from atlas.investment.laboratory import (
-        DEFAULT_INTRADAY_LAB,
-        DEFAULT_SWING_LAB,
-    )
+    from atlas.investment.laboratory import MAIL_LAB_TITLES, MAIL_SNAPSHOT_LABS
 
     try:
         _rehydrate_virtual_portfolios(request)
     except Exception:  # noqa: BLE001
         pass
-    keys = [
-        DEFAULT_SWING_LAB,
-        DEFAULT_INTRADAY_LAB,
-        "india_fno_learner",
-    ]
+    keys = list(MAIL_SNAPSHOT_LABS)
     for row in vp.list_portfolios() or []:
         if isinstance(row, dict) and row.get("portfolio_key"):
             k = str(row["portfolio_key"])
@@ -5316,16 +5312,25 @@ def list_lab_ledgers(request: Request) -> dict:
     for key in keys:
         try:
             doc = portfolio_ledger_statement(key, request)
-            labs.append({"portfolio_key": key, **doc})
+            row = {"portfolio_key": key, **doc}
+            row["title"] = MAIL_LAB_TITLES.get(key) or row.get("label") or key
+            labs.append(row)
         except HTTPException as exc:
             labs.append(
                 {
                     "portfolio_key": key,
+                    "title": MAIL_LAB_TITLES.get(key) or key,
                     "error": getattr(exc, "detail", str(exc)),
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            labs.append({"portfolio_key": key, "error": str(exc)})
+            labs.append(
+                {
+                    "portfolio_key": key,
+                    "title": MAIL_LAB_TITLES.get(key) or key,
+                    "error": str(exc),
+                }
+            )
     return {"labs": labs, "count": len(labs), "version": "jdg.ledger_ui.v1"}
 
 
@@ -5586,11 +5591,27 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
             )
     except Exception:  # noqa: BLE001
         pass
-    stmt["valuation_basis"] = (
+    # OI-STAB0: ledger/snapshot now labels mixed marks; keep fallback for empty books
+    stmt["valuation_basis"] = stmt.get("valuation_basis") or (
         "latest daily market bars" if marks else "average cost (market marks unavailable)"
     )
     stmt["marks"] = marks
     stmt["previous_closes"] = previous_closes
+    try:
+        from datetime import datetime as _dt_tag, timezone as _tz_tag, timedelta as _td_tag
+
+        from atlas.investment.trading_kpis import tag_trades_ist_day
+
+        _ist_day = _dt_tag.now(_tz_tag(_td_tag(hours=5, minutes=30))).date().isoformat()
+        stmt["recent_trades"] = tag_trades_ist_day(
+            stmt.get("recent_trades") or [], ist_date=_ist_day
+        )
+        stmt["fills_today"] = sum(
+            1 for t in stmt["recent_trades"] if isinstance(t, dict) and t.get("ist_day_match")
+        )
+        stmt["ist_date"] = _ist_day
+    except Exception:  # noqa: BLE001
+        pass
     deposits = float(stmt.get("deposited") or 0)
     withdrawals = float(stmt.get("withdrawn") or 0) + float(
         stmt.get("withdrawal_tds") or 0
@@ -6080,6 +6101,82 @@ def reasoning_identity(request: Request) -> dict:
     if identity is None:
         raise HTTPException(status_code=404, detail="identity_not_seeded")
     return {"identity": identity, "version": getattr(rs, "VERSION", "self0")}
+
+
+@v1_router.get("/activity/today", tags=["activity"])
+def activity_today(request: Request, limit: int = 200) -> dict:
+    """OI-STAB0 P0.0 — today's work journal (IST)."""
+    try:
+        journal = _app(request).container.resolve("activity_journal")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"activity journal unavailable: {exc}") from exc
+    if journal is None:
+        raise HTTPException(status_code=503, detail="activity journal not bound")
+    brief = journal.format_day_brief()
+    events = journal.for_day(limit=limit)
+    return {
+        **brief,
+        "events": [
+            {
+                "id": str(e.get("id")),
+                "ts": e.get("ts").isoformat() if hasattr(e.get("ts"), "isoformat") else e.get("ts"),
+                "domain": e.get("domain"),
+                "worker": e.get("worker"),
+                "action": e.get("action"),
+                "target": e.get("target"),
+                "result": e.get("result"),
+                "summary": e.get("summary"),
+            }
+            for e in events
+        ],
+    }
+
+
+@v1_router.get("/market-data/status", tags=["market"])
+def market_data_status(request: Request) -> dict:
+    """OI-STAB0 P0.1 — MarketDataService choke status."""
+    try:
+        mds = _app(request).container.resolve("market_data_service")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if mds is None:
+        raise HTTPException(status_code=503, detail="market_data_service not bound")
+    return mds.status()
+
+
+@v1_router.get("/market/session-readiness", tags=["market"])
+def market_session_readiness(
+    request: Request,
+    day: str | None = None,
+    laboratory_id: str = "india_equity_learner",
+) -> dict:
+    """OI-STAB0 D4 — clean equity session gate card (observe+explain)."""
+    from atlas.investment.session_readiness import evaluate_equity_session
+
+    try:
+        from atlas.config import get_config
+
+        data_dir = get_config().paths.data
+    except Exception:  # noqa: BLE001
+        data_dir = None
+    app = _app(request)
+    c = app.container
+
+    def _opt(name: str):
+        try:
+            return c.resolve(name)
+        except Exception:  # noqa: BLE001
+            return None
+
+    return evaluate_equity_session(
+        data_dir,
+        day=day,
+        laboratory_id=laboratory_id or "india_equity_learner",
+        market_data=_opt("market_data_service"),
+        host_guard=_opt("host_guard"),
+        budget=_opt("budget_controller"),
+        reasoning=_opt("reasoning"),
+    )
 
 
 @v1_router.post("/reasoning/reflect", tags=["reasoning"])

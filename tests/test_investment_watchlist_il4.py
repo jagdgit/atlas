@@ -107,8 +107,9 @@ def test_market_observer_auto_loads_watchlist():
     assert "idle" not in result.note
 
 
-def test_market_observer_still_idle_without_watchlist():
-    clear()
+def test_market_observer_still_idle_without_watchlist(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATLAS_WATCHLIST_DIR", str(tmp_path / "wl"))
+    clear(disk=True)
     worker = MarketObserverWorker(market_reader=MarketReaderService())
     result = worker.do_tick(
         TickContext(
@@ -181,7 +182,8 @@ def test_news_intelligence_auto_seeds_from_watchlist():
     assert result.state.get("auto_watchlist") is True
     assert "RELIANCE.NS" in (result.state.get("auto_symbols") or [])
     assert "auto watchlist" in result.note
-    assert emitted  # extractor + watchlist seed text
+    # OI-LINT0 3A — seed stubs are not evidence and must not become claims.
+    assert not emitted
 
 
 def test_news_pin_headlines_skips_auto():

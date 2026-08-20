@@ -55,7 +55,13 @@ class ProgramCapacityPolicy:
             dict(self.shares) if self.shares is not None else dict(DEFAULT_PROGRAM_SHARES),
         )
 
-    def floor_slots(self, program_id: str, effective_slots: int) -> int:
+    def floor_slots(
+        self,
+        program_id: str,
+        effective_slots: int,
+        *,
+        nse_rth: bool = False,
+    ) -> int:
         """Reserved slots for ``program_id`` when it has demand (0 = no floor)."""
         if not self.enabled or effective_slots <= 0:
             return 0
@@ -65,14 +71,20 @@ class ProgramCapacityPolicy:
             return 0
         raw = int(effective_slots * share)
         if prog in self.floor_min_programs:
-            return max(1, raw) if effective_slots >= 1 else 0
-        return max(0, raw)
+            floor = max(1, raw) if effective_slots >= 1 else 0
+        else:
+            floor = max(0, raw)
+        # NSE RTH: paper labs (equity/intraday/FNO) must tick together. Leave ≥1
+        # slot borrowable for hourly BATCH / other programs.
+        if nse_rth and prog == "market_intelligence" and effective_slots >= 2:
+            floor = max(floor, min(3, effective_slots - 1))
+        return floor
 
-    def floors(self, effective_slots: int) -> dict[str, int]:
+    def floors(self, effective_slots: int, *, nse_rth: bool = False) -> dict[str, int]:
         return {
-            p: self.floor_slots(p, effective_slots)
+            p: self.floor_slots(p, effective_slots, nse_rth=nse_rth)
             for p in self.shares
-            if self.floor_slots(p, effective_slots) > 0
+            if self.floor_slots(p, effective_slots, nse_rth=nse_rth) > 0
         }
 
     def reserved_for_others(
@@ -82,6 +94,7 @@ class ProgramCapacityPolicy:
         effective_slots: int,
         program_inflight: Mapping[str, int],
         programs_with_demand: set[str] | frozenset[str],
+        nse_rth: bool = False,
     ) -> int:
         """Slots that must stay free for other under-floor programs with demand.
 
@@ -91,7 +104,7 @@ class ProgramCapacityPolicy:
             return 0
         admit = normalize_program_id(admit_program)
         reserved = 0
-        for prog, floor in self.floors(effective_slots).items():
+        for prog, floor in self.floors(effective_slots, nse_rth=nse_rth).items():
             if prog == admit:
                 continue
             if prog not in programs_with_demand:
@@ -109,12 +122,13 @@ class ProgramCapacityPolicy:
         total_inflight: int,
         program_inflight: Mapping[str, int],
         programs_with_demand: set[str] | frozenset[str],
+        nse_rth: bool = False,
     ) -> str | None:
         """Return deferral reason if admit would violate another program's floor."""
         if not self.enabled or effective_slots <= 0:
             return None
         prog = normalize_program_id(admit_program)
-        my_floor = self.floor_slots(prog, effective_slots)
+        my_floor = self.floor_slots(prog, effective_slots, nse_rth=nse_rth)
         my_in = int(program_inflight.get(prog, 0) or 0)
         # Claiming own floor is always allowed (Host Guard / global cap still apply).
         if my_floor > 0 and my_in < my_floor:
@@ -124,6 +138,7 @@ class ProgramCapacityPolicy:
             effective_slots=effective_slots,
             program_inflight=program_inflight,
             programs_with_demand=programs_with_demand,
+            nse_rth=nse_rth,
         )
         if reserved <= 0:
             return None

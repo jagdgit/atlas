@@ -69,6 +69,23 @@ def needs_bootstrap(
         return True
 
 
+def needs_tip_refresh(
+    data_dir: str | Path | None,
+    symbol: str,
+) -> bool:
+    """True when history is dense but last bar is older than last NSE session."""
+    try:
+        from atlas.investment.bar_store import load_symbol_doc, symbol_readiness
+
+        doc = load_symbol_doc(data_dir, symbol)
+        if not doc:
+            return False
+        ready = symbol_readiness(doc)
+        return bool(ready.get("priced")) and not bool(ready.get("session_fresh"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def bootstrap_symbol(
     data_dir: str | Path | None,
     symbol: str,
@@ -170,14 +187,19 @@ def bootstrap_batch(
         # Permanent gaps (e.g. Yahoo 404) — do not burn the batch budget re-probing.
         if skip_done and (key in failed or key in {str(k).upper() for k in failed}):
             continue
-        if skip_done and key in done and not needs_bootstrap(data_dir, key, min_bars=min_bars):
+        thin = needs_bootstrap(data_dir, key, min_bars=min_bars)
+        stale_tip = (not thin) and needs_tip_refresh(data_dir, key)
+        if skip_done and key in done and not thin and not stale_tip:
             continue
-        if skip_done and not needs_bootstrap(data_dir, key, min_bars=min_bars):
+        if not thin and not stale_tip:
             done[key] = {"status": "already_dense", "at": time.time()}
             continue
         attempted += 1
         row = bootstrap_symbol(
-            data_dir, key, fetch_bars=fetch_bars, range_=range_
+            data_dir,
+            key,
+            fetch_bars=fetch_bars,
+            range_=range_ if thin else "1mo",
         )
         results.append(row)
         status = str(row.get("status") or "")
@@ -186,6 +208,9 @@ def bootstrap_batch(
             "cooldown" in err.lower()
             or "rate-gate" in err.lower()
             or "rate gate" in err.lower()
+            or "rth" in err.lower()
+            or "yield yahoo" in err.lower()
+            or "live session" in err.lower()
         )
         if status in {"ok", "thin"}:
             done[key] = {

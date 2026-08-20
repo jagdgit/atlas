@@ -75,6 +75,12 @@ class InMemorySimRepo:
     def count_trades(self, portfolio_id):
         return sum(1 for t in self.trades if t["portfolio_id"] == str(portfolio_id))
 
+    def delete_trades(self, portfolio_id):
+        pid = str(portfolio_id)
+        before = len(self.trades)
+        self.trades = [t for t in self.trades if t["portfolio_id"] != pid]
+        return before - len(self.trades)
+
     def record_cash_movement(self, **kw):
         row = {"id": str(uuid.uuid4()), **kw}
         self.cash_movements.append(row)
@@ -142,3 +148,26 @@ def test_snapshot_total_return_and_unrealized(svc):
     assert snap["unrealized_pnl"] == pytest.approx(100.0)  # (30-20)*10
     assert snap["equity"] == pytest.approx(1100.0)         # cash 800 + holdings 300
     assert snap["total_return"] == pytest.approx(0.1)
+    assert snap["valuation_basis"] == "latest daily market bars"
+    assert snap["positions"][0]["mark_source"] == "market"
+
+
+def test_snapshot_mixed_marks_are_honest(svc):
+    p = svc.ensure_portfolio(mission_id=None, starting_cash=2000.0)
+    svc.apply_trade(p["id"], symbol="A", side="buy", quantity=10, price=10.0)
+    svc.apply_trade(p["id"], symbol="B", side="buy", quantity=10, price=10.0)
+    snap = svc.snapshot(p["id"], prices={"A": 12.0})  # B missing → avg cost
+    assert snap["valuation_basis"].startswith("mixed")
+    assert snap["marks_available"] == 1
+    assert snap["marks_total"] == 2
+    by = {r["symbol"]: r["mark_source"] for r in snap["positions"]}
+    assert by["A"] == "market"
+    assert by["B"] == "avg_cost"
+
+
+def test_snapshot_all_missing_marks_labeled(svc):
+    p = svc.ensure_portfolio(mission_id=None, starting_cash=1000.0)
+    svc.apply_trade(p["id"], symbol="ACME", side="buy", quantity=5, price=20.0)
+    snap = svc.snapshot(p["id"], prices={})
+    assert "average cost" in snap["valuation_basis"]
+    assert snap["marks_pct"] == 0.0

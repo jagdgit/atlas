@@ -173,9 +173,27 @@ class DecisionEvolutionWorker(PersistentWorker):
             self._logger.warning("decision evolution tick failed: %s", exc)
             return TickResult(state=state, note=f"error: {exc}")
 
+        try:
+            open_book = self._timeline.record_open_book_outcomes(
+                portfolio_key=portfolio_key,
+                open_symbols=open_symbols,
+                mark_fn=mark_fn,
+            )
+            extra_items = list(open_book.get("items") or [])
+            if extra_items:
+                merged = list(result.get("items") or [])
+                merged.extend(extra_items)
+                result = dict(result)
+                result["items"] = merged
+                result["open_book_outcomes"] = int(open_book.get("wrote") or 0)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("LOOP0 L3 open-book outcomes skipped", exc_info=True)
+
         # DI.Attr — provisional attribution on each completed revisit
         attr_n = 0
         obs_hits = 0
+        l3_checks = 0
+        l3_candidates = 0
         if self._attributions is not None:
             for item in result.get("items") or []:
                 try:
@@ -197,6 +215,43 @@ class DecisionEvolutionWorker(PersistentWorker):
                     attr_n += 1
                 except Exception:  # noqa: BLE001
                     self._logger.debug("DI.Attr revisit attribution skipped", exc_info=True)
+
+        # LOOP0 L3 — genealogical belief candidates (advice-only; never auto-active)
+        try:
+            from atlas.reasoning.outcome_revision import record_belief_candidate
+
+            for item in result.get("items") or []:
+                oc = item.get("outcome_check")
+                if not isinstance(oc, dict):
+                    continue
+                l3_checks += 1
+                recorded = record_belief_candidate(
+                    self._reasoning,
+                    oc,
+                    actor="outcome_loop",
+                )
+                item["belief_candidate"] = recorded.get("belief_candidate")
+                item["belief_candidate_skip"] = recorded.get("skip_reason")
+                if recorded.get("wrote"):
+                    l3_candidates += 1
+                try:
+                    from atlas.config import get_config
+                    from atlas.investment.learning_objects import record_from_outcome_check
+
+                    data_dir = str(get_config().paths.data)
+                    pkt = item.get("packet") if isinstance(item.get("packet"), dict) else {}
+                    if not pkt and item.get("decision_id"):
+                        pkt = {"decision_id": item.get("decision_id"), "symbol": item.get("symbol")}
+                    record_from_outcome_check(
+                        data_dir,
+                        laboratory_id=portfolio_key,
+                        packet=pkt,
+                        outcome_check=oc,
+                    )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("Phase 4 outcome experience skipped", exc_info=True)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("LOOP0 L3 belief candidate skipped", exc_info=True)
 
         counts: dict[str, Any] = {}
         try:
@@ -227,6 +282,8 @@ class DecisionEvolutionWorker(PersistentWorker):
             "counts": counts,
             "attributions": attr_n,
             "revisits_with_new_observations": obs_hits,
+            "outcome_checks": l3_checks,
+            "belief_candidates": l3_candidates,
             "cadence": budget,
         }
 
@@ -454,6 +511,34 @@ class DecisionEvolutionWorker(PersistentWorker):
                 }
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("BRE.3 drain skipped: %s", exc)
+
+        # OI-LINT0 Phase 3 — drain event-triggered research scientist (advice-only)
+        try:
+            from atlas.reasoning.research_scientist import (
+                DEFAULT_EVENT_PASSES,
+                drain_scientist_queue,
+            )
+
+            data_dir = None
+            if self._packets is not None:
+                data_dir = getattr(self._packets, "data_dir", None)
+            if not data_dir:
+                try:
+                    from atlas.config import get_config
+
+                    data_dir = str(get_config().paths.data)
+                except Exception:  # noqa: BLE001
+                    data_dir = None
+            sci = drain_scientist_queue(
+                data_dir,
+                laboratory_id=portfolio_key,
+                llm=self._llm,
+                max_n=max(1, min(int(cfg.get("scientist_passes") or DEFAULT_EVENT_PASSES), 5)),
+            )
+            if isinstance(state.get("last_evolution"), dict):
+                state["last_evolution"]["research_scientist"] = sci
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("research scientist drain skipped: %s", exc)
 
         # UTS.F — Missed Opportunity Ledger (T+20)
         missed_meta: dict[str, Any] = {}

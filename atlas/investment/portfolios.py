@@ -669,7 +669,7 @@ def default_decision_config(row: dict[str, Any]) -> dict[str, Any]:
             ]
     elif "intraday" in key.lower():
         market_session = "nse_equity"
-        auto_max = 15
+        auto_max = 3
     return {
         "portfolio_key": key,
         "portfolio_label": row.get("label") or key,
@@ -766,8 +766,10 @@ def enrich_decision_config_from_book(
         if not instruments:
             out["instruments"] = list(instruments)
         # Keep auto_max so M0 watchlist can load when empty
-        if out.get("auto_max_instruments") is None:
-            out["auto_max_instruments"] = int(suggested.get("auto_max_instruments") or 15)
+        if out.get("auto_max_instruments") in (None, "", 0):
+            out["auto_max_instruments"] = int(suggested.get("auto_max_instruments") or 3)
+        elif int(out.get("auto_max_instruments") or 0) > 3:
+            out["auto_max_instruments"] = 3
 
     return out
 
@@ -879,12 +881,17 @@ def repair_laboratory_pack_alignment(portfolio_key: str) -> dict[str, Any] | Non
         if list(person.get("allowed_assets") or []) != [ac]:
             person["allowed_assets"] = [ac]
             changed = True
-        if not person.get("mentor"):
-            person = apply_laboratory_personality(person, kind=ac)
-            changed = True
-    elif "intraday" in key.lower() and not person.get("mentor"):
-        person = apply_laboratory_personality(person, kind="intraday")
-        changed = True
+        preset = laboratory_personality_preset(ac)
+        for field in ("mentor", "risk", "time_horizon", "holding_philosophy"):
+            if person.get(field) != preset.get(field):
+                person[field] = preset[field]
+                changed = True
+    elif "intraday" in key.lower():
+        preset = laboratory_personality_preset("intraday")
+        for field in ("mentor", "risk", "time_horizon", "holding_philosophy"):
+            if person.get(field) != preset.get(field):
+                person[field] = preset[field]
+                changed = True
     if changed:
         row = dict(row)
         row["persona"] = normalize_persona(person, capital=person.get("capital"))

@@ -136,6 +136,7 @@ def enqueue_from_wsos(
     max_n: int = DEFAULT_CURIOSITY_TASKS,
     ist_date: str | None = None,
     open_symbols: set[str] | None = None,
+    allocation_blockers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build / merge nightly curiosity queue from WSO unknowns (deterministic)."""
     day = ist_date or datetime.now(_IST).strftime("%Y-%m-%d")
@@ -147,6 +148,7 @@ def enqueue_from_wsos(
     }
     open_set = {str(s).upper() for s in (open_symbols or set())}
     candidates: list[dict[str, Any]] = []
+    skipped = 0
     for w in wsos or []:
         if not isinstance(w, dict):
             continue
@@ -189,6 +191,16 @@ def enqueue_from_wsos(
                     "created_at": datetime.now(_IST).isoformat(),
                 }
             )
+    try:
+        from atlas.investment.research_intelligence import filter_curiosity_candidates
+
+        candidates, skipped = filter_curiosity_candidates(
+            candidates,
+            allocation_blockers=allocation_blockers,
+            open_symbols=open_set,
+        )
+    except Exception:  # noqa: BLE001
+        skipped = 0
     # Prefer new high-priority; dedupe
     seen: set[tuple[str, str]] = set(prior_keys)
     fresh: list[dict[str, Any]] = []
@@ -214,6 +226,7 @@ def enqueue_from_wsos(
         "items": items[-200:],
         "enqueued_tonight": len(fresh),
         "max_n": int(max_n),
+        "allocation_filtered_skipped": skipped,
     }
     path = save_queue(data_dir, doc)
     doc["path"] = str(path) if path else None
@@ -294,6 +307,7 @@ def drain_queue_work(
     max_starts: int = 3,
     ist_date: str | None = None,
     trigger: str = "cws_j4",
+    allocation_blockers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """J4 — enqueue unknowns then start real IRA work; persist queue statuses.
 
@@ -308,10 +322,19 @@ def drain_queue_work(
         max_n=DEFAULT_CURIOSITY_TASKS,
         ist_date=day,
         open_symbols=open_symbols,
+        allocation_blockers=allocation_blockers,
     )
     started = maybe_start_ira_for_queue(
         qdoc, research, max_starts=max(0, int(max_starts)), trigger=trigger
     )
+    try:
+        from atlas.investment.research_intelligence import drain_news_curiosity
+
+        qdoc = drain_news_curiosity(
+            qdoc, data_dir, laboratory_id=laboratory_id
+        )
+    except Exception:  # noqa: BLE001
+        _log.debug("news curiosity drain skipped", exc_info=True)
     path = save_queue(data_dir, qdoc)
     qdoc["path"] = str(path) if path else None
     qdoc["work_started"] = started

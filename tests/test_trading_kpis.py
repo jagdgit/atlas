@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from atlas.investment.trading_kpis import build_trading_kpis, format_kpi_section
+from atlas.investment.trading_kpis import (
+    build_trading_kpis,
+    format_kpi_section,
+    tag_trades_ist_day,
+)
 
 
 def test_build_trading_kpis_plan_fill_and_pnl():
@@ -53,3 +57,44 @@ def test_build_trading_kpis_plan_fill_and_pnl():
     blob = "\n".join(lines)
     assert "Trading KPIs" in blob
     assert "plan→fill" in blob.lower() or "Plan→fill" in blob
+
+
+def test_untagged_historical_blotter_is_not_today():
+    kpis = build_trading_kpis(
+        portfolio={
+            "cash": 15000,
+            "equity": 50000,
+            "positions": [{"symbol": "CIPLA.NS", "qty": 13}],
+            "recent_trades": [
+                {
+                    "side": "buy",
+                    "symbol": "APOLLOHOSP.NS",
+                    "quantity": 1,
+                    "created_at": "2026-08-10T04:00:00+00:00",
+                },
+                {
+                    "side": "sell",
+                    "symbol": "ASIANPAINT.NS",
+                    "quantity": 1,
+                    "created_at": "2026-08-11T04:00:00+00:00",
+                },
+            ],
+        },
+        ist_date="2026-08-13",
+    )
+    assert kpis["fills_today"] == 0
+    assert kpis["buys_today"] == 0
+    assert kpis["sells_today"] == 0
+    assert kpis["filled_symbols"] == []
+
+
+def test_tag_trades_ist_day_match():
+    tagged = tag_trades_ist_day(
+        [
+            {"side": "buy", "created_at": "2026-08-13T04:30:00+00:00"},
+            {"side": "sell", "created_at": "2026-08-12T10:00:00+00:00"},
+        ],
+        ist_date="2026-08-13",
+    )
+    assert tagged[0]["ist_day_match"] is True
+    assert tagged[1]["ist_day_match"] is False

@@ -375,12 +375,20 @@ class MissionArbiter:
             # ARMF C1 — program capacity floors + borrowing.
             if eff_max is not None and self._capacity_policy is not None:
                 demanding = self._programs_with_demand_locked(now)
+                nse_rth = False
+                try:
+                    from atlas.trading.sessions import is_session_open
+
+                    nse_rth = bool(is_session_open("nse_equity", now=now))
+                except Exception:  # noqa: BLE001
+                    nse_rth = False
                 block = self._capacity_policy.blocks_admit(
                     admit_program=prog,
                     effective_slots=int(eff_max),
                     total_inflight=self._total,
                     program_inflight=self._program_inflight,
                     programs_with_demand=demanding,
+                    nse_rth=nse_rth,
                 )
                 if block:
                     self._defer_locked(demand.mission_id)

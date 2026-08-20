@@ -21,9 +21,28 @@ from atlas.workers.base import PersistentWorker, TickContext, TickResult
 _IST = ZoneInfo("Asia/Kolkata")
 
 
+def load_mail_lab_books(
+    *,
+    portfolio: Any | None,
+    market_reader: Any | None,
+    data_dir: str | None,
+    ist_date: str,
+    logger: logging.Logger | None = None,
+) -> list[dict[str, Any]]:
+    """Cash/positions snapshots for the three paper laboratories (operator mail)."""
+    helper = InvestorReportsWorker(
+        mailer=None,
+        portfolio=portfolio,
+        market_reader=market_reader,
+        data_dir=data_dir,
+        logger=logger,
+    )
+    return helper._mail_lab_books(ist_date=ist_date)
+
+
 class InvestorReportsWorker(PersistentWorker):
     type = "investor_reports"
-    VERSION = 3
+    VERSION = 4
     journal_ticks = True
 
     def __init__(
@@ -72,6 +91,8 @@ class InvestorReportsWorker(PersistentWorker):
         evening_end = int(cfg.get("evening_hour_end") or 18)
         # Catch-up may run until this hour (IST) so late internet restores still deliver.
         catch_up_until = int(cfg.get("catch_up_until_hour") or 23)
+        hourly_start = int(cfg.get("hourly_hour_start", 8))
+        hourly_end = int(cfg.get("hourly_hour_end", 20))
 
         in_morning = morning_start <= hour < morning_end
         evening_ok = (hour > evening_start_h) or (
@@ -141,34 +162,16 @@ class InvestorReportsWorker(PersistentWorker):
             catch_up_morning = bool(morning_catch_up and not in_morning)
             catch_up_evening = bool(evening_catch_up and not in_evening)
 
-        if not send_morning and not send_evening:
-            # OI-HOURLY0 — still send hourly digests 08–20 IST (awareness)
-            hourly_start = int(cfg.get("hourly_hour_start", 8))
-            hourly_end = int(cfg.get("hourly_hour_end", 20))
-            send_hourly = (
-                bool(cfg.get("hourly_digests", True))
-                and hourly_start <= hour <= hourly_end
-                and now_ist.weekday() < 6  # Mon–Sat (incl. prep days)
-            )
-            if send_hourly and self._mailer is not None:
-                portfolio_doc = self._portfolio_doc(portfolio_key, ist_date=ist_date)
-                result = self._mailer.send_hourly(
-                    program_id=program_id,
-                    portfolio=portfolio_doc if isinstance(portfolio_doc, dict) else None,
-                    force=False,
-                    hour=hour,
-                    laboratory_id=portfolio_key,
-                )
-                state["last_hourly_send"] = result
-                if result.get("sent"):
-                    return TickResult(
-                        state=state,
-                        note=f"hourly sent {hour:02d}:00: {result.get('subject')}",
-                    )
-                return TickResult(
-                    state=state,
-                    note=f"hourly not sent: {result.get('reason') or result}",
-                )
+        # Hourly is independent of morning/evening windows (08–20 IST inclusive).
+        # Previously hourly was skipped whenever morning ran, so 08:00–09:00 never sent.
+        send_hourly = (
+            not force
+            and bool(cfg.get("hourly_digests", True))
+            and hourly_start <= hour <= hourly_end
+            and now_ist.weekday() < 6  # Mon–Sat (incl. prep days)
+        )
+
+        if not send_morning and not send_evening and not send_hourly:
             state["skipped"] = "outside_report_windows_ist"
             return TickResult(
                 state=state,
@@ -183,7 +186,10 @@ class InvestorReportsWorker(PersistentWorker):
         if self._mailer is None:
             return TickResult(state=state, note="idle: investor mailer not configured")
 
-        portfolio_doc = self._portfolio_doc(portfolio_key, ist_date=ist_date)
+        portfolio_doc = self._with_lab_books(
+            self._portfolio_doc(portfolio_key, ist_date=ist_date),
+            ist_date=ist_date,
+        )
 
         notes: list[str] = []
         if send_morning:
@@ -216,12 +222,47 @@ class InvestorReportsWorker(PersistentWorker):
             else:
                 notes.append(f"evening not sent: {result.get('reason') or result}")
 
+        send_hourly_fn = getattr(self._mailer, "send_hourly", None)
+        if send_hourly and callable(send_hourly_fn):
+            result = send_hourly_fn(
+                program_id=program_id,
+                portfolio=portfolio_doc if isinstance(portfolio_doc, dict) else None,
+                force=False,
+                hour=hour,
+                laboratory_id=portfolio_key,
+            )
+            state["last_hourly_send"] = result
+            if result.get("sent"):
+                notes.append(f"hourly sent {hour:02d}:00: {result.get('subject')}")
+            else:
+                notes.append(f"hourly not sent: {result.get('reason') or result}")
+
         if not notes:
             return TickResult(state=state, note="idle: no matching report window")
         return TickResult(state=state, note="; ".join(notes))
 
+    def _mail_lab_books(self, *, ist_date: str) -> list[dict[str, Any]]:
+        from atlas.investment.laboratory import MAIL_SNAPSHOT_LABS
+
+        books: list[dict[str, Any]] = []
+        for key in MAIL_SNAPSHOT_LABS:
+            snap = self._portfolio_doc(key, ist_date=ist_date, compact=True)
+            if isinstance(snap, dict):
+                books.append(snap)
+        return books
+
+    def _with_lab_books(
+        self, primary: dict[str, Any] | None, *, ist_date: str
+    ) -> dict[str, Any] | None:
+        books = self._mail_lab_books(ist_date=ist_date)
+        if primary is None and not books:
+            return None
+        out = dict(primary) if isinstance(primary, dict) else {}
+        out["lab_books"] = books
+        return out
+
     def _portfolio_doc(
-        self, portfolio_key: str | None, *, ist_date: str
+        self, portfolio_key: str | None, *, ist_date: str, compact: bool = False
     ) -> dict[str, Any] | None:
         if not portfolio_key:
             return None
@@ -281,7 +322,10 @@ class InvestorReportsWorker(PersistentWorker):
                         portfolio_doc["positions_value"] = snap.get("holdings_value")
                         portfolio_doc["marks"] = marks
                         portfolio_doc["previous_closes"] = previous
-                        portfolio_doc["valuation_basis"] = (
+                        # OI-STAB0: prefer snapshot honesty (mixed/avg/full) over all-or-nothing
+                        portfolio_doc["valuation_basis"] = snap.get(
+                            "valuation_basis"
+                        ) or (
                             "latest daily market bars"
                             if marks
                             else "average cost (market marks unavailable)"
@@ -291,7 +335,9 @@ class InvestorReportsWorker(PersistentWorker):
                 if hasattr(self._portfolio, "trades"):
                     try:
                         trades = self._portfolio.trades(pid, limit=50)
-                        portfolio_doc["recent_trades"] = self._tag_trades_ist_day(
+                        from atlas.investment.trading_kpis import tag_trades_ist_day as _tag_ist
+
+                        portfolio_doc["recent_trades"] = _tag_ist(
                             list(trades or []), ist_date=ist_date
                         )
                         portfolio_doc["trade_count"] = len(trades or [])
@@ -310,6 +356,8 @@ class InvestorReportsWorker(PersistentWorker):
             portfolio_doc["no_fill_reasons"] = format_no_fill_reasons(notes)
             if notes.get("feed_gap_days") is not None:
                 portfolio_doc["feed_gap_days"] = notes.get("feed_gap_days")
+            if compact:
+                return portfolio_doc
             try:
                 from atlas.investment.decision_packets import DecisionPacketStore
 
@@ -695,25 +743,6 @@ class InvestorReportsWorker(PersistentWorker):
     def _tag_trades_ist_day(
         trades: list[dict[str, Any]], *, ist_date: str
     ) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for t in trades:
-            if not isinstance(t, dict):
-                continue
-            row = dict(t)
-            ts = row.get("created_at") or row.get("ts") or row.get("filled_at") or row.get("t")
-            match = False
-            if ts is not None:
-                try:
-                    if isinstance(ts, datetime):
-                        dt = ts
-                    else:
-                        raw = str(ts).replace("Z", "+00:00")
-                        dt = datetime.fromisoformat(raw)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    match = dt.astimezone(_IST).strftime("%Y-%m-%d") == ist_date
-                except Exception:  # noqa: BLE001
-                    match = False
-            row["ist_day_match"] = match
-            out.append(row)
-        return out
+        from atlas.investment.trading_kpis import tag_trades_ist_day
+
+        return tag_trades_ist_day(trades, ist_date=ist_date)

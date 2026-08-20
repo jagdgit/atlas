@@ -73,7 +73,19 @@ class FundamentalsEnrichWorker(PersistentWorker):
             return TickResult(state=state, note="idle: data_dir not wired")
 
         from atlas.investment.fundamentals import enrich_watchlist_gaps
-        from atlas.investment.yahoo_fundamentals import get_yahoo_rate_gate
+        from atlas.investment.yahoo_fundamentals import (
+            get_yahoo_rate_gate,
+            yahoo_background_should_yield_to_live,
+        )
+
+        try:
+            if enabled and yahoo_background_should_yield_to_live():
+                return TickResult(
+                    state=state,
+                    note="idle: yield yahoo to live session (RTH)",
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
         # Hard-pause while Yahoo cooldown is armed (do not burn IP on fallbacks).
         gate = get_yahoo_rate_gate(data_dir)

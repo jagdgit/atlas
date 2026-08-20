@@ -617,6 +617,7 @@ class AssistantService:
             Intent.MANAGE_GOAL: self._do_manage_goal,
             Intent.CAREER_STATUS: self._do_career_status,
             Intent.MARKET_STATUS: self._do_market_status,
+            Intent.DAY_ACTIVITY: self._do_day_activity,
         }.get(intent, self._do_react)
         return handler(args, context, tool_calls)
 
@@ -1847,6 +1848,35 @@ class AssistantService:
         )
         return _Outcome(answer="\n".join(lines))
 
+    def _do_day_activity(self, args, context, tool_calls) -> _Outcome:
+        """OI-SELF-ID — first-person day brief from durable artifacts (no Ollama)."""
+        from atlas.reasoning.day_activity import build_day_activity_brief
+
+        data_dir = None
+        try:
+            from atlas.config import get_config
+
+            data_dir = str(get_config().paths.data)
+        except Exception:  # noqa: BLE001
+            data_dir = None
+        brief = build_day_activity_brief(
+            data_dir=data_dir, reasoning=self._reasoning
+        )
+        tool_calls.append(
+            {
+                "intent": Intent.DAY_ACTIVITY,
+                "action": "day_activity",
+                "mode": "artifact_brief",
+                "capability": "reasoning",
+                "day_ist": brief.get("day_ist"),
+            }
+        )
+        return _Outcome(
+            answer=str(brief.get("answer") or ""),
+            citations=list(brief.get("citations") or []),
+            extras=brief,
+        )
+
     def _do_market_status(self, args, context, tool_calls) -> _Outcome:
         """PLC.F / UTS.G — Market Intelligence / coverage status (no Ollama)."""
         from atlas.investment.market_status_chat import (
@@ -2032,6 +2062,14 @@ class AssistantService:
 
     def _do_react(self, args, context, tool_calls) -> _Outcome:
         query = args.get("query", "")
+        # OI-SELF-ID — never claim "no record" when day artifacts exist
+        try:
+            from atlas.reasoning.day_activity import detect_day_activity
+
+            if detect_day_activity(query):
+                return self._do_day_activity(args, context, tool_calls)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("day_activity intercept failed", exc_info=True)
         if self._agent is None:
             return _Outcome(answer="I don't know how to handle that yet.")
         result = self._agent.run("assistant", query)

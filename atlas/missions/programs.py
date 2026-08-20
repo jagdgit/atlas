@@ -172,6 +172,9 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "portfolio_key": "india_equity_learner",
             "morning_hour_start": 7,
             "morning_hour_end": 10,
+            "hourly_digests": True,
+            "hourly_hour_start": 8,
+            "hourly_hour_end": 20,
         },
         "research_freshness": {
             "program_id": "market_intelligence",

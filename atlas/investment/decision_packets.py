@@ -468,6 +468,7 @@ def build_packet(
     process_flags: list[dict[str, Any]] | None = None,
     process_context: dict[str, Any] | None = None,
     meta_extra: dict[str, Any] | None = None,
+    belief_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an immutable ``di.packet.1`` payload (does not persist)."""
     act = str(action or "").strip().lower()
@@ -552,6 +553,9 @@ def build_packet(
         if isinstance(plan_link, dict)
         else {"rank": None, "suggested_notional": None, "in_daily_plan": False},
         "gates": gates,
+        "belief_context": dict(belief_context)
+        if isinstance(belief_context, dict)
+        else None,
     }
     meta: dict[str, Any] = {"completeness": completeness_score(payload)}
     flags = list(process_flags) if process_flags else None
@@ -686,6 +690,10 @@ class DecisionPacketStore:
     @property
     def data_dir(self) -> str | None:
         return self._data_dir
+
+    @property
+    def timeline(self) -> Any | None:
+        return self._timeline
 
     def bind_timeline(self, timeline: Any) -> None:
         self._timeline = timeline
@@ -925,6 +933,13 @@ def emit_plan_watch_packets(
                 "return_band": None,
                 "thesis_id": None,
                 "falsifiers": [],
+                "expected_return": cand.get("expected_return"),
+                "er_model": cand.get("er_model"),
+                "er_basis": cand.get("er_basis"),
+                "er_completeness": cand.get("er_completeness"),
+                "er_inputs": cand.get("er_inputs")
+                if isinstance(cand.get("er_inputs"), dict)
+                else {},
             },
         )
         written.append(result["packet"])

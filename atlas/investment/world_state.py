@@ -223,6 +223,7 @@ def format_mind_change_section(
         last = last if isinstance(last, dict) else {}
         reason = str(last.get("reason") or "")
         material = status in {"strengthened", "weakened", "falsified"} and bool(last)
+        unreviewed = status in {"unreviewed", "UNREVIEWED"} or "LLM_UNAVAILABLE" in reason
         if material:
             changed += 1
         evid = last.get("evidence_ids") or last.get("evidence_delta") or {}
@@ -253,7 +254,9 @@ def format_mind_change_section(
         )
         unk_n = len(w.get("unknowns") or [])
         lines.append(
-            f"{sym}: belief_changed={'yes' if material else 'no'} ({status}"
+            f"{sym}: belief_changed={'yes' if material else 'no'} "
+            + ("UNREVIEWED " if unreviewed else "")
+            + f"({status}"
             + (f"; {unk_n} unknowns" if unk_n and not material else "")
             + ")"
         )
