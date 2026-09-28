@@ -55,6 +55,8 @@ class HistoricalBarsBootstrapWorker(PersistentWorker):
 
         try:
             from atlas.investment.yahoo_fundamentals import (
+                YAHOO_PRIORITY_UNIVERSE,
+                get_yahoo_rate_gate,
                 yahoo_background_should_yield_to_live,
             )
 
@@ -62,6 +64,13 @@ class HistoricalBarsBootstrapWorker(PersistentWorker):
                 return TickResult(
                     state=state,
                     note="idle: yield yahoo to live session (RTH)",
+                )
+            gate = get_yahoo_rate_gate(self._data_dir)
+            ok_net, deny = gate.may_network(YAHOO_PRIORITY_UNIVERSE)
+            if not ok_net:
+                return TickResult(
+                    state=state,
+                    note=f"idle: yield yahoo ({deny})",
                 )
         except Exception:  # noqa: BLE001
             pass

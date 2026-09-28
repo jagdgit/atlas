@@ -163,7 +163,11 @@ class SchedulerService:
             self._repo.finish_run(run["id"], "completed", result=result)
             self._repo.mark_completed(task_id)
             get_metrics().incr("scheduler.task.completed", task_type=task_type)
-            self._emit("TaskCompleted", task)
+            self._emit(
+                "TaskCompleted",
+                task,
+                result=result if isinstance(result, dict) else None,
+            )
         except Exception as exc:  # noqa: BLE001 - handler errors drive retry logic
             error = f"{type(exc).__name__}: {exc}"
             self._repo.finish_run(run["id"], "failed", error=error)
@@ -200,9 +204,23 @@ class SchedulerService:
     def _emit(self, event_type: str, task: dict[str, Any], **extra: Any) -> None:
         if self._events is None:
             return
-        payload = {
+        inner = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        payload: dict[str, Any] = {
             "task_id": str(task["id"]),
             "task_type": task["task_type"],
-            **extra,
         }
+        for key in ("worker_id", "mission_id", "schedule_id", "job_id"):
+            if inner.get(key):
+                payload[key] = str(inner[key])
+        result = extra.pop("result", None)
+        if isinstance(result, dict):
+            if result.get("note"):
+                payload["summary"] = str(result["note"])[:160]
+            elif result.get("skipped"):
+                payload["summary"] = f"skipped: {result['skipped']}"
+            if result.get("reason") and not payload.get("summary"):
+                payload["summary"] = str(result["reason"])[:160]
+            if result.get("worker_id") and "worker_id" not in payload:
+                payload["worker_id"] = str(result["worker_id"])
+        payload.update(extra)
         self._events.emit(event_type, payload, source=self.name)

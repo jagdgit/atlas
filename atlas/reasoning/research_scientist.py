@@ -318,6 +318,7 @@ def scientist_prompt(packet: dict[str, Any]) -> str:
             "return_schema": schema,
             "rules": [
                 "JSON only",
+                "concise (max 1-2 sentences per role)",
                 "decision_advice must be DO_NOT_OVERRIDE_RULE_ENGINE",
                 "do not invent fundamentals or news",
                 "belief_changed true only with cited packet evidence",
@@ -339,7 +340,13 @@ def chat_with_retry(
     for i in range(n):
         try:
             client = llm.for_role("researcher") if hasattr(llm, "for_role") else llm
-            resp = client.chat(messages)
+            resp = client.chat(
+                messages,
+                _atlas_purpose="research_scientist",
+                think=False,
+                num_predict=400,
+                format="json",
+            )
             text = getattr(resp, "text", None) or getattr(resp, "content", None) or str(resp)
             if text and str(text).strip():
                 return str(text), None

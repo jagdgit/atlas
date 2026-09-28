@@ -58,6 +58,31 @@ class FundamentalsEnrichWorker(PersistentWorker):
         self._portfolio = portfolio
         self._logger = logger or logging.getLogger("atlas.workers.fundamentals_enrich")
 
+    def _sync_open_book_hermetic(
+        self,
+        data_dir: str,
+        *,
+        cfg: dict[str, Any],
+        program_id: str,
+    ) -> dict[str, Any]:
+        """DP-FUND1 — sector-proxy / universe profiles when Yahoo is paused."""
+        try:
+            from atlas.investment.company_profiles import ensure_open_book_profiles
+            from atlas.trading.company import CompanyDataService
+
+            return ensure_open_book_profiles(
+                data_dir=data_dir,
+                company_data=CompanyDataService(),
+                portfolio=self._portfolio,
+                laboratory_id=str(
+                    cfg.get("portfolio_key") or "india_equity_learner"
+                ),
+                program_id=program_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("hermetic open-book sync skipped: %s", exc)
+            return {"ok": 0, "count": 0, "reason": type(exc).__name__}
+
     def do_tick(self, ctx: TickContext) -> TickResult:
         cfg = ctx.config or {}
         state = dict(ctx.state or {})
@@ -80,27 +105,47 @@ class FundamentalsEnrichWorker(PersistentWorker):
 
         try:
             if enabled and yahoo_background_should_yield_to_live():
+                hermetic = self._sync_open_book_hermetic(
+                    data_dir, cfg=cfg, program_id=program_id
+                )
+                state["last_enrich"] = {
+                    "fetched": 0,
+                    "reason": "yield_rth",
+                    "mode": "yield_live_session",
+                    "hermetic_sync": hermetic,
+                }
                 return TickResult(
                     state=state,
-                    note="idle: yield yahoo to live session (RTH)",
+                    note=(
+                        "idle: yield yahoo to live session (RTH); "
+                        f"hermetic_ok={hermetic.get('ok')}/{hermetic.get('count')}"
+                    ),
                 )
         except Exception:  # noqa: BLE001
             pass
 
         # Hard-pause while Yahoo cooldown is armed (do not burn IP on fallbacks).
+        # Still sync hermetic open-book profiles so holdings are not blank in store.
         gate = get_yahoo_rate_gate(data_dir)
         gate_st = gate.status()
         if not gate_st.get("ready") and float(gate_st.get("cooldown_remaining_s") or 0) > 0:
             cool = gate_st.get("cooldown_remaining_s")
+            hermetic = self._sync_open_book_hermetic(
+                data_dir, cfg=cfg, program_id=program_id
+            )
             state["last_enrich"] = {
                 "fetched": 0,
                 "reason": "yahoo_cooldown",
                 "rate_gate": gate_st,
                 "mode": "hard_pause",
+                "hermetic_sync": hermetic,
             }
             return TickResult(
                 state=state,
-                note=f"LQ.7 hard-pause cooldown {cool}s (no Yahoo probes)",
+                note=(
+                    f"LQ.7 hard-pause cooldown {cool}s (no Yahoo probes); "
+                    f"hermetic_ok={hermetic.get('ok')}/{hermetic.get('count')}"
+                ),
             )
 
         priority: list[str] = []
@@ -123,6 +168,7 @@ class FundamentalsEnrichWorker(PersistentWorker):
         if open_books_only and weekly_window:
             open_books_only = False
 
+        lab_id = str(cfg.get("portfolio_key") or "india_equity_learner")
         try:
             result = enrich_watchlist_gaps(
                 data_dir,
@@ -132,6 +178,7 @@ class FundamentalsEnrichWorker(PersistentWorker):
                 batch_size=batch_size,
                 priority_symbols=priority or None,
                 open_books_only=open_books_only,
+                laboratory_id=lab_id,
             )
         except Exception as exc:  # noqa: BLE001
             self._logger.exception("LQ.7 fundamentals enrich failed")
@@ -144,6 +191,7 @@ class FundamentalsEnrichWorker(PersistentWorker):
             "reason": result.get("reason"),
             "gap_symbols": (result.get("gap_symbols") or [])[:12],
             "priority": priority[:8],
+            "material_challengers": (result.get("material_challengers") or [])[:8],
             "remaining": result.get("remaining"),
             "errors": len(result.get("errors") or []),
             "mode": result.get("mode") or result.get("reason"),
@@ -161,7 +209,7 @@ class FundamentalsEnrichWorker(PersistentWorker):
         elif reason == "no_gaps":
             note = "LQ.7 no watchlist gaps"
         elif reason == "no_open_books":
-            note = "LQ.7 idle: open_books_only and no holdings"
+            note = "LQ.7 idle: open_books_only and no holdings/challengers"
         elif reason == "no_watchlist_symbols":
             note = "LQ.7 idle: empty watchlist"
         elif reason == "yahoo_cooldown":
@@ -170,8 +218,10 @@ class FundamentalsEnrichWorker(PersistentWorker):
         elif fetched:
             syms = ", ".join(str(s) for s in (result.get("symbols") or [])[:5])
             tail = f"; {remaining} remain" if remaining else ""
-            if open_books_only:
+            if open_books_only and priority:
                 pbit = " (open books only)"
+            elif open_books_only and (result.get("material_challengers") or []):
+                pbit = " (material challengers)"
             elif weekly_window:
                 pbit = " (weekly universe)"
             elif priority:

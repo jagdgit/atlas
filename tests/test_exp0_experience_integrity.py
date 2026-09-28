@@ -202,6 +202,10 @@ def test_classify_kinds():
         )
         == "hold_review"
     )
+    assert (
+        classify_experience_kind(action="hold", strategy_tag="plc_a_hold")
+        == "blocked_buy"
+    )
     assert classify_experience_kind(action="hold", trigger="revisit") == "revisit"
 
 

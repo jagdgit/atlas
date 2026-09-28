@@ -135,6 +135,7 @@ class ResourceManager:
         self._cost_in_use = 0
         self._llm_in_use = 0
         self._llm_lane = threading.BoundedSemaphore(self._llm_max)
+        self._llm_holders: dict[str, int] = {}  # CU lane → in-flight count
         self._thermal_hold = False
 
     def posture(self, *, profile: str | None = None) -> dict[str, Any]:
@@ -366,41 +367,110 @@ class ResourceManager:
         }
 
     @contextmanager
-    def llm_lane(self, *, kind: str = "llm") -> Iterator[None]:
-        """Acquire the globally shared LLM capacity lane.
+    def llm_lane(self, *, kind: str = "llm", blocking: bool | None = None) -> Iterator[None]:
+        """Acquire the globally shared LLM capacity lane (OI-CU0 A2).
 
-        Calls wait instead of failing when full.  While occupied, the Execution
-        Planner can see the lane as unavailable and prefer non-LLM work.
+        Protected lanes (chat/market) wait when full. Research/background
+        fail-fast via ``LLMLaneBusy`` — never raise Ollama concurrency to paper
+        over contention. Overnight densify may use free capacity; it does not
+        queue ahead of chat.
         """
-        self._llm_lane.acquire()
+        try:
+            from atlas.investment.llm_lanes import (
+                LLMLaneBusy,
+                cu_lane_for_role,
+                lane_acquire_blocking,
+            )
+
+            cu = cu_lane_for_role(kind)
+            may_block = (
+                lane_acquire_blocking(cu)
+                if blocking is None
+                else bool(blocking)
+            )
+        except Exception:  # noqa: BLE001
+            cu = str(kind or "llm")
+            may_block = True if blocking is None else bool(blocking)
+            LLMLaneBusy = RuntimeError  # type: ignore[misc, assignment]
+
+        if may_block:
+            self._llm_lane.acquire()
+        else:
+            # DP-LLM1 — RTH reserve: low lanes must leave ≥1 slot for chat/market.
+            try:
+                from atlas.investment.llm_lanes import (
+                    LOW_LANES,
+                    admit_llm_lane,
+                )
+
+                with self._lock:
+                    low_used = sum(
+                        int(self._llm_holders.get(k) or 0) for k in LOW_LANES
+                    )
+                    decision = admit_llm_lane(
+                        cu,
+                        in_use=self._llm_in_use,
+                        limit=self._llm_max,
+                        low_lane_in_use=low_used,
+                    )
+                if not decision.get("allowed"):
+                    raise LLMLaneBusy(
+                        cu,
+                        f"LLM lane busy ({self._llm_in_use}/{self._llm_max}) — "
+                        f"{cu} deferred ({decision.get('reason') or 'CU.A2'})",
+                    )
+            except LLMLaneBusy:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
+            if not self._llm_lane.acquire(blocking=False):
+                raise LLMLaneBusy(
+                    cu,
+                    f"LLM lane busy ({self._llm_in_use}/{self._llm_max}) — "
+                    f"{cu} deferred (CU.A2)",
+                )
+
         budget = self._cost_budgets.get(
             self._default_profile, self._cost_budgets["balanced"]
         )
         # A single configured task must always be able to make progress even
         # under a smaller profile budget; concurrent tasks remain constrained.
+        cost_key = kind if kind in self._llm_cost_units else "default"
         task_cost = min(
-            self._llm_cost_units.get(kind, self._llm_cost_units["default"]),
+            self._llm_cost_units.get(cost_key, self._llm_cost_units["default"]),
             budget,
         )
         with self._lock:
             self._llm_in_use += 1
             self._cost_in_use += task_cost
+            self._llm_holders[cu] = int(self._llm_holders.get(cu) or 0) + 1
         try:
             yield
         finally:
             with self._lock:
                 self._llm_in_use = max(0, self._llm_in_use - 1)
                 self._cost_in_use = max(0, self._cost_in_use - task_cost)
+                left = int(self._llm_holders.get(cu) or 0) - 1
+                if left <= 0:
+                    self._llm_holders.pop(cu, None)
+                else:
+                    self._llm_holders[cu] = left
             self._llm_lane.release()
 
     @property
-    def llm_capacity(self) -> dict[str, int]:
+    def llm_capacity(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "limit": self._llm_max,
                 "in_use": self._llm_in_use,
                 "available": max(0, self._llm_max - self._llm_in_use),
                 "cost_in_use": self._cost_in_use,
+                "holders": dict(self._llm_holders),
+                "honesty": (
+                    "Bounded concurrency — chat/market may wait; "
+                    "RTH reserves ≥1 slot for live lanes when limit≥2; "
+                    "research/background defer when saturated or reserve held"
+                ),
             }
 
     @staticmethod

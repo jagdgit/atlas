@@ -411,7 +411,14 @@ class InvestmentResearchService:
             data_dir = str(root) if root is not None else None
             graph = mkg_mod.ensure_seeded(data_dir)
             fin = mkg_mod.financial_cites_for(data_dir, symbol, program_id=program_id)
-            why = mkg_mod.why_own(graph, symbol, financial_cites=fin)
+            why = mkg_mod.why_own_bundle(
+                data_dir,
+                symbol,
+                laboratory_id="india_equity_learner",
+                program_id=program_id,
+                graph=graph,
+                financial_cites=fin,
+            )
             hood = mkg_mod.neighborhood(graph, symbol=symbol, depth=1, limit=40)
             return {
                 "why_own": why,
@@ -1732,6 +1739,23 @@ class InvestmentResearchService:
         if stance == "avoid":
             reasons.append("thesis_avoid")
 
+        # DP-THESIS1 — explicit thesis stance "watch" + insufficient valuation
+        # path must not BUY under soft MoS. ``watch_positive`` may still learn
+        # under soft; swing default is when_available (blocks mos_unknown).
+        try:
+            from atlas.investment.research.valuation_paths import PATH_WATCH
+        except Exception:  # noqa: BLE001
+            PATH_WATCH = "watch_insufficient"
+        method_l = str(val.get("method") or "").strip().lower()
+        path_kind = str(
+            val.get("path_kind") or val.get("active_valuation_path") or ""
+        ).strip().lower()
+        watch_methods = {PATH_WATCH, "watch_insufficient"}
+        if stance == "watch" and (
+            method_l in watch_methods or path_kind in watch_methods
+        ):
+            reasons.append("thesis_watch_insufficient")
+
         # IRA.26b — critical evidence outweighs MVR checklist
         flags = (aw.get("critical_flags") or {}).get("active") or []
         for flg in flags:
@@ -1747,6 +1771,7 @@ class InvestmentResearchService:
         action = "buy_ok" if allowed else "hold_research"
         if not allowed and (
             "mos_unknown" in reasons
+            or "thesis_watch_insufficient" in reasons
             or "mos_below_" in ",".join(reasons)
             or any("critical_flag" in r for r in reasons)
         ):

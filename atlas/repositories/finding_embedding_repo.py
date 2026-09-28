@@ -57,6 +57,7 @@ class FindingEmbeddingRepository(BaseRepository):
                    f.canonical_id,
                    f.statement,
                    f.domain,
+                   f.created_at,
                    e.embedding <=> %s::vector AS distance
             FROM knowledge.finding_embeddings e
             JOIN knowledge.findings f ON f.id = e.finding_id

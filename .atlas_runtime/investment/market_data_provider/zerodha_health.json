@@ -1,0 +1,17 @@
+{
+  "version": "mdph.provider_health.v1",
+  "provider": "zerodha",
+  "trading_date": "2026-09-03",
+  "configured": true,
+  "login_url_path": "/zerodha/login",
+  "updated_at": "2026-09-03T15:28:10.515595+00:00",
+  "status": "LOGIN_REQUIRED",
+  "token_valid": false,
+  "ltp_probe": "FAIL",
+  "reason_code": "PROVIDER_LOGIN_REQUIRED",
+  "instrument_master": "ABSENT",
+  "cta": "/zerodha/login",
+  "message": "Zerodha authentication required before live market session.",
+  "live_trading_allowed": false,
+  "freshness": "UNKNOWN"
+}

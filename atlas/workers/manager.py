@@ -850,10 +850,41 @@ class WorkerManager:
                 from atlas.core.resources.work_profile import SERVICE_BATCH
 
                 prof = resources_for(str(wtype))
-                # Hist bootstrap was mis-seeded as market_observer REALTIME — never
-                # let that steal paper lab slots even on already-instantiated missions.
-                if str(wtype) in {"historical_bars_bootstrap", "fundamentals_enrich"}:
+                # Hist bootstrap stays BATCH in RTH (don't steal paper). Enrich is
+                # BATCH in RTH but NORMAL after close so open-book densify can tick
+                # (DP-FUND2 anti-starve) instead of sitting 17h behind archive.
+                if str(wtype) == "historical_bars_bootstrap":
                     sc = SERVICE_BATCH
+                elif str(wtype) == "fel_experiment_runner":
+                    sc = SERVICE_BATCH
+                elif str(wtype) == "fundamentals_enrich":
+                    try:
+                        from atlas.investment.yahoo_fundamentals import (
+                            yahoo_background_should_yield_to_live,
+                        )
+                        from atlas.core.resources.work_profile import SERVICE_NORMAL
+
+                        sc = (
+                            SERVICE_BATCH
+                            if yahoo_background_should_yield_to_live()
+                            else SERVICE_NORMAL
+                        )
+                    except Exception:  # noqa: BLE001
+                        sc = SERVICE_BATCH
+                elif str(wtype) == "fundamental_evidence":
+                    try:
+                        from atlas.investment.yahoo_fundamentals import (
+                            yahoo_background_should_yield_to_live,
+                        )
+                        from atlas.core.resources.work_profile import SERVICE_NORMAL
+
+                        sc = (
+                            SERVICE_BATCH
+                            if yahoo_background_should_yield_to_live()
+                            else SERVICE_NORMAL
+                        )
+                    except Exception:  # noqa: BLE001
+                        sc = SERVICE_BATCH
                 elif not sc:
                     sc = prof.service_class
                 if not uses_llm:

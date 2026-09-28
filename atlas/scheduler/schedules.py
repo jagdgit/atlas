@@ -207,7 +207,35 @@ class ScheduleService:
         return mission.effective_priority if mission is not None else 0
 
     def _reenqueue_self(self) -> None:
+        """Chain exactly one future ``schedule_tick`` (OI-SCHED-CHURN0).
+
+        Always-insert re-enqueue multiplied under concurrent workers: each due tick
+        spawned another, backlog grew, and TaskCompleted flooded the journal.
+        Prefer an atomic insert-if-no-pending; fall back to a queued-only count for
+        hermetic fakes that lack the repo helper.
+        """
         try:
+            create_if = getattr(self._tasks, "create_if_no_pending", None)
+            if callable(create_if):
+                try:
+                    create_if(
+                        TICK_TASK_TYPE,
+                        {},
+                        max_retries=5,
+                        delay_seconds=self._tick_interval,
+                    )
+                    return
+                except Exception:  # noqa: BLE001 - singleton helper must not kill recurrence
+                    self._logger.exception(
+                        "create_if_no_pending failed; falling back to queued count"
+                    )
+            queued = getattr(self._tasks, "count_queued_of_type", None)
+            if callable(queued):
+                if int(queued(TICK_TASK_TYPE) or 0) > 0:
+                    return
+            elif self._tasks.count_pending_of_type(TICK_TASK_TYPE) > 0:
+                # Fake repos often only track pending; still avoid stacking.
+                return
             self._tasks.create(
                 TICK_TASK_TYPE, {}, max_retries=5, delay_seconds=self._tick_interval
             )
@@ -217,6 +245,15 @@ class ScheduleService:
     def ensure_running(self) -> None:
         """Seed the recurring tick if none is in flight (idempotent across reboots)."""
         try:
+            collapse = getattr(self._tasks, "collapse_pending_of_type", None)
+            if callable(collapse):
+                cancelled = int(collapse(TICK_TASK_TYPE, keep=1) or 0)
+                if cancelled:
+                    self._logger.warning(
+                        "collapsed %d excess pending %s task(s)",
+                        cancelled,
+                        TICK_TASK_TYPE,
+                    )
             if self._tasks.count_pending_of_type(TICK_TASK_TYPE) == 0:
                 self._tasks.create(TICK_TASK_TYPE, {}, max_retries=5, delay_seconds=0.0)
                 self._logger.info("seeded schedule_tick loop")

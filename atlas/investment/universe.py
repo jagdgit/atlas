@@ -128,6 +128,8 @@ _MIDCAP_EXTRA_RAW: tuple[tuple[str, str, str], ...] = (
     ("ASTRAL", "Astral", "Capital Goods"),
     ("BALKRISHNA", "Balkrishna Industries", "Automobile"),
     ("BHARATFORG", "Bharat Forge", "Automobile"),
+    ("BHEL", "Bharat Heavy Electricals", "Capital Goods"),
+    ("BLUESTARCO", "Blue Star", "Consumer Durables"),
     ("COFORGE", "Coforge", "Information Technology"),
     ("CONCOR", "Container Corporation", "Services"),
     ("COROMANDEL", "Coromandel International", "Chemicals"),
@@ -377,6 +379,19 @@ def membership(
 
 def symbols(index: str = INDEX_NIFTY50) -> list[str]:
     return [r["symbol"] for r in membership(index)]
+
+
+def lookup_symbol(symbol: str) -> dict[str, Any] | None:
+    """Resolve name/sector from staged NIFTY500 universe (IIP.1)."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    if not sym.endswith(".NS") and "." not in sym:
+        sym = f"{sym}.NS"
+    for row in membership(INDEX_NIFTY500):
+        if str(row.get("symbol") or "").upper() == sym:
+            return dict(row)
+    return None
 
 
 def sectors(index: str = INDEX_NIFTY50) -> dict[str, list[str]]:

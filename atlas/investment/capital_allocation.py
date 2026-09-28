@@ -199,6 +199,17 @@ def _best_deploy_target(
         sym = _sym(row)
         if not sym or sym == CASH_SYMBOL:
             continue
+        # Never recommend AVOID / INVALID / quarantined names as DEPLOY.
+        stance = str(
+            row.get("thesis_stance")
+            or row.get("stance")
+            or ((row.get("thesis") or {}) if isinstance(row.get("thesis"), dict) else {}).get(
+                "stance"
+            )
+            or ""
+        ).strip().lower()
+        if stance in {"avoid", "sell", "no_buy", "invalid", "thesis_invalid", "quarantined"}:
+            continue
         metrics = estimate_opportunity_metrics(row)
         pool.append(
             {
@@ -315,6 +326,57 @@ def build_challenger_table(
         for c in (challengers or [])
         if isinstance(c, dict) and _sym(c) and _sym(c) not in held_syms
     ]
+    # Drop AVOID / INVALID research stances so Next-₹1 never DEPLOYs vetoed names.
+    try:
+        from atlas.investment.lab_contracts import normalize_thesis_stance
+
+        filtered: list[dict[str, Any]] = []
+        for c in deploy_pool:
+            stance_raw = (
+                c.get("thesis_stance")
+                or c.get("stance")
+                or (
+                    (c.get("thesis") or {}).get("stance")
+                    if isinstance(c.get("thesis"), dict)
+                    else None
+                )
+            )
+            if stance_raw is None:
+                # Best-effort dossier lookup (same program as lab).
+                try:
+                    from atlas.config import get_config
+                    from atlas.investment.research.store import ResearchStore
+
+                    store = ResearchStore(get_config().paths.data)
+                    doc = store.get(
+                        _sym(c),
+                        program_id=str(
+                            (cfg or {}).get("program_id") or "market_intelligence"
+                        ),
+                    )
+                    if isinstance(doc, dict) and isinstance(doc.get("thesis"), dict):
+                        stance_raw = doc["thesis"].get("stance")
+                        c = {**c, "thesis_stance": stance_raw}
+                except Exception:  # noqa: BLE001
+                    stance_raw = None
+            st = normalize_thesis_stance(stance_raw)
+            if st in {"AVOID", "INVALID"}:
+                continue
+            filtered.append(c)
+        deploy_pool = filtered
+    except Exception:  # noqa: BLE001
+        pass
+    # OI-FNO-CONTRACT — F&O Next-₹1 must never recommend cash equities (IDEA/PRAJIND/…).
+    try:
+        from atlas.investment.index_proxy_lot import is_fno_lab
+        from atlas.investment.lab_contracts import filter_symbols_for_lab
+
+        if is_fno_lab(cfg, laboratory_id):
+            deploy_pool = filter_symbols_for_lab(
+                laboratory_id, deploy_pool, cfg=cfg, path="allocation"
+            )
+    except Exception:  # noqa: BLE001
+        pass
     best_deploy = _best_deploy_target(cash_doc=cash_doc, deploy_candidates=deploy_pool)
     cash_doc["best_challenger"] = (
         best_deploy.get("symbol") if best_deploy.get("symbol") != CASH_SYMBOL else None

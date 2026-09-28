@@ -312,6 +312,52 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "news_intelligence"),
     },
     {
+        "name": "overnight_densify",
+        "template_version": 1,
+        "description": (
+            "OI-CU0 CU.C — overnight news densify (18:30–07:30 IST). "
+            "RSS acquire without Ollama; symbol set = open books + allocation blockers; "
+            "news drain → evidence or unknown_explicit. LOW LLM optional and lane-gated."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Overnight Densify",
+            "roadmap": "OI-CU0 CU.C / CU.E",
+            "program_id": "market_intelligence",
+            "rss_enable": ["pib_press"],
+            "allow_llm": True,
+            "icr5_drain_passes": 3,
+            "bre3_drain_passes": 2,
+            "tick_interval_seconds": 1800,
+        },
+        "worker_specs": [{"type": "overnight_densify", "interval_seconds": 1800}],
+        "knowledge_domains": ["finance", "markets", "external"],
+        "success_criteria": with_philosophy({}, "overnight_densify"),
+    },
+    {
+        "name": "fel_experiment_runner",
+        "template_version": 1,
+        "description": (
+            "OI-FEL0 C — BATCH FEL experiment runner. Claims one queued experiment "
+            "per tick, runs existing FEL machinery (E001 path), stores result + "
+            "genealogy. Yields during NSE RTH. Never mutates live V1 control."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "FEL Experiment Runner",
+            "roadmap": "OI-FEL0 C",
+            "program_id": "market_intelligence",
+            "allow_rth": False,
+            "seed_e001": True,
+            "tick_interval_seconds": 1800,
+        },
+        "worker_specs": [{"type": "fel_experiment_runner", "interval_seconds": 1800}],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "fel_experiment_runner"),
+    },
+    {
         "name": "government_intelligence",
         "template_version": 2,
         "description": (
@@ -469,6 +515,36 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "success_criteria": with_philosophy({}, "fundamentals_enrich"),
     },
     {
+        "name": "fundamental_evidence",
+        "template_version": 1,
+        "description": (
+            "FEA — Fundamental Evidence Acquisition. Drains due UQ pe/fcf/roe "
+            "tasks (priority batch) → NSE/XBRL shared pool → store → UQ DONE. "
+            "Yahoo is secondary/cross-check only (not the default drain). "
+            "Never scrapes Screener HTML. Never loosens swing gates."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Fundamental Evidence Acquisition",
+            "roadmap": "OI-FEA0",
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "max_symbols": 6,
+            "nse_concurrency": 3,
+            "yahoo_secondary": False,
+            "push_to_ira": True,
+            "tick_interval_seconds": 600,
+        },
+        "worker_specs": [
+            {"type": "fundamental_evidence", "interval_seconds": 600},
+            # After close Mon–Fri ~22:00 IST (16:30 UTC)
+            {"type": "fundamental_evidence", "cron": "30 16 * * 1-5", "interval_seconds": 600},
+        ],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "fundamental_evidence"),
+    },
+    {
         "name": "thesis_outcome",
         "template_version": 2,
         "description": (
@@ -514,10 +590,10 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "program_id": "market_intelligence",
             "portfolio_key": "india_equity_learner",
             "max_revisits": 20,
-            "tick_interval_seconds": 86400,
+            "tick_interval_seconds": 3600,
         },
         "worker_specs": [
-            {"type": "decision_evolution", "interval_seconds": 86400},
+            {"type": "decision_evolution", "interval_seconds": 3600},
         ],
         "knowledge_domains": ["finance", "markets"],
         "success_criteria": with_philosophy({}, "decision_evolution"),

@@ -48,6 +48,23 @@ _ANSWER_SYSTEM = (
     "information you can't be sure of, say so in one line and offer to research it. "
     "Do not invent specific facts, figures, or citations."
 )
+
+# OI-CU0 A5 — honest capacity failures (not Belief-Core redirects)
+_CHAT_BUSY_FALLBACK = (
+    "Chat LLM is busy right now (inference lane saturated — market/research "
+    "workers share this host). "
+    "Try a definitional question (“what is F&O?”, “what is a challenger?”) — "
+    "those are answered without Ollama — or “market intelligence status” / "
+    "“learner status”. Or ask me to research it as a background job."
+)
+_CHAT_TIMEOUT_FALLBACK = (
+    "Chat LLM timed out (CPU-only Ollama is slow on this host — market workers + "
+    "inference share one lane). This is an inference-capacity failure, not "
+    "“Atlas has no answer.” "
+    "Try “what is F&O?” / “what did you learn?” / “what do you know?” "
+    "(deterministic) or “market intelligence status” (no LLM). "
+    "Or retry in a moment / start a background research job."
+)
 _WEB_SUMMARY_SYSTEM = (
     "You are Atlas. Summarize the fetched web page for the user in a few sentences, "
     "focusing on what answers their request. Do not invent details."
@@ -196,6 +213,10 @@ def _normalize_chat_citations(raw: list[Any] | None) -> list[dict[str, Any]]:
                     "chunk_id": bid,
                     "similarity": float(c.get("similarity") if c.get("similarity") is not None else 1.0),
                     "snippet": snippet[:500] or f"belief {bid}",
+                    "finding_id": None,
+                    "source": "belief",
+                    "timestamp": c.get("timestamp"),
+                    "score": float(c.get("score") if c.get("score") is not None else 1.0),
                 }
             )
             continue
@@ -211,6 +232,10 @@ def _normalize_chat_citations(raw: list[Any] | None) -> list[dict[str, Any]]:
                     "chunk_id": eid,
                     "similarity": float(c.get("similarity") if c.get("similarity") is not None else 1.0),
                     "snippet": snippet[:500] or f"experience {eid}",
+                    "finding_id": None,
+                    "source": "experience",
+                    "timestamp": c.get("timestamp"),
+                    "score": float(c.get("score") if c.get("score") is not None else 1.0),
                 }
             )
             continue
@@ -229,6 +254,16 @@ def _normalize_chat_citations(raw: list[Any] | None) -> list[dict[str, Any]]:
             sim = float(c.get("similarity") if c.get("similarity") is not None else 0.0)
         except (TypeError, ValueError):
             sim = 0.0
+        try:
+            score = c.get("score")
+            score = float(score) if score is not None else sim
+        except (TypeError, ValueError):
+            score = sim
+        finding_id = c.get("finding_id")
+        if not finding_id and str(chunk).startswith("finding:"):
+            finding_id = chunk.split(":", 1)[1] or None
+        source = c.get("source") or c.get("tier")
+        timestamp = c.get("timestamp")
         out.append(
             {
                 "index": int(c.get("index") if c.get("index") is not None else i),
@@ -236,6 +271,10 @@ def _normalize_chat_citations(raw: list[Any] | None) -> list[dict[str, Any]]:
                 "chunk_id": chunk,
                 "similarity": sim,
                 "snippet": snippet[:500],
+                "finding_id": str(finding_id) if finding_id else None,
+                "source": str(source) if source else None,
+                "timestamp": str(timestamp) if timestamp else None,
+                "score": score,
             }
         )
     return out
@@ -313,11 +352,23 @@ class ResponseBuilder:
         fallback: str = "",
         timeout: float | None = None,
         busy_preflight: bool = True,
+        llm_lane: str = "chat",
+        record_failures: bool = True,
+        role: str = "chat",
+        purpose: str = "assistant_compose",
     ) -> str:
         messages = [ChatMessage("system", system)]
         if context is not None:
             messages.extend(context.as_chat_messages())
         messages.append(ChatMessage("user", user))
+        try:
+            from atlas.llm.cpu_policy import chat_max_context_chars, truncate_chat_messages
+
+            messages = truncate_chat_messages(
+                messages, max_chars=chat_max_context_chars()
+            )
+        except Exception:  # noqa: BLE001
+            pass
         options: dict[str, Any] = {}
         if timeout is not None:
             options["timeout"] = timeout
@@ -325,21 +376,67 @@ class ResponseBuilder:
         if busy_preflight:
             try:
                 if hasattr(self._llm, "lane_busy") and self._llm.lane_busy():
-                    return fallback or (
-                        "Chat LLM is busy right now (inference lane saturated). "
-                        "Try “market intelligence status” or “career intelligence status” "
-                        "(no LLM), or ask me to research it as a background job."
-                    )
+                    msg = _CHAT_BUSY_FALLBACK
+                    if record_failures:
+                        self._record_lane_failure("busy", msg, lane=llm_lane)
+                    try:
+                        from atlas.llm.fitness_ledger import record_inference
+
+                        record_inference(
+                            lane=llm_lane,
+                            role=role,
+                            model=(
+                                self._llm.model_for_role(role)
+                                if hasattr(self._llm, "model_for_role")
+                                else None
+                            ),
+                            kind="busy_preflight",
+                            outcome="busy",
+                            queue_wait_ms=0.0,
+                            generate_ms=0.0,
+                            total_ms=0.0,
+                            purpose=purpose,
+                            reason="busy_preflight",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return msg
             except Exception:  # noqa: BLE001
                 pass
         try:
-            return (
-                self._llm.for_role("chat").chat(messages, **options).text.strip()
-                or fallback
+            client = (
+                self._llm.for_role(role) if hasattr(self._llm, "for_role") else self._llm
             )
-        except Exception:  # noqa: BLE001 - never let composition crash a turn
+            return (
+                client.chat(messages, _atlas_purpose=purpose, **options).text.strip()
+                or (fallback or _CHAT_TIMEOUT_FALLBACK)
+            )
+        except Exception as exc:  # noqa: BLE001 - never let composition crash a turn
             self._logger.exception("response composition failed")
-            return fallback
+            msg = fallback or _CHAT_TIMEOUT_FALLBACK
+            # Prefer capacity honesty over Belief-Core grounded dump
+            if "Belief Core" in msg or "Living RAG" in msg:
+                msg = _CHAT_TIMEOUT_FALLBACK
+            if record_failures:
+                self._record_lane_failure(type(exc).__name__, msg, lane=llm_lane)
+            return msg
+
+    @staticmethod
+    def _record_lane_failure(reason: str, detail: str, *, lane: str = "chat") -> None:
+        try:
+            from atlas.config import get_config
+            from atlas.investment.llm_lanes import record_llm_lane_failure
+
+            data_dir = str(get_config().paths.data)
+            record_llm_lane_failure(
+                data_dir,
+                lane=lane,
+                reason=reason,
+                detail=detail[:300],
+                source="assistant_compose",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     @staticmethod
     def explain(tool_calls: list[dict[str, Any]]) -> str:
@@ -462,6 +559,7 @@ class AssistantService:
                 memory=self._memory,
                 context=context,
                 timeout=self._interactive_timeout,
+                fallback=_CHAT_TIMEOUT_FALLBACK,
                 allow_llm=allow_llm,
             )
         except Exception:  # noqa: BLE001
@@ -537,6 +635,182 @@ class AssistantService:
                     answer="Belief Core could not answer that why/mind-change query."
                 )
         else:
+            # OI-CU0 A4/D safety nets — glossary + self-model must never wait on Ollama
+            # even if the planner fell through to ANSWER/REACT.
+            if step.intent in {Intent.ANSWER, Intent.REACT, Intent.SMALLTALK}:
+                try:
+                    from atlas.investment.operator_knowledge import match_operator_knowledge
+
+                    if match_operator_knowledge(message) is not None:
+                        outcome = self._do_operator_knowledge(
+                            {"query": message}, context, tool_calls
+                        )
+                        self._conversation.add_assistant_message(
+                            sid, outcome.answer, tool_calls=tool_calls
+                        )
+                        return ChatTurn(
+                            session_id=sid,
+                            answer=outcome.answer,
+                            intent=Intent.OPERATOR_KNOWLEDGE,
+                            citations=outcome.citations,
+                            tool_calls=tool_calls,
+                            capability_gaps=[],
+                            run_id=outcome.run_id,
+                        )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug(
+                        "operator knowledge safety net skipped", exc_info=True
+                    )
+                try:
+                    from atlas.investment.self_model import detect_self_model_query
+
+                    if detect_self_model_query(message) is not None:
+                        outcome = self._do_self_model(
+                            {"query": message}, context, tool_calls
+                        )
+                        self._conversation.add_assistant_message(
+                            sid, outcome.answer, tool_calls=tool_calls
+                        )
+                        return ChatTurn(
+                            session_id=sid,
+                            answer=outcome.answer,
+                            intent=Intent.SELF_MODEL,
+                            citations=outcome.citations,
+                            tool_calls=tool_calls,
+                            capability_gaps=[],
+                            run_id=outcome.run_id,
+                        )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("self-model safety net skipped", exc_info=True)
+                try:
+                    from atlas.investment.market_status_chat import (
+                        answer_next_rupee_chat,
+                        detect_next_rupee_query,
+                    )
+
+                    if detect_next_rupee_query(message):
+                        data_dir = None
+                        try:
+                            from atlas.config import get_config
+
+                            data_dir = str(get_config().paths.data)
+                        except Exception:  # noqa: BLE001
+                            data_dir = None
+                        special = answer_next_rupee_chat(
+                            message,
+                            data_dir=data_dir,
+                            laboratory_id="india_equity_learner",
+                        )
+                        if special and special.get("answer"):
+                            tool_calls.append(
+                                {
+                                    "intent": Intent.MARKET_STATUS,
+                                    "action": "next_rupee",
+                                    "capability": "chat_inherit",
+                                }
+                            )
+                            self._conversation.add_assistant_message(
+                                sid,
+                                str(special.get("answer") or ""),
+                                tool_calls=tool_calls,
+                            )
+                            return ChatTurn(
+                                session_id=sid,
+                                answer=str(special.get("answer") or ""),
+                                intent=Intent.MARKET_STATUS,
+                                citations=[],
+                                tool_calls=tool_calls,
+                                capability_gaps=[],
+                                run_id=None,
+                            )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("next-rupee chat safety net skipped", exc_info=True)
+                try:
+                    from atlas.investment.capital_scale_lab import (
+                        answer_capital_scale_chat,
+                        detect_capital_scale_query,
+                    )
+
+                    if detect_capital_scale_query(message):
+                        data_dir = None
+                        try:
+                            from atlas.config import get_config
+
+                            data_dir = str(get_config().paths.data)
+                        except Exception:  # noqa: BLE001
+                            data_dir = None
+                        special = answer_capital_scale_chat(
+                            message,
+                            data_dir=data_dir,
+                            laboratory_id="india_equity_learner",
+                        )
+                        if special and special.get("answer"):
+                            tool_calls.append(
+                                {
+                                    "intent": Intent.MARKET_STATUS,
+                                    "action": "capital_scale",
+                                    "capability": "chat_inherit",
+                                }
+                            )
+                            self._conversation.add_assistant_message(
+                                sid,
+                                str(special.get("answer") or ""),
+                                tool_calls=tool_calls,
+                            )
+                            return ChatTurn(
+                                session_id=sid,
+                                answer=str(special.get("answer") or ""),
+                                intent=Intent.MARKET_STATUS,
+                                citations=[],
+                                tool_calls=tool_calls,
+                                capability_gaps=[],
+                                run_id=None,
+                            )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("capital-scale chat safety net skipped", exc_info=True)
+                try:
+                    from atlas.investment.learning_audit import (
+                        answer_learning_audit_chat,
+                        detect_learning_audit_query,
+                    )
+
+                    if detect_learning_audit_query(message):
+                        data_dir = None
+                        try:
+                            from atlas.config import get_config
+
+                            data_dir = str(get_config().paths.data)
+                        except Exception:  # noqa: BLE001
+                            data_dir = None
+                        special = answer_learning_audit_chat(
+                            message,
+                            data_dir=data_dir,
+                            laboratory_id="india_equity_learner",
+                        )
+                        if special and special.get("answer"):
+                            tool_calls.append(
+                                {
+                                    "intent": Intent.MARKET_STATUS,
+                                    "action": "learning_audit",
+                                    "capability": "chat_inherit",
+                                }
+                            )
+                            self._conversation.add_assistant_message(
+                                sid,
+                                str(special.get("answer") or ""),
+                                tool_calls=tool_calls,
+                            )
+                            return ChatTurn(
+                                session_id=sid,
+                                answer=str(special.get("answer") or ""),
+                                intent=Intent.MARKET_STATUS,
+                                citations=[],
+                                tool_calls=tool_calls,
+                                capability_gaps=[],
+                                run_id=None,
+                            )
+                except Exception:  # noqa: BLE001
+                    self._logger.debug("learning-audit chat safety net skipped", exc_info=True)
             outcome = self._dispatch(step.intent, step.args, context, tool_calls)
 
         self._conversation.add_assistant_message(
@@ -618,6 +892,8 @@ class AssistantService:
             Intent.CAREER_STATUS: self._do_career_status,
             Intent.MARKET_STATUS: self._do_market_status,
             Intent.DAY_ACTIVITY: self._do_day_activity,
+            Intent.SELF_MODEL: self._do_self_model,
+            Intent.OPERATOR_KNOWLEDGE: self._do_operator_knowledge,
         }.get(intent, self._do_react)
         return handler(args, context, tool_calls)
 
@@ -653,24 +929,96 @@ class AssistantService:
             )
             if out is not None:
                 return out
+        role = "chat"
+        purpose = "assistant_compose"
+        system = _ANSWER_SYSTEM
+        if re.search(
+            r"\b(write|debug|explain|refactor|implement)\b.{0,40}\b"
+            r"(code|python|script|function|class|module)\b"
+            r"|\b(python|code)\s+(snippet|example|function)\b",
+            msg or "",
+            re.I,
+        ):
+            role = "code"
+            purpose = "eng_chat_code"
+            system = (
+                _ANSWER_SYSTEM
+                + " Prefer short, correct code. This host is CPU-only — keep answers tight."
+            )
         answer = self._responder.compose(
-            _ANSWER_SYSTEM,
+            system,
             msg,
             context=context,
-            fallback=(
-                "Chat LLM timed out (Ollama busy or slow — market workers + "
-                "inference share this host). Try a Belief Core phrase without the "
-                "LLM: “why do you believe capital preservation”, or a status "
-                "phrase: “market intelligence status”, “career intelligence "
-                "status”, “learner status”. Or ask me to research it as a "
-                "background job."
-            ),
+            fallback=_CHAT_TIMEOUT_FALLBACK,
             timeout=self._interactive_timeout,
+            role=role,
+            purpose=purpose,
+            llm_lane="chat",  # interactive — protected even when role=code
         )
         tool_calls.append(
-            {"intent": Intent.ANSWER, "action": "answer", "capability": "llm"}
+            {
+                "intent": Intent.ANSWER,
+                "action": "answer",
+                "capability": "llm",
+                "role": role,
+                "purpose": purpose,
+            }
         )
         return _Outcome(answer=answer)
+
+    def _do_operator_knowledge(self, args, context, tool_calls) -> _Outcome:
+        """OI-CU0 A4 — market + Atlas-lab glossary without Ollama."""
+        from atlas.investment.operator_knowledge import (
+            format_operator_knowledge_answer,
+            match_operator_knowledge,
+        )
+
+        query = str(args.get("query") or "").strip()
+        hit = match_operator_knowledge(query)
+        tool_calls.append(
+            {
+                "intent": Intent.OPERATOR_KNOWLEDGE,
+                "action": "operator_knowledge",
+                "capability": "deterministic",
+                "term": (hit or {}).get("term"),
+            }
+        )
+        if hit is None:
+            return _Outcome(
+                answer=(
+                    "I don't have a fixed glossary entry for that yet. "
+                    "Try “what is F&O?”, “what is a challenger?”, "
+                    "“what is india_fno_learner?”, or “market intelligence status”."
+                )
+            )
+        lab_note = None
+        try:
+            term = str(hit.get("term") or "")
+            if term in {
+                "india_fno_learner",
+                "f&o lab",
+                "fno lab",
+                "index-proxy",
+                "nifty",
+            }:
+                lab_note = (
+                    "F&O lab constraint: cash-equity challengers are rejected "
+                    "(lab_instrument_rejected). Simulation only."
+                )
+            elif term in {
+                "equity_intraday_learner",
+                "intraday lab",
+                "technical_only",
+            }:
+                lab_note = (
+                    "Intraday may BUY under technical_only while thesis=WATCH; "
+                    "must flatten by EOD; technical P&L must not rewrite fundamentals."
+                )
+        except Exception:  # noqa: BLE001
+            lab_note = None
+        return _Outcome(
+            answer=format_operator_knowledge_answer(hit, lab_status_line=lab_note)
+        )
 
     def _do_remember(self, args, context, tool_calls) -> _Outcome:
         content = (args.get("content") or "").strip()
@@ -1876,6 +2224,43 @@ class AssistantService:
             citations=list(brief.get("citations") or []),
             extras=brief,
         )
+
+    def _do_self_model(self, args, context, tool_calls) -> _Outcome:
+        """OI-CU0 CU.D — who / doing / know from global self-model (no Ollama)."""
+        from atlas.investment.self_model import answer_self_model_query
+
+        data_dir = None
+        try:
+            from atlas.config import get_config
+
+            data_dir = str(get_config().paths.data)
+        except Exception:  # noqa: BLE001
+            data_dir = None
+        llm_status = None
+        try:
+            if hasattr(self._llm, "lane_status"):
+                llm_status = self._llm.lane_status()
+        except Exception:  # noqa: BLE001
+            llm_status = None
+        query = str((args or {}).get("query") or (args or {}).get("message") or "")
+        out = answer_self_model_query(data_dir, query, llm_status=llm_status)
+        tool_calls.append(
+            {
+                "intent": Intent.SELF_MODEL,
+                "action": "self_model",
+                "mode": (out or {}).get("mode") or "self_model_deterministic",
+                "kind": (out or {}).get("kind"),
+                "capability": "deterministic",
+            }
+        )
+        if out is None:
+            return _Outcome(
+                answer=(
+                    "I can answer from the self-model for: who are you, "
+                    "what are you doing, what do you know / unknowns."
+                )
+            )
+        return _Outcome(answer=str(out.get("answer") or ""), extras=out)
 
     def _do_market_status(self, args, context, tool_calls) -> _Outcome:
         """PLC.F / UTS.G — Market Intelligence / coverage status (no Ollama)."""

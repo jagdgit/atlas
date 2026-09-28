@@ -261,6 +261,8 @@ def empty_belief_context(
         "wso": None,
         "experiences": [],
         "query": query,
+        "lesson_refs": [],
+        "experience_refs": [],
     }
     if extra:
         ctx.update(extra)
@@ -285,8 +287,12 @@ def consult_unique_decision(
     regime: str = "",
     sector: str = "",
     persist: bool = True,
+    knowledge: Any | None = None,
+    candidate: dict[str, Any] | None = None,
+    retrieved_lessons: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Retrieve worldview for one unique decision state. Advice-only. No LLM."""
+    """Retrieve worldview for one unique decision state. Advice-only unless L2 fires. No LLM."""
+    cand = dict(candidate) if isinstance(candidate, dict) else {}
     query = " ".join(
         p
         for p in (
@@ -295,6 +301,9 @@ def consult_unique_decision(
             "market",
             str(thesis_id or "").strip(),
             str(strategy_tag or "").replace("_", " "),
+            str(cand.get("decision_type") or ""),
+            str(cand.get("query") or ""),
+            " ".join(str(f) for f in (cand.get("features") or [])),
         )
         if p
     )
@@ -334,35 +343,32 @@ def consult_unique_decision(
         states[key] = prior
         return ctx
 
-    if reasoning is None:
-        return empty_belief_context(
-            state_key=key,
-            query=query,
-            note="ReasoningService not bound — worldview not consulted.",
-            extra={"skipped": True, "skip_reason": "no_reasoning"},
-        )
-
     beliefs: list[dict[str, Any]] = []
-    try:
-        consulted = reasoning.consult(
-            domain="market",
-            query=query,
-            limit=8,
-            purpose="decide",
-            record_mode="once",
-        )
-        beliefs = list(consulted.get("beliefs") or [])
-    except TypeError:
-        # Older façade without record_mode.
+    if reasoning is not None:
         try:
+            from atlas.investment.lesson_influence import consult_domains_for_query
+
+            domains = consult_domains_for_query(query)
             consulted = reasoning.consult(
-                domain="market", query=query, limit=8, purpose="decide"
+                domain=domains[0] if len(domains) == 1 else None,
+                domains=domains if len(domains) > 1 else None,
+                query=query,
+                limit=8,
+                purpose="decide",
+                record_mode="once",
             )
             beliefs = list(consulted.get("beliefs") or [])
+        except TypeError:
+            # Older façade without record_mode / domains.
+            try:
+                consulted = reasoning.consult(
+                    domain="market", query=query, limit=8, purpose="decide"
+                )
+                beliefs = list(consulted.get("beliefs") or [])
+            except Exception:  # noqa: BLE001
+                _log.debug("decision consult beliefs failed", exc_info=True)
         except Exception:  # noqa: BLE001
             _log.debug("decision consult beliefs failed", exc_info=True)
-    except Exception:  # noqa: BLE001
-        _log.debug("decision consult beliefs failed", exc_info=True)
 
     wso = None
     if data_dir:
@@ -382,7 +388,9 @@ def consult_unique_decision(
 
     sliced = _belief_slice(beliefs)
     n = len(sliced)
-    if n == 0:
+    if reasoning is None:
+        note = "ReasoningService not bound — worldview not consulted."
+    elif n == 0:
         note = "No relevant belief found."
     else:
         note = f"{n} belief(s) consulted (advice-only; no size/side change)."
@@ -399,7 +407,57 @@ def consult_unique_decision(
         "wso": _wso_slice(wso),
         "experiences": _experience_slice(experiences),
         "query": query,
+        "lesson_refs": [],
+        "experience_refs": [],
+        "beliefs_consulted": reasoning is not None,
     }
+    try:
+        from atlas.investment.lesson_influence import (
+            catalog_lessons,
+            match_lessons,
+            persist_canonical_e001_lesson,
+            retrieved_from_experience,
+            retrieved_from_finding_hit,
+            stamp_belief_context,
+        )
+
+        retrieved: list[dict[str, Any]] = list(retrieved_lessons or [])
+        retrieved.extend(catalog_lessons(data_dir=data_dir))
+        for exp in ctx.get("experiences") or []:
+            row = retrieved_from_experience(exp)
+            if row:
+                retrieved.append(row)
+        if knowledge is not None:
+            try:
+                ranked = knowledge.retrieve(
+                    query or "volume acceleration buy_name",
+                    k=5,
+                    role="research",
+                    mode="hybrid",
+                )
+                for hit in list(getattr(ranked, "hits", None) or []):
+                    row = retrieved_from_finding_hit(hit)
+                    if row:
+                        retrieved.append(row)
+            except Exception:  # noqa: BLE001
+                _log.debug("lesson findings retrieve failed", exc_info=True)
+        if persist:
+            persist_canonical_e001_lesson(data_dir)
+        lesson_candidate = {
+            "query": query,
+            "action": action_kind,
+            "strategy_tag": strategy_tag,
+            "regime": regime,
+            **cand,
+        }
+        lessons = match_lessons(
+            candidate=lesson_candidate,
+            retrieved=retrieved,
+            query=query,
+        )
+        ctx = stamp_belief_context(ctx, lessons)
+    except Exception:  # noqa: BLE001
+        _log.debug("lesson match skipped", exc_info=True)
     states[key] = {"belief_context": ctx, "reuse_count": 0}
     if persist:
         save_day_cache(data_dir, laboratory_id, ist_day, doc)

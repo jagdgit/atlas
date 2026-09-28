@@ -108,7 +108,8 @@ def _polish(summary: str, profile: dict[str, Any], llm: Any) -> str:
                     "Rewrite this into a polished 2-4 sentence professional summary, "
                     f"grounded ONLY in these facts:\n\n{facts}",
                 ),
-            ]
+            ],
+            _atlas_purpose="personal_resume_polish",
         )
         text = (resp.text or "").strip()
         return text or summary

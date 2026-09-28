@@ -1,17 +1,46 @@
 # Atlas — Open Items, Leftovers & Known Issues
 
-> **Purpose.** A single, living registry of *everything deferred* — intentional deviations, deferred
+> **Purpose.** A single, living **registry** of *everything deferred* — intentional deviations, deferred
 > features, tech/test debt, and known flakes — so nothing gets lost between phases. Each item has an
 > **ID**, a **status**, where it was **introduced**, and the **target** phase/owner. Items are closed
 > by referencing their ID in the commit/plan that resolves them.
 >
+> This file is **not** the development roadmap. P0 does not mean “work today.” Frozen items stay listed.
+> **What to work on now** lives in **ACTIVE NOW** below. Architecture: [`ATLAS_FEATURE_EXPERIMENT_LABORATORY_PLAN.md`](ATLAS_FEATURE_EXPERIMENT_LABORATORY_PLAN.md) Amend D.
+>
 > Companion to `ATLAS_OS_ROADMAP.md` (principles/architecture) and the `PHASE_*_PLAN.md` docs
 > (per-phase scope). When a plan says "deferred", the actionable item lives **here**.
 >
-> **Last updated:** 2026-08-20 — OI-LINT0 Phase 1–6 in code (locked plan complete).
+> **Last updated:** 2026-09-24 ~22:10 IST — **OI-LAB-LOOP0 integrity repair in tree** (wash-lock hydrate from ledger · BUY/SELL mail symmetry · blocked-buy reason mail · KPI from day ledger · closed-trades wording). Hermetic tests green. **Live controlled wash proof still pending** (BUY→SELL→BUY must not execute). R1-SYNTHETIC still locked; do not churn R1 fixtures. L5 ❌.
 
 Legend — **Status:** 🔴 open · 🟡 partial/mitigated · 🟢 done · ⚪ won't-do/by-design
-· **Priority:** P1 (do soon) · P2 (should) · P3 (nice-to-have)
+· **Priority:** P0/P1/P2/P3 = *severity / eventual importance*, **not** calendar order
+· **Lane:** NOW · BLOCKED · WAITING FOR SAMPLE · DEFERRED · FROZEN · WON'T DO
+
+---
+
+## 0. ACTIVE NOW (roadmap cut — 2026-09-22)
+
+Work kinds do not compete equally: **integrity that can poison evidence → close the learning loop → intelligence extras → operator convenience.**
+
+| Lane | IDs | Why |
+|------|-----|-----|
+| **LOCKED — R1-SYNTHETIC 🟢** | Mechanical + polarity + L2 + guard. Retrieve→cite→caution→L2 −0.25→buy score down. Qwen never owns BUY/SELL. **No more R1 fixtures tonight.** | Substantial CLC step; not L5 |
+| **NOW — CLC.J1** | Disk conclusion supersedes empty job e498ebb2…: E001 overall=worse; regimes high=`no_significant`, low=`worse` → **`no_further_test`**. SMA/RSI untouched. Not L5 / not R1-LIVE. | Investigate, don’t mutate |
+| **NOW — F&O-LAB (paper only)** | Infra+integrity+experience+Core+decide-time E[R] **in tree**. **Monday = one acceptance RT only:** ATM BUY → prediction file before SELL → `stated` → session_flat → `prediction_error≠unknown` → EXPERIENCE+Core → provisional lesson. **Do not** optimize `control_signal.v1`. Then equity horizon audit. L5 ❌ from one RT. | Isolated lab |
+| **WAITING — R1-LIVE** | Next genuine material production packet (not wash, not forced). Same contract as synthetic. Weekend: inspect packet path; do not manufacture. | Closes R1 overall |
+| **NOW — clean labs (LAB-LOOP0)** | Wash-lock + KPI/email repair **in code**. Live proof still open: second same-day BUY must fail to execute. Intraday flat_ok. F&O idle. Do not loosen PLC.A. | Integrity |
+| **NOW — integrity (narrow)** | `OI-STAB0` · `OI-FNO-CONTRACT` · `OI-INTRADAY-FLAT` | Untrustworthy tape ⇒ untrustworthy lesson |
+| **AFTER J1 + R1-LIVE** | `OI-CF-SNAP0` post-decision counterfactual / opportunity-cost observation | CLC-adjacent |
+| **BLOCKED** | `OI-FEL0` E003+ · FEL.4 · second `ModelPlugin` | Sequence |
+| **WAITING FOR SAMPLE** | `OI-LEARN-AUDIT0` five genuine L5s | Not claimed |
+| **FROZEN** | `OI-AGENT1` · LLM→BUY · SMA/RSI live_control · SELF0 Phase 5 except CLC L2 caps | Explicit |
+| **DEFERRED** | ICR densify · SCALE · UI · book/OCR until after R1-LIVE+J1 · Eng/Personal learners | Do not steal the loop |
+| **WON'T DO now** | PyTorch/RL · MATLAB · second model · loosen F&O isolation / PLC.A to look busy · more synthetic R1 checkboxes | Busy-work ban |
+
+`OI-SCI-DRAIN0` is **not** a FEL.0–3 gate if the first experiment is deterministic (no Scientist in the path).
+
+**Session rule (2026-09-23 ~20:55 IST):** **CLC.R1-SYNTHETIC is GREEN** — retrieve, reason polarity, reject unsafe inversion, apply bounded L2, persist. That is **not** “Atlas has learned” and **not** R1-LIVE. **Stop adding R1 fixtures.** Leave the system running: J1 investigates E001; F&O stays paper-isolated; wait for a genuine production packet for R1-LIVE. Do not force a trade. Do not enable live F&O. L5 ❌.
 
 ---
 
@@ -101,18 +130,42 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-PLC0 | 🟡 | P1 | **Professional Laboratory Cycle** — code ✅. Labs **tick**. L0 cap/alts. **L4** NIFTY index-proxy lot. **L5** 5m ≤3 names. | [`PROFESSIONAL_LABORATORY_CYCLE_PLAN.md`](PROFESSIONAL_LABORATORY_CYCLE_PLAN.md) · LOOP0 | 2026-08-18 |
 | OI-UTS0 | 🟢 | P1 | **Universe Triage & Opportunity Switching** — **UTS.A–G ✅** (allocator + memory + learning loop). Improvement plots deferred. | [`UNIVERSE_TRIAGE_AND_OPPORTUNITY_SWITCHING_PLAN.md`](UNIVERSE_TRIAGE_AND_OPPORTUNITY_SWITCHING_PLAN.md) | 2026-08-09 |
 | OI-DAV0 | 🟢 | P1 | **Decision Attribution densify (causes)** — **complete.** DAV.1 helped/hurt/unknown · evening operator brief · RS vs sector Yahoo index (NIFTY fallback) · FCF cashflow-derive + priority enrich · named news · bar+event regimes · sizing **journal** (proposals only). Strategy edits stay proposals-only. Sizing *policy* learning waits for sample growth (see OI-DAV-SIZE). | `causal_attribution` · `sector_benchmarks` · `sizing_learning` · evening | 2026-08-09 |
-| OI-EXP0 | 🟡 | P0 | **Experience Integrity** — write-path: 1 identical routine HOLD/switch_blocked per symbol+reason per IST day. Evening still overstated “Decisions frozen” until OI-RLD0 metrics land. News demotion → unproven (not demote) until coverage. Folded into OI-RLD0. | `experience_integrity.py` · paper_trading · evening · meta/IQ | 2026-08-09 |
+| OI-EXP0 | 🟡 | P0 | **Experience Integrity** — HOLD/switch_blocked once/day. Wash-lock **v2**: ledger hydrate + flat-exit only + ICR2/switch paths. Hermetic ✅. **Live proof still open** (2026-09-24 COALINDIA 55× was pre-fix). Does not loosen PLC.A. | `experience_integrity.py` · `wash_lock.py` · paper_trading | 2026-09-24 |
 | OI-CWS0 | 🟡 | P0 | **Cognitive Work Scheduler** — IRA-gated research_task ✅ · DCA drain ✅ (structural ≠ agenda done). | `cognitive_work.py` · JUDGMENT §4b–4c | 2026-08-11 |
 | OI-DCA0 | 🟢 | P0 | **Daily Cognitive Agenda** — morning publish + CWS progress + evening section. **Live verified 2026-08-13** (`cognitive_agenda` + morning mail). | `daily_cognitive_agenda.py` · `test_judgment_dca_jis` | 2026-08-13 |
-| OI-HOURLY0 | 🟢 | P0 | **Hourly digests IST 08–20** (independent of morning window — 08/09 no longer skipped). Three-lab book board on morning/evening/hourly/fill mail. | investor_reports · `format_hourly_activity_report` | 2026-08-18 |
-| OI-LEDGER-UI0 | 🟢 | P0 | **Market UI ledger tables (all labs)** — three lab cards at top of Market; auto-refresh books-only (no full-page jump). | app.js · routes | 2026-08-18 |
+| OI-HOURLY0 | 🟢 | P0 | **Hourly digests IST 08–20** (independent of morning window). Three-lab book board. **Densify (TRADE-LOOP0):** FUNDAMENTAL INTELLIGENCE block after lock so Saturday mail shows NSE/UQ/PLC.A. | investor_reports · `format_hourly_activity_report` · weekend stamp discussion | 2026-09-18 |
+| OI-LEDGER-UI0 | 🟢 | P0 | **Market UI ledger** — lab **tabs** · holdings MTM P&L · why-hold links · taxes/closed/blotter. | app.js · `round_trips` · routes | 2026-08-21 |
+| OI-ICR0 | 🟡 | P0 | **ICR.0–5 code ✅** · CIPLA live ACP=`EXIT_REVIEW` (quarantine day-0). Still: live-verify no ADD under AVOID; densify EXIT when clock clears. Parent: NOW roadmap #1. | [`ATLAS_INCUMBENT_COMPETITION_AND_CAPITAL_REALLOCATION_PLAN.md`](ATLAS_INCUMBENT_COMPETITION_AND_CAPITAL_REALLOCATION_PLAN.md) · [`ATLAS_NOW_CLOSED_LOOP_ROADMAP.md`](ATLAS_NOW_CLOSED_LOOP_ROADMAP.md) | 2026-08-21 |
+| OI-LAB-LOOP0 | 🟡 | P0 | **CLEAN EXPERIENCES.** Wash-lock v2 + BUY/SELL email symmetry + blocked-buy reason mail + KPI from `day_trades` (not blotter[:10]) **in tree 2026-09-24**. Hermetic ✅. **Next:** controlled live BUY→SELL→BUY must block; next-day BUY allowed. Then one uncontaminated round-trip → FEL. RL frozen. | [`ATLAS_LABS_INTEGRATION_AND_LEARNING_FEEDBACK_DISCUSSION.md`](ATLAS_LABS_INTEGRATION_AND_LEARNING_FEEDBACK_DISCUSSION.md) | 2026-09-24 |
+| OI-FNO-CONTRACT | 🟢 | P1 | **Complete (not reopen).** Waiting live acceptance of **one** stated-E[R] RT: BUY persists `lab_v1_predictions/{CONTRACT}.json` before SELL; close loads same file; `prediction.status=stated`; `prediction_error≠unknown` (check math on +/− PnL); Core REVIEWED\|honest UNREVIEWED; provisional lesson. Prior 5 RTs = prediction_absent. **After first green proof:** stop densifying predictor; run equity horizon audit. L5 not claimed from one RT. | acceptance: next NSE session · `fno_lab_v1_control_signal.v1` | 2026-09-25 |
+| OI-INTRADAY-FLAT | 🟡 | P0 | **Intraday overnight integrity.** **2026-09-23 live `flat_ok`:** overnight_positions=0, KPI open_positions=0, holdings_value=0 after IDEA/PATANJALI flatten. 2026-09-22 KPI-vs-integrity contradiction is history. Keep watching. | [`ATLAS_NOW_CLOSED_LOOP_ROADMAP.md`](ATLAS_NOW_CLOSED_LOOP_ROADMAP.md) · `intraday_integrity.py` | 2026-09-23 |
+| OI-WORLD-EVID0 | 🟡 | P0 | **NOW #7 first-slice** — `attach_world_evidence` folds news/policy/bars into scientist + BRE.3/ICR.5 packets; empty → explicit unknowns (never invent). Live CIPLA: policy+history attached; news still unknown (non-evidence-grade). | `world_evidence.py` · NOW roadmap #7 | 2026-08-21 |
+| OI-DATA-PLANE0 | 🟡 | P0 | **Data plane + inference integrity** — day-P&L ✅ · LLM=2+RTH reserve ✅ · scientist cap ✅ · Yahoo priority ✅ · evening archive clamp ✅ · thesis WATCH gate ✅ · Screener ritual ✅. Bounce to load. Paid feed deferred. | [`ATLAS_DATA_PLANE_AND_INFERENCE_INTEGRITY_PLAN.md`](ATLAS_DATA_PLANE_AND_INFERENCE_INTEGRITY_PLAN.md) | 2026-08-24 |
+| OI-WEB-EVID0 | 🟡 | P0 | **Live market + web evidence** — Zerodha = LTP/OHLC only (not PE/FCF). Completeness hydrates fund store+bars; flat-book Yahoo densifies Next-₹1 challengers. Screener PE still required for MoS BUY. Gate not loosened. | [`ATLAS_LIVE_MARKET_AND_WEB_EVIDENCE_PLAN.md`](ATLAS_LIVE_MARKET_AND_WEB_EVIDENCE_PLAN.md) · `evidence_completeness` · LQ.7 | 2026-09-03 |
+| OI-TRADE-LOOP0 | 🟡 | P0 | **NOW.** **N1 HBLPOWER PASS + LOCKED** (golden replay). **Live 2026-09-22 completeness still INCOMPLETE:** `usable=57.1`, required missing pe/fcf/mos, `decision_evaluable=False`. Remaining: other names + filing-selection/scope/period/revision/`available_at` edge cases. Not a fill. Not an experience. F&O F is P1. | [`ATLAS_TRADE_LOOP0_ACCEPTANCE_AND_WEEKEND_STAMP_DISCUSSION.md`](ATLAS_TRADE_LOOP0_ACCEPTANCE_AND_WEEKEND_STAMP_DISCUSSION.md) | 2026-09-22 |
+| OI-FEA0 | 🟡 | P0 | Worker ticks. A–D plumbing in tree. **Make FEA provider-agnostic:** NSE_XBRL primary, Yahoo secondary, Screener import. PLC.A unchanged. Screener = probe not OS. | [`ATLAS_FUNDAMENTAL_EVIDENCE_ACQUISITION_PLAN.md`](ATLAS_FUNDAMENTAL_EVIDENCE_ACQUISITION_PLAN.md) · weekend stamp discussion | 2026-09-18 |
+| OI-FUND-INTEL0 | 🟡 | P0 | **N1 HBLPOWER LOCKED** (golden replay). Remaining: other names + edge cases (consolidated vs standalone, period mismatch, revisions, units, missing facts, scope, non-positive EPS, debt-definition, `available_at`). Yahoo = typed `fundamental_conflict`. Universe later. | [`ATLAS_FUNDAMENTAL_INTELLIGENCE_PLAN.md`](ATLAS_FUNDAMENTAL_INTELLIGENCE_PLAN.md) | 2026-09-19 |
+| OI-NEXT-RS1 | 🟡 | P0 | **NOW #8 first-slice** — durable `NEXT_RUPEE_CENTER` answers *why this ₹1 vs cash/incumbents*; evening above-the-fold; no capital increase. Live: DEVYANI DEPLOY vs CASH + EICHERMOT EXIT_REVIEW + PRAJIND. | `next_rupee.py` · NOW roadmap #8 | 2026-08-21 |
+| OI-SELF-WV0 | 🟡 | P0 | **NOW #9 densify** — beliefs + **disk learning lessons** into Next-₹1/BRE.3 (advice-only). Live: CIPLA experience lesson attached; lesson_n≥1. | `self_worldview.py` · `lessons_from_learning_disk` | 2026-08-21 |
+| OI-CHAT-INH0 | 🟡 | P0 | **NOW #10 first-slice** — chat inherits Next-₹1 + worldview (deterministic; planner + safety net). “Where does the next rupee go?” / why-hold → durable answer; no orders. | `market_status_chat.answer_next_rupee_chat` · NOW #10 | 2026-08-21 |
+| OI-SCALE0 | 🟡 | P0 | **NOW #11 first-slice** — virtual Capital Scale Lab ₹1L…₹2Cr on Next-₹1; concentration/completeness gates; **never** mutates live/real capital. Chat + evening. | `capital_scale_lab.py` · NOW #11 | 2026-08-21 |
 | OI-HIST-BARS | 🟡 | P0 | **Historical bar bootstrap** — 1mo tip-refresh when dense-but-stale. **BATCH** (was mis-seeded REALTIME). **Yields Yahoo during NSE RTH** so paper marks keep the IP. Overnight/after-close continues. | `historical_bars*` · JUDGMENT §0b | 2026-08-13 |
 | OI-JDG0 | 🟡 | P0 | **Judgment Pivot LOCKED** (amendments B+C). Primary metric: **Belief Revisions/week**. Next: BRE densify → full JIS → J5. | [`JUDGMENT_PIVOT_DISCUSSION.md`](JUDGMENT_PIVOT_DISCUSSION.md) §0b–0c | 2026-08-11 |
 | OI-LOOP0 | 🟡 | P0 | **L0–L5 landed.** 19 Aug: NIFTY proxy lot + 5m fills. Integrity failures (FNO→Bosch, intraday overnight, thesis vs BUY) → OI-LINT0. 1m still OI-FEED-1M. | [`ATLAS_CLOSED_LOOP_LAB_WAKE_PLAN.md`](ATLAS_CLOSED_LOOP_LAB_WAKE_PLAN.md) | 2026-08-19 |
 | OI-LINT0 | 🟢 | P0 | Phase 1–6 in code. **Locked plan complete.** | [`ATLAS_LEARNING_INTEGRITY_PLAN.md`](ATLAS_LEARNING_INTEGRITY_PLAN.md) | 2026-08-20 |
+| OI-CU0 | 🟢 | P0 | First slices complete. | CU0 plan | 2026-08-20 |
+| OI-CHAT-INFER0 | 🟢 | P0 | **Stages 0–7 first-slice LOCKED** (CPU/no-GPU). Fitness · stabilize · meaningful LLM · scientist_packet · cognitive loop evening · ROI · hardware advice (no auto concurrency). Bounce to verify. | [`ATLAS_CHAT_INFERENCE_CONTENTION_DISCUSSION.md`](ATLAS_CHAT_INFERENCE_CONTENTION_DISCUSSION.md) | 2026-08-20 |
+| OI-COG-CORE0 | 🟡 | P0 | **COG-1..4 densify 2026-09-25** — dual-surface envelope (`CognitiveSurface` + `CognitiveResult`); `lesson.expected_effect` polarity (E001 fixture only); L2 `influence_events` provenance; one Engineering Mentor packet → Core. Eng/Personal **learners** still deferred; Core contract proves domain-agnostic. Core does **not** write lessons. Mon: F&O stated-E[R] RT only. | `cognitive_contract.py` · `cognitive_core.py` · `test_cognitive_contract.py` | 2026-09-25 |
+| OI-SCI-DRAIN0 | 🟡 | P0 | **CLC.R1 🟡 after live session.** 2026-09-23 PID 1940: stamp `no_match=true`, `skipped_pre_clc` 102, **10 COALINDIA `llm:true` prompt-echo** (`empty_rationale_and_falsifiers`). Remaining wash not to be drained (`skipped_r1_quota`). Prompt now plain-text; reject echo. Bounce to load. | `decide_rationale` · `cognitive_core` | 2026-09-23 |
+| OI-SCI-CHATMSG | 🟡 | P0 | **Scientist LLM `as_dict` fix** — landed; bounce 2026-08-23 ✅. Post-bounce: `AttributeError` gone; CPU timeouts (`OllamaError`) remain — retriable + 300s scientist timeout densify. REVIEWED still climbing. | `cognitive_core` · `coerce_chat_messages` · overnight | 2026-08-23 |
+| OI-LEARN-AUDIT0 | 🟡 | P0 | **Learning Auditor LOCKED** (Amend A). **LA.0–LA.5 ✅.** **Live 2026-09-22:** `overall_state=DEVELOPING`, genuine L5 `have=0` / target 5, `chain_complete_n=0`, 4 PROVISIONAL opp-cost rows. Cite loop exists; milestone not met. | [`ATLAS_LEARNING_AUDIT_AND_HISTORICAL_INTELLIGENCE_DISCUSSION.md`](ATLAS_LEARNING_AUDIT_AND_HISTORICAL_INTELLIGENCE_DISCUSSION.md) · `learning_audit.py` | 2026-09-22 |
+| OI-HIST-OPP0 | 🔴 | P1 | **Historical Opportunity Lab** — first **mission class** for FEL (not a second product). Question: what was knowable / useful for future opportunities? Winners + false positives + losers; Bosch = stress case. **After** the one named FEL experiment; do not start 500–1000 names first. | FEL Amend B · under OI-LEARN-AUDIT0 | 2026-08-23 |
+| OI-CLC0 | 🟡 | P0 | **CLC plan locked.** R1-SYNTHETIC 🟢. **J1 disk conclusion:** `no_further_test` (E001 worse; no better regime). R1-LIVE 🟡 waiting genuine packet. F&O paper acceptance Mon. SMA/RSI V1. LLM never BUY. L5 not claimed. | `clc_j1.py` · `j1_conclusion.json` · R1 fixtures locked | 2026-09-25 |
+| OI-FEL0 | 🟡 | P0 | **FEL.0–3 ✅ · E001 ✅ worse · E002 ✅ `no_significant`** (not queued). Paper round-trips `no_significant`. **E003+ BLOCKED on sequence** (CLC.R\* first). Day-2 hermetic gate is already green — do not start E003 to look busy. Not torch/RL, not HIST-OPP scale. | `e002_vol_accel_high_mom.py` · `fel/queue.py` · OI-CLC0 | 2026-09-22 |
+| OI-SCHED-CHURN0 | 🟢 | P1 | **Scheduler `schedule_tick` singleton** — verified after 13:54 bounce: 1 queued, ~1/5s, no `dict_row` errors. | FEL Amend D · `schedules.py` · `task_repo.py` | 2026-09-03 |
 | OI-STAB-JOURNAL | 🟡 | P0 | **P0.0 Daily Activity Journal** — live 2026-08-13: paper_tick 494 · fno_paused 246 (pre-unlock) · hourly 9 · morning+evening. **Gaps:** research / reflection / scheduler / engineering emitters → AGENT-1 P2. MEM.1 distill failed ×14 (advice-only). | under OI-STAB0 |
 | OI-AGENT1 | 🔴 | P0 | **Persistent Operator — FROZEN** until **two consecutive** STAB0 clean equity sessions. Then: Active Agenda · Day Brief · Goal Tracker · Waiting State · Check-ins. Not Phase 5. | [`ATLAS_AGENT1_PERSISTENT_OPERATOR_PLAN.md`](ATLAS_AGENT1_PERSISTENT_OPERATOR_PLAN.md) | 2026-08-12 |
-| OI-SELF0 | 🟡 | P0 | **Persistent Self Phases 1–4 ✅**. **Phase 5 soft influence FROZEN** until ≥5 consecutive clean STAB0 sessions (stricter than AGENT-1’s two-pass gate). | plan · `test_self0_*` | 2026-08-12 |
+| OI-SELF0 | 🟡 | P0 | **Persistent Self Phases 1–4 ✅**. **Phase 5 soft influence FROZEN** except CLC cited L2 (ranking/caution caps only; no LLM qty). Broader Phase 5 still waits ≥5 consecutive clean STAB0 sessions. | plan · `test_self0_*` · OI-CLC0 | 2026-08-12 |
 | OI-SELF-ID | 🟢 | P0 | Identity + Living RAG chat ✅ (`identity_chat` · assistant bind · why/mind-change benchmarks · `/v1/reasoning/living-rag`). | under OI-SELF0 |
 | OI-SELF-BELIEF | 🟡 | P0 | Postgres Belief Engine ✅ | under OI-SELF0 |
 | OI-SELF-SEED | 🟢 | P0 | 21 operator seed beliefs ✅ | under OI-SELF0 |
@@ -134,7 +187,8 @@ family** + reusable `ReaderStrategyChain` only; no new Intelligence. Operator-ap
 | OI-COG-BUDGET0 | 🟡 | P0 | **Cognitive Budget** — scoring + nightly pass cap ✅ (used by CUR.1 / BRE.2). | `cognitive_budget.py` | 2026-08-10 |
 | OI-META-COG0 | 🟡 | P2 | **Meta-cognition** — **META.1 ✅** reasoning-pattern ledger (free-text tags; reliability; evening). Vocab gate at 50 revisions (A8). | `meta_cognition.py` · BRE plan Phase 6 | 2026-08-10 |
 | OI-CURIOSITY0 | 🟡 | P0 | **Active Curiosity** — CUR.1 ✅ · **J4 densify ✅** (`drain_queue_work` → IRA for data gaps; persist statuses; news stays queued). | `curiosity.py` · CWS · JUDGMENT §0b | 2026-08-11 |
-| OI-CF0 | 🟡 | P1 | **Counterfactual Learning** — **CF.1 ✅** schedule on buys · evaluate +30d · evening beat/matched/lost. Ops: wait for horizon fills. | `counterfactual_learning.py` · BRE plan §1.8 | 2026-08-10 |
+| OI-CF0 | 🟡 | P1 | **Counterfactual Learning** — **CF.1 ✅** schedule on buys · evaluate +30d · evening beat/matched/lost. Ops: wait for horizon fills. Densify after J1 via `OI-CF-SNAP0` (HOLD/reject snapshots, fundamentals, four-way class, prediction error). | `counterfactual_learning.py` · BRE plan §1.8 · CLC plan §18 | 2026-09-22 |
+| OI-CF-SNAP0 | 🔴 | P1 | **Post-decision counterfactual / opportunity-cost observation.** After CLC.R1+J1. Snapshot at BUY/HOLD/reject; 1/5/20d price+fundamentals; four-way class (correct rejection / missed opportunity / insufficient evidence / unavoidable); prediction error vs E[R]. Advice-only. **Never** hindsight BUY-score. Densify CF.1 + ICR.3 — do not fork a trader. | CLC plan §18 · `allocation_regret.py` · `counterfactual_learning.py` | 2026-09-22 |
 | OI-UNCERT0 | 🟡 | P0 | **Uncertainty Ledger** — on WSO (BRE.1). Deterministic sets `data` from gaps; other dims await LLM. | `world_state.py` | 2026-08-10 |
 | OI-EVID0 | 🟢 | P1 | **IRA Evidence Plan** — **frozen/shipped** (F0–F5). Snapshots, incremental refresh, hierarchy, sufficiency, valuation path, claim→evidence. | `docs/IRA_NEXT_LEAP_EVIDENCE_PLAN.md` |
 | OI-OPS1 | 🟢 | P1 | **ARMF** — A–E frozen (C10 soft-focus deferred; Phase F goals deferred). Capacity, cleanup idempotent, archive lane, Ops summary first paint. | `docs/OPS_STARVATION_CLEANUP_AND_MARKET_FOCUS_PLAN.md` |

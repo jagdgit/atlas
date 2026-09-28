@@ -654,6 +654,62 @@ class KeyedProviderAdapter:
         )
 
 
+class ZerodhaBarsAdapter:
+    """OI-MDPH0 — OHLCV via Kite historical_data (live-required labs)."""
+
+    name = "zerodha"
+
+    def __init__(
+        self,
+        *,
+        data_dir: str | None = None,
+        feed: Any | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._data_dir = data_dir
+        self._feed = feed
+        self._logger = logger or logging.getLogger("atlas.trading.adapters.zerodha")
+
+    def _get_feed(self) -> Any:
+        if self._feed is not None:
+            return self._feed
+        from atlas.investment.zerodha_feed import ZerodhaMarketFeed
+
+        self._feed = ZerodhaMarketFeed.from_env(data_dir=self._data_dir)
+        return self._feed
+
+    @property
+    def session_ready(self) -> bool:
+        try:
+            feed = self._get_feed()
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(
+            getattr(feed, "is_configured", False) and getattr(feed, "has_session", False)
+        )
+
+    def fetch_bars(self, symbol: str, *, limit: int = 100, **kwargs: Any) -> list[Bar]:
+        feed = self._get_feed()
+        if not getattr(feed, "is_configured", False):
+            raise CapabilityGap(
+                "market_data:zerodha",
+                "zerodha not configured — set ZERODHA_API_KEY/SECRET",
+            )
+        if not getattr(feed, "has_session", False):
+            raise CapabilityGap(
+                "market_data:zerodha",
+                "zerodha session required — open /zerodha/login",
+            )
+        interval = str(kwargs.get("interval") or "day").strip() or "day"
+        out = feed.get_historical_bars(symbol, interval=interval, limit=max(int(limit or 0), 5))
+        if not out.get("ok"):
+            raise CapabilityGap(
+                "market_data:zerodha",
+                str(out.get("error") or "zerodha_bars_failed")[:240],
+            )
+        return list(out.get("bars") or [])
+
+
 def pct_move(bars: list[Bar]) -> float | None:
     """Percent change from first to last close; None if insufficient data."""
     if len(bars) < 2:

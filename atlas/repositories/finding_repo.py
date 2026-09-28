@@ -532,6 +532,45 @@ class FindingRepository(BaseRepository):
             return self.fetch_all(sql, (domain, limit))
         return self.fetch_all(sql, (limit,))
 
+    def search_lexical(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        domains: Sequence[str] | None = None,
+        include_archive: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Token ILIKE over active/contested finding statements (heads only).
+
+        Used by the findings RAG tier. Does not write into ``knowledge.chunks``.
+        """
+        tokens = [t for t in (query or "").split() if t][:8]
+        if not tokens or limit <= 0:
+            return []
+        likes = " OR ".join(["f.statement ILIKE %s"] * len(tokens))
+        archive_clause = "" if include_archive else "AND f.status <> 'archived'"
+        domain_clause = "AND f.domain = ANY(%s)" if domains else ""
+        sql = f"""
+            SELECT f.id AS finding_id,
+                   f.canonical_id,
+                   f.statement,
+                   f.domain,
+                   f.created_at
+            FROM knowledge.findings f
+            WHERE f.status IN ('active', 'contested')
+              {archive_clause}
+              {domain_clause}
+              AND ({likes})
+            ORDER BY f.updated_at DESC
+            LIMIT %s
+        """
+        params: list[Any] = []
+        if domains:
+            params.append(list(domains))
+        params.extend([f"%{tok}%" for tok in tokens])
+        params.append(int(limit))
+        return self.fetch_all(sql, tuple(params))
+
     def list_contested(
         self, *, domain: str | None = None, limit: int = 50
     ) -> list[dict[str, Any]]:

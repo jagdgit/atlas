@@ -1,0 +1,15 @@
+{
+  "version": "mdph.provider_health.v1",
+  "reconciled_at": "2026-09-03T15:02:08.429158+00:00",
+  "trading_date": "2026-09-03",
+  "provider_status": "LOGIN_REQUIRED",
+  "token_valid": false,
+  "ltp_probe": "FAIL",
+  "freshness": "UNKNOWN",
+  "instrument_master": "ABSENT",
+  "live_trading_allowed": false,
+  "live_required_labs_paused": true,
+  "cta": "/zerodha/login",
+  "reason_code": "PROVIDER_LOGIN_REQUIRED",
+  "ok": true
+}

@@ -51,8 +51,22 @@ DEFAULT_BACKOFF_MAX_S = 900.0  # 15 minutes
 DEFAULT_BACKOFF_MULT = 2.0
 DEFAULT_BATCH_SIZE = 3
 
+# DP-YAH2 — single shared Yahoo priority (higher wins the IP).
+YAHOO_PRIORITY_LIVE_MARKS = 100  # open-book / paper chart tips
+YAHOO_PRIORITY_OPEN_BOOK_ENRICH = 50  # holdings fundamentals
+YAHOO_PRIORITY_UNIVERSE = 10  # hist bootstrap / watchlist scrape
+_PRIORITY_HOLD_S = 45.0
+
 _gate_singleton_lock = threading.Lock()
 _rate_gate: YahooRateGate | None = None
+
+
+class YahooPriorityDenied(Exception):
+    """Raised when a lower-priority Yahoo caller must yield (no network)."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = str(reason or "denied")
+        super().__init__(self.reason)
 
 
 class YahooRateGate:
@@ -82,6 +96,9 @@ class YahooRateGate:
         self._backoff_s = self.backoff_start_s
         self._consecutive_blocks = 0
         self._last_block_status: int | None = None
+        self._priority_hold = 0
+        self._priority_hold_until = 0.0
+        self._fundamentals_busy = False
         self._load()
 
     def _load(self) -> None:
@@ -130,6 +147,7 @@ class YahooRateGate:
     def status(self) -> dict[str, Any]:
         rem = self.remaining_cooldown_s()
         with self._lock:
+            hold_rem = max(0.0, self._priority_hold_until - time.time())
             return {
                 "version": "lq.7.yahoo_rate_gate",
                 "ready": rem <= 0,
@@ -139,44 +157,105 @@ class YahooRateGate:
                 "backoff_s": self._backoff_s,
                 "consecutive_blocks": self._consecutive_blocks,
                 "last_block_status": self._last_block_status,
+                "priority_hold": self._priority_hold if hold_rem > 0 else 0,
+                "priority_hold_remaining_s": round(hold_rem, 1),
                 "honesty": (
                     "Slow-and-steady: ~1 Yahoo request every "
                     f"{self.min_interval_s:.0f}s; on 429/401 cool down up to "
-                    f"{self.backoff_max_s:.0f}s then resume remaining gaps."
+                    f"{self.backoff_max_s:.0f}s then resume remaining gaps. "
+                    "Priority: live marks ≫ open-book enrich ≫ universe."
                 ),
             }
 
-    def wait(self, *, respect_cooldown: bool = True) -> float:
+    def may_network(
+        self,
+        priority: int = YAHOO_PRIORITY_LIVE_MARKS,
+        *,
+        now=None,
+    ) -> tuple[bool, str]:
+        """DP-YAH2 — admit Yahoo network by priority (no sleep).
+
+        RTH: only live marks. Off-hours: lower priority yields while a higher
+        priority hold is active (open-book enrich beats universe scrape).
+        """
+        try:
+            pri = int(priority)
+        except (TypeError, ValueError):
+            pri = YAHOO_PRIORITY_LIVE_MARKS
+        rem = self.remaining_cooldown_s()
+        if rem > 0:
+            return False, "cooldown"
+        if pri < YAHOO_PRIORITY_LIVE_MARKS and yahoo_background_should_yield_to_live(
+            now=now
+        ):
+            return False, "rth_live_only"
+        with self._lock:
+            hold_until = float(self._priority_hold_until or 0)
+            hold_pri = int(self._priority_hold or 0)
+        if time.time() < hold_until and pri < hold_pri:
+            return False, "yield_to_higher_priority"
+        return True, "ok"
+
+    def _note_priority_hold(self, priority: int) -> None:
+        try:
+            pri = int(priority)
+        except (TypeError, ValueError):
+            return
+        if pri < YAHOO_PRIORITY_OPEN_BOOK_ENRICH:
+            return
+        with self._lock:
+            self._priority_hold = max(int(self._priority_hold or 0), pri)
+            self._priority_hold_until = time.time() + _PRIORITY_HOLD_S
+
+    def wait(
+        self,
+        *,
+        respect_cooldown: bool = True,
+        priority: int = YAHOO_PRIORITY_LIVE_MARKS,
+    ) -> float:
         """Block until it is polite to hit Yahoo. Returns seconds waited.
 
         ``respect_cooldown=False`` only enforces min-interval (legacy fallbacks).
         Prefer hard-pausing enrich / chart network while cooldown is active.
+        Raises ``YahooPriorityDenied`` when priority/RTH policy forbids network.
         """
+        if respect_cooldown:
+            ok, reason = self.may_network(priority)
+            # Never sleep through a 429 cooldown — that is the consecutive_blocks storm.
+            if not ok:
+                raise YahooPriorityDenied(reason)
         with self._lock:
             now = time.time()
             target = self._last_request_at + self.min_interval_s
-            if respect_cooldown:
-                target = max(self._cooldown_until, target)
             delay = max(0.0, target - now)
         if delay > 0:
             time.sleep(delay)
         with self._lock:
             self._last_request_at = time.time()
             self._save()
+        self._note_priority_hold(priority)
         return delay
 
     def wait_chart(self, *, chart_interval_s: float = 0.85) -> float:
-        """Pace chart API on the shared IP budget; honor fundamentals cooldown."""
+        """Pace chart API on the shared IP budget; honor fundamentals cooldown.
+
+        Live marks always use ``YAHOO_PRIORITY_LIVE_MARKS`` (RTH-safe).
+        """
+        ok, reason = self.may_network(YAHOO_PRIORITY_LIVE_MARKS)
+        if not ok:
+            # Live marks must not wait-out fundamentals cooldown (Zerodha is the tape).
+            raise YahooPriorityDenied(reason)
         interval = max(0.05, float(chart_interval_s))
         with self._lock:
             now = time.time()
-            target = max(self._cooldown_until, self._last_request_at + interval)
+            target = self._last_request_at + interval
             delay = max(0.0, target - now)
         if delay > 0:
             time.sleep(delay)
         with self._lock:
             self._last_request_at = time.time()
             self._save()
+        self._note_priority_hold(YAHOO_PRIORITY_LIVE_MARKS)
         return delay
 
     def on_success(self) -> None:
@@ -188,12 +267,36 @@ class YahooRateGate:
                 self._cooldown_until = 0.0
             self._save()
 
-    def on_block(self, status_code: int | None = 429) -> float:
-        """Record a rate/auth block; returns cooldown seconds applied."""
+    def try_begin_fundamentals(self) -> tuple[bool, str]:
+        """Exclusive slot for quoteSummary / FEA / enrich (not live-mark charts)."""
+        ok, reason = self.may_network(YAHOO_PRIORITY_OPEN_BOOK_ENRICH)
+        if not ok:
+            return False, reason
         with self._lock:
-            self._consecutive_blocks += 1
+            if self._fundamentals_busy:
+                return False, "fundamentals_busy"
+            self._fundamentals_busy = True
+        return True, "ok"
+
+    def end_fundamentals(self) -> None:
+        with self._lock:
+            self._fundamentals_busy = False
+
+    def on_block(self, status_code: int | None = 429) -> float:
+        """Record a rate/auth block; returns cooldown seconds applied.
+
+        While already cooling, do **not** increment ``consecutive_blocks`` —
+        extra callers must not turn one 429 into a 1524-count storm.
+        """
+        with self._lock:
+            already = self._cooldown_until > time.time()
             code = int(status_code) if status_code else 429
             self._last_block_status = code
+            if already:
+                cool = max(0.0, self._cooldown_until - time.time())
+                self._save()
+                return cool
+            self._consecutive_blocks += 1
             cool = min(self.backoff_max_s, self._backoff_s)
             # 401 crumb storms: shorter first pause; 429: full backoff ladder
             if code == 401 and self._consecutive_blocks == 1:
@@ -365,34 +468,72 @@ def parse_quote_summary(payload: dict[str, Any], *, symbol: str) -> dict[str, An
             st0 = statements[0]
             op_cf = _f(st0.get("totalCashFromOperatingActivities"))
             capex = _f(st0.get("capitalExpenditures"))
+            period = None
+            end = st0.get("endDate")
+            if isinstance(end, dict) and end.get("fmt"):
+                period = str(end.get("fmt"))
+            elif isinstance(end, dict) and end.get("raw"):
+                try:
+                    from datetime import datetime, timezone
+
+                    period = datetime.fromtimestamp(
+                        float(end["raw"]), tz=timezone.utc
+                    ).date().isoformat()
+                except (OSError, OverflowError, TypeError, ValueError):
+                    period = None
             if op_cf is not None and capex is not None:
                 fields["fcf"] = op_cf + capex
                 fcf_derived = True
+                fields["_fcf_derive"] = {
+                    "value_type": "derived",
+                    "formula": "operating_cash_flow + capital_expenditures",
+                    "inputs": {
+                        "operating_cash_flow": op_cf,
+                        "capital_expenditures": capex,
+                    },
+                    "period": period,
+                    "note": (
+                        "Yahoo freeCashflow empty — FCF derived from cashflow "
+                        "statement (CapEx typically negative on Yahoo)."
+                    ),
+                }
 
-    evidence = [
-        make_evidence_value(
-            field=k,
-            value=v,
-            provider=PROVIDER_ID,
-            source=PROVIDER_ID,
-            raw_ref={
-                "symbol": normalize_symbol(symbol),
-                "module": (
-                    "cashflowStatementHistory"
-                    if (k == "fcf" and fcf_derived)
-                    else "quoteSummary"
-                ),
-            },
-            ttl_hours=168,
+    derive_meta = fields.pop("_fcf_derive", None) if "_fcf_derive" in fields else None
+    evidence = []
+    for k, v in fields.items():
+        raw_ref: dict[str, Any] = {
+            "symbol": normalize_symbol(symbol),
+            "module": (
+                "cashflowStatementHistory"
+                if (k == "fcf" and fcf_derived)
+                else "quoteSummary"
+            ),
+            "value_type": "reported",
+        }
+        if k == "fcf" and isinstance(derive_meta, dict):
+            raw_ref.update(derive_meta)
+        elif k == "fcf":
+            raw_ref["value_type"] = "reported"
+            raw_ref["yahoo_field"] = "financialData.freeCashflow"
+        evidence.append(
+            make_evidence_value(
+                field=k,
+                value=v,
+                provider=PROVIDER_ID,
+                source=PROVIDER_ID,
+                raw_ref=raw_ref,
+                ttl_hours=168,
+            )
         )
-        for k, v in fields.items()
-    ]
     return {
         "symbol": normalize_symbol(symbol),
         "fields": fields,
         "evidence": evidence,
         "provider": PROVIDER_ID,
         "version": VERSION,
+        "fcf_value_type": (
+            "derived" if fcf_derived else ("reported" if fields.get("fcf") is not None else None)
+        ),
     }
 
 
@@ -528,6 +669,7 @@ class YahooFundamentalsProvider:
         logger: logging.Logger | None = None,
         rate_gate: YahooRateGate | None = None,
         data_dir: str | Path | None = None,
+        yahoo_priority: int = YAHOO_PRIORITY_OPEN_BOOK_ENRICH,
     ) -> None:
         self._enabled = bool(enabled)
         self._timeout = float(timeout)
@@ -535,12 +677,19 @@ class YahooFundamentalsProvider:
         self._logger = logger or _log
         self._client: Any | None = None
         self._session_crumb: str | None = None
+        self._yahoo_priority = int(yahoo_priority or YAHOO_PRIORITY_OPEN_BOOK_ENRICH)
         # Hermetic tests: no live pacing
         self._gate = None if opener is not None else (rate_gate or get_yahoo_rate_gate(data_dir))
 
-    def _pace(self, *, respect_cooldown: bool = True) -> None:
+    def _pace(
+        self,
+        *,
+        respect_cooldown: bool = True,
+        priority: int | None = None,
+    ) -> None:
         if self._gate is not None:
-            self._gate.wait(respect_cooldown=respect_cooldown)
+            pri = self._yahoo_priority if priority is None else int(priority)
+            self._gate.wait(respect_cooldown=respect_cooldown, priority=pri)
 
     def _note_http(self, status_code: int, *, clears_cooldown: bool = True) -> None:
         if self._gate is None:
@@ -593,6 +742,30 @@ class YahooFundamentalsProvider:
                 ),
             }
 
+        # Exclusive fundamentals slot — FEA/enrich cannot stack 429s.
+        if self._gate is not None:
+            ok, reason = self._gate.try_begin_fundamentals()
+            if not ok:
+                return {
+                    "symbol": sym,
+                    "fields": {},
+                    "evidence": [],
+                    "error": f"yahoo_priority_denied ({reason})",
+                    "rate_limited": True,
+                    "priority_denied": reason,
+                    "hint": (
+                        "Yahoo enrich deferred — cooldown, live marks, or another "
+                        "fundamentals caller owns the shared IP budget."
+                    ),
+                }
+
+        try:
+            return self._fetch_symbol_network(sym)
+        finally:
+            if self._gate is not None:
+                self._gate.end_fundamentals()
+
+    def _fetch_symbol_network(self, sym: str) -> dict[str, Any]:
         primary_err: str | None = None
         try:
             payload = self._fetch_json(QUOTE_SUMMARY_URL.format(symbol=sym))
@@ -602,6 +775,15 @@ class YahooFundamentalsProvider:
             if parsed.get("fields"):
                 return parsed
             primary_err = "empty_quote_summary"
+        except YahooPriorityDenied as exc:
+            return {
+                "symbol": sym,
+                "fields": {},
+                "evidence": [],
+                "error": f"yahoo_priority_denied ({exc.reason})",
+                "rate_limited": True,
+                "priority_denied": exc.reason,
+            }
         except Exception as exc:  # noqa: BLE001
             primary_err = str(exc)[:180]
             self._logger.debug("yahoo quoteSummary failed %s: %s", sym, exc)

@@ -85,6 +85,17 @@ def test_starved_after_long_wait():
     assert row["ops_state"] == STATE_STARVED
 
 
+def test_weekly_mentor_not_false_starved():
+    now = datetime.now(timezone.utc)
+    w = _w(
+        type="investment_mentor",
+        last_tick_at=now - timedelta(hours=12),
+    )
+    row = classify_worker(w, now=now)
+    assert row["ops_state"] == STATE_WAITING_SCHEDULE
+    assert "waiting_cadence" in (row["wait_reason"] or "")
+
+
 def test_slow_when_last_tick_exceeds_expected():
     now = datetime.now(timezone.utc)
     w = _w(

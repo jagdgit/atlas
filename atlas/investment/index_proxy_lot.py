@@ -17,10 +17,30 @@ MAX_LOTS = 1
 
 _NIFTY = frozenset({"NIFTY", "NIFTY50", "NIFTY-FUT", "^NSEI", "NSEI"})
 _BANK = frozenset({"BANKNIFTY", "BANKNIFTY-FUT", "^NSEBANK", "NSEBANK"})
+_FIN = frozenset({"FINNIFTY", "FINNIFTY-FUT"})
+_MID = frozenset({"MIDCPNIFTY", "MIDCPNIFTY-FUT"})
 
 
 def _norm(symbol: str) -> str:
     return (symbol or "").strip().upper()
+
+
+def is_nfo_option_symbol(symbol: str) -> bool:
+    """True for NFO call/put tradingsymbols (never cash tickers).
+
+    Requires a digit before CE/PE so names like RELIANCE are not treated as options.
+    """
+    key = _norm(symbol)
+    if ":" in key:
+        key = key.split(":", 1)[-1]
+    if key.endswith(".NS") or key.endswith(".BO"):
+        return False
+    return len(key) >= 3 and key[-2:] in {"CE", "PE"} and key[-3].isdigit()
+
+
+def is_atlas_nifty_underlier(symbol: str) -> bool:
+    """Bare NIFTY lab aliases — not NFO FUT/CE/PE tradingsymbols."""
+    return _norm(symbol) in _NIFTY
 
 
 def is_fno_lab(cfg: dict[str, Any] | None, portfolio_key: str | None = None) -> bool:
@@ -38,10 +58,20 @@ def is_fno_lab(cfg: dict[str, Any] | None, portfolio_key: str | None = None) -> 
 
 def underlier_family(symbol: str) -> str | None:
     key = _norm(symbol)
-    if key in _NIFTY or key.startswith("NIFTY"):
-        return "nifty"
+    if ":" in key:
+        key = key.split(":", 1)[-1]
+    if key in _MID or key.startswith("MIDCPNIFTY"):
+        return "midcpnifty"
     if key in _BANK or key.startswith("BANKNIFTY"):
         return "banknifty"
+    if key in _FIN or key.startswith("FINNIFTY"):
+        return "finnifty"
+    if key in _NIFTY or (
+        key.startswith("NIFTY")
+        and not key.startswith("NIFTYNXT")
+        and not key.startswith("NIFTYIT")
+    ):
+        return "nifty"
     return None
 
 
@@ -73,7 +103,9 @@ def lot_units(
 
 def uses_index_proxy_collateral(symbol: str, qty: float) -> bool:
     """True when this fill is a whole index-proxy lot (not a 1-share cash index)."""
-    if underlier_family(symbol) is None:
+    if is_nfo_option_symbol(symbol):
+        return False
+    if _norm(symbol) not in _NIFTY and _norm(symbol) not in _BANK:
         return False
     try:
         q = float(qty)

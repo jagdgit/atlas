@@ -40,6 +40,7 @@ class _FakeWorkers:
     def __init__(self):
         self.rows = []
         self.resumed = []
+        self.paused = []
 
     def list_workers(self, status=None, **_kwargs):
         rows = list(self.rows)
@@ -53,6 +54,14 @@ class _FakeWorkers:
             if str(w.id) == str(worker_id):
                 w.status = "running"
                 w.metadata = {}
+                return w
+        raise KeyError(worker_id)
+
+    def pause(self, worker_id, reason=""):
+        self.paused.append((str(worker_id), reason))
+        for w in self.rows:
+            if str(w.id) == str(worker_id):
+                w.status = "paused"
                 return w
         raise KeyError(worker_id)
 
@@ -107,6 +116,47 @@ def test_host_guard_tick_resumes_queued_worker():
     out = guard.tick({})
     assert out["resumed"] == 1
     assert workers.resumed[0][0] == "q1"
+
+
+def test_archive_rth_demotes_excess_runners(monkeypatch):
+    """RTH clamp must demote running=2 → <=1 (not display-only)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    workers = _FakeWorkers()
+    workers.rows = [
+        SimpleNamespace(
+            id="old",
+            type="owner_knowledge",
+            status="running",
+            metadata={},
+            created_at="2026-01-01T00:00:00",
+        ),
+        SimpleNamespace(
+            id="new",
+            type="owner_knowledge",
+            status="running",
+            metadata={},
+            created_at="2026-01-02T00:00:00",
+        ),
+    ]
+    monkeypatch.setattr(
+        "atlas.trading.sessions.is_session_open", lambda *a, **k: True
+    )
+    guard = HostGuardService(
+        resources=_FakeResources(allow=True),
+        workers=workers,
+        max_archive_workers=2,
+        archive_one_in_rth=True,
+        clock=lambda: datetime(2026, 9, 3, 11, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+    )
+    assert guard._effective_max_archive() == 1
+    out = guard.tick({})
+    assert "new" in (out.get("archive_demoted") or [])
+    assert any(p[0] == "new" for p in workers.paused)
+    running = [w for w in workers.rows if w.status == "running"]
+    assert len(running) == 1
+    assert running[0].id == "old"
 
 
 def test_can_admit_tick_respects_reserve(monkeypatch):

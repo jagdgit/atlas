@@ -314,10 +314,16 @@ def _apply_llm_text(
                 content=json.dumps(prompt, default=str),
             ),
         ]
-        resp = client.chat(messages)
+        resp = client.chat(
+            messages,
+            _atlas_purpose="mem1_memory_distill",
+            think=False,
+            num_predict=400,
+            format="json",
+        )
         text = getattr(resp, "text", None) or getattr(resp, "content", None) or str(resp)
     except Exception as exc:  # noqa: BLE001
-        return layers, f"MEM.1 LLM failed: {type(exc).__name__}: {exc}"
+        return layers, f"MEM.1 LLM failed: {type(exc).__name__}: {exc}"[:240]
 
     parsed = _parse_json_blob(str(text))
     if not parsed:

@@ -8,7 +8,7 @@ here — the API is just another caller of the same services agents use (ADR-000
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 
 from atlas.notify.broker import sse_stream
 
@@ -173,6 +173,331 @@ def metrics(request: Request) -> PlainTextResponse:
     if not _app(request).config.api.metrics_enabled:
         raise HTTPException(status_code=404, detail="metrics disabled")
     return PlainTextResponse(render_prometheus(get_metrics().snapshot()))
+
+
+def _zerodha_html(title: str, body: str, *, ok: bool) -> HTMLResponse:
+    color = "#0a7" if ok else "#c33"
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{title}</title>
+<style>
+body{{font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;line-height:1.45}}
+h1{{color:{color};font-size:1.35rem}}
+code{{background:#f4f4f4;padding:.1rem .35rem;border-radius:3px}}
+a{{color:#06c}}
+</style></head>
+<body>
+<h1>{title}</h1>
+{body}
+<p><a href="/ui/">Back to Atlas</a></p>
+</body></html>"""
+    return HTMLResponse(html, status_code=200 if ok else 400)
+
+
+def _zerodha_feed_for_request(request: Request):
+    from atlas.config import get_config
+    from atlas.investment.zerodha_feed import ZerodhaMarketFeed
+
+    cfg = _app(request).config
+    data_dir = getattr(getattr(cfg, "paths", None), "data", None) or get_config().paths.data
+    return ZerodhaMarketFeed.from_env(data_dir=data_dir)
+
+
+@public_router.get("/zerodha/login", tags=["zerodha"], include_in_schema=True)
+def zerodha_login(request: Request):
+    """Redirect the operator to Zerodha Kite Connect login (daily session)."""
+    feed = _zerodha_feed_for_request(request)
+    out = feed.login_url()
+    if not out.get("ok") or not out.get("login_url"):
+        return _zerodha_html(
+            "Zerodha login unavailable",
+            f"<p>{out.get('error') or 'unknown'}</p>"
+            f"<p>{out.get('hint') or ''}</p>",
+            ok=False,
+        )
+    return RedirectResponse(url=str(out["login_url"]), status_code=302)
+
+
+@public_router.api_route(
+    "/zerodha/force-login",
+    methods=["GET", "POST"],
+    tags=["zerodha"],
+    include_in_schema=True,
+)
+def zerodha_force_login(request: Request):
+    """Clear any stored day token, then redirect to Zerodha login.
+
+    Use when the ~06:00 IST login was missed or the session later expires —
+    Kite access tokens cannot be silently refreshed without human 2FA.
+    """
+    feed = _zerodha_feed_for_request(request)
+    cleared = feed.clear_session()
+    try:
+        from atlas.config import get_config
+        from atlas.investment.market_data_provider_health import (
+            evaluate_zerodha_health,
+            record_mdph_event,
+        )
+
+        data_dir = get_config().paths.data
+        evaluate_zerodha_health(
+            data_dir, feed=feed, probe=False, refresh_instruments=False
+        )
+        record_mdph_event(
+            data_dir,
+            "force_login",
+            cleared=cleared.get("cleared"),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    out = feed.login_url()
+    if not out.get("ok") or not out.get("login_url"):
+        return _zerodha_html(
+            "Zerodha force-login unavailable",
+            f"<p>Session clear: <code>{cleared}</code></p>"
+            f"<p>{out.get('error') or 'unknown'}</p>",
+            ok=False,
+        )
+    return RedirectResponse(url=str(out["login_url"]), status_code=302)
+
+
+@public_router.post("/zerodha/logout", tags=["zerodha"], include_in_schema=True)
+def zerodha_logout(request: Request) -> dict:
+    """Clear stored session without redirecting (JSON; Ops UI uses this)."""
+    feed = _zerodha_feed_for_request(request)
+    cleared = feed.clear_session()
+    health: dict = {}
+    try:
+        from atlas.config import get_config
+        from atlas.investment.market_data_provider_health import (
+            evaluate_zerodha_health,
+            record_mdph_event,
+        )
+
+        data_dir = get_config().paths.data
+        health = evaluate_zerodha_health(
+            data_dir, feed=feed, probe=False, refresh_instruments=False
+        )
+        record_mdph_event(data_dir, "session_cleared", cleared=cleared.get("cleared"))
+    except Exception as exc:  # noqa: BLE001
+        health = {"error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "ok": bool(cleared.get("ok")),
+        "cleared": cleared,
+        "status": health.get("status"),
+        "live_trading_allowed": health.get("live_trading_allowed"),
+        "login_path": "/zerodha/login",
+        "force_login_path": "/zerodha/force-login",
+    }
+
+
+@public_router.get("/zerodha/callback", tags=["zerodha"], include_in_schema=True)
+def zerodha_callback(
+    request: Request,
+    request_token: str | None = None,
+    status: str | None = None,
+    action: str | None = None,
+):
+    """Kite Connect redirect target — exchanges ``request_token`` for today's access_token.
+
+    Set the Zerodha app Redirect URL to ``http://127.0.0.1:8000/zerodha/callback``
+    (or keep ``http://127.0.0.1:8000`` — ``/`` forwards here when ``request_token`` is present).
+    """
+    if (status or "").lower() == "error" or not request_token:
+        return _zerodha_html(
+            "Zerodha login failed",
+            "<p>No <code>request_token</code> in the redirect. "
+            "Open <a href='/zerodha/login'>/zerodha/login</a> and try again.</p>"
+            f"<p>status={status!r} action={action!r}</p>",
+            ok=False,
+        )
+    feed = _zerodha_feed_for_request(request)
+    result = feed.complete_login(request_token)
+    if not result.get("ok"):
+        return _zerodha_html(
+            "Zerodha session exchange failed",
+            f"<p><code>{result.get('error')}</code></p>"
+            "<p>Request tokens are single-use and expire quickly — "
+            "<a href='/zerodha/login'>login again</a>.</p>",
+            ok=False,
+        )
+    # MDPH — probe LTP + instrument master → READY
+    health: dict = {}
+    try:
+        from atlas.config import get_config
+        from atlas.investment.market_data_provider_health import evaluate_zerodha_health
+
+        health = evaluate_zerodha_health(
+            get_config().paths.data,
+            feed=feed,
+            probe=True,
+            refresh_instruments=True,
+            force_reprobe=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        health = {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"}
+
+    sample_line = ""
+    if health.get("ltp_probe") == "PASS" and health.get("last_ltp_price") is not None:
+        sample_line = (
+            f"<p>Sample LTP {health.get('last_ltp_symbol')} = "
+            f"<strong>{health.get('last_ltp_price')}</strong> "
+            f"(freshness={health.get('freshness')})</p>"
+        )
+    elif health.get("last_ltp_error"):
+        sample_line = (
+            f"<p>Session saved; LTP probe: <code>{health.get('last_ltp_error')}</code></p>"
+        )
+    return _zerodha_html(
+        "Zerodha session active",
+        f"<p>User <code>{result.get('user_id')}</code> · IST day "
+        f"<code>{result.get('ist_day')}</code></p>"
+        f"<p>Provider status: <strong>{health.get('status')}</strong> · "
+        f"instrument master: <code>{health.get('instrument_master')}</code> · "
+        f"live trading allowed: <code>{health.get('live_trading_allowed')}</code></p>"
+        f"{sample_line}"
+        "<p>Atlas can now use Zerodha for live marks today. "
+        "Live-required labs (intraday/F&amp;O) will resume when status is READY.</p>",
+        ok=bool(health.get("live_trading_allowed") or health.get("status") == "READY"),
+    )
+
+
+@public_router.get("/zerodha/status", tags=["zerodha"], include_in_schema=True)
+def zerodha_status(request: Request) -> dict:
+    """Public MDPH provider health (no secrets)."""
+    feed = _zerodha_feed_for_request(request)
+    try:
+        from atlas.config import get_config
+        from atlas.investment.market_data_provider_health import evaluate_zerodha_health
+
+        return evaluate_zerodha_health(
+            get_config().paths.data,
+            feed=feed,
+            probe=False,
+            refresh_instruments=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        base = feed.status()
+        base["error"] = f"{type(exc).__name__}: {exc}"
+        return base
+
+
+@public_router.post("/zerodha/probe", tags=["zerodha"], include_in_schema=True)
+def zerodha_probe(request: Request) -> dict:
+    """Force MDPH LTP + instrument reprobe (public, local-ops convenience)."""
+    feed = _zerodha_feed_for_request(request)
+    from atlas.config import get_config
+    from atlas.investment.market_data_provider_health import evaluate_zerodha_health
+
+    return evaluate_zerodha_health(
+        get_config().paths.data,
+        feed=feed,
+        probe=True,
+        refresh_instruments=True,
+        force_reprobe=True,
+    )
+
+
+@public_router.get("/zerodha/observation", tags=["zerodha"], include_in_schema=True)
+def zerodha_observation(request: Request) -> dict:
+    """Phase 2 MDPH observation scorecard (+ parallel intelligence tracks)."""
+    feed = _zerodha_feed_for_request(request)
+    from atlas.config import get_config
+    from atlas.investment.market_data_provider_health import (
+        build_phase2_observation_report,
+        evaluate_zerodha_health,
+        investment_l5_scoreboard,
+    )
+    from atlas.investment.l5_validation import list_candidates, promote_lab_l3_records
+    from atlas.investment.uncertainty_queue import list_tasks
+    from atlas.investment.llm_attribution import summarize_day as llm_day
+    from atlas.investment.competition_snapshot import STORE_REL as COMP_REL
+    from atlas.investment.evidence_completeness import lab_completeness_rollup
+    from pathlib import Path
+    import json
+
+    data_dir = get_config().paths.data
+    health = evaluate_zerodha_health(
+        data_dir, feed=feed, probe=False, refresh_instruments=False
+    )
+    report = build_phase2_observation_report(data_dir, health=health)
+    report["l5_scoreboard"] = investment_l5_scoreboard(data_dir)
+    # Parallel tracks (implement-now; activation gated)
+    labs = ["equity_intraday_learner", "india_equity_learner", "india_fno_learner"]
+    l3_promo = {}
+    uq = {}
+    l4_open = {}
+    competition = {}
+    for lab in labs:
+        try:
+            l3_promo[lab] = promote_lab_l3_records(data_dir, laboratory_id=lab)
+        except Exception as exc:  # noqa: BLE001
+            l3_promo[lab] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        try:
+            uq[lab] = {
+                "pending_n": len(list_tasks(data_dir, lab, status="PENDING")),
+                "high_n": len(
+                    [
+                        t
+                        for t in list_tasks(data_dir, lab, status="PENDING")
+                        if t.get("importance") == "HIGH"
+                    ]
+                ),
+            }
+        except Exception:  # noqa: BLE001
+            uq[lab] = {"pending_n": 0}
+        try:
+            cands = list_candidates(data_dir, lab)
+            l4_open[lab] = {
+                "candidates_n": len(cands),
+                "open_tests_n": len(
+                    [
+                        c
+                        for c in cands
+                        if (c.get("subsequent_test") or {}).get("status") == "OPEN"
+                    ]
+                ),
+                "l5_validated_n": len([c for c in cands if c.get("level") == "L5"]),
+            }
+        except Exception:  # noqa: BLE001
+            l4_open[lab] = {"candidates_n": 0}
+        try:
+            latest = Path(data_dir) / COMP_REL / lab / "_latest.json"
+            if latest.is_file():
+                competition[lab] = json.loads(latest.read_text(encoding="utf-8"))
+            else:
+                competition[lab] = None
+        except Exception:  # noqa: BLE001
+            competition[lab] = None
+    report["parallel_tracks"] = {
+        "principle": "Don't wait to implement. Wait to trust.",
+        "status_ladder": "IMPLEMENTED → TESTED → OBSERVED → VALIDATED → ACTIVE",
+        "l3_to_l5": l3_promo,
+        "l4_candidates": l4_open,
+        "uncertainty_queue": uq,
+        "competition": {
+            lab: (
+                {
+                    "winner": (competition[lab] or {}).get("winner"),
+                    "candidate_set": (competition[lab] or {}).get("candidate_set"),
+                    "as_of_ist": (competition[lab] or {}).get("as_of_ist"),
+                }
+                if competition.get(lab)
+                else None
+            )
+            for lab in labs
+        },
+        "llm_attribution": llm_day(data_dir),
+        "evidence_completeness": {
+            lab: lab_completeness_rollup(data_dir, lab) for lab in labs
+        },
+        "activation": {
+            "strategy_mutation": "FORBIDDEN",
+            "capital_increase": "FORBIDDEN",
+            "silent_yahoo": "FORBIDDEN",
+            "l5_claim_without_validation": "FORBIDDEN",
+        },
+    }
+    return report
 
 
 @v1_router.get("/metrics", tags=["monitoring"])
@@ -3462,6 +3787,34 @@ def get_market_fundamentals_learner_template(
     return out
 
 
+@v1_router.post("/market/fundamentals/open-book-screener-ritual", tags=["programs"])
+def post_open_book_screener_ritual(request: Request, body: dict | None = None) -> dict:
+    """DP-FUND3 — stage open-book Screener gap CSV under imports/fundamentals/."""
+    from atlas.config import get_config
+    from atlas.investment.open_book_screener_ritual import (
+        stage_open_book_screener_template,
+    )
+
+    body = body or {}
+    data_dir = str(get_config().paths.data)
+    portfolio_svc = None
+    try:
+        portfolio_svc = _app(request).container.resolve("portfolio")
+    except Exception:  # noqa: BLE001
+        portfolio_svc = None
+    return stage_open_book_screener_template(
+        data_dir,
+        portfolio=portfolio_svc,
+        portfolio_key=str(
+            body.get("portfolio_key") or "india_equity_learner"
+        ),
+        program_id=str(body.get("program_id") or "market_intelligence"),
+        only_gaps=bool(body.get("only_gaps", True)),
+        limit=int(body.get("limit") or 40),
+        symbols=list(body.get("symbols") or []) or None,
+    )
+
+
 @v1_router.post("/market/fundamentals/import", tags=["programs"])
 def post_market_fundamentals_import(request: Request, body: dict | None = None) -> dict:
     """IIP.3 — import JSON rows or CSV text into fundamentals store."""
@@ -3806,15 +4159,19 @@ def get_market_mkg_neighborhood(
 def get_market_mkg_why_own(
     symbol: str,
     program_id: str = "market_intelligence",
+    laboratory_id: str = "india_equity_learner",
 ) -> dict:
-    """IIP.5 — Why own/watch X? (theme + policy edges + fundamentals cites)."""
+    """IIP.5 — Why own/watch X? (MKG + open-book fallbacks when edges missing)."""
     from atlas.config import get_config
     from atlas.investment import mkg as mkg_mod
 
     data_dir = str(get_config().paths.data)
-    graph = mkg_mod.ensure_seeded(data_dir)
-    fin = mkg_mod.financial_cites_for(data_dir, symbol, program_id=program_id)
-    return mkg_mod.why_own(graph, symbol, financial_cites=fin)
+    return mkg_mod.why_own_bundle(
+        data_dir,
+        symbol,
+        laboratory_id=laboratory_id,
+        program_id=program_id,
+    )
 
 
 @v1_router.get("/market/mkg/who-benefits", tags=["programs"])
@@ -5622,6 +5979,10 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
     stmt["total_return_pct"] = (
         100.0 * stmt["total_pnl"] / net_capital if net_capital > 0 else None
     )
+    tax_pnl = stmt.get("taxes_and_pnl")
+    if isinstance(tax_pnl, dict):
+        tax_pnl["total_pnl"] = round(float(stmt["total_pnl"]), 4)
+        stmt["taxes_and_pnl"] = tax_pnl
     stmt["day_pnl"] = None
     stmt["day_return_pct"] = None
     if marks and previous_closes:
@@ -5630,7 +5991,8 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
 
             today_ist = _dt.now(_tz(_td(hours=5, minutes=30))).date()
             day_trades: list[dict] = []
-            for trade in stmt.get("recent_trades") or []:
+            blotter_for_day = stmt.get("trades") or stmt.get("recent_trades") or []
+            for trade in blotter_for_day:
                 raw = trade.get("created_at")
                 if raw is None:
                     continue
@@ -5681,15 +6043,82 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
         except Exception:  # noqa: BLE001
             pass
     # Attach P9 explanations so the Market UI can answer "why did this buy?".
+    # Prefer open-book buys (holdings) + recent blotter; avoid N lookups on full history.
     try:
         decision = _app(request).container.resolve("decision")
-        for trade in stmt.get("recent_trades") or []:
+        open_syms = {
+            str(p.get("symbol") or "").strip()
+            for p in (stmt.get("positions") or [])
+            if p.get("symbol")
+        }
+        recent = [t for t in (stmt.get("recent_trades") or []) if isinstance(t, dict)]
+        recent_ids = {str(t.get("id")) for t in recent if t.get("id")}
+        all_trades = [t for t in (stmt.get("trades") or recent) if isinstance(t, dict)]
+        need_ids: set[str] = set()
+        latest_buy: dict[str, dict] = {}
+        for trade in all_trades:
+            sym = str(trade.get("symbol") or "").strip()
+            side = str(trade.get("side") or "").lower()
             did = trade.get("decision_id")
-            if not did:
-                continue
+            tid = str(trade.get("id") or "")
+            if did and (tid in recent_ids or (sym in open_syms and side == "buy")):
+                need_ids.add(str(did))
+            if sym in open_syms and side == "buy" and sym not in latest_buy:
+                # trades are newest-first — first seen wins
+                latest_buy[sym] = trade
+                if did:
+                    need_ids.add(str(did))
+        explained_cache: dict[str, dict] = {}
+        for did in need_ids:
             explained = decision.get_decision(did)
             if isinstance(explained, dict):
-                trade["decision"] = explained
+                explained_cache[str(did)] = explained
+        for trade in all_trades:
+            did = trade.get("decision_id")
+            if did and str(did) in explained_cache:
+                trade["decision"] = explained_cache[str(did)]
+        for pos in stmt.get("positions") or []:
+            sym = str(pos.get("symbol") or "").strip()
+            buy = latest_buy.get(sym)
+            avg = float(pos.get("avg_price") or 0)
+            mark = float(pos.get("mark") or avg)
+            qty = float(pos.get("quantity") or 0)
+            upnl = float(pos.get("unrealized_pnl") or 0)
+            cost = avg * qty
+            pos["market_value"] = round(float(pos.get("value") or (mark * qty)), 4)
+            pos["cost_basis"] = round(cost, 4)
+            pos["unrealized_pnl_pct"] = (
+                round(100.0 * (mark - avg) / avg, 2) if avg > 1e-12 else None
+            )
+            pos["expected_pnl"] = upnl
+            if not buy:
+                continue
+            pos["bought_at"] = buy.get("created_at")
+            pos["entry_price"] = buy.get("price")
+            pos["decision_id"] = buy.get("decision_id")
+            dec = buy.get("decision")
+            if not isinstance(dec, dict) and buy.get("decision_id"):
+                dec = explained_cache.get(str(buy.get("decision_id")))
+            rationale = None
+            action = "buy"
+            if isinstance(dec, dict):
+                pos["decision"] = dec
+                expl = dec.get("explanation")
+                if isinstance(expl, dict):
+                    rationale = expl.get("summary")
+                elif isinstance(expl, str):
+                    rationale = expl
+                rationale = dec.get("rationale") or dec.get("reason") or rationale
+                action = dec.get("action") or dec.get("action_kind") or "buy"
+            pos["holding_why"] = {
+                "summary": rationale if isinstance(rationale, str) else (
+                    str(rationale) if rationale else None
+                ),
+                "action": action,
+                "decision_id": buy.get("decision_id"),
+                "bought_at": buy.get("created_at"),
+                "entry_price": buy.get("price"),
+            }
     except Exception:  # noqa: BLE001
         pass
     # Attach today's session note so Learner can explain zero fills honestly.
@@ -5756,6 +6185,24 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
         )
     except Exception:  # noqa: BLE001
         kpis = None
+    # OI-ICR1 — attach latest ACP summaries onto open positions.
+    try:
+        from atlas.config import get_config
+        from atlas.investment.allocation_comparison import load_latest_acp_summary
+
+        data_dir = str(get_config().paths.data)
+        lab_key = str(row.get("portfolio_key") or portfolio_ref)
+        for pos in stmt.get("positions") or []:
+            if not isinstance(pos, dict):
+                continue
+            sym = str(pos.get("symbol") or "").strip()
+            if not sym:
+                continue
+            summary = load_latest_acp_summary(data_dir, lab_key, sym)
+            if summary:
+                pos["allocation"] = summary
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "portfolio": row,
         "statement": stmt,
@@ -6538,6 +6985,8 @@ def worker_action(
 @v1_router.post("/knowledge/search", response_model=SearchResponse, tags=["knowledge"])
 def search(body: SearchRequest, request: Request) -> SearchResponse:
     knowledge = _app(request).container.resolve("knowledge")
+    from atlas.knowledge.access import finding_id_of
+
     ranked = knowledge.retrieve(
         body.query,
         k=body.limit,
@@ -6560,12 +7009,17 @@ def search(body: SearchRequest, request: Request) -> SearchResponse:
                 lexical_score=h.lexical_score,
                 rrf_score=h.rrf_score,
                 score=h.score,
+                finding_id=finding_id_of(h),
+                source=h.tier,
+                timestamp=h.timestamp,
+                tier=h.tier,
             )
             for h in ranked.hits
         ],
         role=ranked.role,
         mode=ranked.mode,
         diagnostics_id=ranked.diagnostics_id,
+        retrieved_at=ranked.retrieved_at,
         context=ranked.context,
     )
 

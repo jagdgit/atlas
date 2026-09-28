@@ -73,6 +73,8 @@ def test_collateral_only_for_whole_lots():
     assert uses_index_proxy_collateral("NIFTY", 25) is True
     assert uses_index_proxy_collateral("NIFTY", 1) is False
     assert uses_index_proxy_collateral("CIPLA.NS", 13) is False
+    assert uses_index_proxy_collateral("NIFTYNEAR25000CE", 25) is False
+    assert uses_index_proxy_collateral("NIFTYNEAR25000PE", 25) is False
 
 
 def test_honesty_labels_are_not_live_futures():

@@ -149,6 +149,7 @@ class DesignReviewer:
                     ChatMessage("user", context),
                 ],
                 timeout=self._timeout,
+                _atlas_purpose="eng_design_review",
             )
             raw = (resp.text or "").strip()
         except Exception:  # noqa: BLE001 - design review is advisory; never crash a learn

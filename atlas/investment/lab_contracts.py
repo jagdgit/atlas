@@ -112,8 +112,13 @@ def instrument_class(
     *,
     instrument: dict[str, Any] | None = None,
 ) -> str:
-    from atlas.investment.index_proxy_lot import underlier_family
+    from atlas.investment.index_proxy_lot import (
+        is_nfo_option_symbol,
+        underlier_family,
+    )
 
+    if is_nfo_option_symbol(symbol):
+        return CLASS_FNO_CONTRACT
     if underlier_family(symbol):
         return CLASS_INDEX_PROXY
     row = instrument if isinstance(instrument, dict) else {}
@@ -202,6 +207,22 @@ def skip_cash_alts_for_lab(
     if pack_id and not merged.get("instrument_pack"):
         merged["instrument_pack"] = pack_id
     kind = lab_kind(portfolio_key or merged.get("portfolio_key"), cfg=merged)
+    return kind in {LAB_FNO, LAB_INTRADAY}
+
+
+def live_required(
+    laboratory_id: str | None = None,
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> bool:
+    """OI-MDPH0 — True when the lab contract requires broker-authorized live marks.
+
+    Intraday and F&O are live-required. Swing/research are non-live (may use
+    bar_store / Yahoo / Screener when those paths are explicitly labeled).
+    """
+    kind = lab_kind(laboratory_id, cfg=cfg)
+    if cfg and cfg.get("live_required") is not None:
+        return bool(cfg.get("live_required"))
     return kind in {LAB_FNO, LAB_INTRADAY}
 
 
@@ -318,15 +339,16 @@ def apply_lab_policy(
     elif lab_kind_s == LAB_FNO:
         final = tech
     elif lab_kind_s == LAB_SWING and tech == "BUY":
+        # Thesis *veto* (not thesis-*required* BUY): AVOID / INVALID / quarantine
+        # block new money; WATCH / ABSENT still allow technical BUY so a flat
+        # cash book can re-enter while research/PLC/MoS gates remain binding.
+        # Affirmative BUY thesis is preferred but not mandatory for entry.
         if ident == "QUARANTINED" or th in {"AVOID", "INVALID"}:
             final = "HOLD"
-        elif th in {"WATCH", "ABSENT"} and float(held or 0) <= 1e-12:
-            final = "HOLD"
-        elif th in {"WATCH", "ABSENT"} and float(held or 0) > 1e-12:
-            final = "BUY"
-            add_incumbent = True
         else:
             final = "BUY"
+            if th in {"WATCH", "ABSENT"} and float(held or 0) > 1e-12:
+                add_incumbent = True
 
     return {
         "technical_signal": tech,

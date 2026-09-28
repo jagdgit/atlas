@@ -19,6 +19,7 @@ from atlas.trading.broker_profiles import (
     list_broker_profiles,
 )
 from atlas.trading.portfolio import PortfolioService
+from atlas.trading.round_trips import build_closed_round_trips, summarize_taxes_and_pnl
 
 
 class PortfolioLedgerService:
@@ -154,10 +155,18 @@ class PortfolioLedgerService:
         *,
         prices: dict[str, float] | None = None,
         broker_profile: str | None = None,
+        trade_limit: int = 500,
     ) -> dict[str, Any]:
-        """Operator-facing ledger snapshot + fee/TDS rollups + recent movements."""
+        """Operator-facing ledger snapshot + fee/TDS rollups + closed round-trips."""
         snap = self._portfolio.snapshot(portfolio_id, prices=prices)
-        trades = self._portfolio.trades(portfolio_id, limit=50)
+        trades = self._portfolio.trades(portfolio_id, limit=max(50, int(trade_limit)))
+        trade_count = len(trades)
+        count_fn = getattr(self._portfolio._repo, "count_trades", None)
+        if callable(count_fn):
+            try:
+                trade_count = int(count_fn(portfolio_id) or trade_count)
+            except Exception:  # noqa: BLE001
+                pass
         fees_paid = sum(float(t.get("fee") or 0.0) for t in trades)
         components = {
             "brokerage": 0.0,
@@ -176,6 +185,8 @@ class PortfolioLedgerService:
                     continue
         for k in components:
             components[k] = round(components[k], 4)
+
+        closed = build_closed_round_trips(trades, limit=200)
 
         movements: list[dict[str, Any]] = []
         list_mv = getattr(self._portfolio._repo, "list_cash_movements", None)
@@ -202,12 +213,28 @@ class PortfolioLedgerService:
             if str(m.get("kind") or "") == "withdraw"
         )
         profile = self.resolve_profile(broker_profile) if broker_profile else None
+        tax_pnl = summarize_taxes_and_pnl(
+            fee_components=components,
+            fees_paid=fees_paid,
+            withdrawal_tds=withdrawal_tds,
+            realized_pnl=float(snap.get("realized_pnl") or 0),
+            unrealized_pnl=float(snap.get("unrealized_pnl") or 0),
+            total_pnl=None,
+            closed_round_trips=closed,
+        )
+        # Newest-first blotter for the UI (repo already returns DESC).
+        blotter = list(trades)
         return {
             **snap,
             "fees_paid": round(fees_paid, 4),
             "fee_components": components,
-            "trade_count": len(trades),
-            "recent_trades": trades[:10],
+            "trade_count": trade_count,
+            "trades_returned": len(blotter),
+            "recent_trades": blotter[:10],
+            "trades": blotter,
+            "closed_round_trips": closed,
+            "closed_round_trip_count": len(closed),
+            "taxes_and_pnl": tax_pnl,
             "cash_movements": movements[:10],
             "deposited": round(deposited, 4),
             "withdrawn": round(withdrawn, 4),

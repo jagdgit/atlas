@@ -28,7 +28,7 @@ def test_merge_bars_dedupes_by_date():
 
 
 def test_persist_and_readiness_grade_b(tmp_path):
-    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     bars = []
     for i in range(45):
         day = (now - timedelta(days=44 - i)).date().isoformat()
@@ -91,3 +91,23 @@ def test_readiness_from_rows_grades():
     s = readiness_from_rows(rows, membership=[f"S{i}" for i in range(100)])
     assert s["readiness_grade"] == "B"
     assert s["durable_bars_ok"] is True
+
+
+def test_persist_preserves_history_provider_when_last_write_changes(tmp_path):
+    now = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    bars = [
+        {"date": (now - timedelta(days=10 - i)).date().isoformat(), "close": 10.0 + i}
+        for i in range(11)
+    ]
+    persist_symbol_bars(tmp_path, "YESBANK.NS", bars, provider="yahoo")
+    tip = [{"date": now.date().isoformat(), "close": 22.0}]
+    persist_symbol_bars(tmp_path, "YESBANK.NS", tip, provider="zerodha")
+    from atlas.investment.bar_store import load_symbol_doc
+
+    doc = load_symbol_doc(tmp_path, "YESBANK.NS")
+    assert doc["provider"] == "zerodha"
+    assert doc["last_write_provider"] == "zerodha"
+    assert doc["history_provider"] == "yahoo"
+    loaded = load_bars(tmp_path, "YESBANK.NS")
+    assert loaded[-1]["close"] == 22.0
+    assert loaded[-1]["date"] == now.date().isoformat()

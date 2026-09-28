@@ -69,8 +69,38 @@ class Application:
         )
         self.lifecycle.start_all()
         self._started_at = time.monotonic()
+        self._reconcile_program_members()
         self.events.emit("KernelStarted", source="kernel")
         self.logger.info("Atlas is ready.")
+
+    def _reconcile_program_members(self) -> None:
+        """LAB-LOOP0 Step 1 — fill ENABLED catalog members missing from live programs.
+
+        Templates must already be seeded (lifecycle start_all). Never fatal.
+        """
+        try:
+            programs = self.container.resolve("programs")
+        except Exception:  # noqa: BLE001
+            return
+        fn = getattr(programs, "ensure_missing_enabled_members", None)
+        if not callable(fn):
+            return
+        try:
+            report = fn() or {}
+        except Exception:  # noqa: BLE001
+            self.logger.exception("program member reconcile skipped")
+            return
+        started = list(report.get("started") or [])
+        if not started:
+            return
+        names = ", ".join(
+            str(row.get("template") or row.get("role") or "?") for row in started[:8]
+        )
+        self.logger.info(
+            "program member reconcile started %d: %s",
+            len(started),
+            names,
+        )
 
     def stop(self) -> None:
         self.events.emit("KernelStopping", source="kernel")

@@ -70,6 +70,8 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
         "require_mvr": True,
         "require_thesis": True,
         "research_auto_mvr": True,
+        # Soft MoS: unknown MoS does not idle the cash book (playbook default).
+        # AVOID / INVALID still veto via lab_contracts; negative MoS still blocks.
         "mos_mode": "soft",
         # PLC.A — fund sanity + explicit thesis trigger (SMA/RSI remains A1)
         "plc_a_gates": True,
@@ -151,6 +153,16 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
             "rss_enable": ["pib_press"],
             "rss_include_defaults": True,
         },
+        "overnight_densify": {
+            "program_id": "market_intelligence",
+            "rss_enable": ["pib_press"],
+            "allow_llm": False,
+        },
+        "fel_experiment_runner": {
+            "program_id": "market_intelligence",
+            "allow_rth": False,
+            "seed_e001": True,
+        },
         "government_intelligence": {
             "program_id": "market_intelligence",
             "include_defaults": True,
@@ -194,6 +206,12 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
                 "hour_end": 5,
             },
             "portfolio_key": "india_equity_learner",
+        },
+        "fundamental_evidence": {
+            "program_id": "market_intelligence",
+            "portfolio_key": "india_equity_learner",
+            "max_symbols": 2,
+            "push_to_ira": True,
         },
         "thesis_outcome": {
             "program_id": "market_intelligence",
@@ -305,6 +323,22 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 description="News claims → Knowledge (optional verify)",
             ),
             ProgramMember(
+                role="Overnight Densify",
+                template="overnight_densify",
+                kind="learning",
+                cadence="18:30–07:30 IST / 30m",
+                status=MEMBER_ENABLED,
+                description="CU.C — RSS densify for open books + blockers; no invented news",
+            ),
+            ProgramMember(
+                role="FEL Experiment Runner",
+                template="fel_experiment_runner",
+                kind="learning",
+                cadence="BATCH; yields NSE RTH; 30m",
+                status=MEMBER_ENABLED,
+                description="OI-FEL0 C — one queued FEL experiment per tick; never live control",
+            ),
+            ProgramMember(
                 role="Government Intelligence",
                 template="government_intelligence",
                 kind="learning",
@@ -343,6 +377,17 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 cadence="daily off-hours",
                 status=MEMBER_ENABLED,
                 description="LQ.7 — Tier C Yahoo enrich on watchlist PE/FCF/ROE/D/E gaps",
+            ),
+            ProgramMember(
+                role="Fundamental Evidence Acquisition",
+                template="fundamental_evidence",
+                kind="learning",
+                cadence="~20m off-RTH",
+                status=MEMBER_ENABLED,
+                description=(
+                    "FEA — UQ-driven PE/FCF acquisition (Yahoo paced; Screener "
+                    "operator-only; no HTML scrape; gate unchanged)"
+                ),
             ),
             ProgramMember(
                 role="Thesis Outcome",
@@ -743,6 +788,63 @@ class ProgramService:
             "preset": preset,
             "dry_run": dry_run,
             "side_effecting": not dry_run,
+        }
+
+    def ensure_missing_enabled_members(
+        self, program_id: str | None = None
+    ) -> dict[str, Any]:
+        """Instantiate ENABLED members added after a program first started.
+
+        LAB-LOOP0 Step 1: ``start()`` skips already-present missions but is never
+        re-called when a later catalog member (e.g. ``fundamental_evidence``)
+        ships. This only fills gaps on programs that already have live missions —
+        it does not start a program the operator never opted into.
+        """
+        if self._templates is None or self._missions is None:
+            return {
+                "ok": False,
+                "reason": "not_wired",
+                "kind": "program_member_reconcile",
+                "programs": [],
+                "started": [],
+                "started_n": 0,
+            }
+        ids = [program_id] if program_id else [p.id for p in BUILTIN_PROGRAMS]
+        reports: list[dict[str, Any]] = []
+        started_all: list[dict[str, Any]] = []
+        for pid in ids:
+            if not pid or get_program(str(pid)) is None:
+                continue
+            try:
+                view = self.describe(str(pid))
+            except Exception:  # noqa: BLE001
+                continue
+            if int(view.get("mission_count") or 0) <= 0:
+                reports.append(
+                    {
+                        "program_id": pid,
+                        "action": "skipped_never_started",
+                        "started": [],
+                    }
+                )
+                continue
+            out = self.start(str(pid), activate=True)
+            started = list(out.get("started") or [])
+            started_all.extend({"program_id": pid, **row} for row in started)
+            reports.append(
+                {
+                    "program_id": pid,
+                    "action": "reconciled",
+                    "started": started,
+                    "skipped_n": len(out.get("skipped") or []),
+                }
+            )
+        return {
+            "ok": True,
+            "kind": "program_member_reconcile",
+            "programs": reports,
+            "started": started_all,
+            "started_n": len(started_all),
         }
 
     def preview_start(

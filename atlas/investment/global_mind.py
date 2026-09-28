@@ -245,22 +245,32 @@ def _llm_global_narrative(
     }
     try:
         client = llm.for_role("researcher") if hasattr(llm, "for_role") else llm
+        from atlas.llm.provider import ChatMessage
+
         messages = [
-            {
-                "role": "system",
-                "content": (
+            ChatMessage(
+                role="system",
+                content=(
                     "You are Atlas's global investment cortex. Summarize revision "
                     "patterns across symbols. One JSON object only."
                 ),
-            },
-            {"role": "user", "content": json.dumps(prompt, default=str)},
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(prompt, default=str)[:3500],
+            ),
         ]
-        resp = client.chat(messages)
-        text = getattr(resp, "text", None) or getattr(resp, "content", None) or str(resp)
+        resp = client.chat(messages, _atlas_purpose="bre5_global_mind")
+        text = getattr(resp, "text", None) or getattr(resp, "content", None) or ""
+        thinking = getattr(resp, "thinking", None) or ""
+        if not str(text).strip() and thinking:
+            text = thinking
+        elif thinking and "{" not in str(text) and "{" in str(thinking):
+            text = f"{text}\n{thinking}"
+        return _parse_json_blob(str(text))
     except Exception:  # noqa: BLE001
-        _log.debug("BRE.5 LLM narrative failed", exc_info=True)
+        _log.debug("BRE.5 global narrative skipped", exc_info=True)
         return None
-    return _parse_json_blob(str(text))
 
 
 def format_global_mind_section(global_wso: dict[str, Any] | None) -> list[str]:

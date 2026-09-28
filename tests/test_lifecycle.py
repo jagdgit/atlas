@@ -181,3 +181,23 @@ def test_identity_key_experience_keys_on_skill_and_context():
     # Falls back to the statement when no structured skill is supplied.
     d = finding_identity_key({"domain": "experience", "statement": "Led a solo project"})
     assert d[0] == "experience" and d[1]
+
+
+def test_identity_key_fundamental_summary_is_per_symbol():
+    a = finding_identity_key(
+        {
+            "claim_type": "fundamental_summary",
+            "domain": "research",
+            "value": {"kind": "fundamental_summary", "symbol": "HBLPOWER.NS"},
+        }
+    )
+    b = finding_identity_key(
+        {
+            "claim_type": "fundamental_summary",
+            "domain": "research",
+            "value": {"kind": "fundamental_summary", "symbol": "TATACHEM.NS"},
+        }
+    )
+    assert a[0] == "fundamental_summary"
+    assert a != b
+    assert a[2] == "HBLPOWER.NS"

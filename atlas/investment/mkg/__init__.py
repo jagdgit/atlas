@@ -7,6 +7,7 @@ from typing import Any
 from atlas.investment.mkg.schema import VERSION
 from atlas.investment.mkg.seed import ensure_seeded
 from atlas.investment.mkg.service import graph_view, neighborhood, who_benefits, why_own
+from atlas.investment.mkg.why_own_bundle import why_own_bundle
 from atlas.investment.mkg.store import load_graph
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "neighborhood",
     "who_benefits",
     "why_own",
+    "why_own_bundle",
 ]
 
 

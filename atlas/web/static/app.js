@@ -299,11 +299,24 @@ function renderMessage(m) {
   if (cites.length) {
     const box = el("div", { class: "citations" });
     cites.forEach((c, i) => {
-      const label = c.title || c.snippet || c.document_id || c.source_id || `source ${i + 1}`;
+      const idx = c.index || i + 1;
+      const src = c.source || c.tier || "";
+      const id = c.finding_id || c.document_id || c.source_id || "";
+      const score = (c.score != null ? c.score : c.similarity);
+      const scoreBit = (score != null && score !== "") ? ` score=${Number(score).toFixed(3)}` : "";
+      const ts = c.timestamp ? ` ${String(c.timestamp).replace("T", " ").slice(0, 19)}` : "";
+      const label = c.title || c.snippet || "";
+      const head = `[${idx}] ${src ? src + " " : ""}${id || ("source " + idx)}${scoreBit}${ts}`;
       const row = el("div", { class: "citation" });
-      row.append(document.createTextNode(`[${c.index || i + 1}] `));
-      if (c.url) row.append(el("a", { href: c.url, target: "_blank", rel: "noopener", text: label }));
-      else row.append(document.createTextNode(label));
+      row.append(document.createTextNode(head));
+      if (label) {
+        row.append(document.createTextNode(" — "));
+        if (c.url) row.append(el("a", { href: c.url, target: "_blank", rel: "noopener", text: label }));
+        else row.append(document.createTextNode(label));
+      } else if (c.url) {
+        row.append(document.createTextNode(" "));
+        row.append(el("a", { href: c.url, target: "_blank", rel: "noopener", text: c.url }));
+      }
       box.append(row);
     });
     wrap.append(box);
@@ -1189,11 +1202,20 @@ function renderStepCard(s) {
     body.append(el("div", { class: "step-label muted small", text: `sources gathered (${citations.length})` }));
     const box = el("div", { class: "citations" });
     citations.forEach((c, i) => {
+      const idx = c.index || i + 1;
+      const src = c.source || c.tier || "";
+      const id = c.finding_id || c.document_id || c.source_id || "";
+      const score = (c.score != null ? c.score : c.similarity);
+      const scoreBit = (score != null && score !== "") ? ` score=${Number(score).toFixed(3)}` : "";
       const lvl = c.evidence_level != null ? `L${c.evidence_level} ` : "";
-      const label = lvl + (c.title || c.source_id || c.document_id || `source ${i + 1}`);
+      const label = lvl + (c.title || id || `source ${idx}`);
       const row = el("div", { class: "citation" });
-      if (c.url) row.append(el("a", { href: c.url, target: "_blank", rel: "noopener", text: label }));
-      else row.append(document.createTextNode(label));
+      const head = `${src ? src + " " : ""}${label}${scoreBit}`;
+      if (c.url) row.append(el("a", { href: c.url, target: "_blank", rel: "noopener", text: head }));
+      else row.append(document.createTextNode(head));
+      if (c.timestamp) {
+        row.append(el("span", { class: "muted", text: " " + String(c.timestamp).replace("T", " ").slice(0, 19) }));
+      }
       box.append(row);
     });
     body.append(box);
@@ -1756,6 +1778,15 @@ const LAB_BOOK_ORDER = [
   "india_fno_learner",
   "equity_intraday_learner",
 ];
+const LAB_BOOK_SHORT = {
+  india_equity_learner: "Swing",
+  india_fno_learner: "F&O",
+  equity_intraday_learner: "Intraday",
+};
+let lastLedgersLabKey = null;
+try {
+  lastLedgersLabKey = sessionStorage.getItem("atlas_lab_book_tab") || null;
+} catch (_) {}
 
 async function loadIip() {
   const failBox = $("#iip-failures");
@@ -2327,8 +2358,9 @@ async function runIipMkgWhy() {
   try {
     const res = await api(`/v1/market/mkg/why-own/${encodeURIComponent(sym)}`);
     if (out) {
+      const text = res.display_summary || res.summary || "";
       out.innerHTML = `<strong>${esc(res.symbol || sym)}</strong> <code>${esc(res.status || "")}</code><br/>`
-        + `${esc(res.summary || "")}<br/>`
+        + `${esc(text).replace(/\n/g, "<br/>")}<br/>`
         + `themes ${(res.themes || []).length} · policies ${(res.policies || []).length}`
         + ` · financial cites ${(res.financial_cites || []).length}`;
     }
@@ -2566,16 +2598,68 @@ function renderLearnerLedgers(box, data) {
     const ib = LAB_BOOK_ORDER.indexOf(b.portfolio_key);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
-  box.innerHTML = "";
-  for (const lab of labs) {
-    box.append(renderLearnerLabCard(lab));
+  let active = lastLedgersLabKey;
+  if (!active || !labs.some((l) => l.portfolio_key === active)) {
+    active = labs[0].portfolio_key;
   }
+  lastLedgersLabKey = active;
+  try { sessionStorage.setItem("atlas_lab_book_tab", active); } catch (_) {}
+
+  box.innerHTML = "";
+  const tabs = el("div", { class: "lab-book-tabs", role: "tablist" });
+  const panels = el("div", { class: "lab-book-panels" });
+  for (const lab of labs) {
+    const key = lab.portfolio_key || "?";
+    const short = LAB_BOOK_SHORT[key] || (lab.title || key).split(" ")[0];
+    const title = lab.title || LAB_BOOK_TITLES[key] || key;
+    const btn = el("button", {
+      type: "button",
+      class: "lab-book-tab" + (key === active ? " active" : ""),
+      role: "tab",
+      "aria-selected": key === active ? "true" : "false",
+      "data-lab": key,
+      title: title,
+    }, short);
+    const st = lab.statement || lab.snapshot || {};
+    const upnl = st.unrealized_pnl != null ? Number(st.unrealized_pnl) : null;
+    const tpnl = st.total_pnl != null ? Number(st.total_pnl) : null;
+    const chip = upnl != null ? upnl : tpnl;
+    if (chip != null && !Number.isNaN(chip)) {
+      btn.append(el("span", {
+        class: "lab-tab-pnl" + (chip > 0 ? " up" : chip < 0 ? " down" : ""),
+        text: signedInrAmt(chip, 0),
+      }));
+    }
+    btn.addEventListener("click", () => {
+      lastLedgersLabKey = key;
+      try { sessionStorage.setItem("atlas_lab_book_tab", key); } catch (_) {}
+      tabs.querySelectorAll(".lab-book-tab").forEach((b) => {
+        const on = b.getAttribute("data-lab") === key;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      panels.querySelectorAll(".lab-book-panel").forEach((p) => {
+        p.hidden = p.getAttribute("data-lab") !== key;
+      });
+    });
+    tabs.append(btn);
+
+    const panel = el("div", {
+      class: "lab-book-panel",
+      role: "tabpanel",
+      "data-lab": key,
+    });
+    panel.hidden = key !== active;
+    panel.append(renderLearnerLabCard(lab));
+    panels.append(panel);
+  }
+  box.append(tabs, panels);
 }
 
 function renderLearnerLabCard(lab) {
   const key = lab.portfolio_key || "?";
   const title = lab.title || LAB_BOOK_TITLES[key] || lab.label || key;
-  const wrap = el("div", { class: "learner-lab-card", "data-lab": key });
+  const wrap = el("div", { class: "learner-lab-card learner-lab-ledger", "data-lab": key });
   wrap.append(el("div", { class: "lab-title", text: title }));
   wrap.append(el("div", { class: "lab-key", text: key }));
   if (lab.error) {
@@ -2587,13 +2671,14 @@ function renderLearnerLabCard(lab) {
   const equity = st.equity != null ? Number(st.equity) : null;
   const dayPnl = st.day_pnl != null ? Number(st.day_pnl) : null;
   const totalPnl = st.total_pnl != null ? Number(st.total_pnl) : null;
+  const realized = st.realized_pnl != null ? Number(st.realized_pnl) : null;
+  const unrealized = st.unrealized_pnl != null ? Number(st.unrealized_pnl) : null;
+  const tax = st.taxes_and_pnl || {};
   const kpis = lab.kpis || st.kpis || {};
   const todayFills = kpis.fills_today != null
     ? Number(kpis.fills_today)
     : (st.fills_today != null ? Number(st.fills_today) : null);
-  const trades = todayFills != null
-    ? todayFills
-    : (st.trade_count != null ? st.trade_count : (st.recent_trades || []).length);
+  const tradeCount = st.trade_count != null ? Number(st.trade_count) : (st.trades || []).length;
 
   function metric(lbl, val, cls) {
     return el("div", { class: "learner-lab-metric" },
@@ -2601,7 +2686,7 @@ function renderLearnerLabCard(lab) {
       el("span", { class: "val" + (cls ? " " + cls : ""), text: val }),
     );
   }
-  const metrics = el("div", { class: "learner-lab-metrics" });
+  const metrics = el("div", { class: "learner-lab-metrics learner-lab-metrics-wide" });
   metrics.append(metric("Cash", inrAmt(cash)));
   metrics.append(metric("Equity", inrAmt(equity)));
   metrics.append(metric(
@@ -2614,13 +2699,27 @@ function renderLearnerLabCard(lab) {
     signedInrAmt(totalPnl),
     totalPnl > 0 ? "up" : totalPnl < 0 ? "down" : "",
   ));
+  metrics.append(metric(
+    "Realized (sold)",
+    signedInrAmt(realized),
+    realized > 0 ? "up" : realized < 0 ? "down" : "",
+  ));
+  metrics.append(metric(
+    "Open MTM (mark)",
+    signedInrAmt(unrealized),
+    unrealized > 0 ? "up" : unrealized < 0 ? "down" : "",
+  ));
+  metrics.append(metric("Total taxes", inrAmt(tax.total_taxes, 2)));
+  metrics.append(metric("Fees + TDS", inrAmt(tax.total_charges != null ? tax.total_charges : st.fees_paid, 2)));
   wrap.append(metrics);
   wrap.append(el("div", {
     class: "lab-basis",
     text: (st.valuation_basis ? `Valuation: ${st.valuation_basis}` : "Valuation: average cost")
       + (st.marks_pct != null ? ` · marks ${st.marks_available || 0}/${st.marks_total || 0}` : "")
-      + ` · today fills ${trades}`
-      + (kpis.buys_today != null ? ` (${kpis.buys_today} buy / ${kpis.sells_today || 0} sell)` : ""),
+      + ` · fills today ${todayFills != null ? todayFills : "—"}`
+      + (kpis.buys_today != null ? ` (${kpis.buys_today} buy / ${kpis.sells_today || 0} sell)` : "")
+      + ` · blotter ${tradeCount}`
+      + " · Open MTM = current market vs avg cost (before sell)",
   }));
 
   const noteSn = lab.session_note || {};
@@ -2641,39 +2740,294 @@ function renderLearnerLabCard(lab) {
     }));
   }
 
-  const positions = st.positions || [];
+  // --- Holdings (open positions) ---
+  wrap.append(el("div", {
+    class: "lab-section-h",
+    text: "Current holdings (mark-to-market)",
+  }));
+  const positions = Array.isArray(st.positions) ? st.positions.slice() : [];
   if (!positions.length) {
     wrap.append(el("div", { class: "lab-idle", text: "No open positions." }));
   } else {
+    positions.sort((a, b) => String(a.symbol || "").localeCompare(String(b.symbol || "")));
     const table = el("table", { class: "learner-ledger-table" });
     const thead = el("tr", {});
-    for (const h of ["Symbol", "Qty", "Avg", "Mark", "uPnL"]) {
+    for (const h of ["Symbol", "Qty", "Avg", "Mark", "Value", "MTM P&L", "Why"]) {
       thead.append(el("th", { text: h }));
     }
     table.append(thead);
-    for (const p of positions.slice(0, 12)) {
+    for (const p of positions) {
       const tr = el("tr", {});
-      const pnl = Number(p.unrealized_pnl || 0);
-      tr.append(el("td", { text: String(p.symbol || "") }));
+      const pnl = Number(p.expected_pnl != null ? p.expected_pnl : (p.unrealized_pnl || 0));
+      const pct = p.unrealized_pnl_pct;
+      const sym = String(p.symbol || "");
+      tr.append(el("td", { text: sym }));
       tr.append(el("td", { text: String(p.quantity ?? p.qty ?? "") }));
       tr.append(el("td", { text: Number(p.avg_price || p.avg_cost || 0).toFixed(2) }));
-      tr.append(el("td", { text: Number(p.mark || 0).toFixed(2) }));
       tr.append(el("td", {
-        class: pnl > 0 ? "up" : pnl < 0 ? "down" : "",
-        text: signedInrAmt(pnl, 2),
+        text: p.mark != null ? Number(p.mark).toFixed(2) : "—",
+        title: p.mark_source ? `mark source: ${p.mark_source}` : "",
       }));
+      tr.append(el("td", {
+        text: inrAmt(p.market_value != null ? p.market_value : p.value, 0),
+      }));
+      const pnlCell = el("td", {
+        class: pnl > 0 ? "up" : pnl < 0 ? "down" : "",
+        text: signedInrAmt(pnl, 2)
+          + (pct != null ? ` (${pct > 0 ? "+" : ""}${pct}%)` : ""),
+      });
+      tr.append(pnlCell);
+
+      const whyTd = el("td", { class: "lab-why-cell" });
+      const why = p.holding_why || {};
+      const summary = (why.summary || "").trim();
+      if (summary) {
+        whyTd.append(el("div", {
+          class: "lab-why-summary",
+          text: summary.length > 90 ? summary.slice(0, 90) + "…" : summary,
+          title: summary,
+        }));
+      } else if (why.bought_at || why.entry_price) {
+        whyTd.append(el("div", {
+          class: "muted small",
+          text: `Bought ${istDay(why.bought_at)}`
+            + (why.entry_price != null ? ` @ ${Number(why.entry_price).toFixed(2)}` : ""),
+        }));
+      } else {
+        whyTd.append(el("span", { class: "muted", text: "—" }));
+      }
+      const alloc = p.allocation || {};
+      if (alloc.operator_line || alloc.decision) {
+        whyTd.append(el("div", {
+          class: "lab-acp-line muted small",
+          text: alloc.operator_line
+            || (`ACP ${alloc.decision}`
+              + (alloc.best_challenger ? ` vs ${alloc.best_challenger}` : "")
+              + (alloc.why ? ` — ${String(alloc.why).slice(0, 80)}` : "")),
+          title: alloc.operator_line || alloc.why || "",
+        }));
+      }
+      if (alloc.exit_line || alloc.exit_action) {
+        whyTd.append(el("div", {
+          class: "lab-acp-line muted small",
+          text: alloc.exit_line
+            || (`ICR.2 ${alloc.exit_action}`
+              + (alloc.waiting_for && alloc.waiting_for.length
+                ? ` waiting: ${alloc.waiting_for.join(", ")}`
+                : "")),
+          title: alloc.exit_line || "",
+        }));
+      }
+      if (alloc.scientist_line || alloc.scientist_summary) {
+        whyTd.append(el("div", {
+          class: "lab-acp-line muted small",
+          text: alloc.scientist_line || alloc.scientist_summary,
+          title: "ICR.5 scientist (advice-only) — never places orders",
+        }));
+      }
+      const actions = el("div", { class: "lab-why-actions" });
+      actions.append(el("a", {
+        href: "#",
+        class: "link",
+        onclick: (e) => {
+          e.preventDefault();
+          const input = $("#learner-research-symbol");
+          if (input) input.value = sym;
+          const go = $("#learner-research-go");
+          if (go) go.click();
+          const panel = $("#learner-research-status");
+          if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        },
+      }, "Research"));
+      actions.append(document.createTextNode(" · "));
+      actions.append(el("a", {
+        href: "#",
+        class: "link",
+        onclick: async (e) => {
+          e.preventDefault();
+          try {
+            const res = await api(`/v1/market/mkg/why-own/${encodeURIComponent(sym)}`);
+            const bits = [];
+            const text = res.display_summary || res.summary;
+            if (text) bits.push(text);
+            else if (res.why) bits.push(typeof res.why === "string" ? res.why : JSON.stringify(res.why));
+            if (res.themes && res.themes.length) {
+              bits.push("themes: " + res.themes.slice(0, 3).map((t) => t.label || t.target_key || t).join(", "));
+            }
+            toast((bits.join("\n\n") || JSON.stringify(res)).slice(0, 480));
+          } catch (err) {
+            toast(err.message || String(err));
+          }
+        },
+      }, "Why own?"));
+      if (why.decision_id || p.decision_id) {
+        const did = why.decision_id || p.decision_id;
+        actions.append(document.createTextNode(" · "));
+        actions.append(el("a", {
+          href: "#",
+          class: "link",
+          onclick: async (e) => {
+            e.preventDefault();
+            try {
+              const full = await api(`/v1/decision/decisions/${encodeURIComponent(did)}`);
+              const pre = el("pre", {
+                class: "lab-why-detail small",
+                text: JSON.stringify(full, null, 2),
+              });
+              whyTd.append(pre);
+              e.currentTarget.remove();
+            } catch (err) {
+              toast(err.message || String(err));
+            }
+          },
+        }, "Decision"));
+      }
+      whyTd.append(actions);
+      tr.append(whyTd);
       table.append(tr);
     }
     wrap.append(table);
   }
-  const blotter = el("div", { class: "lab-blotter" });
-  const rt = (st.recent_trades || []).slice(0, 6);
-  blotter.textContent = "Recent: "
-    + (rt.length
-      ? rt.map((t) => `${t.side || "?"} ${t.symbol || ""}×${t.quantity ?? ""}`).join(" · ")
-      : "(none)");
-  wrap.append(blotter);
+
+  // --- Taxes & P&L summary ---
+  wrap.append(el("div", { class: "lab-section-h", text: "Taxes & profit / loss" }));
+  const taxTable = el("table", { class: "learner-ledger-table learner-ledger-summary" });
+  const taxHead = el("tr", {});
+  for (const h of ["Item", "Amount"]) taxHead.append(el("th", { text: h }));
+  taxTable.append(taxHead);
+  const taxRows = [
+    ["Brokerage", tax.brokerage],
+    ["STT", tax.stt],
+    ["Stamp", tax.stamp],
+    ["GST", tax.gst],
+    ["Exchange", tax.exchange],
+    ["Trade TDS", tax.trade_tds],
+    ["Withdrawal TDS", tax.withdrawal_tds],
+    ["Total taxes", tax.total_taxes],
+    ["All fees + TDS", tax.total_charges != null ? tax.total_charges : st.fees_paid],
+    ["Realized P&L (after sell)", realized],
+    ["Open MTM P&L (mark − avg)", unrealized],
+    ["Total P&L (equity − capital)", totalPnl],
+  ];
+  for (const [label, val] of taxRows) {
+    const tr = el("tr", {});
+    const n = val != null ? Number(val) : null;
+    const signed = label.indexOf("P&L") >= 0;
+    tr.append(el("td", { text: label }));
+    tr.append(el("td", {
+      class: signed ? (n > 0 ? "up" : n < 0 ? "down" : "") : "",
+      text: signed ? signedInrAmt(n, 2) : inrAmt(n, 2),
+    }));
+    taxTable.append(tr);
+  }
+  wrap.append(taxTable);
+
+  // --- Closed round-trips (buy → sell) ---
+  const closed = Array.isArray(st.closed_round_trips) ? st.closed_round_trips.slice() : [];
+  wrap.append(el("div", {
+    class: "lab-section-h",
+    text: `Bought & sold (${closed.length})`,
+  }));
+  if (!closed.length) {
+    wrap.append(el("div", { class: "lab-idle", text: "No closed round-trips yet." }));
+  } else {
+    const ctable = el("table", { class: "learner-ledger-table learner-ledger-scroll" });
+    const chead = el("tr", {});
+    for (const h of ["Symbol", "Qty", "Bought", "Buy ₹", "Sold", "Sell ₹", "Fees", "P&L"]) {
+      chead.append(el("th", { text: h }));
+    }
+    ctable.append(chead);
+    for (const r of closed.slice(0, 80)) {
+      const tr = el("tr", {});
+      const pnl = Number(r.realized_pnl || 0);
+      tr.append(el("td", { text: String(r.symbol || "") }));
+      tr.append(el("td", { text: String(r.quantity ?? "") }));
+      tr.append(el("td", { text: istDay(r.bought_at) }));
+      tr.append(el("td", {
+        text: r.buy_price != null ? Number(r.buy_price).toFixed(2) : "—",
+      }));
+      tr.append(el("td", { text: istDay(r.sold_at) }));
+      tr.append(el("td", {
+        text: r.sell_price != null ? Number(r.sell_price).toFixed(2) : "—",
+      }));
+      tr.append(el("td", { text: inrAmt(r.fees, 2) }));
+      tr.append(el("td", {
+        class: pnl > 0 ? "up" : pnl < 0 ? "down" : "",
+        text: signedInrAmt(pnl, 2),
+      }));
+      ctable.append(tr);
+    }
+    wrap.append(ctable);
+    if (closed.length > 80) {
+      wrap.append(el("div", {
+        class: "lab-idle",
+        text: `Showing 80 of ${closed.length} closed legs.`,
+      }));
+    }
+  }
+
+  // --- Full blotter ---
+  const blotterRows = Array.isArray(st.trades) && st.trades.length
+    ? st.trades.slice()
+    : (st.recent_trades || []).slice();
+  blotterRows.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  wrap.append(el("div", {
+    class: "lab-section-h",
+    text: `All fills (${blotterRows.length}${st.trade_count > blotterRows.length ? ` of ${st.trade_count}` : ""})`,
+  }));
+  if (!blotterRows.length) {
+    wrap.append(el("div", { class: "lab-idle", text: "No fills yet." }));
+  } else {
+    const btable = el("table", { class: "learner-ledger-table learner-ledger-scroll" });
+    const bhead = el("tr", {});
+    for (const h of ["Date", "Side", "Symbol", "Qty", "Price", "Fee", "rPnL"]) {
+      bhead.append(el("th", { text: h }));
+    }
+    btable.append(bhead);
+    for (const t of blotterRows.slice(0, 100)) {
+      const tr = el("tr", {});
+      const side = String(t.side || "").toLowerCase();
+      const rpnl = t.realized_pnl != null ? Number(t.realized_pnl) : null;
+      tr.append(el("td", { text: istDay(t.created_at) }));
+      tr.append(el("td", {
+        class: side === "buy" ? "up" : side === "sell" ? "down" : "",
+        text: side || "?",
+      }));
+      tr.append(el("td", { text: String(t.symbol || "") }));
+      tr.append(el("td", { text: String(t.quantity ?? "") }));
+      tr.append(el("td", { text: Number(t.price || 0).toFixed(2) }));
+      tr.append(el("td", { text: inrAmt(t.fee, 2) }));
+      tr.append(el("td", {
+        class: rpnl > 0 ? "up" : rpnl < 0 ? "down" : "",
+        text: side === "sell" ? signedInrAmt(rpnl, 2) : "—",
+      }));
+      btable.append(tr);
+    }
+    wrap.append(btable);
+    if (blotterRows.length > 100) {
+      wrap.append(el("div", {
+        class: "lab-idle",
+        text: `Showing latest 100 fills.`,
+      }));
+    }
+  }
   return wrap;
+}
+
+function istDay(raw) {
+  if (raw == null || raw === "") return "—";
+  try {
+    const d = new Date(typeof raw === "string" ? raw : String(raw));
+    if (Number.isNaN(d.getTime())) return String(raw).slice(0, 10);
+    return d.toLocaleDateString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+    });
+  } catch (_) {
+    return String(raw).slice(0, 10);
+  }
 }
 
 async function loadLearnerLabStatus() {
@@ -5325,6 +5679,7 @@ function fmtUptime(upt) {
 function pctSeverity(p) { return p == null ? "" : p >= 92 ? "fail" : p >= 80 ? "warn" : ""; }
 
 async function loadOverview() {
+  wireZerodhaPanel();
   startOpsStream();
   startOpsPoll();
   await refreshOps({ preferSummary: true });
@@ -5372,9 +5727,11 @@ function renderOpsSummaryFirstPaint(summary) {
   renderOpsBanner({
     capacity_signal: summary.capacity_signal,
     startup: summary.startup,
+    mdph: summary.mdph,
   });
   renderOpsProgramHealth(summary.program_health || {});
   renderOpsArchiveLane(summary.archive_lane || summary.host_guard || {});
+  renderOpsScientistDrain(summary.scientist_drain || {});
   const a = summary.atlas || {};
   const cards = $("#ops-cards");
   if (cards && !cards.childElementCount) {
@@ -5406,6 +5763,7 @@ function renderOps(snap) {
   renderOpsProgramHealth(snap.program_health || {});
   renderOpsArchiveLane(snap.archive_lane || snap.host_guard || {});
   renderOpsResearchVelocity(snap.research_velocity || {});
+  renderOpsScientistDrain(snap.scientist_drain || {});
   renderOpsNextTick(snap.next_tick || {});
   renderOpsGlossary(snap.glossary || {});
 
@@ -5537,6 +5895,26 @@ function renderOps(snap) {
   cards.append(opsCard("last backup", backup.last || "none"));
   cards.append(opsCard("live clients", snap.sse_subscribers || 0));
 
+  const mdph = snap.mdph || {};
+  if (mdph.status) {
+    const p2 = (mdph.phase2_sessions != null)
+      ? `${mdph.phase2_sessions}/${mdph.phase2_target || 5}`
+      : "—";
+    const inv = mdph.phase2_invariant_ok === false ? "warn" : (mdph.status === "READY" ? "ok" : "warn");
+    cards.append(opsCard(
+      "mdph / phase2",
+      `${mdph.status} · sess ${p2} · silentYahoo ${mdph.silent_yahoo_blocked_today || 0}`,
+      inv,
+    ));
+    if (mdph.l5_target) {
+      cards.append(opsCard(
+        "learning L5",
+        `${mdph.l5_have || 0} / ${mdph.l5_target}`,
+        (mdph.l5_have || 0) >= mdph.l5_target ? "ok" : "",
+      ));
+    }
+  }
+
   window.__opsLastSnap = snap;
   renderOpsWorkerStates(ws);
   renderOpsMissionQueue(snap.mission_queue || {});
@@ -5547,7 +5925,31 @@ function renderOpsBanner(snap) {
   if (!banner) return;
   const startup = snap.startup || {};
   const sig = snap.capacity_signal || {};
-  if (startup.warming && startup.message) {
+  const mdph = snap.mdph || {};
+  const mdphStatus = String(mdph.status || "");
+  const needsLogin = mdphStatus === "LOGIN_REQUIRED" || mdphStatus === "EXPIRED";
+  const mdphPaused = mdphStatus === "DEGRADED" || mdphStatus === "ERROR";
+  if (needsLogin) {
+    const cta = mdph.cta || "/zerodha/force-login";
+    banner.innerHTML = "";
+    banner.append(document.createTextNode(
+      mdph.message
+        || "Zerodha login required — live-required labs (intraday/F&O) are paused."
+    ));
+    banner.append(document.createTextNode(" "));
+    const a = el("a", { href: cta, text: "Force update token", class: "ops-banner-link" });
+    banner.append(a);
+    banner.classList.remove("hidden");
+  } else if (mdphPaused && mdph.message) {
+    banner.innerHTML = "";
+    banner.append(document.createTextNode(mdph.message + " "));
+    banner.append(el("a", {
+      href: "/zerodha/force-login",
+      text: "Force update token",
+      class: "ops-banner-link",
+    }));
+    banner.classList.remove("hidden");
+  } else if (startup.warming && startup.message) {
     banner.textContent = startup.message;
     banner.classList.remove("hidden");
   } else if (sig.active && sig.message) {
@@ -5557,6 +5959,89 @@ function renderOpsBanner(snap) {
     banner.textContent = "";
     banner.classList.add("hidden");
   }
+  // Always refresh the dedicated Zerodha session panel
+  renderZerodhaPanel(mdph);
+}
+
+async function refreshZerodhaPanel() {
+  try {
+    const res = await fetch("/zerodha/status", { cache: "no-store" });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const health = await res.json();
+    renderZerodhaPanel(health);
+    return health;
+  } catch (err) {
+    const box = $("#zerodha-panel-status");
+    if (box) box.textContent = `Zerodha status unavailable — ${err.message || err}`;
+    return null;
+  }
+}
+
+function renderZerodhaPanel(health) {
+  const panel = $("#zerodha-panel");
+  const box = $("#zerodha-panel-status");
+  if (!panel || !box) return;
+  const h = health || {};
+  const status = String(h.status || "UNKNOWN");
+  const live = h.live_trading_allowed === true;
+  const ltp = h.ltp_probe || "—";
+  const hist = h.hist_probe || "—";
+  const day = h.trading_date || h.session_ist_day || "—";
+  const fresh = h.freshness || "—";
+  const inst = h.instrument_master || "—";
+  const px = h.last_ltp_price != null
+    ? `${h.last_ltp_symbol || "LTP"} ${h.last_ltp_price}`
+    : "";
+  box.innerHTML = "";
+  const line = el("div", {},
+    el("strong", { text: status }),
+    document.createTextNode(
+      ` · live ${live ? "allowed" : "paused"} · LTP ${ltp} · hist ${hist}`
+      + ` · ${fresh} · instruments ${inst} · IST ${day}`
+      + (px ? ` · ${px}` : "")
+    ),
+  );
+  box.append(line);
+  if (h.message) {
+    box.append(el("div", { class: "muted small", text: String(h.message) }));
+  } else if (status === "READY") {
+    box.append(el("div", {
+      class: "muted small",
+      text: "Session active. Use Force update token anytime to clear and re-login (e.g. if morning ~06:00 login was missed).",
+    }));
+  } else if (status === "LOGIN_REQUIRED" || status === "EXPIRED") {
+    box.append(el("div", {
+      class: "muted small",
+      text: "No valid day token — click Force update token (clears old session + opens Zerodha login).",
+    }));
+  }
+  panel.classList.remove("ready", "need-login", "expired", "degraded", "error");
+  if (status === "READY") panel.classList.add("ready");
+  else if (status === "LOGIN_REQUIRED") panel.classList.add("need-login");
+  else if (status === "EXPIRED") panel.classList.add("expired");
+  else if (status === "DEGRADED") panel.classList.add("degraded");
+  else if (status === "ERROR") panel.classList.add("error");
+}
+
+function wireZerodhaPanel() {
+  const probe = $("#zerodha-probe-btn");
+  if (probe && !probe.dataset.wired) {
+    probe.dataset.wired = "1";
+    probe.addEventListener("click", async () => {
+      probe.disabled = true;
+      try {
+        const res = await fetch("/zerodha/probe", { method: "POST", cache: "no-store" });
+        const health = await res.json();
+        renderZerodhaPanel(health);
+        toast(health.status === "READY" ? "Zerodha probe PASS" : `Zerodha ${health.status}`);
+      } catch (err) {
+        toast(err.message || "probe failed");
+      } finally {
+        probe.disabled = false;
+      }
+    });
+  }
+  refreshZerodhaPanel();
 }
 
 function renderOpsProgramHealth(ph) {
@@ -5630,6 +6115,61 @@ function renderOpsResearchVelocity(rv) {
     el("div", { class: "k", text: "Session buys today" }),
     el("div", { class: "v", text: String(market.session_buys_today != null ? market.session_buys_today : "—") })));
   box.append(row);
+}
+
+function renderOpsScientistDrain(sd) {
+  const box = $("#ops-scientist-drain");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!sd || !sd.version) {
+    box.append(el("div", {
+      class: "muted small",
+      text: "Scientist drain · (waiting for Ops snapshot)",
+    }));
+    return;
+  }
+  const reviewed = sd.REVIEWED != null ? sd.REVIEWED : 0;
+  const pending = sd.pending != null ? sd.pending : 0;
+  const retriable = sd.retriable != null ? sd.retriable : pending;
+  const fit = sd.fitness_today || {};
+  const status = String(sd.status || "unknown");
+  let sev = "";
+  if (retriable > 0 && reviewed === 0) sev = "warn";
+  if (status === "caught_up") sev = "ok";
+  box.append(el("div", {
+    class: "muted small",
+    text: sd.as_of_ist
+      ? `Scientist LLM drain · ${sd.as_of_ist} · ${status}`
+      : `Scientist LLM drain · ${status}`,
+  }));
+  const row = el("div", { class: "row" });
+  row.append(el("div", { class: "ops-rv-chip" + (sev ? " " + sev : "") },
+    el("div", { class: "k", text: "REVIEWED" }),
+    el("div", { class: "v", text: String(reviewed) })));
+  row.append(el("div", { class: "ops-rv-chip" + (retriable > 0 ? " warn" : "") },
+    el("div", { class: "k", text: "Pending / retriable" }),
+    el("div", { class: "v", text: String(retriable) })));
+  row.append(el("div", { class: "ops-rv-chip" },
+    el("div", { class: "k", text: "Fitness today (sci)" }),
+    el("div", {
+      class: "v",
+      text: `ok=${fit.ok != null ? fit.ok : 0} · err=${fit.error != null ? fit.error : 0} · to=${fit.timeout != null ? fit.timeout : 0}`,
+    })));
+  const swing = sd.primary_lab || {};
+  if (swing.label) {
+    row.append(el("div", { class: "ops-rv-chip" },
+      el("div", { class: "k", text: `${swing.label} notes` }),
+      el("div", {
+        class: "v",
+        text: `R=${swing.REVIEWED != null ? swing.REVIEWED : 0} · P=${swing.pending != null ? swing.pending : 0}`,
+      })));
+  }
+  box.append(row);
+  box.append(el("div", {
+    class: "muted small ops-scientist-drain-why",
+    text: sd.why_pending
+      || "Atlas drains this queue on paper/overnight ticks — CPU Ollama is slow; pending ≠ ignored.",
+  }));
 }
 
 function renderOpsNextTick(nt) {
@@ -5965,29 +6505,171 @@ function renderOpsCleanupResults(result) {
   }
 }
 
+function humanizeSnake(s) {
+  const t = String(s || "").trim();
+  if (!t) return "";
+  return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function unwrapOpsEvent(raw) {
+  if (!raw || typeof raw !== "object") {
+    return { inner: {}, source: null, createdAt: null };
+  }
+  const inner = (raw.payload && typeof raw.payload === "object") ? raw.payload : raw;
+  return {
+    inner,
+    source: raw.source || null,
+    createdAt: raw.created_at || null,
+  };
+}
+
+const OPS_TASK_LABELS = {
+  worker_tick: "Worker tick",
+  schedule_tick: "Schedule tick",
+  host_guard_tick: "Host Guard tick",
+  embed_document: "Embed document",
+  embed_backfill: "Embed backfill",
+  lab_loop0_s11_canary: "LAB-LOOP0 Step 11 canary",
+  fundamental_summary_publish: "Fundamental summary → RAG",
+  candidates_drain: "Knowledge candidates drain",
+  candidates_prune: "Knowledge prune",
+  backup: "Database backup",
+  plan_job: "Plan job",
+  advance_job: "Advance job",
+  ingest_scan: "Ingest scan",
+  memory_prune: "Memory prune",
+  verify_finding: "Verify finding",
+  run_agent: "Run agent",
+};
+
+const OPS_WORKER_LABELS = {
+  paper_trading: "Paper trading",
+  decision_simulation: "Paper trading",
+  hello_watcher: "Hello watcher",
+  investment_mentor: "Investment mentor",
+  engineering_mentor: "Engineering mentor",
+  personal_mentor: "Personal mentor",
+  decision_meta_learning: "Decision meta-learning",
+  fundamentals_enrich: "Fundamentals enrich",
+  research_freshness: "Research freshness",
+  investment_universe: "Investment universe",
+  opportunity_discovery: "Opportunity discovery",
+  government_intelligence: "Government intelligence",
+  tech_security_watcher: "Tech security watcher",
+  job_watcher: "Job watcher",
+  owner_knowledge: "Owner knowledge",
+  repo_watcher: "Repo watcher",
+  knowledge_verification: "Knowledge verification",
+  historical_bars_bootstrap: "Historical bars bootstrap",
+};
+
+/** Routine scheduler housekeeping — WorkerTick / schedule_tick carry the signal. */
+const OPS_SUPPRESS_TASK_COMPLETED = new Set([
+  "worker_tick",
+  "schedule_tick",
+  "host_guard_tick",
+]);
+
+function formatOpsActivity(eventType, raw) {
+  const et = String(eventType || raw?.type || "event");
+  const { inner, source, createdAt } = unwrapOpsEvent(raw);
+  const when = createdAt ? clockTime(createdAt) : new Date().toLocaleTimeString();
+
+  if (et === "TaskCompleted" && OPS_SUPPRESS_TASK_COMPLETED.has(inner.task_type)) {
+    return null;
+  }
+
+  if (et === "TaskCompleted" || et === "TaskFailed" || et === "TaskRetry") {
+    const tt = inner.task_type || "task";
+    const label = OPS_TASK_LABELS[tt] || humanizeSnake(tt);
+    const verb = et === "TaskFailed" ? "failed" : et === "TaskRetry" ? "retry" : "completed";
+    const bits = [
+      inner.summary || null,
+      inner.worker_id ? `worker ${String(inner.worker_id).slice(0, 8)}` : null,
+      inner.error || null,
+      inner.retry != null ? `retry ${inner.retry}` : null,
+    ].filter(Boolean);
+    return {
+      badge: verb === "failed" ? "failed" : verb === "retry" ? "warn" : "ok",
+      title: `${label} ${verb}`,
+      detail: bits.length ? `${when} · ${bits.slice(0, 2).join(" · ")}` : when,
+    };
+  }
+
+  if (et.startsWith("Worker")) {
+    const wt = inner.type || inner.worker_type;
+    const label = OPS_WORKER_LABELS[wt] || humanizeSnake(wt) || "Worker";
+    const action = et.replace(/^Worker/, "").replace(/([A-Z])/g, " $1").trim().toLowerCase();
+    const bits = [
+      inner.note || inner.summary || null,
+      inner.reason || null,
+      inner.worker_id ? String(inner.worker_id).slice(0, 8) : null,
+    ].filter(Boolean);
+    const title = `${label} · ${action || "event"}`;
+    return {
+      badge: /fail|error|thrott|defer|pause|memory/i.test(et) ? "warn" : "ok",
+      title,
+      detail: bits.length ? `${when} · ${bits.slice(0, 2).join(" · ")}` : when,
+    };
+  }
+
+  if (et === "PaperTradingFill") {
+    const sym = inner.symbol || inner.hold_symbol || "?";
+    const side = inner.side || inner.action || "fill";
+    return {
+      badge: "ok",
+      title: `Paper fill · ${sym}`,
+      detail: `${when} · ${side}${inner.qty != null ? ` qty=${inner.qty}` : ""}`,
+    };
+  }
+
+  if (et === "SchedulesFired") {
+    const n = inner.count != null ? inner.count : (inner.schedule_ids || []).length;
+    return {
+      badge: "ok",
+      title: "Schedules fired",
+      detail: `${when} · ${n || 0} schedule(s)`,
+    };
+  }
+
+  if (et === "MissionCreated" || et === "MissionUpdated") {
+    const title = inner.title || inner.name || inner.mission_id || "Mission";
+    return {
+      badge: "ok",
+      title: `${humanizeSnake(et.replace(/^Mission/, "Mission "))}`,
+      detail: `${when} · ${String(title).slice(0, 64)}`,
+    };
+  }
+
+  const fallbackBits = [
+    inner.summary || inner.note || inner.message || inner.reason || null,
+    inner.task_type ? humanizeSnake(inner.task_type) : null,
+    inner.type ? humanizeSnake(inner.type) : null,
+    inner.worker_id ? `worker ${String(inner.worker_id).slice(0, 8)}` : null,
+    inner.task_id ? `task ${String(inner.task_id).slice(0, 8)}` : null,
+    source ? `from ${source}` : null,
+  ].filter(Boolean);
+  const sev = /failed|error/i.test(et) ? "failed"
+    : /retry|thrott|defer|warn/i.test(et) ? "warn"
+    : /completed|done|tick|fill|created|fired/i.test(et) ? "ok" : "";
+  return {
+    badge: sev || "ok",
+    title: humanizeSnake(et),
+    detail: fallbackBits.length ? `${when} · ${fallbackBits.slice(0, 2).join(" · ")}` : when,
+  };
+}
+
 function pushActivity(type, payload) {
   const feed = $("#ops-activity");
   if (!feed) return;
+  const formatted = formatOpsActivity(type, payload);
+  if (!formatted) return;
   const hint = feed.querySelector(".empty-hint");
   if (hint) hint.remove();
-  const when = new Date().toLocaleTimeString();
-  const sev = /\.(failed|error)$/i.test(type) || /failed|error/i.test(type) ? "failed"
-    : /\.(completed|done)$/i.test(type) || /completed|done/i.test(type) ? "ok" : "";
-  let detail = when;
-  if (payload && typeof payload === "object") {
-    const bits = [
-      payload.mission_id ? `mission ${String(payload.mission_id).slice(0, 8)}` : null,
-      payload.worker_id ? `worker ${String(payload.worker_id).slice(0, 8)}` : null,
-      payload.task_id ? `task ${String(payload.task_id).slice(0, 8)}` : null,
-      payload.reason || payload.message || payload.summary || null,
-      payload.worker_type || payload.type || null,
-    ].filter(Boolean);
-    if (bits.length) detail = `${when} · ${bits.slice(0, 3).join(" · ")}`;
-  }
   const row = el("div", { class: "health-row" },
-    el("span", { class: "badge " + (sev || "ok"), text: sev || "event" }),
-    el("span", { class: "name", text: type }),
-    el("span", { class: "detail", text: detail }));
+    el("span", { class: "badge " + (formatted.badge || "ok"), text: formatted.badge || "ok" }),
+    el("span", { class: "name", text: formatted.title }),
+    el("span", { class: "detail", text: formatted.detail }));
   feed.prepend(row);
   while (feed.children.length > 80) feed.lastChild.remove();
 }

@@ -334,13 +334,17 @@ class InvestorReportsWorker(PersistentWorker):
                     self._logger.debug("sim portfolio snapshot failed", exc_info=True)
                 if hasattr(self._portfolio, "trades"):
                     try:
-                        trades = self._portfolio.trades(pid, limit=50)
+                        # OI-LAB-LOOP0 — KPIs must count the day ledger, not a 10/50-row UI blotter.
+                        trades = self._portfolio.trades(pid, limit=2000)
                         from atlas.investment.trading_kpis import tag_trades_ist_day as _tag_ist
 
-                        portfolio_doc["recent_trades"] = _tag_ist(
-                            list(trades or []), ist_date=ist_date
-                        )
+                        tagged = _tag_ist(list(trades or []), ist_date=ist_date)
+                        day_trades = [t for t in tagged if t.get("ist_day_match")]
+                        portfolio_doc["trades"] = tagged
+                        portfolio_doc["day_trades"] = day_trades
+                        portfolio_doc["recent_trades"] = day_trades[:10]
                         portfolio_doc["trade_count"] = len(trades or [])
+                        portfolio_doc["fills_today_ledger"] = len(day_trades)
                     except Exception:  # noqa: BLE001
                         self._logger.debug("sim portfolio trades failed", exc_info=True)
                 self._add_cash_and_pnl_metrics(
@@ -692,6 +696,12 @@ class InvestorReportsWorker(PersistentWorker):
         )
 
         trades = list(portfolio_doc.get("recent_trades") or [])
+        # LM-PNL1 — ensure IST day stamps before filtering (some blotters omit them).
+        if trades and ist_date and not any(
+            isinstance(t, dict) and "ist_day_match" in t for t in trades
+        ):
+            trades = self._tag_trades_ist_day(trades, ist_date=str(ist_date))
+            portfolio_doc["recent_trades"] = trades
         day_trades = [
             t for t in trades
             if isinstance(t, dict) and t.get("ist_day_match")
@@ -699,16 +709,108 @@ class InvestorReportsWorker(PersistentWorker):
         previous = portfolio_doc.get("previous_closes") or {}
         marks = portfolio_doc.get("marks") or {}
         positions = portfolio_doc.get("positions") or []
-        if not marks or not previous:
+        # Flat books still have a real day P&L from closed round-trips — do not
+        # null it just because there are no open marks (OI: +19260 phantom vanish).
+        if not day_trades and (not marks or not previous):
             portfolio_doc["day_pnl"] = None
+            portfolio_doc.pop("day_pnl_note", None)
             return
-        # Start-of-day holdings plus today's fills, marked to latest close.
-        day_pnl = 0.0
+        day_pnl = self._compute_day_pnl(
+            positions=positions,
+            day_trades=day_trades,
+            marks=marks,
+            previous=previous,
+        )
+        if day_pnl is None:
+            # LM-PNL1 — today's fills with no markable overnight → honest zero, not null
+            if day_trades:
+                day_pnl = 0.0
+            else:
+                portfolio_doc["day_pnl"] = None
+                portfolio_doc.pop("day_pnl_note", None)
+                return
+        portfolio_doc["day_pnl"] = day_pnl
+        base = equity - day_pnl
+        portfolio_doc["day_return_pct"] = (
+            100.0 * day_pnl / base if base > 0 else None
+        )
+        # Operator honesty: concentration sell @ prior close looks like "no P&L today"
+        sells = [
+            t
+            for t in day_trades
+            if str(t.get("side") or "").lower() == "sell"
+        ]
+        if sells and abs(float(day_pnl)) < 1e-6:
+            realized = 0.0
+            for t in sells:
+                try:
+                    realized += float(t.get("realized_pnl") or 0)
+                except (TypeError, ValueError):
+                    pass
+            if realized:
+                portfolio_doc["day_pnl_note"] = (
+                    f"Day mark P&L ≈ 0 (sell near prior mark). "
+                    f"Trade realized_pnl sum ≈ {realized:.2f} — gap/MTM usually "
+                    f"already in a prior IST day's day_pnl."
+                )
+            else:
+                portfolio_doc["day_pnl_note"] = (
+                    "Day mark P&L ≈ 0 after today's sells (fill ≈ mark). "
+                    "Holding-period edge may already appear on a prior IST day_pnl."
+                )
+        else:
+            portfolio_doc.pop("day_pnl_note", None)
+
+    @staticmethod
+    def _compute_day_pnl(
+        *,
+        positions: list[dict[str, Any]],
+        day_trades: list[dict[str, Any]],
+        marks: dict[str, Any],
+        previous: dict[str, Any],
+    ) -> float | None:
+        """Trading-day P&L from overnight inventory + today's fills.
+
+        Algebra (long-only paper books):
+          overnight qty × (mark − previous)
+          + buys still open / all buys × (mark − buy)   [MTM from fill]
+          + sells × (sell − mark)                       [realize vs mark]
+
+        Same-day round-trips then collapse to ``sell − buy`` (no spurious
+        ``mark − previous``). The old sell leg used ``sell − previous``, which
+        double-counted the overnight gap on every round-trip — after a weekend
+        gap (e.g. WELCORP Fri−Thu ≈ ₹307) that inflated day P&L by tens of
+        thousands of rupees, then went ``None`` when the book flattened.
+        """
         current_qty: dict[str, float] = {
             str(p.get("symbol")): float(p.get("quantity") or p.get("qty") or 0)
             for p in positions
             if isinstance(p, dict) and p.get("symbol")
         }
+        # Symbols we can value: open marks, or trade marks inferred from fills.
+        valued = set(str(s) for s in marks) | {
+            str(t.get("symbol") or "")
+            for t in day_trades
+            if isinstance(t, dict) and t.get("symbol")
+        }
+        if not valued:
+            return None
+
+        # Infer mark for flat symbols from last trade price when mark missing.
+        eff_marks: dict[str, float] = {
+            str(k): float(v) for k, v in marks.items() if v is not None
+        }
+        for trade in day_trades:
+            sym = str(trade.get("symbol") or "")
+            if not sym or sym in eff_marks:
+                continue
+            px = trade.get("price") if trade.get("price") is not None else trade.get("fill_price")
+            if px is not None:
+                eff_marks[sym] = float(px)
+
+        if not eff_marks:
+            return None
+
         start_qty = dict(current_qty)
         for trade in day_trades:
             symbol = str(trade.get("symbol") or "")
@@ -718,26 +820,32 @@ class InvestorReportsWorker(PersistentWorker):
                 start_qty[symbol] = start_qty.get(symbol, 0.0) - qty
             elif side == "sell":
                 start_qty[symbol] = start_qty.get(symbol, 0.0) + qty
+
+        day_pnl = 0.0
+        any_term = False
         for symbol, qty in start_qty.items():
-            if symbol in marks and symbol in previous:
-                day_pnl += qty * (float(marks[symbol]) - float(previous[symbol]))
+            if qty == 0:
+                continue
+            if symbol in eff_marks and symbol in previous:
+                day_pnl += qty * (float(eff_marks[symbol]) - float(previous[symbol]))
+                any_term = True
         for trade in day_trades:
             symbol = str(trade.get("symbol") or "")
-            if symbol not in marks:
+            if symbol not in eff_marks:
                 continue
             qty = float(trade.get("quantity") or trade.get("qty") or 0)
             price = float(trade.get("price") or trade.get("fill_price") or 0)
             fee = float(trade.get("fee") or 0)
+            mark = float(eff_marks[symbol])
             side = str(trade.get("side") or "").lower()
             if side == "buy":
-                day_pnl += qty * (float(marks[symbol]) - price) - fee
-            elif side == "sell" and symbol in previous:
-                day_pnl += qty * (price - float(previous[symbol])) - fee
-        portfolio_doc["day_pnl"] = day_pnl
-        base = equity - day_pnl
-        portfolio_doc["day_return_pct"] = (
-            100.0 * day_pnl / base if base > 0 else None
-        )
+                day_pnl += qty * (mark - price) - fee
+                any_term = True
+            elif side == "sell":
+                # Realize vs mark (not previous) so round-trips = sell−buy.
+                day_pnl += qty * (price - mark) - fee
+                any_term = True
+        return day_pnl if any_term else 0.0
 
     @staticmethod
     def _tag_trades_ist_day(

@@ -45,14 +45,63 @@ def test_rate_gate_401_shorter_first_pause(tmp_path):
     )
     cool = gate.on_block(401)
     assert cool == 45.0
+    # Ladder only after cooldown expires — extra hits during cooldown must not count.
+    gate._cooldown_until = 0.0
     cool2 = gate.on_block(401)
-    assert cool2 == 90.0  # ladder after first
+    assert cool2 == 90.0
+    assert gate._consecutive_blocks == 2
 
 
 def test_is_yahoo_rate_block_error():
     assert is_yahoo_rate_block_error("HTTP 429 from Yahoo quoteSummary")
     assert is_yahoo_rate_block_error("HTTP 401 from Yahoo getcrumb")
     assert not is_yahoo_rate_block_error("empty_quote_summary")
+
+
+def test_on_block_does_not_storm_during_cooldown(tmp_path):
+    reset_yahoo_rate_gate_for_tests()
+    gate = YahooRateGate(
+        data_dir=tmp_path,
+        backoff_start_s=60.0,
+        backoff_max_s=900.0,
+    )
+    gate.on_block(429)
+    assert gate._consecutive_blocks == 1
+    gate.on_block(429)
+    gate.on_block(429)
+    assert gate._consecutive_blocks == 1
+
+
+def test_wait_raises_on_cooldown_does_not_sleep_through(tmp_path):
+    from atlas.investment.yahoo_fundamentals import YahooPriorityDenied
+
+    reset_yahoo_rate_gate_for_tests()
+    gate = YahooRateGate(
+        data_dir=tmp_path,
+        min_interval_s=0.0,
+        backoff_start_s=600.0,
+        backoff_max_s=900.0,
+    )
+    gate.on_block(429)
+    try:
+        gate.wait(respect_cooldown=True)
+        raise AssertionError("expected YahooPriorityDenied")
+    except YahooPriorityDenied as exc:
+        assert exc.reason == "cooldown"
+
+
+def test_fundamentals_slot_is_exclusive(tmp_path):
+    reset_yahoo_rate_gate_for_tests()
+    gate = YahooRateGate(data_dir=tmp_path, min_interval_s=0.0)
+    ok, reason = gate.try_begin_fundamentals()
+    assert ok is True
+    ok2, reason2 = gate.try_begin_fundamentals()
+    assert ok2 is False
+    assert reason2 == "fundamentals_busy"
+    gate.end_fundamentals()
+    ok3, _ = gate.try_begin_fundamentals()
+    assert ok3 is True
+    gate.end_fundamentals()
 
 
 def test_wait_interval_only_skips_crumb_cooldown(tmp_path):

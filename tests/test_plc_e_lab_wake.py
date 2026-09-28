@@ -54,8 +54,19 @@ def test_load_nifty_from_caret_legacy_filename(tmp_path):
 
 
 def test_market_reader_nifty_uses_durable_caret(tmp_path):
-    bars = [{"date": f"2026-07-{i:02d}", "close": 100.0 + i} for i in range(1, 28)]
-    bars += [{"date": f"2026-08-{i:02d}", "close": 130.0 + i} for i in range(1, 20)]
+    from datetime import datetime, timedelta, timezone
+
+    from atlas.investment.bar_store import last_completed_nse_session_date
+
+    sess = last_completed_nse_session_date()
+    end = datetime.combine(sess, datetime.min.time(), tzinfo=timezone.utc)
+    bars = [
+        {
+            "date": (end - timedelta(days=45 - i)).date().isoformat(),
+            "close": 100.0 + i,
+        }
+        for i in range(46)
+    ]
     root = tmp_path / "market" / "bars"
     root.mkdir(parents=True)
     (root / "^NSEI.json").write_text(

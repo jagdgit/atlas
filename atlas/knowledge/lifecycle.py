@@ -149,6 +149,10 @@ def finding_identity_key(data: dict[str, Any]) -> tuple[Any, ...]:
         return ("typed", domain, claim_type, normalize_statement(str(data.get("statement", ""))))
     if claim_type == "claim":
         return ("typed", domain, "claim", normalize_statement(str(data.get("statement", ""))))
+    if claim_type == "fundamental_summary":
+        # One active summary per symbol. Do not collapse all symbols onto kind+unit.
+        sym = str(value.get("symbol") or "").strip().upper()
+        return ("fundamental_summary", domain, sym)
 
     if isinstance(value, dict) and (value.get("kind") or "").strip():
         kind = str(value.get("kind", "")).strip().lower()

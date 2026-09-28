@@ -176,15 +176,21 @@ def revise_one_wso(
             },
             {"role": "user", "content": json.dumps(prompt, default=str)},
         ]
-        resp = client.chat(messages)
+        resp = client.chat(
+            messages,
+            _atlas_purpose="bre2_belief_revision",
+            think=False,
+            num_predict=400,
+            format="json",
+        )
         text = getattr(resp, "text", None) or getattr(resp, "content", None) or str(resp)
     except Exception as exc:  # noqa: BLE001
         append_revision(
             doc,
             status="unreviewed",
-            reason=f"LLM_UNAVAILABLE — BRE.2 LLM failed: {type(exc).__name__}",
+            reason=f"LLM_UNAVAILABLE — {type(exc).__name__}: {exc}"[:240],
             evidence_delta=delta,
-            llm=False,
+            llm=True,
         )
         if data_dir:
             save_wso(data_dir, doc)

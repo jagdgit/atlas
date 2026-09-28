@@ -153,7 +153,103 @@ def format_learning_first_header(
                 alloc = load_allocation_table(str(get_config().paths.data), lab)
             except Exception:  # noqa: BLE001
                 alloc = None
+        # NOW #8 — economic-center answer above the challenger table
+        try:
+            from atlas.investment.next_rupee import (
+                format_next_rupee_evening_lines,
+                load_next_rupee,
+            )
+
+            nr = (
+                port.get("next_rupee_doc")
+                if isinstance(port.get("next_rupee_doc"), dict)
+                else None
+            )
+            if nr is None:
+                dd_nr = data_dir
+                if not dd_nr:
+                    try:
+                        from atlas.config import get_config
+
+                        dd_nr = str(get_config().paths.data)
+                    except Exception:  # noqa: BLE001
+                        dd_nr = None
+                if dd_nr:
+                    nr = load_next_rupee(dd_nr, lab)
+            lines.extend(format_next_rupee_evening_lines(nr))
+        except Exception:  # noqa: BLE001
+            pass
+        # NOW #11 — virtual Capital Scale Lab
+        try:
+            from atlas.investment.capital_scale_lab import (
+                format_capital_scale_evening_lines,
+                load_capital_scale,
+            )
+
+            csl = (
+                port.get("capital_scale_doc")
+                if isinstance(port.get("capital_scale_doc"), dict)
+                else None
+            )
+            if csl is None:
+                dd_csl = data_dir
+                if not dd_csl:
+                    try:
+                        from atlas.config import get_config
+
+                        dd_csl = str(get_config().paths.data)
+                    except Exception:  # noqa: BLE001
+                        dd_csl = None
+                if dd_csl:
+                    csl = load_capital_scale(dd_csl, lab)
+            lines.extend(format_capital_scale_evening_lines(csl))
+        except Exception:  # noqa: BLE001
+            pass
         lines.extend(format_allocation_evening_lines(alloc))
+        # OI-ICR1 — per-incumbent ACP one-liners
+        try:
+            from atlas.investment.allocation_comparison import format_acp_evening_from_disk
+
+            pos = port.get("positions") or port.get("holdings") or []
+            if isinstance(pos, dict):
+                syms = [str(k) for k in pos.keys()]
+            else:
+                syms = [
+                    str(p.get("symbol") or "")
+                    for p in (pos or [])
+                    if isinstance(p, dict) and p.get("symbol")
+                ]
+            dd = data_dir
+            if not dd:
+                try:
+                    from atlas.config import get_config
+
+                    dd = str(get_config().paths.data)
+                except Exception:  # noqa: BLE001
+                    dd = None
+            acp_lines = format_acp_evening_from_disk(dd, lab, syms)
+            if acp_lines:
+                lines.extend(acp_lines)
+            # OI-ICR3 — capital regret KPI
+            try:
+                from atlas.investment.allocation_regret import (
+                    format_capital_regret_evening_lines,
+                )
+
+                lines.extend(format_capital_regret_evening_lines(dd, lab))
+            except Exception:  # noqa: BLE001
+                pass
+            # OI-ICR5 — scientist notes
+            try:
+                from atlas.investment.incumbent_scientist import (
+                    format_scientist_evening_lines,
+                )
+
+                lines.extend(format_scientist_evening_lines(dd, lab, syms))
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            pass
     except Exception:  # noqa: BLE001
         lines.extend(
             [
@@ -199,6 +295,7 @@ def format_learning_first_header(
             load_learning_events,
             summarize_learning_day,
         )
+        from atlas.investment.learning_story import format_learning_story_lines
 
         dd = data_dir
         if not dd:
@@ -212,11 +309,19 @@ def format_learning_first_header(
             evs = load_learning_events(dd, lab)
             learning_summary = summarize_learning_day(evs)
             lines.extend(format_learning_objects_lines(learning_summary))
+            lines.extend(format_learning_story_lines(evs))
     except Exception:  # noqa: BLE001
         pass
 
-    # 4 — Closed trades today
-    lines.extend(["", "── Closed trades today ──"])
+    # 4 — Sell fills today (activity — not learning "closed trades")
+    lines.extend(
+        [
+            "",
+            "── Sell fills today (activity) ──",
+            "  (These are individual SELL events. Learning-dataset",
+            "   'Closed trades' above counts attributed exits only.)",
+        ]
+    )
     if sells:
         for t in sells[:8]:
             sym = t.get("symbol") or "?"
@@ -227,7 +332,7 @@ def format_learning_first_header(
                 f"@ {t.get('price') or t.get('fill_price')}{pnl_s}"
             )
     else:
-        lines.append("  (no closes today — open books still under observation)")
+        lines.append("  (no sell fills today — open books still under observation)")
 
     # 5 — Contradictions
     contra = _packet_contradictions(decision_rows)

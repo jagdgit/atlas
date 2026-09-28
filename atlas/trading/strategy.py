@@ -132,7 +132,7 @@ class StrategyDecisionRule:
                     )
                 )
 
-        return _apply_mentor_bias(options, ctx)
+        return _apply_lesson_influence(_apply_mentor_bias(options, ctx), ctx)
 
     # --- sizing ---------------------------------------------------------
     def _buy_quantity(
@@ -228,6 +228,19 @@ def _apply_mentor_bias(options: list[ScoredOption], ctx: dict[str, Any]) -> list
             opt.rationale = (opt.rationale or "") + cite_bit
             opt.knowledge_refs = list(opt.knowledge_refs or []) + citations[:3]
     return options
+
+
+def _apply_lesson_influence(options: list[ScoredOption], ctx: dict[str, Any]) -> list[ScoredOption]:
+    """CLC.2 — structured lesson L2 (not keyword mentor scan). Caps inside lesson_influence."""
+    lessons = ctx.get("lesson_refs") or ctx.get("lessons")
+    if not lessons:
+        return options
+    try:
+        from atlas.investment.lesson_influence import apply_to_options
+
+        return apply_to_options(options, list(lessons))
+    except Exception:  # noqa: BLE001
+        return options
 
 
 def _as_float(value: Any, *, default: float | None = None) -> float | None:

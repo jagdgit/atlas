@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:in-bse="http://www.nseindia.com/taxonomy/ind-as">
+  <xbrli:context id="Q1">
+    <xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com/symbol">QONLY</xbrli:identifier></xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2025-04-01</xbrli:startDate>
+      <xbrli:endDate>2025-06-30</xbrli:endDate>
+    </xbrli:period>
+  </xbrli:context>
+  <in-bse:ProfitAfterTax contextRef="Q1" unitRef="INR">1000000000</in-bse:ProfitAfterTax>
+  <in-bse:NumberOfShares contextRef="Q1" unitRef="SHARES">100000000</in-bse:NumberOfShares>
+</xbrli:xbrl>

@@ -589,11 +589,33 @@ class InvestmentUniverseWorker(PersistentWorker):
         return out
 
     def _experience_bias(self, members: list[dict[str, Any]]) -> dict[str, float]:
+        """CLC.2 — structured lesson matcher, not keyword scan of advice text."""
+        try:
+            from atlas.investment.lesson_influence import (
+                catalog_lessons,
+                experience_bias_map,
+                match_lessons,
+            )
+
+            data_dir = self._data_dir
+            lessons = match_lessons(
+                candidate={
+                    "decision_type": "buy_name",
+                    "features": ["volume_acceleration_20d"],
+                    "query": "Does volume acceleration help buy_name?",
+                },
+                retrieved=catalog_lessons(data_dir=data_dir),
+                query="Does volume acceleration help buy_name?",
+            )
+            symbols = [str(m.get("symbol") or "").strip() for m in members if m.get("symbol")]
+            mapped = experience_bias_map(symbols, lessons)
+            if mapped:
+                return mapped
+        except Exception:  # noqa: BLE001
+            self._logger.debug("structured experience bias skipped", exc_info=True)
         if self._experience is None:
             return {}
         out: dict[str, float] = {}
-        caution = ("loss", "caution", "avoid", "drawdown", "failed", "mistake")
-        support = ("win", "lesson applied", "improved", "success")
         for m in members:
             sym = str(m.get("symbol") or "").strip()
             if not sym:
@@ -605,13 +627,25 @@ class InvestmentUniverseWorker(PersistentWorker):
             text = ""
             if isinstance(advice, dict):
                 text = str(advice.get("advice") or "").lower()
-            bias = 0.0
-            if any(w in text for w in caution):
-                bias -= 0.2
-            if any(w in text for w in support):
-                bias += 0.1
-            if bias:
-                out[sym] = bias
+            if not text:
+                continue
+            try:
+                from atlas.investment.lesson_influence import (
+                    catalog_lessons,
+                    match_lessons,
+                    l2_totals,
+                )
+
+                matched = match_lessons(
+                    candidate={"query": text, "symbol": sym, "decision_type": "buy_name"},
+                    retrieved=catalog_lessons(data_dir=self._data_dir),
+                    query=text,
+                )
+                delta = l2_totals(matched)["ranking"]
+                if delta:
+                    out[sym] = delta
+            except Exception:  # noqa: BLE001
+                continue
         return out
 
     def _research_bias(self, members: list[dict[str, Any]]) -> dict[str, float]:

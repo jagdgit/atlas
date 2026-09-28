@@ -7,7 +7,8 @@ layer persists rows and does the atomic **claim-and-advance** of due schedules.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +18,23 @@ from psycopg.types.json import Jsonb
 from atlas.models.schedule import KIND_CRON, KIND_INTERVAL, Schedule
 from atlas.repositories.base import BaseRepository
 from atlas.scheduler.cron import next_run_after, validate_cron
+
+
+def _json_safe(value: Any) -> Any:
+    """Normalize UUIDs/datetimes/sets/paths so they serialize cleanly into JSONB."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, set):
+        return [_json_safe(v) for v in sorted(value, key=str)]
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 _COLS = (
     "id, task_type, payload, interval_seconds, next_run_at, last_run_at, "
@@ -66,7 +84,7 @@ class ScheduleRepository(BaseRepository):
                 """,
                 (
                     task_type,
-                    Jsonb(payload or {}),
+                    Jsonb(_json_safe(payload or {})),
                     interval_seconds,
                     next_at,
                     enabled,
@@ -87,7 +105,7 @@ class ScheduleRepository(BaseRepository):
                 """,
                 (
                     task_type,
-                    Jsonb(payload or {}),
+                    Jsonb(_json_safe(payload or {})),
                     interval_seconds,
                     first_run_delay,
                     enabled,

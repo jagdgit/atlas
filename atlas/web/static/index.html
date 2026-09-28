@@ -53,9 +53,22 @@
           <button id="overview-refresh" class="link">refresh</button>
         </div>
         <div id="ops-banner" class="ops-banner hidden" role="status"></div>
+        <div id="zerodha-panel" class="zerodha-panel" aria-live="polite">
+          <div class="zerodha-panel-main">
+            <div class="zerodha-panel-title">Zerodha market session</div>
+            <div id="zerodha-panel-status" class="zerodha-panel-status muted">Checking…</div>
+          </div>
+          <div class="zerodha-panel-actions">
+            <a id="zerodha-login-link" class="btn" href="/zerodha/login">Login</a>
+            <a id="zerodha-force-login-link" class="btn btn-warn" href="/zerodha/force-login" title="Clear stored token and login again (use if morning login missed or session expired)">Force update token</a>
+            <button id="zerodha-probe-btn" class="link" type="button">Probe now</button>
+            <a class="link small" href="/zerodha/observation" target="_blank" rel="noopener">Observation</a>
+          </div>
+        </div>
         <div id="ops-program-health" class="ops-program-health"></div>
         <div id="ops-archive-lane" class="ops-archive-lane"></div>
         <div id="ops-research-velocity" class="ops-research-velocity"></div>
+        <div id="ops-scientist-drain" class="ops-scientist-drain" aria-live="polite"></div>
         <div id="ops-next-tick" class="ops-next-tick"></div>
         <div id="ops-cards" class="status-cards"></div>
         <details class="ops-glossary" id="ops-glossary">
@@ -178,8 +191,21 @@
             </div>
           </div>
           <p class="muted small learner-lab-books-note">
-            Cash · equity · P&amp;L · positions for each lab. Do not add the three equities into one P&amp;L.
+            One lab at a time (Swing · F&amp;O · Intraday). Holdings show <strong>mark-to-market P&amp;L</strong> while open;
+            realized P&amp;L appears after sells. Use Why → Research / Why own? / Decision.
+            Do not add labs into one P&amp;L.
           </p>
+          <details class="muted small learner-data-map">
+            <summary>Where is collected simulation &amp; learning data?</summary>
+            <ul>
+              <li><strong>This panel</strong> — cash, holdings, fills, taxes (Postgres <code>sim.*</code> via <code>/v1/market/labs/ledgers</code>).</li>
+              <li><strong>Investing research</strong> (below) — dossiers, thesis, MoS for a symbol.</li>
+              <li><strong>Invest intel</strong> nav — MKG why-own, thesis tracker, awareness.</li>
+              <li><strong>Laboratory status / DI dashboards</strong> — coverage, KPI stages, gates.</li>
+              <li><strong>Morning / evening email</strong> — daily learning digest.</li>
+              <li>On disk under the data dir: <code>investment/learning/{lab}/</code>, fundamentals, timelines, fitness ledger.</li>
+            </ul>
+          </details>
           <div id="learner-ledgers" class="learner-lab-books">Loading books…</div>
         </div>
 

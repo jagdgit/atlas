@@ -10,6 +10,7 @@ import pytest
 
 from atlas.investment.lab_contracts import (
     CLASS_CASH_EQUITY,
+    CLASS_FNO_CONTRACT,
     CLASS_INDEX_PROXY,
     CONTRADICTION_TECH_VS_THESIS,
     LAB_FNO,
@@ -55,6 +56,12 @@ def test_fno_allows_nifty_rejects_cash():
     assert bosch.allowed is False
     assert bosch.reason == REASON_LAB_INSTRUMENT
     assert instrument_class("CIPLA.NS") == CLASS_CASH_EQUITY
+    opt = is_instrument_permitted(
+        "india_fno_learner", "NIFTYNEAR25000PE", path="buy"
+    )
+    assert opt.allowed is True
+    assert opt.instrument_class == CLASS_FNO_CONTRACT
+    assert instrument_class("NIFTYNEAR25000CE") == CLASS_FNO_CONTRACT
     for path in ("buy", "switch", "alternative", "allocation", "replace"):
         v = is_instrument_permitted("india_fno_learner", "ASTRAL.NS", path=path)
         assert v.allowed is False, path
@@ -88,6 +95,26 @@ def test_fno_ledger_rejects_cash_buy_allows_nifty_and_cash_exit():
     svc.apply_trade(
         p["id"], symbol="NIFTY", side="sell", quantity=25, price=24160.0
     )
+
+
+def test_fno_option_buy_debits_premium_not_index_proxy():
+    svc = PortfolioService(InMemorySimRepo())
+    p = svc.ensure_portfolio(
+        mission_id="m-fno", name="india_fno_learner", starting_cash=100_000.0
+    )
+    svc.apply_trade(
+        p["id"],
+        symbol="NIFTYNEAR25000PE",
+        side="buy",
+        quantity=25,
+        price=110.0,
+        laboratory_id="india_fno_learner",
+    )
+    snap = svc.snapshot(p["id"], prices={"NIFTYNEAR25000PE": 110.0})
+    assert snap["cash"] == pytest.approx(100_000.0 - 25 * 110.0)
+    pos = next(r for r in snap["positions"] if r["symbol"] == "NIFTYNEAR25000PE")
+    assert pos["quantity"] == 25.0
+    assert pos["value"] == pytest.approx(25 * 110.0)
 
 
 def test_uts_switch_cannot_replace_nifty_with_bosch():
@@ -130,11 +157,12 @@ def test_intraday_flatten_window():
     assert intraday_must_be_flat(morning) is False
 
 
-def test_swing_watch_blocks_new_buy_allows_intraday():
+def test_swing_watch_allows_new_buy_avoid_still_blocks():
+    """Swing uses thesis *veto*: WATCH/ABSENT allow entry; AVOID/INVALID block."""
     swing_new = apply_lab_policy(
         lab_kind_s=LAB_SWING, technical="BUY", thesis="WATCH", held=0.0
     )
-    assert swing_new["final_decision"] == "HOLD"
+    assert swing_new["final_decision"] == "BUY"
     assert CONTRADICTION_TECH_VS_THESIS in swing_new["contradictions"]
     assert swing_new["lab_policy"] == POLICY_THESIS_GATED
     swing_add = apply_lab_policy(
@@ -142,6 +170,10 @@ def test_swing_watch_blocks_new_buy_allows_intraday():
     )
     assert swing_add["final_decision"] == "BUY"
     assert swing_add["add_to_incumbent"] is True
+    swing_avoid = apply_lab_policy(
+        lab_kind_s=LAB_SWING, technical="BUY", thesis="AVOID", held=0.0
+    )
+    assert swing_avoid["final_decision"] == "HOLD"
     intra = apply_lab_policy(
         lab_kind_s=LAB_INTRADAY, technical="BUY", thesis="WATCH", held=0.0
     )
@@ -154,8 +186,17 @@ def test_swing_watch_blocks_new_buy_allows_intraday():
         awareness={"thesis": {"stance": "WATCH — not BUY"}},
         held=0.0,
     )
-    assert d["final_decision"] == "HOLD"
+    assert d["final_decision"] == "BUY"
     assert d["fundamental_thesis"] == "WATCH"
+    d_avoid = decompose_decision(
+        laboratory_id="india_equity_learner",
+        symbol="WELCORP.NS",
+        action="buy",
+        awareness={"thesis": {"stance": "avoid"}},
+        held=0.0,
+    )
+    assert d_avoid["final_decision"] == "HOLD"
+    assert d_avoid["fundamental_thesis"] == "AVOID"
 
 
 class _FakeEOS:

@@ -93,7 +93,8 @@ def test_empty_worldview_still_records_none_found():
         persist=False,
     )
     assert out["beliefs_found"] == 0
-    assert out["note"] == "No relevant belief found."
+    assert out["note"].startswith("No relevant belief found.")
+    assert out["no_match"] is True
     assert rs.consultation_metrics()["total"] == 1
     assert out["influence"] == "advice_only"
 
@@ -150,6 +151,9 @@ def test_packet_carries_belief_context():
     assert pkt["belief_context"]["influence"] == "advice_only"
     assert pkt["belief_context"]["beliefs_found"] >= 1
     assert pkt["belief_context"]["state_key"]
+    assert pkt["belief_context"].get("no_match") is True
+    assert pkt.get("no_match") is True
+    assert not pkt.get("experience_refs")
 
 
 def test_state_key_stable_and_rank_bucket():

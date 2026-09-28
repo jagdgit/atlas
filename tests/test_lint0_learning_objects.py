@@ -18,9 +18,11 @@ def test_learning_event_kinds():
     assert infer_learning_event_kind(action="buy") == "fill"
     assert infer_learning_event_kind(action="sell", strategy_tag="eod_flatten") == "eod_flatten"
     assert infer_learning_event_kind(strategy_tag="switch_advantage_cleared") == "challenger_crossed_threshold"
-    assert infer_learning_event_kind(strategy_tag="lab_policy_hold") == "lab_policy_hold"
+    assert infer_learning_event_kind(strategy_tag="lab_policy_hold") == "blocked_buy"
+    assert infer_learning_event_kind(strategy_tag="plc_a_hold") == "blocked_buy"
     assert infer_learning_event_kind(trigger="llm_unavailable") == "llm_failure"
     assert "eod_flatten" in LEARNING_EVENT_KINDS
+    assert "blocked_buy" in LEARNING_EVENT_KINDS
 
 
 def test_prediction_error_computed():

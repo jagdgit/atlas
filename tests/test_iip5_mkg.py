@@ -70,3 +70,29 @@ def test_awareness_includes_mkg(tmp_path):
     mkg = aw.get("mkg") or {}
     assert mkg.get("status") == "ok"
     assert "theme" in (mkg.get("summary") or "").lower() or (mkg.get("why_own") or {}).get("themes")
+
+
+def test_why_own_bundle_fallback_when_mkg_empty(tmp_path):
+    """PRAJIND has no MKG edges — bundle should surface open-book context."""
+    from atlas.investment.mkg.why_own_bundle import why_own_bundle
+
+    ensure_seeded(tmp_path, force=True)
+    # Seed fundamentals via hermetic profile path
+    from atlas.trading.company import CompanyDataService
+
+    svc = CompanyDataService()
+    fetched = svc.fetch("PRAJIND.NS", provider="config_seed")
+    from atlas.investment.company_profiles import sync_profile_to_fundamentals
+
+    sync_profile_to_fundamentals(
+        str(tmp_path),
+        "PRAJIND.NS",
+        fetched.get("profile") or {},
+    )
+    ans = why_own_bundle(str(tmp_path), "PRAJIND.NS")
+    assert ans.get("display_summary")
+    assert ans["status"] != "ok" or not ans.get("themes")
+    # MKG empty → fallback honesty line or open-book context
+    display = str(ans.get("display_summary") or "")
+    assert "MKG" in display or "Open-book" in display or ans.get("fallback")
+    assert ans.get("advice_only") is True

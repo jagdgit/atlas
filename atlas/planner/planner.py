@@ -66,6 +66,8 @@ class Intent:
     CAREER_STATUS = "career_status"
     MARKET_STATUS = "market_status"
     DAY_ACTIVITY = "day_activity"
+    SELF_MODEL = "self_model"
+    OPERATOR_KNOWLEDGE = "operator_knowledge"
     VERIFY_KNOWLEDGE = "verify_knowledge"
 
 
@@ -633,6 +635,11 @@ def _start_investment_learner_args(message: str, _m: re.Match[str] | None) -> di
     }
 
 
+def _operator_knowledge_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
+    """OI-CU0 A4 — deterministic glossary; no interactive LLM."""
+    return {"query": (message or "").strip()[:400], "action": "glossary"}
+
+
 def _career_status_args(message: str, _m: re.Match[str] | None) -> dict[str, Any]:
     """PLC.F — Career Intelligence status without an LLM turn."""
     return {"query": (message or "").strip()[:400], "action": "status"}
@@ -722,6 +729,92 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
         _day_activity_args,
     ),
     (
+        Intent.SELF_MODEL,
+        "",  # OI-CU0 CU.D — global self-model snapshot (no Ollama)
+        re.compile(
+            r"\bwho\s+are\s+you\b"
+            r"|\bwhat\s+are\s+you(?:\s*\?|$)"
+            r"|\bwhat\s+are\s+you\s+doing\b"
+            r"|\bwhat\s+are\s+you\s+working\s+on\b"
+            r"|\bwhat(?:'s|\s+is)\s+your\s+(?:focus|status|state)\b"
+            r"|\bhow\s+are\s+you\s+(?:doing|running)\b"
+            r"|\bwhat\s+do\s+you\s+know\b"
+            r"|\bwhat\s+don'?t\s+you\s+know\b"
+            r"|\bwhat\s+are\s+your\s+unknowns\b"
+            r"|\bwhat\s+(?:have\s+you\s+|did\s+you\s+)?learn(?:ed|t)?\b"
+            r"|\bwhat\s+have\s+you\s+learned\b"
+            r"|\blearn(?:ed|t)?\s+so\s+far\b"
+            r"|\blearning\s+(?:so\s+far|to\s+date|today)\b"
+            r"|\bopen\s+unknowns\b"
+            r"|\bknowledge\s+gaps?\b"
+            r"|\bintroduce\s+yourself\b"
+            r"|\btell\s+me\s+about\s+yourself\b"
+            r"|\bself[\s_-]?model\b"
+            r"|\bsystem\s+state\b",
+            re.IGNORECASE,
+        ),
+        _query_args,
+    ),
+    (
+        Intent.OPERATOR_KNOWLEDGE,
+        "",  # OI-CU0 A4 — deterministic market + Atlas-lab glossary
+        re.compile(
+            # Allow polite / conversational wrappers before the definitional ask.
+            r"(?:"
+            r"^\s*(?:(?:can|could|would|will)\s+you\s+)?"
+            r"(?:please\s+)?(?:help\s+me\s+)?"
+            r"(?:what(?:'s|\s+is|\s+are)|define|explain(?:\s+me)?|"
+            r"meaning\s+of|tell\s+me\s+about)\b"
+            r"|"
+            r"^\s*(?:f\s*&\s*o|fno)\s*\??\s*$"
+            r")"
+            r".{0,120}\b(?:"
+            + "|".join(
+                [
+                    r"f\s*&\s*o",
+                    r"fno",
+                    r"futures?",
+                    r"options?",
+                    r"nifty",
+                    r"index(?:-|\s*)proxy",
+                    r"stop\s*loss",
+                    r"p\s*&\s*l",
+                    r"\bpnl\b",
+                    r"e\[r\]",
+                    r"expected\s+return",
+                    r"market\s+cap",
+                    r"\bp/?e\b",
+                    r"price\s+to\s+earnings",
+                    r"\bfcf\b",
+                    r"free\s+cash\s+flow",
+                    r"india_equity_learner",
+                    r"india_fno_learner",
+                    r"equity_intraday_learner",
+                    r"swing\s+lab",
+                    r"intraday\s+lab",
+                    r"f\s*&\s*o\s+lab",
+                    r"fno\s+lab",
+                    r"next\s*(?:₹\s*1|rupee|₹1)",
+                    r"challenger",
+                    r"switch[_\s-]?block",
+                    r"\bwso\b",
+                    r"world\s+state",
+                    r"\bira\b",
+                    r"learning\s+story",
+                    r"unknown_explicit",
+                    r"prediction_absent",
+                    r"technical_only",
+                    r"\bmos\b",
+                    r"margin\s+of\s+safety",
+                    r"\bindex\b",
+                ]
+            )
+            + r")\b",
+            re.IGNORECASE,
+        ),
+        _operator_knowledge_args,
+    ),
+    (
         Intent.CAREER_STATUS,
         "",  # PLC.F — no plugin capability; deterministic brief
         re.compile(
@@ -754,12 +847,23 @@ _RULES: list[tuple[str, str, re.Pattern[str], ArgBuilder]] = [
             r"|\buniverse\s+coverage\b"
             r"|\bcoverage\s+kpi"
             r"|\bwhy\s+not\s+switch\s+into\b"
-            r"|\bwhy\s+(?:didn'?t|did\s+not)\s+we\s+switch\b",
+            r"|\bwhy\s+(?:didn'?t|did\s+not)\s+we\s+switch\b"
+            r"|\bnext\s*(?:₹|rs\.?|rupee)\b"
+            r"|\bwhere\s+does\s+(?:the\s+)?next\b"
+            r"|\bwhere\s+should\s+(?:the\s+)?next\b"
+            r"|\bcapital\s+allocation\b"
+            r"|\bbest\s+use\s+of\s+capital\b"
+            r"|\beconomic\s+center\b"
+            r"|\bwhy\s+(?:do\s+we\s+)?(?:still\s+)?(?:hold|own)\b"
+            r"|\bcapital\s+scale\b"
+            r"|\bscale\s+lab\b"
+            r"|\bat\s+1\s*cr(?:ore)?\b"
+            r"|\bat\s+2\s*cr(?:ore)?\b"
+            r"|\bvirtual\s+capital\b",
             re.IGNORECASE,
         ),
         _market_status_args,
-    ),
-    (
+    ),    (
         Intent.MANAGE_GOAL,
         "goals",
         re.compile(
@@ -984,6 +1088,8 @@ _DESCRIPTIONS = {
     Intent.CAREER_STATUS: "Career Intelligence status / brief (deterministic — no interactive LLM).",
     Intent.MARKET_STATUS: "Market Intelligence / lab status from durable stores + Goals DB (no interactive LLM).",
     Intent.DAY_ACTIVITY: "What Atlas did today — durable mail/KPI/research/belief artifacts (no interactive LLM).",
+    Intent.SELF_MODEL: "Global self-model snapshot — who/doing/know from investment/self_model (OI-CU0 CU.D, no Ollama).",
+    Intent.OPERATOR_KNOWLEDGE: "Deterministic market + Atlas-lab glossary (OI-CU0 A4 — no interactive LLM).",
 }
 
 

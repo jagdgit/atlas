@@ -310,7 +310,8 @@ def _optional_llm_narrative(
                         "Narrative:"
                     ),
                 ),
-            ]
+            ],
+            _atlas_purpose="self_nightly_reflection",
         )
         text = (getattr(resp, "text", None) or str(resp) or "").strip()
         return text[:500] or None

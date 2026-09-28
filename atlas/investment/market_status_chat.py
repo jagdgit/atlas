@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -229,8 +230,6 @@ def answer_market_allocation_question(
 
     Returns None when the message is not an allocation-coverage question.
     """
-    import re
-
     text = (message or "").strip()
     if not text:
         return None
@@ -296,4 +295,158 @@ def answer_market_allocation_question(
         out = why_not_switch_into(root, sym, laboratory_id=laboratory_id)
         return {"ok": True, "kind": "why_not_switch", **out}
 
+    # NOW #10 — Next-₹1 / capital economic center (deterministic inherited state)
+    next_hit = answer_next_rupee_chat(
+        text, data_dir=root, laboratory_id=laboratory_id
+    )
+    if next_hit is not None:
+        return next_hit
+
+    # NOW #11 — Capital Scale Lab (virtual)
+    from atlas.investment.capital_scale_lab import answer_capital_scale_chat
+
+    scale_hit = answer_capital_scale_chat(
+        text, data_dir=root, laboratory_id=laboratory_id
+    )
+    if scale_hit is not None:
+        return scale_hit
+
     return None
+
+
+def detect_next_rupee_query(message: str) -> bool:
+    """True when the operator asks where capital / the next rupee should go."""
+    low = (message or "").strip().lower()
+    if not low:
+        return False
+    needles = (
+        "next rupee",
+        "next ₹",
+        "next rs",
+        "next ₹1",
+        "next rs.1",
+        "next 1 rupee",
+        "where does the next",
+        "where should the next",
+        "where is the next",
+        "capital allocation",
+        "economic center",
+        "best use of capital",
+        "where should capital",
+        "deploy the next",
+        "why this rupee",
+        "why the next rupee",
+    )
+    if any(n in low for n in needles):
+        return True
+    # Holding / EXIT_REVIEW why-own framed as capital
+    if re.search(
+        r"\b(why\s+(?:do\s+we\s+)?(?:still\s+)?(?:hold|own|keep)\b|"
+        r"\bexit_review\b|"
+        r"\bwhere\s+is\s+(?:my|our)\s+capital\b)",
+        low,
+    ):
+        return True
+    return False
+
+
+def answer_next_rupee_chat(
+    message: str,
+    *,
+    data_dir: str | Path | None = None,
+    laboratory_id: str = "india_equity_learner",
+) -> dict[str, Any] | None:
+    """NOW #10 — chat inherits Next-₹1 + worldview (advice-only, no orders)."""
+    if not detect_next_rupee_query(message):
+        return None
+    from atlas.investment.next_rupee import format_next_rupee_evening_lines, load_next_rupee
+
+    root = Path(data_dir) if data_dir else None
+    doc = load_next_rupee(root, laboratory_id) if root else None
+    if not isinstance(doc, dict) or not doc.get("operator_answer"):
+        return {
+            "ok": True,
+            "kind": "next_rupee",
+            "answer": (
+                "Next-₹1 economic center is not persisted yet for this lab "
+                f"({laboratory_id}). After a paper tick, Atlas answers: "
+                "why the next ₹1 goes to a deploy target vs cash and incumbents. "
+                "Advice-only — no orders from chat."
+            ),
+            "advice_only": True,
+            "never_orders": True,
+        }
+
+    lines = [
+        "Next ₹1 (inherited economic center — advice-only, no orders from chat)",
+        "",
+        str(doc.get("operator_answer") or ""),
+        "",
+        f"destination={doc.get('destination')} · action={doc.get('destination_action')} "
+        f"· as_of={doc.get('as_of_ist')}",
+    ]
+    # Symbol-specific rejected why (e.g. CIPLA / EICHERMOT)
+    low = (message or "").lower()
+    mentioned = []
+    for r in doc.get("rejected") or []:
+        if not isinstance(r, dict):
+            continue
+        sym = str(r.get("symbol") or "")
+        base = sym.split(".")[0].lower()
+        if base and base in low.replace(".ns", ""):
+            mentioned.append(r)
+    if mentioned:
+        lines.append("")
+        lines.append("Holding vs next ₹1:")
+        for r in mentioned[:4]:
+            lines.append(f"  · {r.get('symbol')}: {r.get('why_not')}")
+    elif any(
+        str(r.get("acp_decision") or "") == "EXIT_REVIEW"
+        for r in (doc.get("rejected") or [])
+        if isinstance(r, dict)
+    ):
+        lines.append("")
+        lines.append("Incumbents under EXIT_REVIEW (capital trapped pending densify):")
+        for r in doc.get("rejected") or []:
+            if not isinstance(r, dict):
+                continue
+            if str(r.get("acp_decision") or "") != "EXIT_REVIEW":
+                continue
+            lines.append(f"  · {r.get('symbol')}: {r.get('why_not')}")
+
+    wv = doc.get("worldview") if isinstance(doc.get("worldview"), dict) else {}
+    claims = list(wv.get("belief_claims") or [])[:3]
+    lessons = list(wv.get("experience_lessons") or [])[:2]
+    if claims or lessons:
+        lines.append("")
+        lines.append("Learned state (SELF worldview — advice-only):")
+        for c in claims:
+            if isinstance(c, dict) and c.get("claim"):
+                lines.append(f"  · belief: {str(c['claim'])[:160]}")
+        for x in lessons:
+            if isinstance(x, dict) and x.get("lesson"):
+                lines.append(f"  · lesson: {str(x['lesson'])[:160]}")
+        if wv.get("unknowns"):
+            lines.append(f"  · unknowns: {', '.join(str(u) for u in wv['unknowns'][:6])}")
+
+    lines.append("")
+    lines.append(
+        "Honesty: Chat inherits durable Next-₹1 + worldview. "
+        "Does not place orders or change capital."
+    )
+    # Keep evening formatter available for richer dumps when useful
+    _ = format_next_rupee_evening_lines
+    return {
+        "ok": True,
+        "kind": "next_rupee",
+        "answer": "\n".join(lines),
+        "next_rupee": {
+            "destination": doc.get("destination"),
+            "destination_action": doc.get("destination_action"),
+            "as_of_ist": doc.get("as_of_ist"),
+            "worldview_belief_n": wv.get("belief_n"),
+            "worldview_lesson_n": wv.get("lesson_n"),
+        },
+        "advice_only": True,
+        "never_orders": True,
+    }

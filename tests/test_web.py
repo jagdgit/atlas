@@ -45,19 +45,40 @@ def test_ui_assets_served():
     assert "/v1/chat" in js.text  # the SPA talks to the real API
     assert "loadPersonal" in js.text
     assert "/v1/personal/dashboard" in js.text
-    assert "no-cache" in (js.headers.get("cache-control") or "").lower()
+    assert "no-store" in (js.headers.get("cache-control") or "").lower() or "no-cache" in (
+        js.headers.get("cache-control") or ""
+    ).lower()
     css = client.get("/ui/styles.css")
     assert css.status_code == 200
     assert "--accent" in css.text
     assert "personal-coverage" in css.text
-    assert "no-cache" in (css.headers.get("cache-control") or "").lower()
+    assert "no-store" in (css.headers.get("cache-control") or "").lower() or "no-cache" in (
+        css.headers.get("cache-control") or ""
+    ).lower()
+    assert "Bought & sold" in js.text or "closed_round_trips" in js.text
+    assert "Current holdings" in js.text
+    assert "Taxes & profit" in js.text or "taxes_and_pnl" in js.text
+    assert "lab-book-tab" in js.text
+    assert "Open MTM" in js.text
+    assert "learner-ledger-scroll" in css.text
+    assert "lab-book-tabs" in css.text
+    # OI-MDPH0 — Ops Zerodha session panel + force re-login
+    assert "mdph" in js.text
+    assert "zerodha-panel" in js.text
+    assert "/zerodha/force-login" in js.text
+    assert "ops-banner-link" in css.text
+    assert "zerodha-panel" in css.text
+    index = client.get("/ui/")
+    assert "zerodha-panel" in index.text
+    assert "/zerodha/login" in index.text
+    assert "Force update token" in index.text
 
 
 def test_ui_index_cache_headers():
     resp = _client().get("/ui/")
     assert resp.status_code == 200
-    assert "no-cache" in (resp.headers.get("cache-control") or "").lower()
-
+    cc = (resp.headers.get("cache-control") or "").lower()
+    assert "no-store" in cc or "no-cache" in cc
 
 def test_root_redirects_to_ui():
     resp = _client().get("/", follow_redirects=False)

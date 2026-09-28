@@ -10,34 +10,37 @@ One global ``retrieve(query, …, role=…)`` serves chat, research, and future 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
 from atlas.knowledge.domains import RESEARCHER_DOMAINS
 
 # Memory tiers (D3B.20). Archive excluded unless explicitly requested (D3B.21).
 #
-# Honesty (post-3B.5): only ``knowledge`` is backed by the Access Layer index today.
-# ``experience`` is a *domain* tag on knowledge rows (not a separate store walk).
+# Honesty (OI-LAB-LOOP0 Step 10): ``knowledge`` is the document chunk index;
+# ``findings`` is the validated-conclusion index (``finding_embeddings``), not
+# smashed into chunks. ``experience`` / memories stay deferred (not the blotter).
 # ``working`` / ``session`` live in MemoryService and are not fused here yet.
-# ``archive`` is an opt-in status filter on findings/chunks when present — not a
-# separate corpus. Requesting deferred tiers is recorded in RankedContext.meta.
+# ``archive`` is an opt-in status filter — not a separate corpus.
 TIER_WORKING = "working"
 TIER_SESSION = "session"
 TIER_KNOWLEDGE = "knowledge"
+TIER_FINDINGS = "findings"
 TIER_EXPERIENCE = "experience"
 TIER_ARCHIVE = "archive"
 
-DEFAULT_TIERS = (TIER_KNOWLEDGE,)
+DEFAULT_TIERS = (TIER_KNOWLEDGE, TIER_FINDINGS)
 ALL_TIERS = (
     TIER_WORKING,
     TIER_SESSION,
     TIER_KNOWLEDGE,
+    TIER_FINDINGS,
     TIER_EXPERIENCE,
     TIER_ARCHIVE,
 )
 # Tiers the Access Layer can actually retrieve from today.
-LIVE_TIERS = frozenset({TIER_KNOWLEDGE})
+LIVE_TIERS = frozenset({TIER_KNOWLEDGE, TIER_FINDINGS})
 # Accepted but not searched as independent corpora in this retrieve path.
 DEFERRED_TIERS = frozenset({TIER_WORKING, TIER_SESSION, TIER_EXPERIENCE, TIER_ARCHIVE})
 
@@ -69,6 +72,8 @@ class RankedHit:
     tier: str = TIER_KNOWLEDGE
     policy_boost: float = 0.0            # signed policy influence folded into `score` (C.5)
     policy_ids: tuple[str, ...] = ()     # which enabled policy rules affected this hit (P9)
+    finding_id: str | None = None        # M4 Step 2 — explicit; never inferred by the LLM
+    timestamp: str | None = None         # source created_at (ISO-8601)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -85,6 +90,9 @@ class RankedHit:
             "tier": self.tier,
             "policy_boost": self.policy_boost,
             "policy_ids": list(self.policy_ids),
+            "finding_id": finding_id_of(self),
+            "source": self.tier,
+            "timestamp": self.timestamp,
         }
 
 
@@ -101,6 +109,7 @@ class RankedContext:
     tiers: tuple[str, ...] = DEFAULT_TIERS
     mode: str = "hybrid"
     diagnostics_id: str | None = None
+    retrieved_at: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -114,8 +123,60 @@ class RankedContext:
             "tiers": list(self.tiers),
             "mode": self.mode,
             "diagnostics_id": self.diagnostics_id,
+            "retrieved_at": self.retrieved_at,
             "meta": dict(self.meta),
         }
+
+
+def isoformat_ts(value: Any) -> str | None:
+    """Normalize a DB/datetime timestamp to ISO-8601. Ranking-neutral."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    text = str(value).strip()
+    return text or None
+
+
+def finding_id_of(hit: RankedHit | dict[str, Any] | None) -> str | None:
+    """Explicit finding id, else parse ``finding:{uuid}`` chunk ids. Never invent."""
+    if hit is None:
+        return None
+    if isinstance(hit, dict):
+        explicit = hit.get("finding_id")
+        chunk_id = str(hit.get("chunk_id") or "")
+    else:
+        explicit = hit.finding_id
+        chunk_id = str(hit.chunk_id or "")
+    if explicit:
+        text = str(explicit).strip()
+        return text or None
+    if chunk_id.startswith("finding:"):
+        rest = chunk_id.split(":", 1)[1].strip()
+        return rest or None
+    return None
+
+
+def row_timestamp(row: dict[str, Any] | None) -> str | None:
+    if not row:
+        return None
+    return isoformat_ts(row.get("timestamp") or row.get("created_at"))
+
+
+def hit_provenance(hit: RankedHit) -> dict[str, Any]:
+    """M4 Step 2 fields. Does not change retrieval ranking."""
+    sim = hit.similarity if hit.similarity is not None else hit.score
+    return {
+        "finding_id": finding_id_of(hit),
+        "document_id": hit.document_id,
+        "source": hit.tier,
+        "score": float(hit.score) if hit.score is not None else None,
+        "similarity": float(sim) if sim is not None else None,
+        "timestamp": hit.timestamp,
+    }
 
 
 def domains_for_role(role: str, domains: Sequence[str] | None = None) -> list[str] | None:
@@ -134,7 +195,7 @@ def domains_for_role(role: str, domains: Sequence[str] | None = None) -> list[st
 
 
 def normalize_tiers(tiers: Sequence[str] | None) -> list[str]:
-    """Default to knowledge only; archive never implied."""
+    """Default to knowledge + findings; archive never implied."""
     if not tiers:
         return list(DEFAULT_TIERS)
     out = [t for t in tiers if t in ALL_TIERS]
@@ -213,18 +274,9 @@ def heuristic_rerank(
                 applied_ids.append(str(pr.get("id")))
         score = hit.rrf_score + boost + policy_delta
         reranked.append(
-            RankedHit(
-                chunk_id=hit.chunk_id,
-                document_id=hit.document_id,
-                ordinal=hit.ordinal,
-                content=hit.content,
-                dense_score=hit.dense_score,
-                lexical_score=hit.lexical_score,
-                rrf_score=hit.rrf_score,
+            replace(
+                hit,
                 score=score,
-                distance=hit.distance,
-                similarity=hit.similarity,
-                tier=hit.tier,
                 policy_boost=policy_delta,
                 policy_ids=tuple(applied_ids),
             )
@@ -254,6 +306,7 @@ def build_context(
             break
         blocks.append(block)
         used += len(block)
+        prov = hit_provenance(hit)
         citations.append(
             {
                 "index": index,
@@ -268,6 +321,9 @@ def build_context(
                 "tier": hit.tier,
                 "policy_boost": hit.policy_boost,
                 "policy_ids": list(hit.policy_ids),
+                "finding_id": prov["finding_id"],
+                "source": prov["source"],
+                "timestamp": prov["timestamp"],
             }
         )
     return "\n\n".join(blocks), citations
@@ -278,6 +334,7 @@ def fuse_dense_lexical(
     lexical_rows: Iterable[dict[str, Any]],
     *,
     rrf_k: int = 60,
+    tier: str = TIER_KNOWLEDGE,
 ) -> list[RankedHit]:
     """Build RankedHit list from dense + lexical candidate rows via equal RRF."""
     dense_list = list(dense_rows)
@@ -319,7 +376,9 @@ def fuse_dense_lexical(
                 score=rrf_score,
                 distance=float(distance) if distance is not None else None,
                 similarity=float(similarity) if similarity is not None else None,
-                tier=TIER_KNOWLEDGE,
+                tier=str(row.get("tier") or tier),
+                finding_id=finding_id_of(row),
+                timestamp=row_timestamp(row),
             )
         )
     hits.sort(key=lambda h: h.rrf_score, reverse=True)

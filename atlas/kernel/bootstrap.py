@@ -71,6 +71,8 @@ from atlas.workers.program_stub import ProgramStubWorker
 from atlas.workers.market_observer import MarketObserverWorker
 from atlas.workers.investment_universe import InvestmentUniverseWorker
 from atlas.workers.news_intelligence import NewsIntelligenceWorker
+from atlas.workers.overnight_densify import OvernightDensifyWorker
+from atlas.workers.fel_experiment import FelExperimentWorker
 from atlas.workers.event_research import EventResearchWorker
 from atlas.workers.company_intelligence import CompanyIntelligenceWorker
 from atlas.workers.portfolio_ledger import PortfolioLedgerWorker
@@ -349,6 +351,9 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     knowledge_service._lifecycle = None  # noqa: SLF001 — set below after scheduler
     # Deferred/resilient embedding path: enqueue an 'embed_document' task.
     handlers.register("embed_document", knowledge_service.embed_document_task)
+    # OI-LAB-LOOP0 Step 8 — bounded re-enqueue of already-chunked docs that
+    # never received an embed_document task (ingest only enqueues new files).
+    handlers.register("embed_backfill", knowledge_service.embed_backfill_task)
 
     # Agent layer (Sprint 3): a RAG agent over the knowledge base, dispatched by
     # the AgentService, with every run persisted for observability/recovery.
@@ -386,6 +391,25 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     )
     handlers.register("run_agent", agent_service.run_agent_task)
 
+    def _lab_loop0_s11_canary_task(payload=None):
+        from atlas.knowledge.restart_canary import run_tick
+
+        del payload
+        return run_tick(
+            knowledge_service,
+            str(cfg.paths.data),
+            rag_agent=rag_agent,
+        )
+
+    handlers.register("lab_loop0_s11_canary", _lab_loop0_s11_canary_task)
+
+    def _fundamental_summary_publish_task(payload=None):
+        from atlas.investment.fundamental_knowledge import run_tick as _fs_tick
+
+        return _fs_tick(knowledge_service, str(cfg.paths.data), payload or {})
+
+    handlers.register("fundamental_summary_publish", _fundamental_summary_publish_task)
+
     # Expose other agents as tools so the ReAct assistant can delegate to them
     # (ADR-0052). The assistant is not registered as a tool of itself.
     def _agent_tool(name: str):
@@ -413,11 +437,16 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         drain_timeout=cfg.scheduler.drain_timeout,
         logger=get_logger("atlas.scheduler"),
     )
+    knowledge_service.bind_scheduler(
+        enqueue=scheduler_service.enqueue,
+        count_pending=task_repo.count_pending_of_type,
+    )
     from atlas.knowledge.consolidation import KnowledgeLifecycleService
     from atlas.knowledge.nn_identity import EmbeddingIdentityResolver
     from atlas.repositories.finding_embedding_repo import FindingEmbeddingRepository
 
     finding_embedding_repo = FindingEmbeddingRepository(db_manager)
+    knowledge_service._finding_embeddings = finding_embedding_repo  # noqa: SLF001
     nn_identity = EmbeddingIdentityResolver(
         llm_service,
         finding_embedding_repo,
@@ -680,6 +709,12 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         missions=mission_service,
         max_concurrent_ticks=_tick_hard,
         max_archive_workers=int(getattr(cfg.resources, "max_archive_workers", 1) or 1),
+        archive_one_evening=bool(
+            getattr(cfg.resources, "archive_one_evening", True)
+        ),
+        archive_evening_until_hour_ist=int(
+            getattr(cfg.resources, "archive_evening_until_hour_ist", 22) or 22
+        ),
         host_ram_reserve_mb=int(getattr(cfg.resources, "host_ram_reserve_mb", 2048) or 2048),
         tick_ram_mb=int(getattr(cfg.resources, "tick_ram_mb", 512) or 512),
         logger=get_logger("atlas.host_guard"),
@@ -734,6 +769,10 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     worker_manager.register_worker_type(HelloWatcher())
     handlers.register("worker_tick", worker_manager.worker_tick)
     handlers.register("host_guard_tick", host_guard.tick)
+    # OI-MDPH0 — periodic Zerodha provider health probe (premarket + RTH recovery)
+    from atlas.investment.market_data_provider_health import provider_health_tick
+
+    handlers.register("provider_health_tick", provider_health_tick)
     # Periodically resume capacity-queued workers when the host is safe again.
     _hg_existing = [
         s
@@ -750,6 +789,90 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     else:
         # Ensure at least one remains enabled after upgrades.
         for s in _hg_existing:
+            if not getattr(s, "enabled", True):
+                try:
+                    schedule_service.enable(s.id)
+                except Exception:  # noqa: BLE001
+                    pass
+                break
+
+    _mdph_existing = [
+        s
+        for s in schedule_service.list_schedules()
+        if getattr(s, "task_type", None) == "provider_health_tick"
+    ]
+    if not _mdph_existing:
+        schedule_service.register_schedule(
+            "provider_health_tick",
+            interval_seconds=120,
+            payload={},
+            first_run_delay=45.0,
+        )
+    else:
+        for s in _mdph_existing:
+            if not getattr(s, "enabled", True):
+                try:
+                    schedule_service.enable(s.id)
+                except Exception:  # noqa: BLE001
+                    pass
+                break
+
+    _embed_bf_existing = [
+        s
+        for s in schedule_service.list_schedules()
+        if getattr(s, "task_type", None) == "embed_backfill"
+    ]
+    if not _embed_bf_existing:
+        schedule_service.register_schedule(
+            "embed_backfill",
+            interval_seconds=90,
+            payload={"limit": knowledge_service.EMBED_BACKFILL_LIMIT},
+            first_run_delay=60.0,
+        )
+    else:
+        for s in _embed_bf_existing:
+            if not getattr(s, "enabled", True):
+                try:
+                    schedule_service.enable(s.id)
+                except Exception:  # noqa: BLE001
+                    pass
+                break
+
+    _s11_existing = [
+        s
+        for s in schedule_service.list_schedules()
+        if getattr(s, "task_type", None) == "lab_loop0_s11_canary"
+    ]
+    if not _s11_existing:
+        schedule_service.register_schedule(
+            "lab_loop0_s11_canary",
+            interval_seconds=120,
+            payload={},
+            first_run_delay=90.0,
+        )
+    else:
+        for s in _s11_existing:
+            if not getattr(s, "enabled", True):
+                try:
+                    schedule_service.enable(s.id)
+                except Exception:  # noqa: BLE001
+                    pass
+                break
+
+    _fs_existing = [
+        s
+        for s in schedule_service.list_schedules()
+        if getattr(s, "task_type", None) == "fundamental_summary_publish"
+    ]
+    if not _fs_existing:
+        schedule_service.register_schedule(
+            "fundamental_summary_publish",
+            interval_seconds=900,
+            payload={"symbols": ["HBLPOWER.NS", "TATACHEM.NS"]},
+            first_run_delay=180.0,
+        )
+    else:
+        for s in _fs_existing:
             if not getattr(s, "enabled", True):
                 try:
                     schedule_service.enable(s.id)
@@ -1775,6 +1898,16 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.fundamentals_enrich"),
         )
     )
+    from atlas.workers.fundamental_evidence import FundamentalEvidenceWorker
+
+    worker_manager.register_worker_type(
+        FundamentalEvidenceWorker(
+            data_dir=str(cfg.paths.data),
+            yahoo_enabled=bool(cfg.market.yahoo_enabled),
+            investment_research=investment_research,
+            logger=get_logger("atlas.workers.fundamental_evidence"),
+        )
+    )
     from atlas.workers.thesis_outcome import ThesisOutcomeWorker
 
     worker_manager.register_worker_type(
@@ -2072,6 +2205,27 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             decision_packets=decision_packet_store,
             portfolio=portfolio_service,
             logger=get_logger("atlas.workers.news_intelligence"),
+        )
+    )
+    worker_manager.register_worker_type(
+        OvernightDensifyWorker(
+            data_dir=str(cfg.paths.data),
+            portfolio=portfolio_service,
+            llm=llm_service,
+            logger=get_logger("atlas.workers.overnight_densify"),
+        )
+    )
+    try:
+        from atlas.investment.fel.queue import ensure_queue_dir
+
+        ensure_queue_dir(cfg.paths.data)
+    except Exception:  # noqa: BLE001
+        get_logger("atlas.bootstrap").debug("fel queue dir skipped", exc_info=True)
+    worker_manager.register_worker_type(
+        FelExperimentWorker(
+            data_dir=str(cfg.paths.data),
+            host_guard=host_guard,
+            logger=get_logger("atlas.workers.fel_experiment_runner"),
         )
     )
     worker_manager.register_worker_type(

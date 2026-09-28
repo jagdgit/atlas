@@ -136,8 +136,40 @@ class FakeTaskRepo:
         self.tasks.append(row)
         return row
 
+    def create_if_no_pending(
+        self, task_type, payload=None, *, priority=0, max_retries=3, delay_seconds=0.0
+    ):
+        if self.count_queued_of_type(task_type) > 0:
+            return None
+        return self.create(
+            task_type,
+            payload,
+            priority=priority,
+            max_retries=max_retries,
+            delay_seconds=delay_seconds,
+        )
+
+    def count_queued_of_type(self, task_type) -> int:
+        return sum(
+            1 for t in self.tasks if t["task_type"] == task_type and t["status"] == "pending"
+        )
+
     def count_pending_of_type(self, task_type) -> int:
-        return sum(1 for t in self.tasks if t["task_type"] == task_type and t["status"] == "pending")
+        return sum(
+            1
+            for t in self.tasks
+            if t["task_type"] == task_type and t["status"] in ("pending", "claimed", "running")
+        )
+
+    def collapse_pending_of_type(self, task_type, *, keep: int = 1) -> int:
+        pending = [
+            t for t in self.tasks if t["task_type"] == task_type and t["status"] == "pending"
+        ]
+        cancelled = 0
+        for row in pending[max(0, int(keep)) :]:
+            row["status"] = "cancelled"
+            cancelled += 1
+        return cancelled
 
 
 @pytest.fixture()
@@ -248,6 +280,27 @@ def test_tick_reenqueues_self_even_when_claim_fails(svc):
     # claim failed → scheduler will retry this task, but we still chained a tick so the
     # loop self-heals rather than dying silently
     assert len(_ticks(trepo)) == 1
+
+
+def test_tick_does_not_multiply_pending_schedule_ticks(svc):
+    """OI-SCHED-CHURN0: concurrent due ticks must not each spawn another chain."""
+    service, _, trepo = svc
+    service.register_schedule("worker_tick", 60)
+    service.tick()
+    service.tick()
+    service.tick()
+    pending_ticks = [t for t in _ticks(trepo) if t["status"] == "pending"]
+    assert len(pending_ticks) == 1
+
+
+def test_ensure_running_collapses_excess_pending_ticks(svc):
+    service, _, trepo = svc
+    for _ in range(5):
+        trepo.create(TICK_TASK_TYPE, {}, delay_seconds=5.0)
+    assert trepo.count_queued_of_type(TICK_TASK_TYPE) == 5
+    service.ensure_running()
+    assert trepo.count_queued_of_type(TICK_TASK_TYPE) == 1
+    assert sum(1 for t in _ticks(trepo) if t["status"] == "cancelled") == 4
 
 
 # --- lifecycle / control -------------------------------------------------

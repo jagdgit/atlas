@@ -126,6 +126,8 @@ def classify_action(action: str) -> str | None:
         return "feed_error"
     if "research_hold" in a:
         return "research_hold"
+    if "lab_policy_hold" in a:
+        return "lab_policy_hold"
     if "policy_block" in a:
         return "policy_block"
     if "pack_block" in a:
@@ -158,6 +160,7 @@ REASON_LABELS = {
     "empty_feed": "Bar feed empty",
     "feed_error": "Live feed errors while fetching bars",
     "research_hold": "Research gate held buys (MVR / thesis / MoS incomplete)",
+    "lab_policy_hold": "Lab policy held buys (thesis AVOID/INVALID / quarantine veto)",
     "plc_a_hold": "PLC.A buy gate held (fundamentals / thesis trigger incomplete)",
     "portfolio_hold": "Portfolio gate held (concentration / cash buffer / name cap)",
     "switch_blocked": "Hold-vs-challenger switch blocked (missing E[R] or costs)",

@@ -12,6 +12,7 @@ from atlas.missions.programs import (
     list_programs,
     program_label,
 )
+from atlas.missions.philosophy import LIFECYCLE_STAGES
 
 
 def test_builtin_programs_include_market_engineering_personal():
@@ -23,25 +24,23 @@ def test_builtin_programs_include_market_engineering_personal():
     }
 
 
-def test_market_program_has_seven_enabled_members():
+def test_market_program_includes_fea_and_core_labs():
     market = get_program("market_intelligence")
     assert market is not None
-    assert len(market.members) == 7
     statuses = {m.template: m.status for m in market.members}
     assert statuses["decision_simulation"] == MEMBER_ENABLED
     assert statuses["market_observer"] == MEMBER_ENABLED
-    assert statuses["news_intelligence"] == MEMBER_ENABLED
-    assert statuses["event_research"] == MEMBER_ENABLED
-    assert statuses["company_intelligence"] == MEMBER_ENABLED
-    assert statuses["portfolio_ledger"] == MEMBER_ENABLED
-    assert statuses["investment_mentor"] == MEMBER_ENABLED
+    assert statuses["fundamental_evidence"] == MEMBER_ENABLED
+    assert statuses["fundamentals_enrich"] == MEMBER_ENABLED
+    assert statuses["fel_experiment_runner"] == MEMBER_ENABLED
     assert "Broker Profiles" in market.domain_adapters
     assert "MarketReader" in market.domain_adapters
+    assert len(market.members) >= 20
 
 
 def test_lifecycle_board_covers_all_stages():
     board = lifecycle_board(get_program("market_intelligence").lifecycle)
-    assert len(board) == 7
+    assert len(board) == len(LIFECYCLE_STAGES)
     assert board[0]["label"] == "Observe"
     assert any(r["stage"] == "decide" and r["status"] == "active" for r in board)
 
@@ -53,7 +52,7 @@ def test_program_service_describe_without_deps():
     assert view["startable_count"] == 0  # no templates wired
     assert view["stub_count"] == 0  # Market Program fully shipped
     assert view["label"] == program_label("market_intelligence")
-    assert len(view["lifecycle"]) == 7
+    assert len(view["lifecycle"]) == len(LIFECYCLE_STAGES)
     personal = svc.describe("personal_intelligence")
     assert personal["stub_count"] == 0  # Personal Mentor shipped
     eng = svc.describe("engineering_intelligence")
@@ -170,3 +169,77 @@ def test_start_skips_missing_templates_not_stubs():
     assert any(s["template"] == "owner_knowledge" for s in pres["started"])
     # personal_mentor is enabled but template not in this fake registry → skipped non-stub
     assert any(s.get("template") == "personal_mentor" for s in pres["skipped"])
+
+
+def test_ensure_missing_does_not_start_empty_program():
+    created: list[str] = []
+
+    class _Templates:
+        def list_templates(self):
+            class T:
+                name = "fundamental_evidence"
+                id = "tpl-fea"
+
+            return [T()]
+
+        def instantiate(self, template_name, **kwargs):
+            created.append(template_name)
+            raise AssertionError("must not instantiate a never-started program")
+
+    class _Missions:
+        def list_missions(self, **kwargs):
+            return []
+
+    svc = ProgramService(templates=_Templates(), missions=_Missions())
+    out = svc.ensure_missing_enabled_members("market_intelligence")
+    assert out["ok"] is True
+    assert out["started_n"] == 0
+    assert created == []
+    assert out["programs"][0]["action"] == "skipped_never_started"
+
+
+def test_ensure_missing_instantiates_fea_when_program_already_runs():
+    created: list[str] = []
+
+    class _Mission:
+        def __init__(self, mid: str, template: str, status: str = "active"):
+            self.id = mid
+            self.status = status
+            self._template = template
+
+        def to_dict(self):
+            return {
+                "id": self.id,
+                "title": self._template,
+                "status": self.status,
+                "labels": ["program:market_intelligence"],
+                "template_id": f"tpl-{self._template}",
+                "metadata": {"template": self._template},
+            }
+
+    class _Templates:
+        def list_templates(self):
+            class T:
+                def __init__(self, name: str):
+                    self.name = name
+                    self.id = f"tpl-{name}"
+
+            return [
+                T("decision_simulation"),
+                T("fundamental_evidence"),
+            ]
+
+        def instantiate(self, template_name, **kwargs):
+            created.append(template_name)
+            return {"mission": _Mission("m-fea", template_name)}
+
+    class _Missions:
+        def list_missions(self, **kwargs):
+            return [_Mission("m-ds", "decision_simulation")]
+
+    svc = ProgramService(templates=_Templates(), missions=_Missions())
+    out = svc.ensure_missing_enabled_members("market_intelligence")
+    assert out["ok"] is True
+    assert "fundamental_evidence" in created
+    assert "decision_simulation" not in created
+    assert any(s.get("template") == "fundamental_evidence" for s in out["started"])

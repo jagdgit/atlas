@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from atlas.investment.universe import INDEX_NIFTY50, membership
+from atlas.investment.universe import INDEX_NIFTY50, INDEX_NIFTY500, membership
 
 AS_OF = "2026-07"
 SOURCE = "hermetic_seed"
@@ -103,6 +103,15 @@ def nifty50_quality_seed() -> dict[str, dict[str, Any]]:
     return out
 
 
+def staged_universe_quality_seed() -> dict[str, dict[str, Any]]:
+    """Hermetic quality map for staged NIFTY500 membership (mid/small caps included)."""
+    out: dict[str, dict[str, Any]] = {}
+    for row in membership(INDEX_NIFTY500):
+        sym = str(row["symbol"])
+        out[sym] = quality_row(symbol=sym, sector=str(row.get("sector") or ""))
+    return out
+
+
 def resolve_quality_seed(
     raw: Any = None,
     *,
@@ -166,7 +175,7 @@ def ratios_for_symbol(
     When ``merge_operator`` is true, overlays the latest screener/research
     operator snapshot (IRA F1 ladder layer 1) so PE/FCF/price reach MVR.
     """
-    pack = seed if seed is not None else nifty50_quality_seed()
+    pack = seed if seed is not None else staged_universe_quality_seed()
     key = _normalize_symbol(symbol)
     row = dict(pack.get(key) or {})
     if merge_operator:

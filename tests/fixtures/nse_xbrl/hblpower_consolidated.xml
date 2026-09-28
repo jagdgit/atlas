@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"
+            xmlns:in-bse="http://www.nseindia.com/taxonomy/ind-as">
+  <xbrli:context id="FY2025C">
+    <xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com/symbol">HBLPOWER</xbrli:identifier></xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2024-04-01</xbrli:startDate>
+      <xbrli:endDate>2025-03-31</xbrli:endDate>
+    </xbrli:period>
+    <xbrli:scenario>CONSOLIDATED</xbrli:scenario>
+  </xbrli:context>
+  <xbrli:context id="FY2026C">
+    <xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com/symbol">HBLPOWER</xbrli:identifier></xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2025-04-01</xbrli:startDate>
+      <xbrli:endDate>2026-03-31</xbrli:endDate>
+    </xbrli:period>
+    <xbrli:scenario>CONSOLIDATED</xbrli:scenario>
+  </xbrli:context>
+  <xbrli:context id="Q1FY26">
+    <xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com/symbol">HBLPOWER</xbrli:identifier></xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2025-04-01</xbrli:startDate>
+      <xbrli:endDate>2025-06-30</xbrli:endDate>
+    </xbrli:period>
+    <xbrli:scenario>CONSOLIDATED</xbrli:scenario>
+  </xbrli:context>
+  <xbrli:context id="Q2FY26">
+    <xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com/symbol">HBLPOWER</xbrli:identifier></xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2025-07-01</xbrli:startDate>
+      <xbrli:endDate>2025-09-30</xbrli:endDate>
+    </xbrli:period>
+    <xbrli:scenario>CONSOLIDATED</xbrli:scenario>
+  </xbrli:context>
+  <xbrli:context id="Q3FY26">
+    <xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com/symbol">HBLPOWER</xbrli:identifier></xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2025-10-01</xbrli:startDate>
+      <xbrli:endDate>2025-12-31</xbrli:endDate>
+    </xbrli:period>
+    <xbrli:scenario>CONSOLIDATED</xbrli:scenario>
+  </xbrli:context>
+  <xbrli:context id="Q4FY26">
+    <xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com/symbol">HBLPOWER</xbrli:identifier></xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2026-01-01</xbrli:startDate>
+      <xbrli:endDate>2026-03-31</xbrli:endDate>
+    </xbrli:period>
+    <xbrli:scenario>CONSOLIDATED</xbrli:scenario>
+  </xbrli:context>
+
+  <in-bse:TotalEquity contextRef="FY2025C" unitRef="INR" decimals="0">2000000000</in-bse:TotalEquity>
+  <in-bse:TotalEquity contextRef="FY2026C" unitRef="INR" decimals="0">2200000000</in-bse:TotalEquity>
+  <in-bse:ProfitAfterTax contextRef="FY2026C" unitRef="INR" decimals="0">1000000000</in-bse:ProfitAfterTax>
+  <in-bse:ProfitAfterTax contextRef="Q1FY26" unitRef="INR" decimals="0">250000000</in-bse:ProfitAfterTax>
+  <in-bse:ProfitAfterTax contextRef="Q2FY26" unitRef="INR" decimals="0">250000000</in-bse:ProfitAfterTax>
+  <in-bse:ProfitAfterTax contextRef="Q3FY26" unitRef="INR" decimals="0">250000000</in-bse:ProfitAfterTax>
+  <in-bse:ProfitAfterTax contextRef="Q4FY26" unitRef="INR" decimals="0">250000000</in-bse:ProfitAfterTax>
+  <in-bse:NumberOfShares contextRef="FY2026C" unitRef="SHARES" decimals="0">100000000</in-bse:NumberOfShares>
+  <in-bse:ShortTermBorrowings contextRef="FY2026C" unitRef="INR" decimals="0">100000000</in-bse:ShortTermBorrowings>
+  <in-bse:LongTermBorrowings contextRef="FY2026C" unitRef="INR" decimals="0">200000000</in-bse:LongTermBorrowings>
+  <in-bse:TotalLiabilities contextRef="FY2026C" unitRef="INR" decimals="0">1500000000</in-bse:TotalLiabilities>
+  <in-bse:CashFlowsFromOperatingActivities contextRef="FY2026C" unitRef="INR" decimals="2">3204.28</in-bse:CashFlowsFromOperatingActivities>
+  <in-bse:CapitalExpenditure contextRef="FY2026C" unitRef="INR" decimals="2">-3713.9</in-bse:CapitalExpenditure>
+</xbrli:xbrl>

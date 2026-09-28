@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"
+            xmlns:in-bse-fin="http://www.nseindia.com/taxonomy/ifindas">
+  <xbrli:context id="OneI">
+    <xbrli:period>
+      <xbrli:instant>2025-03-31</xbrli:instant>
+    </xbrli:period>
+  </xbrli:context>
+  <in-bse-fin:EquityAttributableToOwnersOfParent contextRef="OneI" unitRef="INR" decimals="-5">2000000000</in-bse-fin:EquityAttributableToOwnersOfParent>
+</xbrli:xbrl>

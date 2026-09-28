@@ -79,6 +79,41 @@ def _service(repo, handlers=None):
     return SchedulerService(repo, handlers or HandlerRegistry(), events=None)
 
 
+def test_task_completed_emit_includes_summary_and_worker_id():
+    repo = FakeRepo()
+
+    class _Events:
+        def __init__(self):
+            self.items = []
+
+        def emit(self, event_type, payload, source=None):
+            self.items.append((event_type, payload, source))
+
+    events = _Events()
+    handlers = HandlerRegistry()
+    wid = str(uuid.uuid4())
+
+    def _handler(payload):
+        return {"worker_id": wid, "note": "PRAJIND: session_closed (weekend)"}
+
+    handlers.register("worker_tick", _handler)
+    svc = SchedulerService(repo, handlers, events=events)
+
+    task = _task(
+        task_type="worker_tick",
+        payload={"worker_id": wid},
+    )
+    svc._run_task(task, "worker-0")
+
+    assert events.items
+    et, payload, source = events.items[-1]
+    assert et == "TaskCompleted"
+    assert payload["task_type"] == "worker_tick"
+    assert payload["worker_id"] == wid
+    assert "session_closed" in payload.get("summary", "")
+    assert source == "scheduler"
+
+
 def test_success_marks_completed():
     repo = FakeRepo()
     handlers = HandlerRegistry()
@@ -295,4 +330,21 @@ def test_integration_crash_recovery():
         assert repo.get(task["id"])["status"] == "pending"
     finally:
         repo.delete(task["id"])
+        db.close()
+
+
+def test_create_if_no_pending_is_singleton():
+    db = _db_or_skip()
+    repo = TaskRepository(db)
+    first = second = None
+    try:
+        first = repo.create_if_no_pending("test_singleton_tick", {"n": 1})
+        second = repo.create_if_no_pending("test_singleton_tick", {"n": 2})
+        assert first is not None
+        assert first["status"] == "pending"
+        assert second is None
+        assert repo.count_queued_of_type("test_singleton_tick") == 1
+    finally:
+        if first is not None:
+            repo.delete(first["id"])
         db.close()

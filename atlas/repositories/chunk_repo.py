@@ -96,6 +96,7 @@ class ChunkRepository(BaseRepository):
             return self.fetch_all(
                 """
                 SELECT c.id AS chunk_id, c.document_id, c.ordinal, c.content,
+                       c.created_at AS timestamp,
                        ts_rank_cd(c.content_tsv, plainto_tsquery('english', %s)) AS rank
                 FROM knowledge.chunks c
                 JOIN knowledge.documents d ON d.id = c.document_id
@@ -109,6 +110,7 @@ class ChunkRepository(BaseRepository):
         return self.fetch_all(
             """
             SELECT c.id AS chunk_id, c.document_id, c.ordinal, c.content,
+                   c.created_at AS timestamp,
                    ts_rank_cd(c.content_tsv, plainto_tsquery('english', %s)) AS rank
             FROM knowledge.chunks c
             WHERE c.content_tsv @@ plainto_tsquery('english', %s)

@@ -12,11 +12,13 @@ import io
 import json
 import logging
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger("atlas.investment.fundamentals")
+_STORE_LOCK = threading.RLock()
 
 VERSION = "li.2.fundamentals"
 STORE_REL = Path("investment") / "fundamentals"
@@ -25,6 +27,7 @@ DEFAULT_PROGRAM = "market_intelligence"
 SOURCE_OPERATOR = "operator_import"
 SOURCE_SCREENER_EXPORT = "screener_export"
 SOURCE_YAHOO = "yahoo_fundamentals"
+SOURCE_NSE_XBRL = "nse_xbrl"
 
 # DI.4 / LQ.7 — watchlist gap defaults (Tier C Yahoo).
 DEFAULT_CRITICAL_FIELDS: tuple[str, ...] = ("pe", "fcf", "roe", "debt_to_equity")
@@ -299,6 +302,13 @@ def normalize_row(
 def load_store(
     data_dir: str | Path | None, program_id: str = DEFAULT_PROGRAM
 ) -> dict[str, Any]:
+    with _STORE_LOCK:
+        return _load_store_unlocked(data_dir, program_id)
+
+
+def _load_store_unlocked(
+    data_dir: str | Path | None, program_id: str = DEFAULT_PROGRAM
+) -> dict[str, Any]:
     if not data_dir:
         return {"symbols": {}, "count": 0, "program_id": program_id, "version": VERSION}
     path = store_path(data_dir, program_id)
@@ -321,6 +331,15 @@ def load_store(
 
 
 def save_store(
+    data_dir: str | Path | None,
+    doc: dict[str, Any],
+    program_id: str = DEFAULT_PROGRAM,
+) -> Path | None:
+    with _STORE_LOCK:
+        return _save_store_unlocked(data_dir, doc, program_id)
+
+
+def _save_store_unlocked(
     data_dir: str | Path | None,
     doc: dict[str, Any],
     program_id: str = DEFAULT_PROGRAM,
@@ -378,59 +397,73 @@ def upsert_rows(
             raw2["as_of"] = as_of
         row = normalize_row(raw2, default_source=source)
         if row:
+            conflicts = raw2.get("evidence_conflicts")
+            if conflicts:
+                row["evidence_conflicts"] = list(conflicts)
+            if raw2.get("nse_raw_evidence_id"):
+                row["nse_raw_evidence_id"] = raw2["nse_raw_evidence_id"]
+            if raw2.get("eps_basis"):
+                row["eps_basis"] = raw2["eps_basis"]
             normalized.append(row)
 
-    doc = load_store(data_dir, program_id)
-    symbols = dict(doc.get("symbols") or {})
-    for row in normalized:
-        sym = row["symbol"]
-        prev = dict(symbols.get(sym) or {})
-        # LI.2 — attach evidence provenance for imported flat fields
-        try:
-            from atlas.investment.evidence_providers import (
-                append_evidence,
-                evidence_from_flat_row,
-                make_evidence_value,
-            )
+    with _STORE_LOCK:
+        doc = load_store(data_dir, program_id)
+        symbols = dict(doc.get("symbols") or {})
+        for row in normalized:
+            sym = row["symbol"]
+            prev = dict(symbols.get(sym) or {})
+            # LI.2 — attach evidence provenance for imported flat fields
+            try:
+                from atlas.investment.evidence_providers import (
+                    append_evidence,
+                    evidence_from_flat_row,
+                    make_evidence_value,
+                )
 
-            row_ev = evidence_from_flat_row(row)
-            for field, hist in (row_ev.get("evidence") or {}).items():
-                for ev in hist or []:
-                    if isinstance(ev, dict):
-                        prev = append_evidence(prev, ev)
-            # Also stamp explicit evidence when source is yahoo
-            if str(row.get("source") or source) == SOURCE_YAHOO:
-                for fld in SCHEMA_FIELDS:
-                    if row.get(fld) is None:
-                        continue
-                    prev = append_evidence(
-                        prev,
-                        make_evidence_value(
-                            field=fld,
-                            value=row[fld],
-                            provider=SOURCE_YAHOO,
-                            as_of=row.get("as_of"),
-                        ),
-                    )
-        except Exception:  # noqa: BLE001
-            _log.debug("evidence attach skipped", exc_info=True)
-        prev.update({k: v for k, v in row.items() if v is not None and k != "evidence"})
-        # merge evidence bags if row carried them
-        if isinstance(row.get("evidence"), dict):
-            bag = dict(prev.get("evidence") or {})
-            for fld, hist in row["evidence"].items():
-                existing = list(bag.get(fld) or [])
-                for ev in hist or []:
-                    if ev not in existing:
-                        existing.append(ev)
-                bag[fld] = existing[-12:]
-            prev["evidence"] = bag
-        symbols[sym] = prev
-    doc["symbols"] = symbols
-    doc["count"] = len(symbols)
-    doc["note"] = note or doc.get("note") or "Operator / Screener export import (IIP.3)"
-    doc["last_import_count"] = len(normalized)
-    path = save_store(data_dir, doc, program_id)
+                row_ev = evidence_from_flat_row(row)
+                for field, hist in (row_ev.get("evidence") or {}).items():
+                    for ev in hist or []:
+                        if isinstance(ev, dict):
+                            prev = append_evidence(prev, ev)
+                # Also stamp explicit evidence when source is yahoo
+                if str(row.get("source") or source) == SOURCE_YAHOO:
+                    for fld in SCHEMA_FIELDS:
+                        if row.get(fld) is None:
+                            continue
+                        prev = append_evidence(
+                            prev,
+                            make_evidence_value(
+                                field=fld,
+                                value=row[fld],
+                                provider=SOURCE_YAHOO,
+                                as_of=row.get("as_of"),
+                            ),
+                        )
+            except Exception:  # noqa: BLE001
+                _log.debug("evidence attach skipped", exc_info=True)
+            prev.update({k: v for k, v in row.items() if v is not None and k != "evidence"})
+            incoming_src = str(row.get("source") or source)
+            if (
+                str(prev.get("source") or "") == SOURCE_NSE_XBRL
+                and incoming_src == "universe_catalog"
+            ):
+                prev["source"] = SOURCE_NSE_XBRL
+            # merge evidence bags if row carried them
+            if isinstance(row.get("evidence"), dict):
+                bag = dict(prev.get("evidence") or {})
+                for fld, hist in row["evidence"].items():
+                    existing = list(bag.get(fld) or [])
+                    for ev in hist or []:
+                        if ev not in existing:
+                            existing.append(ev)
+                    bag[fld] = existing[-12:]
+                prev["evidence"] = bag
+            symbols[sym] = prev
+        doc["symbols"] = symbols
+        doc["count"] = len(symbols)
+        doc["note"] = note or doc.get("note") or "Operator / Screener export import (IIP.3)"
+        doc["last_import_count"] = len(normalized)
+        path = save_store(data_dir, doc, program_id)
 
     screener_meta = None
     if merge_screener and normalized:
@@ -559,15 +592,55 @@ def import_drop_folder(
     for path in sorted(root.iterdir()):
         if not path.is_file():
             continue
-        if path.suffix.lower() not in {".csv", ".json"}:
+        if path.suffix.lower() not in {".csv", ".json", ".xlsx"}:
             continue
         try:
-            text = path.read_text(encoding="utf-8")
-            if path.suffix.lower() == ".csv":
+            if path.suffix.lower() == ".xlsx":
+                from atlas.investment.screener_xlsx import parse_screener_company_xlsx
+
+                # Only auto-map ticker-like filenames (WELCORP.xlsx / WELCORP.NS.xlsx).
+                # "Welspun Corp.xlsx" must be renamed — do not invent WELSPUNCORP.NS.
+                raw_stem = path.stem.strip()
+                if " " in raw_stem or len(raw_stem) > 24:
+                    files_out.append(
+                        {
+                            "file": path.name,
+                            "imported": 0,
+                            "reason": "rename_to_TICKER.NS.xlsx",
+                            "honesty": (
+                                "Company-name Screener exports need rename "
+                                "e.g. WELCORP.NS.xlsx before drop-import."
+                            ),
+                        }
+                    )
+                    continue
+                stem = raw_stem.upper().replace(" ", "")
+                sym_hint = stem if stem.endswith(".NS") else f"{stem}.NS"
+                parsed = parse_screener_company_xlsx(path, symbol=sym_hint)
+                if not parsed.get("ok"):
+                    files_out.append(
+                        {
+                            "file": path.name,
+                            "imported": 0,
+                            "reason": parsed.get("reason") or "xlsx_parse",
+                            "honesty": parsed.get("honesty"),
+                        }
+                    )
+                    continue
+                result = upsert_rows(
+                    data_dir,
+                    parsed["rows"],
+                    program_id=program_id,
+                    source=SOURCE_SCREENER_EXPORT,
+                    note=f"drop:{path.name}",
+                )
+            elif path.suffix.lower() == ".csv":
+                text = path.read_text(encoding="utf-8")
                 result = import_csv_text(
                     data_dir, text, program_id=program_id, note=f"drop:{path.name}"
                 )
             else:
+                text = path.read_text(encoding="utf-8")
                 result = import_json_payload(
                     data_dir, text, program_id=program_id, note=f"drop:{path.name}"
                 )
@@ -849,6 +922,7 @@ def enrich_from_yahoo(
     only_gaps: bool = True,
     critical_fields: tuple[str, ...] = DEFAULT_CRITICAL_FIELDS,
     batch_size: int | None = None,
+    yahoo_priority: int | None = None,
 ) -> dict[str, Any]:
     """LI.2 — fetch Yahoo fundamentals as medium-confidence evidence and upsert.
 
@@ -862,6 +936,7 @@ def enrich_from_yahoo(
     from atlas.investment.evidence_providers import append_evidence
     from atlas.investment.yahoo_fundamentals import (
         DEFAULT_BATCH_SIZE,
+        YAHOO_PRIORITY_OPEN_BOOK_ENRICH,
         YahooFundamentalsProvider,
         get_yahoo_rate_gate,
         is_yahoo_rate_block_error,
@@ -869,6 +944,11 @@ def enrich_from_yahoo(
 
     gate = None if opener is not None else get_yahoo_rate_gate(data_dir)
     rate_status = gate.status() if gate else {"ready": True, "cooldown_remaining_s": 0}
+    pri = int(
+        yahoo_priority
+        if yahoo_priority is not None
+        else YAHOO_PRIORITY_OPEN_BOOK_ENRICH
+    )
     # Hard-pause on cooldown: do not probe chart/HTML either (shared IP budget).
     if gate is not None and float(rate_status.get("cooldown_remaining_s") or 0) > 0:
         pending = [normalize_symbol(s) for s in symbols if str(s).strip()]
@@ -889,14 +969,48 @@ def enrich_from_yahoo(
             "reason": "yahoo_cooldown",
             "rate_gate": rate_status,
             "batch_size": 0,
+            "yahoo_priority": pri,
             "honesty": (
                 "Yahoo enrich hard-paused while rate gate cooldown is active. "
                 "Gaps stay unknown; resume after cooldown (prefer Screener for FCF)."
             ),
         }
 
+    # DP-YAH2 — RTH / higher-priority hold: skip network this tick
+    if gate is not None:
+        ok_net, deny_reason = gate.may_network(pri)
+        if not ok_net:
+            pending = [normalize_symbol(s) for s in symbols if str(s).strip()]
+            pending = [s for s in pending if s]
+            return {
+                "version": VERSION,
+                "provider": SOURCE_YAHOO,
+                "confidence": "medium",
+                "ok": True,
+                "fetched": 0,
+                "skipped_already_covered": 0,
+                "evidence_attached": 0,
+                "errors": [],
+                "symbols": [],
+                "remaining_symbols": pending,
+                "remaining": len(pending),
+                "paused": True,
+                "reason": deny_reason,
+                "rate_gate": rate_status,
+                "batch_size": 0,
+                "yahoo_priority": pri,
+                "honesty": (
+                    "Yahoo enrich deferred by priority policy "
+                    f"({deny_reason}); live marks / open-book win the IP."
+                ),
+            }
+
     provider = YahooFundamentalsProvider(
-        enabled=enabled, opener=opener, data_dir=data_dir, rate_gate=gate
+        enabled=enabled,
+        opener=opener,
+        data_dir=data_dir,
+        rate_gate=gate,
+        yahoo_priority=pri,
     )
     fetched = 0
     skipped = 0
@@ -1097,6 +1211,50 @@ def watchlist_symbols(
     return out
 
 
+def resolve_material_challenger_symbols(
+    data_dir: str | Path | None,
+    *,
+    laboratory_id: str | None = None,
+    limit: int = 5,
+) -> list[str]:
+    """Next-₹1 destination + pending UQ symbols — densify even when flat.
+
+    Zerodha does not supply PE/FCF. When ``open_books_only`` and no holdings,
+    Yahoo enrich still needs a material challenger set or the thesis path starves.
+    """
+    if not data_dir or not laboratory_id:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    cap = max(1, int(limit))
+    try:
+        from atlas.investment.next_rupee import load_next_rupee
+
+        nr = load_next_rupee(data_dir, str(laboratory_id))
+        dest = normalize_symbol((nr or {}).get("destination") or "")
+        if dest and dest != "CASH" and dest not in seen:
+            seen.add(dest)
+            out.append(dest)
+    except Exception:  # noqa: BLE001
+        _log.debug("material challenger next_rupee skipped", exc_info=True)
+    try:
+        from atlas.investment.uncertainty_queue import list_tasks
+
+        for task in list_tasks(data_dir, str(laboratory_id)) or []:
+            if not isinstance(task, dict):
+                continue
+            sym = normalize_symbol(task.get("symbol") or "")
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            out.append(sym)
+            if len(out) >= cap:
+                break
+    except Exception:  # noqa: BLE001
+        _log.debug("material challenger UQ skipped", exc_info=True)
+    return out[:cap]
+
+
 def enrich_watchlist_gaps(
     data_dir: str | Path | None,
     *,
@@ -1109,6 +1267,8 @@ def enrich_watchlist_gaps(
     priority_symbols: list[str] | None = None,
     open_books_only: bool = False,
     critical_fields: tuple[str, ...] | None = None,
+    laboratory_id: str | None = None,
+    material_challengers: list[str] | None = None,
 ) -> dict[str, Any]:
     """LQ.7 — auto Tier C enrich for watchlist symbols missing critical fields.
 
@@ -1118,9 +1278,13 @@ def enrich_watchlist_gaps(
 
     ``priority_symbols`` (e.g. open holdings) are enriched before other watchlist gaps.
     ``open_books_only`` (E2 / A9) restricts work to open books — no watchlist rest.
+    When the book is flat, ``material_challengers`` / Next-₹1 destination still densify
+    so swing thesis PE/FCF are not starved waiting for holdings.
     """
     from atlas.investment.yahoo_fundamentals import (
         DEFAULT_BATCH_SIZE,
+        YAHOO_PRIORITY_OPEN_BOOK_ENRICH,
+        YAHOO_PRIORITY_UNIVERSE,
         get_yahoo_rate_gate,
     )
 
@@ -1128,8 +1292,23 @@ def enrich_watchlist_gaps(
     prio = [s for s in prio if s]
     want = [normalize_symbol(s) for s in (symbols or []) if str(s).strip()]
     want = [s for s in want if s]
+    challengers = [
+        normalize_symbol(s) for s in (material_challengers or []) if str(s).strip()
+    ]
+    challengers = [s for s in challengers if s]
+    if open_books_only and not challengers:
+        challengers = resolve_material_challenger_symbols(
+            data_dir,
+            laboratory_id=laboratory_id,
+            limit=min(5, max(1, int(limit))),
+        )
     if open_books_only:
-        want = list(prio) if prio else list(want)
+        want = list(prio) if prio else []
+        seen_w = set(want)
+        for s in challengers:
+            if s not in seen_w:
+                want.append(s)
+                seen_w.add(s)
         if not want:
             return {
                 "version": VERSION,
@@ -1140,9 +1319,11 @@ def enrich_watchlist_gaps(
                 "gap_symbols": [],
                 "reason": "no_open_books",
                 "open_books_only": True,
+                "material_challengers": [],
                 "honesty": (
-                    "E2 open_books_only — no open holdings to enrich; "
-                    "watchlist rest waits for weekly universe window."
+                    "E2 open_books_only — no open holdings and no material "
+                    "challengers (Next-₹1 / UQ); watchlist rest waits for weekly "
+                    "universe window. Zerodha marks do not fill PE/FCF."
                 ),
             }
     else:
@@ -1152,6 +1333,12 @@ def enrich_watchlist_gaps(
         if prio:
             seen = set(want)
             for s in prio:
+                if s not in seen:
+                    want.append(s)
+                    seen.add(s)
+        if challengers:
+            seen = set(want)
+            for s in challengers:
                 if s not in seen:
                     want.append(s)
                     seen.add(s)
@@ -1169,7 +1356,12 @@ def enrich_watchlist_gaps(
 
     crit = critical_fields
     if crit is None:
-        crit = OPEN_BOOK_CRITICAL_FIELDS if open_books_only else DEFAULT_CRITICAL_FIELDS
+        # Holdings densify open-book fields; flat-book challengers use learner gaps.
+        crit = (
+            OPEN_BOOK_CRITICAL_FIELDS
+            if open_books_only and prio
+            else DEFAULT_CRITICAL_FIELDS
+        )
     gaps_doc = learner_fundamentals_gaps(
         data_dir, want, program_id=program_id, critical_fields=tuple(crit)
     )
@@ -1177,13 +1369,14 @@ def enrich_watchlist_gaps(
         g for g in (gaps_doc.get("gaps") or []) if isinstance(g, dict) and g.get("symbol")
     ]
 
-    def _gap_priority(g: dict[str, Any]) -> tuple[int, int, str]:
-        """Open-book + FCF holes first (DAV densify feeder)."""
+    def _gap_priority(g: dict[str, Any]) -> tuple[int, int, int, str]:
+        """Open-book + challenger + FCF holes first (DAV densify feeder)."""
         sym = str(g.get("symbol") or "")
         missing = {str(x) for x in (g.get("missing") or [])}
         open_rank = 0 if (prio and sym in set(prio)) else 1
+        challenger_rank = 0 if (challengers and sym in set(challengers)) else 1
         fcf_rank = 0 if "fcf" in missing else 1
-        return (open_rank, fcf_rank, sym)
+        return (open_rank, challenger_rank, fcf_rank, sym)
 
     gap_rows.sort(key=_gap_priority)
     gap_syms = [str(g.get("symbol")) for g in gap_rows]
@@ -1198,6 +1391,7 @@ def enrich_watchlist_gaps(
             "symbols_checked": len(want),
             "reason": "no_gaps",
             "open_books_only": open_books_only,
+            "material_challengers": challengers[:12],
             "gaps": gaps_doc,
             "honesty": (
                 "Watchlist already has PE/FCF/ROE/D/E for checked symbols — "
@@ -1227,6 +1421,12 @@ def enrich_watchlist_gaps(
     # Cap work list to one batch — enrich_from_yahoo also enforces, but avoid
     # looking like we intend to fetch the whole gap list in one call.
     work = gap_syms[:bs]
+    prio_set = set(prio)
+    yahoo_pri = (
+        YAHOO_PRIORITY_OPEN_BOOK_ENRICH
+        if open_books_only or any(s in prio_set for s in work)
+        else YAHOO_PRIORITY_UNIVERSE
+    )
     out = enrich_from_yahoo(
         data_dir,
         work,
@@ -1236,20 +1436,25 @@ def enrich_watchlist_gaps(
         only_gaps=True,
         batch_size=bs if opener is None else None,
         critical_fields=tuple(crit),
+        yahoo_priority=yahoo_pri,
     )
     out["ok"] = True
     out["gap_symbols"] = gap_syms[:limit]
     out["symbols_checked"] = len(want)
     out["priority_symbols"] = prio[:20]
     out["open_books_only"] = open_books_only
+    out["material_challengers"] = challengers[:12]
     out["gaps_before"] = {
         "symbols_with_gaps": gaps_doc.get("symbols_with_gaps"),
         "missing_pe": gaps_doc.get("missing_pe"),
         "missing_fcf": gaps_doc.get("missing_fcf"),
     }
-    out["mode"] = (
-        "lq.7_open_books_only" if open_books_only else "lq.7_watchlist_gaps"
-    )
+    if open_books_only and not prio and challengers:
+        out["mode"] = "lq.7_material_challengers"
+    elif open_books_only:
+        out["mode"] = "lq.7_open_books_only"
+    else:
+        out["mode"] = "lq.7_watchlist_gaps"
     if opener is None:
         out["rate_gate"] = out.get("rate_gate") or get_yahoo_rate_gate(data_dir).status()
     rem = list(out.get("remaining_symbols") or [])

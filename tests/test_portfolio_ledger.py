@@ -76,12 +76,20 @@ class InMemorySimRepo:
         return 1 if self.positions.pop((str(portfolio_id), symbol), None) else 0
 
     def record_trade(self, **kw):
+        from datetime import datetime, timedelta, timezone
+
+        if "created_at" not in kw:
+            # Monotonic IST-ish stamps so FIFO round-trips are deterministic in tests.
+            n = len(self.trades)
+            kw["created_at"] = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=n)
         row = {"id": str(uuid.uuid4()), **kw}
         self.trades.append(row)
         return dict(row)
 
     def list_trades(self, portfolio_id, *, limit=200):
-        return [dict(t) for t in self.trades if t["portfolio_id"] == str(portfolio_id)][:limit]
+        rows = [dict(t) for t in self.trades if t["portfolio_id"] == str(portfolio_id)]
+        rows.reverse()  # newest-first, matching SimTradingRepository
+        return rows[:limit]
 
     def count_trades(self, portfolio_id):
         return sum(1 for t in self.trades if t["portfolio_id"] == str(portfolio_id))
@@ -146,9 +154,41 @@ def test_ledger_apply_fill_charges_fee():
     stmt = ledger.statement(p["id"], broker_profile="zerodha")
     assert stmt["fees_paid"] == pytest.approx(out["fees"]["total"])
     assert stmt["trade_count"] == 1
+    assert "taxes_and_pnl" in stmt
+    assert stmt["closed_round_trips"] == []
+    assert isinstance(stmt.get("trades"), list) and len(stmt["trades"]) == 1
 
 
-def test_portfolio_ledger_worker_idempotent():
+def test_ledger_statement_closed_round_trip():
+    portfolio = PortfolioService(InMemorySimRepo())
+    ledger = PortfolioLedgerService(portfolio)
+    p = ledger.ensure_portfolio(mission_id="m1", starting_cash=100_000.0)
+    ledger.apply_fill(
+        p["id"],
+        symbol="INFY.NS",
+        side="buy",
+        quantity=10,
+        price=1000.0,
+        broker_profile="paper_demo",
+        mission_id="m1",
+    )
+    ledger.apply_fill(
+        p["id"],
+        symbol="INFY.NS",
+        side="sell",
+        quantity=10,
+        price=1100.0,
+        broker_profile="paper_demo",
+        mission_id="m1",
+    )
+    stmt = ledger.statement(p["id"], broker_profile="paper_demo")
+    assert stmt["closed_round_trip_count"] == 1
+    leg = stmt["closed_round_trips"][0]
+    assert leg["symbol"] == "INFY.NS"
+    assert leg["buy_price"] == 1000.0
+    assert leg["sell_price"] == 1100.0
+    assert leg["realized_pnl"] == pytest.approx(stmt["realized_pnl"])
+
     portfolio = PortfolioService(InMemorySimRepo())
     ledger = PortfolioLedgerService(portfolio)
     worker = PortfolioLedgerWorker(ledger=ledger)

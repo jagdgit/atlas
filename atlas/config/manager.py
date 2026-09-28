@@ -105,10 +105,9 @@ class LLMConfig(BaseModel):
     embedding_model: str = "nomic-embed-text"  # pull before knowledge sprint
     temperature: float = 0.0
     timeout: float = 120.0  # seconds; model load on first call can be slow
-    # RC / D3.12c: a shorter wall-clock for interactive chat than for background
-    # jobs. A slow generation returns an honest "run it as a job" message instead
-    # of hanging the /api/chat request for the full (job-sized) `timeout`.
-    interactive_timeout: float = 60.0
+    # RC / D3.12c + OI-CHAT-INFER0 CPU-slow: interactive chat budget on no-GPU host.
+    # Measured short joke ~43–52s; heavy RAG compose can approach 90s+.
+    interactive_timeout: float = 120.0
     keep_alive: str = "5m"  # how long Ollama keeps the model resident
     # Reasoning models (qwen3) ignore think=false and leak chain-of-thought into
     # the answer; think=true makes Ollama separate it into a `thinking` field so
@@ -117,8 +116,12 @@ class LLMConfig(BaseModel):
     # R4 (hardware envelope): inference is CPU-only and RAM-heavy, so every LLM
     # call passes through a single "LLM lane" (a semaphore) — running two models
     # at once would thrash RAM. Concurrency for Atlas means parallel I/O, not
-    # parallel inference. Raise only when RAM/hardware allows.
+    # parallel inference. Raise only when RAM/hardware allows (Stage 7 LOCK).
     max_concurrency: int = 1
+    # OI-CHAT-INFER0: operator hardware has no GPU — encode that explicitly.
+    accelerator: str = "cpu"
+    # Bound Living RAG / chat context so interactive turns stay within budget.
+    chat_max_context_chars: int = 2400
     # Role → model registry (D7). Seeded below so today's single `model` /
     # `embedding_model` keep working: `chat` and `embed` always exist.
     roles: dict[str, LLMRole] = Field(default_factory=dict)
@@ -555,6 +558,9 @@ class ResourcesConfig(BaseModel):
     max_ocr_workers: int = 2
     max_extract_workers: int = 2
     max_archive_workers: int = 1  # parallel owner_knowledge active ingest jobs
+    # DP-BATCH1 — when max_archive>1 via env, still clamp to 1 in evening densify
+    archive_one_evening: bool = True
+    archive_evening_until_hour_ist: int = 22
     host_ram_reserve_mb: int = 2048  # keep free for OS / desktop / Ollama
     tick_ram_mb: int = 512  # default projected RAM for one worker tick
     # IR-RO11 Layer 2: soft ceiling for the whole Atlas process (keep below systemd MemoryMax).
@@ -630,11 +636,17 @@ class ApiConfig(BaseModel):
 class MarketConfig(BaseModel):
     """Market Intelligence feed providers (MI.3 / OI-D1). Simulation Program only."""
 
-    default_provider: str = "asset_replay"  # asset_replay | yahoo | polygon | …
+    default_provider: str = "asset_replay"  # asset_replay | yahoo | polygon | zerodha | …
     yahoo_enabled: bool = False  # opt-in live Yahoo chart API
     move_alert_pct: float = 5.0
     polygon_api_key_env: str = "ATLAS_POLYGON_API_KEY"
     alphavantage_api_key_env: str = "ATLAS_ALPHAVANTAGE_API_KEY"
+    # OI-ZERODHA0 — Kite Connect live marks (secrets via env, never YAML)
+    zerodha_enabled: bool = True
+    zerodha_api_key_env: str = "ZERODHA_API_KEY"
+    zerodha_api_secret_env: str = "ZERODHA_API_SECRET"
+    zerodha_access_token_env: str = "ZERODHA_ACCESS_TOKEN"
+    zerodha_redirect_url_env: str = "ZERODHA_REDIRECT_URL"
 
 
 class AtlasConfig(BaseModel):

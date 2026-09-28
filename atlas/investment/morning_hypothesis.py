@@ -434,14 +434,20 @@ def run_morning_hypothesis_batch(
             ),
             ChatMessage("user", json.dumps(prompt, default=str)),
         ]
-        resp = client.chat(messages)
+        resp = client.chat(
+            messages,
+            _atlas_purpose="bre4_morning_hypothesis",
+            think=False,
+            num_predict=400,
+            format="json",
+        )
         text = getattr(resp, "text", None) or getattr(resp, "content", None) or str(resp)
     except Exception as exc:  # noqa: BLE001
         doc = _deterministic_batch(
             targets,
             laboratory_id=lab,
             ist_date=day,
-            skip_reason=f"BRE.4 LLM failed: {type(exc).__name__}: {exc}",
+            skip_reason=f"BRE.4 LLM error ({type(exc).__name__}: {exc})",
         )
         doc["status"] = "failed"
         doc["targets_considered"] = len(targets)

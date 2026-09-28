@@ -16,6 +16,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from atlas.agents.base import AgentResult, Citation
+from atlas.knowledge.access import finding_id_of, hit_provenance
 from atlas.llm.provider import ChatMessage
 from atlas.telemetry import get_metrics, start_span, timer
 
@@ -132,7 +133,7 @@ class RagAgent:
                 prompt_chars = sum(len(m.content) for m in messages)
 
                 with timer("agent.rag.generate"):
-                    response = self._llm.chat(messages)
+                    response = self._llm.chat(messages, _atlas_purpose="rag_generate")
                 self._record_step(
                     run_id,
                     1,
@@ -155,6 +156,8 @@ class RagAgent:
                         "prompt_chars": prompt_chars,
                         "mode": ranked.mode,
                         **response.usage,
+                        "retrieved_at": ranked.retrieved_at,
+                        "diagnostics_id": ranked.diagnostics_id,
                     },
                     run_id=run_id,
                 )
@@ -188,15 +191,21 @@ class RagAgent:
                 break
             blocks.append(block)
             used_chars += len(block)
+            prov = hit_provenance(r)
+            sim = float(
+                r.similarity if r.similarity is not None else r.score
+            )
             citations.append(
                 Citation(
                     index=i,
                     document_id=r.document_id,
                     chunk_id=r.chunk_id,
-                    similarity=float(
-                        r.similarity if r.similarity is not None else r.score
-                    ),
+                    similarity=sim,
                     snippet=_snippet(r.content),
+                    finding_id=finding_id_of(r),
+                    source=str(prov["source"] or r.tier),
+                    timestamp=prov["timestamp"],
+                    score=float(r.score) if r.score is not None else sim,
                 )
             )
         return "\n\n".join(blocks), citations

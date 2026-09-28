@@ -35,8 +35,11 @@ LEARNING_EVENT_KINDS = frozenset(
         "llm_failure",
         "challenger_crossed_threshold",
         "lab_policy_hold",
+        "blocked_buy",
         "thesis_invalid",
         "outcome_check",
+        "opportunity_cost_scheduled",
+        "opportunity_cost_resolved",
     }
 )
 
@@ -84,7 +87,20 @@ def infer_learning_event_kind(
     if tag.startswith("switch_blocked"):
         return "missed_opportunity"
     if tag in {"lab_policy_hold", "plc_a_hold"}:
-        return "lab_policy_hold"
+        return "blocked_buy"
+    try:
+        from atlas.investment.lab_experience import is_blocked_buy_tag
+
+        if is_blocked_buy_tag(tag):
+            return "blocked_buy"
+    except Exception:  # noqa: BLE001
+        if tag in {
+            "research_forced_hold",
+            "research_hold",
+            "pack_block",
+            "policy_block",
+        }:
+            return "blocked_buy"
     if tag in {"thesis_invalid", "identity_quarantined"}:
         return "thesis_invalid"
     if trig in {"llm_unavailable", "unreviewed"} or tag == "llm_unavailable":
@@ -210,19 +226,37 @@ def build_trading_experience(
     if pnl is not None and cost and cost > 0:
         realized_pct = round(100.0 * pnl / cost, 4)
     if realized_pct is None:
-        realized_pct = _f(oc.get("price_change_pct"))
+        realized_pct = _f(oc.get("price_change_pct") or oc.get("realized_return_pct"))
+
+    pred_dir = (
+        oc.get("expected_direction")
+        or expected.get("expected_direction")
+        or expected.get("direction")
+    )
+    obs_dir = oc.get("observed_direction")
+    if obs_dir is None and realized_pct is not None:
+        if realized_pct > 1e-9:
+            obs_dir = "up"
+        elif realized_pct < -1e-9:
+            obs_dir = "down"
+        else:
+            obs_dir = "flat"
 
     pred_err = compute_prediction_error(
         predicted_er=pred_er,
         realized_return_pct=realized_pct,
-        predicted_direction=oc.get("expected_direction"),
-        observed_direction=oc.get("observed_direction"),
+        predicted_direction=pred_dir,
+        observed_direction=obs_dir,
     )
 
     attr_payload = attr.get("payload") if isinstance(attr.get("payload"), dict) else {}
     causal = attr_payload.get("causal_factors") if isinstance(attr_payload.get("causal_factors"), dict) else {}
     attr_status = "unknown"
-    if causal.get("helped") or causal.get("hurt"):
+    if str(attr.get("status") or "").lower() == "unknown_explicit" or str(
+        causal.get("status") or ""
+    ).lower() == "unknown_explicit":
+        attr_status = "unknown_explicit"
+    elif causal.get("helped") or causal.get("hurt"):
         attr_status = "attributed"
     elif causal.get("unknown"):
         attr_status = "all_unknown"
@@ -300,8 +334,13 @@ def build_trading_experience(
         },
         "predicted": {
             "expected_return": pred_er,
-            "expected_direction": oc.get("expected_direction"),
-            "confidence": expected.get("opportunity_confidence"),
+            "expected_direction": pred_dir,
+            "confidence": expected.get("opportunity_confidence")
+            or expected.get("predicted_probability"),
+            "prediction_status": expected.get("prediction_status")
+            or ("stated" if pred_er is not None or pred_dir else "prediction_absent"),
+            "prediction_horizon": expected.get("prediction_horizon"),
+            "er_model": expected.get("er_model"),
         },
         "outcome": {
             "realized_pnl": pnl,
@@ -317,7 +356,8 @@ def build_trading_experience(
         "attribution": {
             "status": attr_status,
             "required": bool(need_attr and closed),
-            "satisfied": attr_status in {"attributed", "all_unknown", "partial"},
+            "satisfied": attr_status
+            in {"attributed", "all_unknown", "partial", "unknown_explicit"},
             "causal_factors": causal or None,
         },
         "lessons": build_lessons(
@@ -431,10 +471,25 @@ def summarize_learning_day(events: list[dict[str, Any]] | None) -> dict[str, Any
     for r in rows:
         k = str(r.get("event_kind") or "unknown")
         by_kind[k] = by_kind.get(k, 0) + 1
+    blocked_buys = sum(
+        1
+        for r in rows
+        if str(r.get("event_kind") or "") == "blocked_buy"
+        or str(r.get("experience_type") or "") == "blocked_buy"
+    )
+    rewards_computed = sum(
+        1
+        for r in experiences
+        if isinstance(r.get("reward"), dict) and r["reward"].get("status") == "computed"
+    )
+    useful_experiences = rewards_computed
     return {
         "version": VERSION,
         "events": len(rows),
         "experiences": len(experiences),
+        "blocked_buys": blocked_buys,
+        "rewards_computed": rewards_computed,
+        "useful_experiences": useful_experiences,
         "prediction_errors_computed": errors_computed,
         "direction_misses": dir_miss,
         "attribution_required": attr_required,
@@ -449,6 +504,9 @@ def format_learning_objects_lines(summary: dict[str, Any] | None, *, limit: int 
         "",
         "── Prediction error & experiences (OI-LINT0 Phase 4) ──",
         f"  experiences today: {s.get('experiences', 0)} · "
+        f"useful (rewarded round-trips): {s.get('useful_experiences', 0)} · "
+        f"blocked_buy (not P&L): {s.get('blocked_buys', 0)}",
+        f"  rewards computed: {s.get('rewards_computed', 0)} · "
         f"prediction errors computed: {s.get('prediction_errors_computed', 0)} · "
         f"direction misses: {s.get('direction_misses', 0)}",
         f"  closed-lab attribution: {s.get('attribution_satisfied', 0)}/"
@@ -459,9 +517,10 @@ def format_learning_objects_lines(summary: dict[str, Any] | None, *, limit: int 
         top = ", ".join(f"{k}={v}" for k, v in sorted(kinds.items())[: max(1, limit)])
         lines.append(f"  event kinds: {top}")
     if int(s.get("experiences") or 0) == 0:
-        lines.append("  (no durable experiences yet — fills/exits/flatten write here)")
+        lines.append("  (no durable experiences yet — fills/exits/flatten/blocked_buy write here)")
     lines.append(
-        "  Honesty: learned = prediction + outcome + error + attribution — not activity."
+        "  Honesty: learned = prediction + outcome + error + attribution — not activity. "
+        "blocked_buy is not a trade outcome. Reward is book P&L, not RL."
     )
     return lines
 
@@ -474,19 +533,153 @@ def record_from_trade_close(
     laboratory_id: str,
     packet: dict[str, Any] | None = None,
     strategy_tag: str | None = None,
+    indicators: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     kind = infer_learning_event_kind(
         action="sell",
         strategy_tag=strategy_tag or (packet or {}).get("strategy_tag"),
     )
+    pkt = packet if isinstance(packet, dict) else None
+    if pkt is None:
+        try:
+            from atlas.investment.learning_story import resolve_related_packet
+
+            pkt = resolve_related_packet(
+                data_dir, laboratory_id=laboratory_id, symbol=symbol
+            )
+        except Exception:  # noqa: BLE001
+            pkt = None
+    if isinstance(pkt, dict) and strategy_tag and not pkt.get("strategy_tag"):
+        pkt = dict(pkt)
+        pkt["strategy_tag"] = strategy_tag
+    elif isinstance(pkt, dict) and strategy_tag == "eod_flatten":
+        pkt = dict(pkt)
+        pkt["strategy_tag"] = "eod_flatten"
+
+    # Lab v1 experiment_close: stamp prediction_absent only when no decide-time E[R].
+    if isinstance(pkt, dict) and str(pkt.get("strategy_tag") or strategy_tag or "") == (
+        "fno_lab_v1_experiment_close"
+    ):
+        pkt = dict(pkt)
+        pkt.setdefault("strategy_tag", "fno_lab_v1_experiment_close")
+        pkt.setdefault("action", "sell")
+        expected = pkt.get("expected") if isinstance(pkt.get("expected"), dict) else {}
+        expected = dict(expected)
+        has_stated = (
+            expected.get("expected_return") is not None
+            or expected.get("expected_direction")
+            or expected.get("prediction_status") == "stated"
+        )
+        if not has_stated and expected.get("prediction_status") is None:
+            expected["prediction_status"] = "prediction_absent"
+            expected["honesty"] = (
+                "prediction_absent — session_flat close without decide-time E[R]"
+            )
+        pkt["expected"] = expected
+
+    attr = None
+    try:
+        from atlas.investment.learning_story import ensure_close_attribution
+
+        attr = ensure_close_attribution(
+            packet=pkt,
+            trade=trade,
+            laboratory_id=laboratory_id,
+        )
+    except Exception:  # noqa: BLE001
+        attr = None
+
+    oc_from_pkt = None
+    if isinstance(pkt, dict) and isinstance(pkt.get("outcome_check"), dict):
+        oc_from_pkt = dict(pkt["outcome_check"])
+
     exp = build_trading_experience(
         laboratory_id=laboratory_id,
         symbol=symbol,
         event_kind=kind,
-        packet=packet,
+        packet=pkt,
         trade=trade,
+        outcome_check=oc_from_pkt,
+        attribution=attr,
     )
-    return record_learning_event(data_dir, exp)
+    try:
+        from atlas.investment.lab_experience import (
+            already_recorded,
+            attach_round_trip_l10,
+        )
+
+        exp = attach_round_trip_l10(
+            exp,
+            laboratory_id=laboratory_id,
+            symbol=symbol,
+            trade=trade,
+            packet=pkt,
+            indicators=indicators,
+            cfg={"portfolio_key": laboratory_id},
+        )
+        fp = str(exp.get("fingerprint") or "")
+        if fp and already_recorded(
+            data_dir,
+            laboratory_id=laboratory_id,
+            fingerprint_s=fp,
+            as_of_ist=str(exp.get("as_of_ist") or "") or None,
+        ):
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "duplicate_round_trip",
+                "fingerprint": fp,
+            }
+    except Exception:  # noqa: BLE001
+        _log.debug("round-trip L10 attach skipped", exc_info=True)
+    # Align predicted status with packet prediction_status
+    try:
+        expected = (pkt or {}).get("expected") if isinstance(pkt, dict) else {}
+        if isinstance(expected, dict) and expected.get("prediction_status") == "prediction_absent":
+            pred = dict(exp.get("predicted") or {})
+            pred["expected_return"] = None
+            pred["expected_direction"] = None
+            pred["prediction_status"] = "prediction_absent"
+            exp["predicted"] = pred
+            pe = dict(exp.get("prediction_error") or {})
+            if pe.get("status") == "unknown":
+                pe["honesty"] = (
+                    "prediction_absent at decide-time — error not inventable"
+                )
+            exp["prediction_error"] = pe
+        elif isinstance(expected, dict) and (
+            expected.get("prediction_status") == "stated"
+            or expected.get("expected_return") is not None
+        ):
+            pred = dict(exp.get("predicted") or {})
+            pred["prediction_status"] = "stated"
+            if expected.get("expected_return") is not None:
+                pred["expected_return"] = expected.get("expected_return")
+            if expected.get("expected_direction"):
+                pred["expected_direction"] = expected.get("expected_direction")
+            exp["predicted"] = pred
+    except Exception:  # noqa: BLE001
+        pass
+
+    result = record_learning_event(data_dir, exp)
+    if exp.get("fingerprint"):
+        result["fingerprint"] = exp.get("fingerprint")
+    result["skipped"] = False
+    try:
+        from atlas.investment.learning_story import record_learning_story_for_close
+
+        story = record_learning_story_for_close(
+            data_dir,
+            laboratory_id=laboratory_id,
+            symbol=symbol,
+            experience=exp,
+            packet=pkt,
+            trade=trade,
+        )
+        result["learning_story"] = story
+    except Exception:  # noqa: BLE001
+        _log.debug("learning story skipped", exc_info=True)
+    return result
 
 
 def record_from_outcome_check(

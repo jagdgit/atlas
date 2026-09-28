@@ -431,7 +431,9 @@ def format_learned_today_section(
     decision_rows = list(decisions or port.get("decisions") or [])
     trade_rows = list(trades or [])
     if not trade_rows:
-        trade_rows = list(port.get("recent_trades") or [])
+        trade_rows = list(
+            port.get("day_trades") or port.get("trades") or port.get("recent_trades") or []
+        )
     day_trades = [t for t in trade_rows if isinstance(t, dict)]
     if any("ist_day_match" in t for t in day_trades):
         day_trades = [t for t in day_trades if t.get("ist_day_match")]
@@ -452,6 +454,19 @@ def format_learned_today_section(
     with_unk = sum(
         1 for d in decision_rows if isinstance(d, dict) and (d.get("unknowns") or [])
     )
+    pe_miss = fcf_miss = mos_unk = conflicts = 0
+    for d in decision_rows:
+        if not isinstance(d, dict):
+            continue
+        unk = [str(x).lower() for x in (d.get("unknowns") or [])]
+        if any(u == "pe_missing" or u.startswith("pe_missing") for u in unk):
+            pe_miss += 1
+        if any("fcf_missing" in u for u in unk):
+            fcf_miss += 1
+        if any("mos_unknown" in u for u in unk):
+            mos_unk += 1
+        if any("conflict" in u for u in unk):
+            conflicts += 1
 
     kpis = port.get("kpis") if isinstance(port.get("kpis"), dict) else {}
     evo = port.get("evolution") if isinstance(port.get("evolution"), dict) else {}
@@ -615,7 +630,10 @@ def format_learned_today_section(
     )
     lines.extend(
         [
-        f"  Packets still missing PE/FCF/MoS: {with_unk}/{len(decision_rows) or 0}",
+        f"  Decision packets with unresolved fields: "
+        f"{with_unk}/{len(decision_rows) or 0}",
+        f"    PE missing: {pe_miss} · FCF missing: {fcf_miss} · "
+        f"MoS unknown: {mos_unk} · data conflicts: {conflicts}",
         f"  Observations ingested: {len(obs)}",
         f"  Revisits due today / future / done: "
         f"{evo.get('revisits_due_today', '—')}/"
@@ -635,12 +653,32 @@ def format_learned_today_section(
             f"  Evolution Host Guard thinned: {evo.get('host_guard_reason')} "
             "(pending kept — not invented done)"
         )
+    # Three scopes — store ≠ open-book gaps ≠ packet-time unknowns (OI-CU0/RLD)
+    store_n = int(cov.get("symbols") or 0)
+    store_pe = cov.get("with_pe", 0)
+    store_fcf = cov.get("with_fcf", "—")
     lines.extend(
         [
-        f"  Fundamentals PE: {cov.get('with_pe', 0)}/{cov.get('symbols', 0)}"
-        f" · FCF holes (watchlist): {gaps.get('missing_fcf', gaps.get('symbols_with_gaps', '—'))}",
+            "  Fundamentals store (fixed market_intelligence book):",
+            f"    PE coverage: {store_pe}/{store_n} · FCF coverage: {store_fcf}/{store_n}",
         ]
     )
+    checked = int(gaps.get("symbols_checked") or 0)
+    if checked:
+        miss_fcf = int(gaps.get("missing_fcf") or 0)
+        miss_pe = int(gaps.get("missing_pe") or 0)
+        lines.append(
+            f"  Open books / learner gaps (allocation-relevant): "
+            f"checked={checked} · PE missing={miss_pe} · FCF missing={miss_fcf}"
+        )
+        for g in list(gaps.get("gaps") or [])[:4]:
+            if isinstance(g, dict) and g.get("symbol"):
+                miss = ",".join(str(x) for x in (g.get("missing") or [])[:6]) or "—"
+                lines.append(f"    · {g.get('symbol')}: {miss}")
+    elif gaps.get("missing_fcf") is not None:
+        lines.append(
+            f"  Open-book FCF holes (legacy): {gaps.get('missing_fcf')}"
+        )
     # Operator brief — changed / causes / uncertain / tomorrow (avoid repeating later)
     lines.extend(["", "── What changed today ──"])
     changed_bits: list[str] = []
@@ -675,7 +713,9 @@ def format_learned_today_section(
     uncertain: list[str] = []
     if with_unk:
         uncertain.append(
-            f"{with_unk} packets still missing PE/FCF/MoS at decide-time"
+            f"{with_unk} packets still have unresolved fields at decide-time "
+            f"(PE missing={pe_miss}, FCF missing={fcf_miss}, MoS={mos_unk}, "
+            f"conflicts={conflicts})"
         )
     if gaps.get("missing_fcf") or (
         isinstance(gaps.get("symbols_with_gaps"), int)
@@ -1196,6 +1236,33 @@ def format_morning_report(
             "Note: catch-up send — morning window was missed (offline / internet / restart)."
         )
     lines.extend(format_three_lab_books_section(_lab_books_arg(portfolio)))
+
+    # OI-CU0 CU.C — overnight densify intake (operator-visible, no invented thesis)
+    try:
+        from atlas.investment.overnight_densify import (
+            format_overnight_morning_lines,
+            load_overnight_densify,
+        )
+
+        data_dir = None
+        if isinstance(portfolio, dict):
+            data_dir = portfolio.get("data_dir")
+        if not data_dir:
+            try:
+                from atlas.config import get_config
+
+                data_dir = str(get_config().paths.data)
+            except Exception:  # noqa: BLE001
+                data_dir = None
+        overnight = None
+        if isinstance(portfolio, dict):
+            overnight = portfolio.get("overnight_densify")
+        if not isinstance(overnight, dict):
+            overnight = load_overnight_densify(data_dir, as_of_ist=str(as_of) if as_of else None)
+        lines.extend(format_overnight_morning_lines(overnight if isinstance(overnight, dict) else None))
+    except Exception:  # noqa: BLE001
+        pass
+
     lines.extend(
         [
             "",
@@ -1370,6 +1437,162 @@ def format_evening_report(
             "Note: catch-up send — report delayed (host offline / internet / Atlas restart)."
         )
     lines.extend(format_three_lab_books_section(_lab_books_arg(portfolio)))
+    try:
+        from atlas.investment.nse_xbrl.digest import format_fundamental_intelligence_section
+
+        lines.extend(
+            format_fundamental_intelligence_section(
+                portfolio.get("data_dir") if isinstance(portfolio, dict) else None,
+                laboratory_id=laboratory_id or "india_equity_learner",
+                portfolio=portfolio,
+            )
+        )
+    except Exception:  # noqa: BLE001
+        lines.extend(
+            [
+                "",
+                "━━━━━━━━ FUNDAMENTAL INTELLIGENCE ━━━━━━━━",
+                "(section failed to render — treat as observability miss)",
+            ]
+        )
+
+    # OI-CU0 CU.D — global self-model (aligned with investment/self_model/{day}.json)
+    try:
+        from atlas.investment.self_model import (
+            ensure_self_model,
+            format_self_model_evening_lines,
+        )
+
+        data_dir = None
+        if isinstance(portfolio, dict):
+            data_dir = portfolio.get("data_dir")
+        if not data_dir:
+            try:
+                from atlas.config import get_config
+
+                data_dir = str(get_config().paths.data)
+            except Exception:  # noqa: BLE001
+                data_dir = None
+        lab_books = _lab_books_arg(portfolio)
+        snap = ensure_self_model(
+            data_dir,
+            as_of_ist=str(as_of) if as_of else None,
+            lab_books=lab_books or None,
+            refresh=True,
+        )
+        lines.extend(format_self_model_evening_lines(snap))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # OI-CHAT-INFER0 Stage 0 — LLM fitness ledger
+    try:
+        from atlas.llm.fitness_ledger import format_fitness_evening_lines
+
+        data_dir = None
+        if isinstance(portfolio, dict):
+            data_dir = portfolio.get("data_dir")
+        if not data_dir:
+            try:
+                from atlas.config import get_config
+
+                data_dir = str(get_config().paths.data)
+            except Exception:  # noqa: BLE001
+                data_dir = None
+        lines.extend(
+            format_fitness_evening_lines(data_dir, as_of_ist=str(as_of) if as_of else None)
+        )
+        try:
+            from atlas.investment.learning_audit import (
+                format_learning_audit_evening_lines,
+                load_learning_audit,
+                build_and_persist_learning_audit,
+                format_weekly_learning_report_lines,
+                load_weekly_learning_report,
+                build_and_persist_weekly_learning_report,
+            )
+
+            lab_key = str(
+                (portfolio or {}).get("portfolio_key")
+                if isinstance(portfolio, dict)
+                else "india_equity_learner"
+            )
+            day = str(as_of)[:10] if as_of else None
+            aud = load_learning_audit(data_dir, laboratory_id=lab_key, as_of_ist=day)
+            if aud is None and data_dir:
+                aud = build_and_persist_learning_audit(
+                    data_dir, laboratory_id=lab_key, as_of_ist=day
+                )
+            lines.extend(format_learning_audit_evening_lines(aud))
+            if data_dir:
+                wk = load_weekly_learning_report(
+                    data_dir, laboratory_id=lab_key, as_of_ist=day
+                )
+                if wk is None:
+                    wk = build_and_persist_weekly_learning_report(
+                        data_dir,
+                        laboratory_id=lab_key,
+                        as_of_ist=day,
+                        ensure_dailies=False,
+                    )
+                lines.extend(format_weekly_learning_report_lines(wk))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from atlas.investment.intraday_integrity import (
+                format_intraday_integrity_evening_lines,
+            )
+
+            lines.extend(
+                format_intraday_integrity_evening_lines(
+                    data_dir, as_of_ist=str(as_of) if as_of else None
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from atlas.llm.cognitive_roi import format_cognitive_roi_evening_lines
+            from atlas.llm.cpu_policy import (
+                accelerator_from_config,
+                format_cpu_policy_evening_lines,
+            )
+            from atlas.llm.fitness_ledger import load_day, summarize_day
+            from atlas.investment.cognitive_experiment import (
+                format_cognitive_loop_evening_lines,
+            )
+
+            rows = load_day(data_dir, as_of_ist=str(as_of) if as_of else None)
+            lines.extend(
+                format_cognitive_roi_evening_lines(
+                    data_dir, as_of_ist=str(as_of) if as_of else None, rows=rows
+                )
+            )
+            lines.extend(
+                format_cognitive_loop_evening_lines(
+                    data_dir, as_of_ist=str(as_of) if as_of else None
+                )
+            )
+            summary = summarize_day(rows)
+            try:
+                from atlas.config import get_config
+
+                cfg = get_config()
+                ito = float(cfg.llm.interactive_timeout)
+                mc = int(cfg.llm.max_concurrency)
+            except Exception:  # noqa: BLE001
+                ito = 120.0
+                mc = 1
+            lines.extend(
+                format_cpu_policy_evening_lines(
+                    summary,
+                    interactive_timeout=ito,
+                    accelerator=accelerator_from_config(),
+                    max_concurrency=mc,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001
+        pass
 
     # Operator-first: learning grade, sell rule, under observation
     try:
@@ -1378,7 +1601,12 @@ def format_evening_report(
             decision_rows_early = list(portfolio.get("decisions") or [])
         day_trades_early = list(trades or [])
         if isinstance(portfolio, dict) and not day_trades_early:
-            day_trades_early = list(portfolio.get("recent_trades") or [])
+            day_trades_early = list(
+                portfolio.get("day_trades")
+                or portfolio.get("trades")
+                or portfolio.get("recent_trades")
+                or []
+            )
         lines.extend(
             format_learned_today_section(
                 plan=plan,
@@ -1588,7 +1816,12 @@ def format_evening_report(
 
     trades = list(trades or [])
     if portfolio and not trades:
-        trades = list(portfolio.get("recent_trades") or [])
+        trades = list(
+            portfolio.get("day_trades")
+            or portfolio.get("trades")
+            or portfolio.get("recent_trades")
+            or []
+        )
     # Prefer today's IST fills when portfolio tagged them; fall back to recent ledger.
     day_trades = [t for t in trades if isinstance(t, dict) and t.get("ist_day_match") is not False]
     if any(isinstance(t, dict) and "ist_day_match" in t for t in trades):
@@ -1950,6 +2183,17 @@ def format_weekly_research_report(
             lines.extend(format_meta_learning_section(meta))
         except Exception:  # noqa: BLE001
             pass
+    # OI-LEARN-AUDIT0 LA.2 — weekly Learning Report (≠ EOD fills)
+    wk = digest.get("weekly_learning_report")
+    if isinstance(wk, dict):
+        try:
+            from atlas.investment.learning_audit import (
+                format_weekly_learning_report_lines,
+            )
+
+            lines.extend(format_weekly_learning_report_lines(wk))
+        except Exception:  # noqa: BLE001
+            pass
     lines.append("")
     lines.append("— Atlas Resource OS / Market Program · P10 simulation only")
     return subject, "\n".join(lines)
@@ -1979,9 +2223,18 @@ def format_trade_report(
     lab = normalize_laboratory_id(
         laboratory_id=laboratory_id, portfolio_key=portfolio_key
     )
-    subject = f"[Atlas][{lab}] {side_u} {symbol} × {quantity:g} @ {price:.2f}"
+    blocked = (
+        str((decision or {}).get("status") or "") == "same_day_reentry_blocked"
+        or str((decision or {}).get("action") or "").lower() == "blocked"
+    )
+    if blocked:
+        subject = f"[Atlas][{lab}] {reason or f'{symbol} BUY blocked'}"
+    else:
+        subject = f"[Atlas][{lab}] {side_u} {symbol} × {quantity:g} @ {price:.2f}"
     lines = [
-        "Atlas trade decision report (simulation fill)",
+        "Atlas trade decision report (simulation fill)"
+        if not blocked
+        else "Atlas blocked-action report (simulation — no fill)",
         f"Time (UTC): {datetime.now(timezone.utc).isoformat()}",
         f"Laboratory: {lab}",
         f"Side: {side_u}",
@@ -1990,6 +2243,8 @@ def format_trade_report(
         f"Price: {price:.4f}",
         f"Fee: {fee:.4f}",
     ]
+    if blocked:
+        lines.append("Status: BLOCKED — no fill executed")
     if fees:
         lines.append(f"Fee breakdown: {fees}")
     if realized_pnl is not None:
@@ -2002,7 +2257,24 @@ def format_trade_report(
     if decision:
         lines.append("")
         lines.append("Decision detail:")
-        for key in ("id", "action", "rationale", "confidence", "rule", "status"):
+        for key in (
+            "id",
+            "action",
+            "rationale",
+            "confidence",
+            "rule",
+            "status",
+            "prior_sale",
+            "cognitive_review",
+            "experiment_id",
+            "lab_role",
+            "learning_status",
+            "spot",
+            "atm_strike",
+            "right",
+            "live_orders",
+            "honesty",
+        ):
             if decision.get(key) is not None:
                 lines.append(f"  {key}: {decision.get(key)}")
         opts = decision.get("options") or decision.get("chosen") or {}
@@ -2075,6 +2347,24 @@ def format_hourly_activity_report(
         f"Laboratory: {lab}",
     ]
     lines.extend(format_three_lab_books_section(_lab_books_arg(port)))
+    try:
+        from atlas.investment.nse_xbrl.digest import format_fundamental_intelligence_section
+
+        lines.extend(
+            format_fundamental_intelligence_section(
+                port.get("data_dir") if isinstance(port, dict) else None,
+                laboratory_id=laboratory_id or "india_equity_learner",
+                portfolio=port,
+            )
+        )
+    except Exception:  # noqa: BLE001
+        lines.extend(
+            [
+                "",
+                "━━━━━━━━ FUNDAMENTAL INTELLIGENCE ━━━━━━━━",
+                "(section failed to render — treat as observability miss)",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -2697,6 +2987,7 @@ class InvestorReportMailer:
                         self._data_dir,
                         laboratory_id=lab,
                         llm=getattr(self, "_llm", None),
+                        reasoning=getattr(self, "_reasoning", None),
                         max_passes=DEFAULT_DECIDE_LLM_PASSES,
                     )
                     port["decide_rationale"] = {
@@ -3119,6 +3410,57 @@ class InvestorReportMailer:
             "reason": None if ok else "smtp_send_failed",
         }
 
+    def send_blocked_action(
+        self,
+        *,
+        symbol: str,
+        reason: str,
+        detail: str = "",
+        prior_sale: str = "",
+        laboratory_id: str | None = None,
+        portfolio_key: str | None = None,
+    ) -> dict[str, Any]:
+        """OI-LAB-LOOP0 — auditable blocked BUY (wash lock), not a silent drop."""
+        return self.send_trade(
+            side="BUY",
+            symbol=symbol,
+            quantity=0,
+            price=0.0,
+            fee=0.0,
+            reason=reason,
+            decision={
+                "action": "blocked",
+                "rationale": detail or reason,
+                "prior_sale": prior_sale or None,
+                "status": "same_day_reentry_blocked",
+            },
+            laboratory_id=laboratory_id,
+            portfolio_key=portfolio_key,
+        )
+
+    def send_fno_paper_experience(
+        self,
+        doc: dict[str, Any],
+        *,
+        advice: dict[str, Any] | None = None,
+        laboratory_id: str = "india_fno_learner",
+    ) -> dict[str, Any]:
+        """FNO-PAPER-001 complete RT — execution + cognitive chain (not vanity P&L)."""
+        if not self.available():
+            return {"sent": False, "reason": "email_unavailable", "status": self.status()}
+        from atlas.investment.fno_paper_001 import format_experience_email
+
+        subject, body = format_experience_email(doc, advice=advice)
+        ok = self._deliver(subject, body)
+        return {
+            "sent": ok,
+            "recipients": self.recipients(),
+            "subject": subject,
+            "body": body,
+            "laboratory_id": laboratory_id,
+            "reason": None if ok else "smtp_send_failed",
+        }
+
     def preview_weekly_research(
         self,
         *,
@@ -3145,6 +3487,21 @@ class InvestorReportMailer:
             )
         except Exception:  # noqa: BLE001
             self._logger.debug("DI.6 weekly meta-learning skipped", exc_info=True)
+        # OI-LEARN-AUDIT0 LA.2 — weekly Learning Report instrument
+        try:
+            from atlas.config import get_config
+            from atlas.investment.learning_audit import (
+                build_and_persist_weekly_learning_report,
+            )
+
+            data_dir = str(get_config().paths.data)
+            digest["weekly_learning_report"] = build_and_persist_weekly_learning_report(
+                data_dir,
+                laboratory_id="india_equity_learner",
+                ensure_dailies=False,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("LA.2 weekly learning report skipped", exc_info=True)
         subject, body = format_weekly_research_report(digest=digest, program_id=program_id)
         return {
             "subject": subject,

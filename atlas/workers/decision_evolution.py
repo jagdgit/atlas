@@ -119,6 +119,10 @@ class DecisionEvolutionWorker(PersistentWorker):
                 "counts": counts,
                 "cadence": budget,
             }
+            try:
+                self._drain_bre3(portfolio_key=portfolio_key, cfg=cfg, state=state)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("BRE.3 drain skipped (thinned tick): %s", exc)
             return TickResult(
                 state=state,
                 note=(
@@ -419,6 +423,26 @@ class DecisionEvolutionWorker(PersistentWorker):
                     "completed": cf_meta.get("completed"),
                     "missing_prices": cf_meta.get("missing_prices"),
                 }
+            # OI-ICR3 — drain due opportunity-cost / capital_regret horizons
+            try:
+                from atlas.investment.allocation_regret import (
+                    evaluate_due_opportunity_costs,
+                )
+
+                oc_meta = evaluate_due_opportunity_costs(
+                    data_dir,
+                    laboratory_id=portfolio_key,
+                    as_of_ist=result.get("as_of_ist"),
+                    price_fn=price_fn,
+                    limit=max(1, min(20, limit or 5)),
+                )
+                if isinstance(state.get("last_evolution"), dict):
+                    state["last_evolution"]["opportunity_cost"] = {
+                        "completed": oc_meta.get("completed"),
+                        "missing_prices": oc_meta.get("missing_prices"),
+                    }
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("ICR.3 opportunity-cost drain skipped: %s", exc)
             # OI-SELF-EXP — close learning loops for completed CF horizons (advice-only).
             if (
                 int(cf_meta.get("completed") or 0) > 0
@@ -477,9 +501,15 @@ class DecisionEvolutionWorker(PersistentWorker):
 
         # BRE.3 — drain async decide-time LLM rationales (never on fill path)
         try:
-            from atlas.investment.decide_rationale import (
-                DEFAULT_DECIDE_LLM_PASSES,
-                drain_pending_rationales,
+            self._drain_bre3(portfolio_key=portfolio_key, cfg=cfg, state=state)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("BRE.3 drain skipped: %s", exc)
+
+        # OI-ICR5 — drain scientist notes LLM enrich (advice-only; research lane)
+        try:
+            from atlas.investment.incumbent_scientist import (
+                DEFAULT_ICR5_PASSES,
+                drain_pending_scientist_notes,
             )
 
             data_dir = None
@@ -492,25 +522,25 @@ class DecisionEvolutionWorker(PersistentWorker):
                     data_dir = str(get_config().paths.data)
                 except Exception:  # noqa: BLE001
                     data_dir = None
-            max_passes = max(
-                1, min(int(cfg.get("decide_rationale_passes") or DEFAULT_DECIDE_LLM_PASSES), 5)
-            )
-            bre3 = drain_pending_rationales(
+            icr5 = drain_pending_scientist_notes(
                 data_dir,
                 laboratory_id=portfolio_key,
                 llm=self._llm,
-                max_passes=max_passes,
+                reasoning=self._reasoning,
+                max_passes=max(
+                    1, min(int(cfg.get("icr5_passes") or DEFAULT_ICR5_PASSES), 5)
+                ),
                 limit=max(1, min(20, limit or 5)),
             )
             if isinstance(state.get("last_evolution"), dict):
-                state["last_evolution"]["decide_rationale"] = {
-                    "done": bre3.get("done"),
-                    "deferred": bre3.get("deferred"),
-                    "skipped": bre3.get("skipped"),
-                    "pending": bre3.get("pending"),
+                state["last_evolution"]["icr5_scientist"] = {
+                    "done": icr5.get("done"),
+                    "deferred": icr5.get("deferred"),
+                    "skipped": icr5.get("skipped"),
+                    "pending": icr5.get("pending"),
                 }
         except Exception as exc:  # noqa: BLE001
-            self._logger.debug("BRE.3 drain skipped: %s", exc)
+            self._logger.debug("ICR.5 scientist drain skipped: %s", exc)
 
         # OI-LINT0 Phase 3 — drain event-triggered research scientist (advice-only)
         try:
@@ -629,6 +659,79 @@ class DecisionEvolutionWorker(PersistentWorker):
                 f"{thinned}{hyp_note}{sw_note}{miss_note}"
             ),
         )
+
+    def _evolution_data_dir(self) -> str | None:
+        if self._packets is not None:
+            data_dir = getattr(self._packets, "data_dir", None)
+            if data_dir:
+                return str(data_dir)
+        try:
+            from atlas.config import get_config
+
+            return str(get_config().paths.data)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _drain_bre3(
+        self,
+        *,
+        portfolio_key: str,
+        cfg: dict[str, Any],
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """CLC.R0 — drain is independent of revisit Host Guard budget."""
+        from atlas.investment.decide_rationale import (
+            DEFAULT_DECIDE_LLM_PASSES,
+            drain_pending_rationales,
+        )
+
+        max_passes = max(
+            1, min(int(cfg.get("decide_rationale_passes") or DEFAULT_DECIDE_LLM_PASSES), 5)
+        )
+        self._logger.info(
+            "CLC.R0 drain llm_bound=%s reasoning_bound=%s lab=%s passes=%s",
+            self._llm is not None,
+            self._reasoning is not None,
+            portfolio_key,
+            max_passes,
+        )
+        bre3 = drain_pending_rationales(
+            self._evolution_data_dir(),
+            laboratory_id=portfolio_key,
+            llm=self._llm,
+            reasoning=self._reasoning,
+            max_passes=max_passes,
+            limit=20,
+        )
+        self._logger.info(
+            "CLC.R0 drain result lab=%s done=%s deferred=%s skipped=%s pending=%s "
+            "stale_expired=%s pre_clc=%s r1_quota=%s cause=%s",
+            portfolio_key,
+            bre3.get("done"),
+            bre3.get("deferred"),
+            bre3.get("skipped"),
+            bre3.get("pending"),
+            bre3.get("stale_expired"),
+            bre3.get("pre_clc_expired"),
+            bre3.get("r1_quota_expired"),
+            bre3.get("r0_cause"),
+        )
+        meta = {
+            "done": bre3.get("done"),
+            "deferred": bre3.get("deferred"),
+            "skipped": bre3.get("skipped"),
+            "pending": bre3.get("pending"),
+            "stale_expired": bre3.get("stale_expired"),
+            "pre_clc_expired": bre3.get("pre_clc_expired"),
+            "r1_quota_expired": bre3.get("r1_quota_expired"),
+            "llm_bound": bre3.get("llm_bound"),
+            "reasoning_bound": bre3.get("reasoning_bound"),
+            "r0_cause": bre3.get("r0_cause"),
+        }
+        if not isinstance(state.get("last_evolution"), dict):
+            state["last_evolution"] = {}
+        state["last_evolution"]["decide_rationale"] = meta
+        return meta
 
     def _open_symbols(
         self, cfg: dict[str, Any], *, portfolio_key: str

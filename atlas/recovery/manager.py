@@ -82,6 +82,7 @@ class RecoveryManager:
             self._step("storage_integrity", self._storage_integrity),
             self._step("backup_verify", self._backup_verify),
             self._step("task_recovery", self._task_recovery),
+            self._step("mdph_reconcile", self._mdph_reconcile),
         ]
         ok = all(s["ok"] for s in steps)
         status = "completed" if ok else "failed"
@@ -142,6 +143,26 @@ class RecoveryManager:
             return {"ok": True, "detail": "task repo not available", "data": {}}
         n = self._task_repo.recover_interrupted()
         return {"ok": True, "detail": f"{n} interrupted task(s) reset", "data": {"reset": n}}
+
+    def _mdph_reconcile(self) -> dict[str, Any]:
+        """OI-MDPH0 / MDPH.9 — reconstruct provider health after unclean boot."""
+        try:
+            from atlas.investment.market_data_provider_health import reconcile_operating_state
+
+            report = reconcile_operating_state()
+            status = report.get("provider_status")
+            allowed = report.get("live_trading_allowed")
+            detail = (
+                f"MDPH {status}; live_trading_allowed={allowed}; "
+                f"instrument={report.get('instrument_master')}"
+            )
+            return {"ok": True, "detail": detail, "data": report}
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": True,
+                "detail": f"mdph reconcile skipped: {type(exc).__name__}: {exc}",
+                "data": {},
+            }
 
     # --- helpers --------------------------------------------------------
 

@@ -12,6 +12,21 @@ Atlas does **not** scrape Screener.in HTML. Operator-exported CSV/JSON becomes d
 
 ## Ways to import
 
+### Screener company Excel (``.xlsx``)
+
+Invest-intel **Import paste** accepts **CSV/JSON text only**. Pasting a Screener
+URL (`https://www.screener.in/...`) imports **0 rows**. Dropping
+`Welspun Corp.xlsx` (company name) also fails until the ticker is known.
+
+Supported paths:
+
+1. Prefer flat CSV (symbol,pe,fcf,roe,…) — see ritual template
+2. Or rename export to ``WELCORP.NS.xlsx`` and drop into
+   ``{data}/imports/fundamentals/`` → **Ingest drop folder** (parser reads
+   ``Data Sheet``, derives PE/ROE/D/E; **FCF stays missing** unless an explicit
+   FCF row exists)
+3. Or call `atlas.investment.screener_xlsx.import_screener_company_xlsx(...)`
+
 ### 1. Invest intel UI
 
 1. Open **Invest intel**
@@ -62,6 +77,19 @@ Ratios may be percent (28) or fraction (0.28); Atlas normalizes to percent in th
 - Prefer annual/quarterly PDFs (IIP.4) for stronger dossier sections
 - **Never invent** PE, FCF, or industry averages. `fair_pe` on valuation is a quality heuristic — not industry average.
 - Optional columns `industry_pe_median` / `industry_pb_median` / `industry_roe_median` are operator evidence only. Atlas may say “PE below industry median” **only** when those fields were imported.
+
+## DP-FUND3 — Weekly open-book Screener ritual
+
+**When:** Sunday evening IST (or any day after a Yahoo 429 storm / missing PE on holdings).
+
+1. `POST /v1/market/fundamentals/open-book-screener-ritual` — stages  
+   `{data}/imports/fundamentals/open_book_screener_YYYY-MM-DD.csv` for current holdings
+2. Or: `GET /v1/market/fundamentals/learner-template?open_books_only=true&only_gaps=true`
+3. Fill empty `pe` / `fcf` / `roe` / `debt_to_equity` from a **manual** Screener.in export (no scraping)
+4. Drop the filled file back into `imports/fundamentals/` → **Ingest drop folder**, or paste CSV in Invest intel
+5. Confirm: `GET /v1/market/fundamentals` shows the holding with PE/FCF (not invent)
+
+This is the durable path when Yahoo enrich is paused — holdings must not sit with zero store rows while capital is deployed.
 
 ## DI.4 — Learner watchlist gap fill
 

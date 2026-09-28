@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"
+            xmlns:in-bse-fin="http://www.nseindia.com/taxonomy/ifindas">
+  <xbrli:context id="FourD">
+    <xbrli:period>
+      <xbrli:startDate>2025-04-01</xbrli:startDate>
+      <xbrli:endDate>2026-03-31</xbrli:endDate>
+    </xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="OneI">
+    <xbrli:period>
+      <xbrli:instant>2026-03-31</xbrli:instant>
+    </xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="PY_I">
+    <xbrli:period>
+      <xbrli:instant>2025-03-31</xbrli:instant>
+    </xbrli:period>
+  </xbrli:context>
+  <in-bse-fin:ProfitLossForPeriod contextRef="FourD" unitRef="INR" decimals="-5">-17150000000</in-bse-fin:ProfitLossForPeriod>
+  <in-bse-fin:ProfitOrLossAttributableToOwnersOfParent contextRef="FourD" unitRef="INR" decimals="-5">-18960000000</in-bse-fin:ProfitOrLossAttributableToOwnersOfParent>
+  <in-bse-fin:ProfitOrLossAttributableToNonControllingInterests contextRef="FourD" unitRef="INR" decimals="-5">1810000000</in-bse-fin:ProfitOrLossAttributableToNonControllingInterests>
+  <in-bse-fin:DilutedEarningsLossPerShareFromContinuingAndDiscontinuedOperations contextRef="FourD" unitRef="INRPerShare" decimals="INF">-74.42</in-bse-fin:DilutedEarningsLossPerShareFromContinuingAndDiscontinuedOperations>
+  <in-bse-fin:EquityAttributableToOwnersOfParent contextRef="OneI" unitRef="INR" decimals="-5">212060000000</in-bse-fin:EquityAttributableToOwnersOfParent>
+  <in-bse-fin:Equity contextRef="OneI" unitRef="INR" decimals="-5">221750000000</in-bse-fin:Equity>
+  <in-bse-fin:EquityAttributableToOwnersOfParent contextRef="PY_I" unitRef="INR" decimals="-5">215940000000</in-bse-fin:EquityAttributableToOwnersOfParent>
+  <in-bse-fin:Equity contextRef="PY_I" unitRef="INR" decimals="-5">225010000000</in-bse-fin:Equity>
+  <in-bse-fin:BorrowingsCurrent contextRef="OneI" unitRef="INR" decimals="-5">26240000000</in-bse-fin:BorrowingsCurrent>
+  <in-bse-fin:BorrowingsNoncurrent contextRef="OneI" unitRef="INR" decimals="-5">53770000000</in-bse-fin:BorrowingsNoncurrent>
+  <in-bse-fin:LeaseLiabilitiesCurrent contextRef="OneI" unitRef="INR" decimals="-5">1730000000</in-bse-fin:LeaseLiabilitiesCurrent>
+  <in-bse-fin:LeaseLiabilitiesNoncurrent contextRef="OneI" unitRef="INR" decimals="-5">7140000000</in-bse-fin:LeaseLiabilitiesNoncurrent>
+  <in-bse-fin:Liabilities contextRef="OneI" unitRef="INR" decimals="-5">168560000000</in-bse-fin:Liabilities>
+  <in-bse-fin:CashFlowsFromUsedInOperatingActivities contextRef="FourD" unitRef="INR" decimals="-5">12690000000</in-bse-fin:CashFlowsFromUsedInOperatingActivities>
+  <in-bse-fin:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities contextRef="FourD" unitRef="INR" decimals="-5">12050000000</in-bse-fin:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities>
+</xbrli:xbrl>

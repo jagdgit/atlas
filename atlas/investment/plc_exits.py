@@ -61,12 +61,24 @@ DEFAULT_PE_EXCESSIVE = 55.0
 
 
 def plc_b_enabled(cfg: dict[str, Any] | None, portfolio_key: str | None) -> bool:
+    """Learner books default ON; F&O / futures labs OFF (own margin/lot exit contract).
+
+    Cash-equity concentration / PE exits treat ``qty × index`` as name weight and
+    falsely liquidate a single NIFTY proxy lot (OI-FNO-CONTRACT / NOW roadmap #2).
+    """
     cfg = cfg or {}
     if cfg.get("plc_b_exits") is not None:
         return bool(cfg.get("plc_b_exits"))
     if cfg.get("plc_b_gates") is not None:
         return bool(cfg.get("plc_b_gates"))
     pk = (portfolio_key or "").lower()
+    # Match PLC.A: F&O / futures use pack margin + index-proxy exits — not equity PLC.B.
+    if "intraday" in pk or "fno" in pk or pk.endswith("_futures"):
+        return False
+    ac = str(cfg.get("asset_class") or "").strip().lower()
+    pack = str(cfg.get("instrument_pack") or "").strip().lower()
+    if ac in {"futures", "options"} or pack in {"futures", "options", "fno", "nse_fno"}:
+        return False
     return "learner" in pk or "laboratory" in pk
 
 
@@ -215,7 +227,15 @@ def evaluate_plc_b_exits(
         max_name = DEFAULT_MAX_NAME_PCT
     if max_name and max_name > 1.0:
         max_name = max_name / 100.0
-    if eq and eq > 0 and max_name:
+    # Index-proxy lots: qty×index ≫ book equity — never treat as cash-equity name weight.
+    index_proxy = False
+    try:
+        from atlas.investment.index_proxy_lot import underlier_family
+
+        index_proxy = underlier_family(symbol) is not None
+    except Exception:  # noqa: BLE001
+        index_proxy = False
+    if eq and eq > 0 and max_name and not index_proxy:
         weight = (held * price) / eq
         if weight > max_name + 1e-9:
             proposals.append(
@@ -234,7 +254,8 @@ def evaluate_plc_b_exits(
     pe = _f(fund.get("pe"))
     pe_cap = _f(cfg.get("plc_b_pe_excessive")) or DEFAULT_PE_EXCESSIVE
     ind_pe = _f(fund.get("industry_pe") or fund.get("sector_pe_median"))
-    if pe is not None:
+    # Index underliers have no PE — skip cash-equity valuation exit.
+    if pe is not None and not index_proxy:
         rich = pe >= pe_cap
         if ind_pe and ind_pe > 0 and pe >= ind_pe * 1.75:
             rich = True

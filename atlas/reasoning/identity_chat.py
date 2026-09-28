@@ -47,7 +47,8 @@ _ATLAS_SYSTEM = (
     "3. When you rely on an experience, cite experience_id, e.g. (experience:ID).\n"
     "4. If context is thin, say what you don't know (open questions) — never invent evidence.\n"
     "5. Keep answers concise. Influence is advice-only; do not claim you changed trading gates.\n"
-    "6. Models are replaceable CPUs; you remain Atlas."
+    "6. Models are replaceable CPUs; you remain Atlas. One local reasoner "
+    "(qwen3:4b) + embed (nomic-embed-text). Role names are lanes, not different weights."
 )
 
 
@@ -236,11 +237,20 @@ def answer_as_atlas(
         }
 
     ctx_block = format_bundle_context(bundle)
-    system = _ATLAS_SYSTEM
+    try:
+        from atlas.llm.cpu_policy import chat_max_context_chars, truncate_text
+
+        ctx_block = truncate_text(ctx_block, max_chars=chat_max_context_chars())
+    except Exception:  # noqa: BLE001
+        pass
+    system = (
+        _ATLAS_SYSTEM
+        + " Host is CPU-only — keep answers short; prefer citing beliefs over long prose."
+    )
     user = (
         f"Living RAG context:\n{ctx_block}\n\n"
         f"User message:\n{query}\n\n"
-        "Answer as Atlas. Cite belief_id / experience_id when you use them."
+        "Answer as Atlas. Cite belief_id / experience_id when you use them. Be brief."
     )
     try:
         text = compose_fn(
@@ -255,8 +265,12 @@ def answer_as_atlas(
         text = fallback or grounded
 
     answer = (text or "").strip()
-    if not answer or _looks_like_timeout(answer):
+    if not answer:
         answer = grounded
+    elif _looks_like_timeout(answer):
+        # OI-CU0 A5 — keep lane-busy / timeout honesty. Do not swap to Belief
+        # Core for unrelated questions (that masquerades as knowledge).
+        pass
     elif bundle.get("beliefs") and "belief:" not in answer.lower() and "(belief" not in answer.lower():
         top = bundle["beliefs"][0]
         answer = (

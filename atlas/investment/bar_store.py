@@ -204,7 +204,11 @@ def persist_symbol_bars(
     *,
     provider: str | None = None,
 ) -> dict[str, Any]:
-    """Merge incoming bars into durable store. Returns per-symbol readiness."""
+    """Merge incoming bars into durable store. Returns per-symbol readiness.
+
+    ``provider`` is the last-write / session source. Prior ``history_provider``
+    is preserved so a 10y Yahoo bootstrap stays labeled when a Zerodha tip lands.
+    """
     try:
         from atlas.investment.symbol_aliases import resolve_yahoo_symbol
 
@@ -219,10 +223,17 @@ def persist_symbol_bars(
     prior_bars = prior.get("bars") if isinstance(prior.get("bars"), list) else []
     merged = merge_bars(prior_bars, bars or [])
     now = datetime.now(timezone.utc).isoformat()
+    incoming = str(provider).strip() if provider is not None else ""
+    prior_provider = str(prior.get("provider") or "").strip()
+    prior_history = str(prior.get("history_provider") or "").strip()
+    last_write = incoming or prior_provider
+    history = prior_history or prior_provider or last_write
     doc = {
         "version": VERSION,
         "symbol": canon,
-        "provider": str(provider or prior.get("provider") or ""),
+        "provider": last_write,
+        "last_write_provider": last_write,
+        "history_provider": history,
         "updated_at": now,
         "bar_count": len(merged),
         "bars": merged,
@@ -348,6 +359,9 @@ def symbol_readiness(
         "last_nse_session": last_session_s,
         "age_days": age_days,
         "provider": (doc or {}).get("provider"),
+        "last_write_provider": (doc or {}).get("last_write_provider")
+        or (doc or {}).get("provider"),
+        "history_provider": (doc or {}).get("history_provider"),
         "updated_at": (doc or {}).get("updated_at"),
     }
 

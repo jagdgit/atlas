@@ -697,7 +697,8 @@ class ReportGenerator:
                         "separate funnel table. Focus on what the evidence says and how "
                         f"confident it is.\n\n{facts}",
                     ),
-                ]
+                ],
+                _atlas_purpose="report_executive_summary",
             ).text.strip()
             if prose:
                 # Keep the authoritative deterministic count sentence in front of the

@@ -152,9 +152,49 @@ def test_e2_open_books_only_idle_without_holdings(tmp_path, monkeypatch):
         opener=lambda _u: _fake_quote_summary(),
         priority_symbols=[],
         open_books_only=True,
+        laboratory_id="india_equity_learner",
     )
     assert out["reason"] == "no_open_books"
     assert out["fetched"] == 0
+
+
+def test_e2_open_books_only_enrich_material_challenger(tmp_path, monkeypatch):
+    """Flat book still densifies Next-₹1 destination — Zerodha does not fill PE."""
+    monkeypatch.setenv("ATLAS_WATCHLIST_DIR", str(tmp_path / "wl"))
+    wl.clear(disk=True)
+    wl.publish(
+        program_id="market_intelligence",
+        index="TEST",
+        watchlist=[{"symbol": "OTHERGAP.NS"}, {"symbol": "WELCORP.NS"}],
+        ranked=[{"symbol": "OTHERGAP.NS", "rank": 1}, {"symbol": "WELCORP.NS", "rank": 2}],
+    )
+    seen: list[str] = []
+
+    def opener(url: str):
+        u = url.upper()
+        if "WELCORP" in u:
+            seen.append("WELCORP.NS")
+        elif "OTHERGAP" in u:
+            seen.append("OTHERGAP.NS")
+        return _fake_quote_summary(pe=14.0, fcf=2e8)
+
+    out = enrich_watchlist_gaps(
+        tmp_path,
+        program_id="market_intelligence",
+        enabled=True,
+        opener=opener,
+        batch_size=5,
+        priority_symbols=[],
+        open_books_only=True,
+        laboratory_id="india_equity_learner",
+        material_challengers=["WELCORP.NS"],
+    )
+    assert out["ok"] is True
+    assert out.get("mode") == "lq.7_material_challengers"
+    assert "WELCORP.NS" in (out.get("gap_symbols") or out.get("symbols") or [])
+    assert "OTHERGAP.NS" not in (out.get("gap_symbols") or [])
+    assert seen == ["WELCORP.NS"]
+    assert out.get("fetched", 0) >= 1
 
 
 def test_e2_weekly_window_sunday_ist():

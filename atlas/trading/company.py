@@ -120,6 +120,15 @@ def profile_from_dict(raw: dict[str, Any], *, provider: str = "config_seed") -> 
     )
 
 
+def _normalize_equity_symbol(symbol: str) -> str:
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return sym
+    if not sym.endswith(".NS") and "." not in sym:
+        return f"{sym}.NS"
+    return sym
+
+
 class ConfigSeedCompanyAdapter:
     """Hermetic: profiles supplied in mission config (no network)."""
 
@@ -150,10 +159,10 @@ class ConfigSeedCompanyAdapter:
                 self._by_symbol[profile.symbol.upper()] = profile
 
     def fetch_company(self, symbol: str, **kwargs: Any) -> CompanyProfile:
-        sym = (symbol or "").strip()
+        sym = _normalize_equity_symbol(symbol)
         if not sym:
             raise CapabilityGap("company_data:symbol", "symbol is required")
-        profile = self._by_symbol.get(sym.upper())
+        profile = self._by_symbol.get(sym)
         if profile is None:
             raise CapabilityGap(
                 f"company_data:config_seed:{sym}",
@@ -312,57 +321,69 @@ class CompanyDataService:
         if isinstance(fs, ConfigSeedCompanyAdapter):
             fs.load(profiles)
 
-    def _ensure_filings_seed(self, symbol: str) -> None:
-        """Lazy-load hermetic name/sector/filings for filings_seed provider."""
+    def _ensure_hermetic_profile(self, symbol: str) -> None:
+        """Lazy-load name/sector/filings/ratios for universe + open-book symbols."""
         from atlas.investment.filings import filings_for_symbol
         from atlas.investment.quality_seed import ratios_for_symbol
-        from atlas.investment.universe import INDEX_NIFTY50, membership
+        from atlas.investment.universe import lookup_symbol
 
-        sym = (symbol or "").strip().upper()
+        sym = _normalize_equity_symbol(symbol)
         if not sym:
             return
-        if not sym.endswith(".NS") and "." not in sym:
-            sym = f"{sym}.NS"
-        fs = self._adapters.get("filings_seed")
-        if not isinstance(fs, ConfigSeedCompanyAdapter):
-            return
-        try:
-            fs.fetch_company(sym)
-            return  # already loaded
-        except CapabilityGap:
-            pass
-        name = sym
-        sector = ""
-        exchange = "NSE"
-        for row in membership(INDEX_NIFTY50):
-            if str(row.get("symbol") or "").upper() == sym:
-                name = str(row.get("name") or sym)
-                sector = str(row.get("sector") or "")
-                exchange = str(row.get("exchange") or "NSE")
-                break
-        filings = filings_for_symbol(sym, name=name)
-        ratios = ratios_for_symbol(sym)
-        facts = [
-            f"{name} is studied via hermetic filing refs (IL.5+).",
-            "Official NSE/BSE filing APIs remain capability_gap until ToS path exists.",
-        ]
-        fs.load(
-            [
-                {
-                    "symbol": sym,
-                    "name": name,
-                    "sector": sector,
-                    "exchange": exchange,
-                    "facts": facts,
-                    "filings": filings,
-                    "ratios": {
-                        k: ratios[k]
-                        for k in ("roe", "debt_to_equity")
-                        if k in ratios and ratios[k] is not None
-                    },
-                }
+        for adapter_key in ("config_seed", "filings_seed"):
+            adapter = self._adapters.get(adapter_key)
+            if not isinstance(adapter, ConfigSeedCompanyAdapter):
+                continue
+            try:
+                adapter.fetch_company(sym)
+                continue  # already loaded
+            except CapabilityGap:
+                pass
+
+            row = lookup_symbol(sym) or {}
+            name = str(row.get("name") or sym)
+            sector = str(row.get("sector") or "")
+            exchange = str(row.get("exchange") or "NSE")
+            filings = filings_for_symbol(sym, name=name)
+            ratios = ratios_for_symbol(sym)
+            ratio_fields = {
+                k: ratios[k]
+                for k in (
+                    "roe",
+                    "roce",
+                    "roic",
+                    "debt_to_equity",
+                    "pe",
+                    "fcf",
+                    "operating_margin",
+                )
+                if k in ratios and ratios[k] is not None
+            }
+            facts = [
+                f"{name} is in Atlas staged India equity universe ({sector or 'sector pending'}).",
+                "Hermetic sector-proxy ratios until operator Screener/Yahoo import lands.",
             ]
-        )
+            adapter.load(
+                [
+                    {
+                        "symbol": sym,
+                        "name": name,
+                        "sector": sector,
+                        "exchange": exchange,
+                        "facts": facts,
+                        "filings": filings,
+                        "ratios": ratio_fields,
+                        "metadata": {
+                            "source": "universe_seed",
+                            "method": str(ratios.get("method") or "sector_proxy"),
+                        },
+                    }
+                ]
+            )
+
+    def _ensure_filings_seed(self, symbol: str) -> None:
+        """Backward-compatible alias."""
+        self._ensure_hermetic_profile(symbol)
 
     def fetch(
         self,
@@ -375,15 +396,15 @@ class CompanyDataService:
         if companies:
             self.load_config_profiles(companies)
         prov = (provider or self._default or "config_seed").strip().lower()
-        if prov == "filings_seed":
-            self._ensure_filings_seed(symbol)
+        if prov in ("config_seed", "filings_seed"):
+            self._ensure_hermetic_profile(symbol)
         adapter = self._adapters.get(prov)
         if adapter is None:
             raise CapabilityGap(
                 f"company_data:{prov}",
                 f"unknown company provider '{prov}' — known: {sorted(self._adapters)}",
             )
-        profile = adapter.fetch_company(symbol)
+        profile = adapter.fetch_company(_normalize_equity_symbol(symbol))
         # Enrich empty filings from hermetic/operator store when using config_seed
         data = profile.as_dict()
         if prov in ("config_seed", "filings_seed") and not data.get("filings"):

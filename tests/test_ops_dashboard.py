@@ -161,6 +161,7 @@ def test_dashboard_snapshot_shape():
                 "sse_subscribers", "recovery", "last_checkpoint", "self_improvement",
                 "glossary", "program_health", "capacity_signal",
                 "next_tick", "research_progress", "research_velocity",
+                "scientist_drain",
                 "generated_at"):
         assert key in snap
     assert snap["glossary"]["entries"]

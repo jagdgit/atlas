@@ -251,6 +251,7 @@ class ReActAgent:
 
     def _chat(self, messages: list[ChatMessage], *, think: bool | None = None, **extra: Any):
         use_think = self._think if think is None else think
+        extra.setdefault("_atlas_purpose", "react_agent")
         return self._llm.chat(
             messages, temperature=self._temperature, think=use_think, **extra
         )

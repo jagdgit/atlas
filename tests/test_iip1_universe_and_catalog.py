@@ -24,6 +24,15 @@ def test_known_indices_include_iip1_packs():
     assert len(membership(INDEX_NIFTY50)) == 50
     assert len(membership(INDEX_NIFTY_NEXT50)) >= 30
     assert len(membership(INDEX_NIFTY_MIDCAP150)) >= 40
+    from atlas.investment.universe import lookup_symbol
+
+    bhel = lookup_symbol("BHEL")
+    assert bhel is not None
+    assert bhel["sector"] == "Capital Goods"
+    blue = lookup_symbol("BLUESTARCO")
+    assert blue is not None
+    assert blue["sector"] == "Consumer Durables"
+    assert blue["name"] == "Blue Star"
 
 
 def test_resolve_union_next50_midcap():

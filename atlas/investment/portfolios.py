@@ -653,23 +653,18 @@ def default_decision_config(row: dict[str, Any]) -> dict[str, Any]:
         market_session = "nse_fno"
         auto_max = 0
         if not instruments:
-            instruments = [
-                {
-                    "symbol": "NIFTY",
-                    "asset_class": "futures",
-                    "lot_size": 25,
-                    "note": "plc.e_demo_seed — underlier ^NSEI via alias; replace with operator contracts",
-                },
-                {
-                    "symbol": "BANKNIFTY",
-                    "asset_class": "futures",
-                    "lot_size": 15,
-                    "note": "plc.e_demo_seed — optional second underlier",
-                },
-            ]
+            from atlas.investment.fno_lab_v1 import instrument_rows_for_seed
+
+            instruments = instrument_rows_for_seed()
     elif "intraday" in key.lower():
         market_session = "nse_equity"
         auto_max = 3
+        live_provider = "zerodha"
+    else:
+        live_provider = "yahoo"
+    # F&O / futures packs also require broker-authorized live marks
+    if ac in {"futures", "options"} or pack in {"futures", "options", "fno"}:
+        live_provider = "zerodha"
     return {
         "portfolio_key": key,
         "portfolio_label": row.get("label") or key,
@@ -682,7 +677,7 @@ def default_decision_config(row: dict[str, Any]) -> dict[str, Any]:
         "instrument_pack": pack,
         "instruments": instruments,
         "feed_mode": "live",
-        "live_provider": "yahoo",
+        "live_provider": live_provider,
         "market_session": market_session,
         "respect_market_hours": True,
         "auto_max_instruments": auto_max,
@@ -727,6 +722,18 @@ def enrich_decision_config_from_book(
             if suggested.get(field) is not None:
                 out[field] = suggested[field]
 
+    # OI-MDPH0 — never silently keep Yahoo as live provider for live-required labs
+    try:
+        from atlas.investment.lab_contracts import live_required as _live_req
+
+        pk = str(out.get("portfolio_key") or key or "")
+        if _live_req(pk, cfg=out):
+            lp = str(out.get("live_provider") or "").strip().lower()
+            if lp in {"", "yahoo"}:
+                out["live_provider"] = "zerodha"
+    except Exception:  # noqa: BLE001
+        pass
+
     if not out.get("persona") and suggested.get("persona"):
         out["persona"] = suggested["persona"]
 
@@ -746,6 +753,7 @@ def enrich_decision_config_from_book(
             out["_lab_seeded_instruments"] = True
         # Ensure asset_class stamped on rows so persona filter keeps them
         fixed: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for inst in instruments:
             if not isinstance(inst, dict):
                 continue
@@ -758,7 +766,23 @@ def enrich_decision_config_from_book(
                     row["lot_size"] = default_lot_size(str(row.get("symbol") or ""))
                 except Exception:  # noqa: BLE001
                     row["lot_size"] = 25
+            sym_u = str(row.get("symbol") or "").strip().upper()
+            if sym_u:
+                seen.add(sym_u)
             fixed.append(row)
+        # F&O Lab v1 — merge indices + stock seed without dropping operator rows
+        try:
+            from atlas.investment.fno_lab_v1 import instrument_rows_for_seed
+
+            for extra in instrument_rows_for_seed():
+                sym_u = str(extra.get("symbol") or "").strip().upper()
+                if not sym_u or sym_u in seen:
+                    continue
+                seen.add(sym_u)
+                fixed.append(dict(extra))
+                out["_lab_v1_seed_merged"] = True
+        except Exception:  # noqa: BLE001
+            pass
         out["instruments"] = fixed
     elif "intraday" in key.lower():
         out.setdefault("market_session", "nse_equity")

@@ -63,6 +63,25 @@ def test_company_data_service_fetch():
     assert "sec" in names and "nse" in names
 
 
+def test_hermetic_profile_from_universe_without_config_entry():
+    """Open-book symbols resolve via staged NIFTY500 — no manual companies[] entry."""
+    from atlas.investment.universe import lookup_symbol
+
+    row = lookup_symbol("PRAJIND.NS")
+    assert row is not None
+    assert row.get("sector") == "Capital Goods"
+    assert "Praj" in str(row.get("name") or "")
+
+    svc = CompanyDataService()
+    out = svc.fetch("PRAJIND.NS", provider="config_seed")
+    profile = out.get("profile") or {}
+    assert profile.get("name")
+    assert profile.get("sector") == "Capital Goods"
+    ratios = profile.get("ratios") or {}
+    assert ratios.get("roe") is not None or ratios.get("roce") is not None
+    assert "sector-proxy" in out["knowledge_text"].lower() or profile.get("sector")
+
+
 def test_company_intelligence_worker_emits():
     emitted: list[dict] = []
 

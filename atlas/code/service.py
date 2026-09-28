@@ -242,7 +242,8 @@ class CodeService:
         user = f"{ask}\n\nParsed structure:\n{outline}\n\nSource (truncated):\n{source}"
         try:
             text = self._llm.for_role("code").chat(
-                [ChatMessage("system", _EXPLAIN_SYSTEM), ChatMessage("user", user)]
+                [ChatMessage("system", _EXPLAIN_SYSTEM), ChatMessage("user", user)],
+                _atlas_purpose="eng_code_explain",
             ).text.strip()
         except Exception:  # noqa: BLE001 - never let explanation crash the call
             self._logger.exception("code explanation failed")

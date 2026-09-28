@@ -14,6 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fastapi import Request
+from fastapi.responses import RedirectResponse
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -34,7 +37,6 @@ def mount_ui(app: "FastAPI", config: "AtlasConfig") -> bool:
     if not STATIC_DIR.is_dir():
         return False
 
-    from fastapi.responses import RedirectResponse
     from starlette.staticfiles import StaticFiles
 
     class NoCacheStaticFiles(StaticFiles):
@@ -53,7 +55,24 @@ def mount_ui(app: "FastAPI", config: "AtlasConfig") -> bool:
     app.mount("/ui", NoCacheStaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
 
     @app.get("/", include_in_schema=False)
-    def _root() -> RedirectResponse:  # pragma: no cover - trivial redirect
+    def _root(request: Request):  # pragma: no cover - thin redirect
+        # Zerodha Kite may redirect to bare host with ?request_token=… — forward.
+        token = request.query_params.get("request_token")
+        if token:
+            from urllib.parse import urlencode
+
+            q = urlencode(
+                {
+                    k: v
+                    for k, v in {
+                        "request_token": token,
+                        "status": request.query_params.get("status"),
+                        "action": request.query_params.get("action"),
+                    }.items()
+                    if v
+                }
+            )
+            return RedirectResponse(url=f"/zerodha/callback?{q}", status_code=302)
         return RedirectResponse(url="/ui/")
 
     return True

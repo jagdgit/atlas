@@ -21,6 +21,33 @@ class ChatMessage:
         return {"role": self.role, "content": self.content}
 
 
+def coerce_chat_messages(messages: list[Any]) -> list[ChatMessage]:
+    """Normalize dict / ChatMessage inputs for Ollama (expects ``as_dict``).
+
+    Call sites historically passed raw ``{"role","content"}`` dicts; the provider
+    requires ChatMessage. Coerce here so research/scientist paths cannot burn the
+    off-market LLM window on AttributeError.
+    """
+    out: list[ChatMessage] = []
+    for m in messages or []:
+        if isinstance(m, ChatMessage):
+            out.append(m)
+            continue
+        if isinstance(m, dict):
+            role = str(m.get("role") or "user")
+            content = m.get("content")
+            if content is None:
+                content = m.get("text") or ""
+            out.append(ChatMessage(role=role, content=str(content)))
+            continue
+        role = str(getattr(m, "role", None) or "user")
+        content = getattr(m, "content", None)
+        if content is None:
+            content = getattr(m, "text", None) or str(m)
+        out.append(ChatMessage(role=role, content=str(content)))
+    return out
+
+
 @dataclass(frozen=True)
 class LLMResponse:
     text: str

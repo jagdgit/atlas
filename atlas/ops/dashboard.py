@@ -57,11 +57,13 @@ class OperationsDashboard:
         )
         research_progress = self._guard(self._research_progress, {})
         research_velocity = self._guard(self._research_velocity, {})
+        scientist_drain = self._guard(self._scientist_drain, {})
         archive_lane = self._guard(lambda: self._archive_lane(host_guard), {})
         # Drop full classified rows from the wire payload (used only for rollups).
         if isinstance(worker_states, dict) and "rows" in worker_states:
             worker_states = {k: v for k, v in worker_states.items() if k != "rows"}
         atlas = self._guard(self._atlas, {})
+        mdph = self._guard(self._mdph, {})
         return {
             "atlas": atlas,
             "counts": self._guard(self._counts, {}),
@@ -73,6 +75,7 @@ class OperationsDashboard:
             "archive_lane": archive_lane,
             "research_progress": research_progress,
             "research_velocity": research_velocity,
+            "scientist_drain": scientist_drain,
             "glossary": self._guard(self._glossary, {}),
             "reservations": self._guard(self._reservations, {}),
             "storage_pressure": self._guard(self._storage_pressure, {}),
@@ -90,6 +93,7 @@ class OperationsDashboard:
             "last_checkpoint": self._guard(self._last_checkpoint, None),
             "self_improvement": self._guard(self._self_improvement, {}),
             "startup": self._startup_banner(atlas),
+            "mdph": mdph,
             "generated_at": self._now(),
         }
 
@@ -108,6 +112,7 @@ class OperationsDashboard:
             {},
         )
         archive_lane = self._guard(lambda: self._archive_lane(host_guard), {})
+        scientist_drain = self._guard(self._scientist_drain, {})
         # Compact worker counts only (no row dump)
         ws_counts = {}
         if isinstance(worker_states, dict):
@@ -124,6 +129,7 @@ class OperationsDashboard:
             "program_health": program_health,
             "capacity_signal": capacity_signal,
             "archive_lane": archive_lane,
+            "scientist_drain": scientist_drain,
             "host_guard": {
                 "max_concurrent_ticks": host_guard.get("max_concurrent_ticks"),
                 "max_archive_workers": host_guard.get("max_archive_workers"),
@@ -133,6 +139,7 @@ class OperationsDashboard:
             },
             "worker_counts": ws_counts,
             "startup": self._startup_banner(atlas),
+            "mdph": self._guard(self._mdph, {}),
             "leave_running": {
                 "ok_to_leave": bool(atlas.get("healthy")),
                 "reminders": [
@@ -144,6 +151,68 @@ class OperationsDashboard:
             },
             "generated_at": self._now(),
         }
+
+    def _mdph(self) -> dict[str, Any]:
+        """OI-MDPH0 — Zerodha provider health for ops banner (no secrets; no live probe)."""
+        try:
+            from atlas.investment.market_data_provider_health import (
+                evaluate_zerodha_health,
+                load_health,
+                observation_silent_sub_count,
+            )
+
+            data_dir = None
+            try:
+                cfg = getattr(self._app, "config", None)
+                paths = getattr(cfg, "paths", None) if cfg is not None else None
+                data_dir = getattr(paths, "data", None)
+            except Exception:  # noqa: BLE001
+                data_dir = None
+
+            def _pack(src: dict[str, Any]) -> dict[str, Any]:
+                phase2 = {}
+                l5 = {}
+                try:
+                    from atlas.investment.market_data_provider_health import (
+                        build_phase2_observation_report,
+                        investment_l5_scoreboard,
+                    )
+
+                    rep = build_phase2_observation_report(data_dir, health=src)
+                    phase2 = rep.get("phase2") or {}
+                    l5 = investment_l5_scoreboard(data_dir)
+                except Exception:  # noqa: BLE001
+                    phase2, l5 = {}, {}
+                return {
+                    "status": src.get("status"),
+                    "live_trading_allowed": src.get("live_trading_allowed"),
+                    "cta": src.get("cta") or src.get("login_url_path") or "/zerodha/login",
+                    "message": src.get("message"),
+                    "reason_code": src.get("reason_code"),
+                    "trading_date": src.get("trading_date"),
+                    "freshness": src.get("freshness"),
+                    "instrument_master": src.get("instrument_master"),
+                    "silent_yahoo_blocked_today": observation_silent_sub_count(data_dir),
+                    "hist_probe": src.get("hist_probe"),
+                    "phase2_sessions": phase2.get("sessions_observed"),
+                    "phase2_target": phase2.get("target_sessions"),
+                    "phase2_complete": phase2.get("complete"),
+                    "phase2_invariant_ok": phase2.get("invariant_ok"),
+                    "l5_have": l5.get("have"),
+                    "l5_target": l5.get("target"),
+                }
+
+            cached = load_health(data_dir) if data_dir else {}
+            if cached.get("status"):
+                return _pack(cached)
+            doc = evaluate_zerodha_health(
+                data_dir,
+                probe=False,
+                refresh_instruments=False,
+            )
+            return _pack(doc)
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}", "cta": "/zerodha/login"}
 
     def _startup_banner(self, atlas: dict[str, Any] | None) -> dict[str, Any]:
         """Show a warm-up banner for the first minutes after restart."""
@@ -330,6 +399,11 @@ class OperationsDashboard:
         from atlas.ops.research_signals import research_velocity_snapshot
 
         return research_velocity_snapshot(self._data_dir())
+
+    def _scientist_drain(self) -> dict[str, Any]:
+        from atlas.ops.scientist_drain import scientist_drain_snapshot
+
+        return scientist_drain_snapshot(self._data_dir())
 
     def _data_dir(self) -> str | None:
         try:

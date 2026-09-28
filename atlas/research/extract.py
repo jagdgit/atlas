@@ -519,6 +519,7 @@ class ClaimExtractor:
                     ChatMessage("user", context),
                 ],
                 timeout=_LLM_TIMEOUT,
+                _atlas_purpose="research_claim_extract",
             )
             raw = (resp.text or "").strip()
         except Exception:  # noqa: BLE001 - LLM failure degrades to deterministic-only

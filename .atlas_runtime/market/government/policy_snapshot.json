@@ -1,0 +1,123 @@
+{
+  "item_count": 8,
+  "items": [
+    {
+      "delta": 0.12,
+      "id": "budget_infra_capex",
+      "kind": "budget",
+      "sectors": [
+        "Capital Goods",
+        "Cement",
+        "Metals",
+        "Realty"
+      ],
+      "source": "catalog:union_budget",
+      "summary": "Higher public capex on roads, railways, and logistics typically supports Capital Goods, Cement, Metals, and select Realty names.",
+      "title": "Union Budget \u2014 elevated infrastructure / railway / roads capex"
+    },
+    {
+      "delta": 0.1,
+      "id": "pli_electronics_auto",
+      "kind": "industrial_policy",
+      "sectors": [
+        "Consumer Durables",
+        "Automobile",
+        "IT"
+      ],
+      "source": "catalog:pli",
+      "summary": "Production-Linked Incentive schemes for electronics and EV/auto supply chains support Consumer Durables, Automobile, and related manufacturing.",
+      "title": "PLI schemes \u2014 electronics manufacturing & auto/EV"
+    },
+    {
+      "delta": 0.09,
+      "id": "renewable_energy_push",
+      "kind": "policy",
+      "sectors": [
+        "Energy",
+        "Capital Goods"
+      ],
+      "source": "catalog:energy_transition",
+      "summary": "Policy support for renewables and green hydrogen aids Energy names with clean-energy exposure and related capital goods.",
+      "title": "Renewable energy / green hydrogen policy push"
+    },
+    {
+      "delta": 0.11,
+      "id": "defence_indigenisation",
+      "kind": "budget",
+      "sectors": [
+        "Capital Goods"
+      ],
+      "source": "catalog:defence",
+      "summary": "Higher defence budget and indigenisation preferences support Capital Goods and specialised manufacturing linked to defence orders.",
+      "title": "Defence indigenisation & Make in India"
+    },
+    {
+      "delta": 0.07,
+      "id": "digital_india_fintech",
+      "kind": "policy",
+      "sectors": [
+        "IT",
+        "Banks"
+      ],
+      "source": "catalog:digital_india",
+      "summary": "UPI / account aggregator / digital India rails support IT services and financial digitalisation themes (Banks / IT).",
+      "title": "Digital public infrastructure / fintech enablement"
+    },
+    {
+      "delta": 0.08,
+      "id": "pharma_api_incentives",
+      "kind": "industrial_policy",
+      "sectors": [
+        "Pharma"
+      ],
+      "source": "catalog:pharma",
+      "summary": "Incentives for bulk drugs and pharma manufacturing support Pharma sector names with domestic API / formulation exposure.",
+      "title": "Pharma / API manufacturing incentives"
+    },
+    {
+      "delta": 0.06,
+      "id": "housing_urban",
+      "kind": "budget",
+      "sectors": [
+        "Realty",
+        "Cement",
+        "FMCG"
+      ],
+      "source": "catalog:housing",
+      "summary": "Housing and urban schemes can lift Cement, Realty, and related consumer demand themes \u2014 treat as a soft sector nudge.",
+      "title": "Affordable housing / urban development outlays"
+    },
+    {
+      "delta": 0.05,
+      "id": "telecom_spectrum_capex",
+      "kind": "policy",
+      "sectors": [
+        "Telecom",
+        "Capital Goods"
+      ],
+      "source": "catalog:telecom",
+      "summary": "Spectrum and network rollout cycles support Telecom operators and related capex suppliers.",
+      "title": "Telecom / 5G infrastructure cycle"
+    }
+  ],
+  "notes": [
+    "Hermetic government-policy catalog for India equity ranking nudges.",
+    "Operator items / Budget notes deepen this store \u2014 not live gazette scrape."
+  ],
+  "sector_deltas": {
+    "Automobile": 0.1,
+    "Banks": 0.07,
+    "Capital Goods": 0.35,
+    "Cement": 0.18,
+    "Consumer Durables": 0.1,
+    "Energy": 0.09,
+    "FMCG": 0.06,
+    "IT": 0.17,
+    "Metals": 0.12,
+    "Pharma": 0.08,
+    "Realty": 0.18,
+    "Telecom": 0.05
+  },
+  "updated_at": "2026-09-03T14:57:24.152361+00:00",
+  "version": "gov.1"
+}

@@ -48,6 +48,7 @@ class OllamaProvider:
         self._temperature = temperature
         self._keep_alive = keep_alive
         self._think = think
+        self._timeout = float(timeout)
         self._client = client or httpx.Client(base_url=self._host, timeout=timeout)
 
     # --- public API -----------------------------------------------------
@@ -74,18 +75,29 @@ class OllamaProvider:
         )
 
     def chat(self, messages: list[ChatMessage], **options: Any) -> LLMResponse:
+        from atlas.llm.provider import coerce_chat_messages
+
+        normalized = coerce_chat_messages(list(messages or []))
         payload = {
             "model": options.get("model", self._model),
-            "messages": [m.as_dict() for m in messages],
+            "messages": [m.as_dict() for m in normalized],
             "stream": False,
             "keep_alive": options.get("keep_alive", self._keep_alive),
             "options": self._gen_options(options),
         }
+        # Structured output — ``format: "json"`` or a JSON schema object
+        if "format" in options and options.get("format") is not None:
+            payload["format"] = options["format"]
         data = self._post_with_think("/api/chat", payload, options)
         message = data.get("message", {}) or {}
-        clean, thinking = self._split_thinking(
-            message.get("content", ""), message.get("thinking")
-        )
+        content = message.get("content", "") or ""
+        explicit_thinking = message.get("thinking")
+        # When think=False, some qwen builds still fill ``thinking`` and leave
+        # content empty — promote thinking so callers can parse JSON.
+        if not str(content).strip() and explicit_thinking:
+            content = str(explicit_thinking)
+            explicit_thinking = None
+        clean, thinking = self._split_thinking(content, explicit_thinking)
         return LLMResponse(
             text=clean,
             model=payload["model"],

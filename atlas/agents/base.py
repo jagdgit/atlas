@@ -20,21 +20,35 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class Citation:
-    """A source reference backing part of an answer."""
+    """A source reference backing part of an answer.
+
+    M4 Step 2: every RAG citation exposes finding_id (when the hit is a
+    finding), document_id, retrieval score, source tier, and source timestamp.
+    These fields are provenance — they do not change retrieval ranking.
+    """
 
     index: int  # 1-based marker used inline as [index]
     document_id: str
     chunk_id: str
     similarity: float
     snippet: str
+    finding_id: str | None = None
+    source: str | None = None
+    timestamp: str | None = None
+    score: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
+        score = self.score if self.score is not None else self.similarity
         return {
             "index": self.index,
             "document_id": self.document_id,
             "chunk_id": self.chunk_id,
             "similarity": round(self.similarity, 4),
             "snippet": self.snippet,
+            "finding_id": self.finding_id,
+            "source": self.source,
+            "timestamp": self.timestamp,
+            "score": round(float(score), 6) if score is not None else None,
         }
 
 

@@ -54,6 +54,20 @@ def classify_experience_kind(
         return "revisit"
     if act in {"buy", "sell"}:
         return "investment_decision"
+    try:
+        from atlas.investment.lab_experience import is_blocked_buy_tag
+
+        if is_blocked_buy_tag(tag):
+            return "blocked_buy"
+    except Exception:  # noqa: BLE001
+        if tag in {
+            "plc_a_hold",
+            "lab_policy_hold",
+            "research_forced_hold",
+            "research_hold",
+            "pack_block",
+        }:
+            return "blocked_buy"
     if tag.startswith("switch_blocked") or tag in ROUTINE_HOLD_TAGS or act == "hold":
         return "hold_review"
     if act in {"watch", "observe"}:
@@ -396,7 +410,8 @@ def format_experience_metrics_lines(doc: dict[str, Any] | None) -> list[str]:
             f"  Revisits completed:         {doc.get('revisits', doc.get('revisits_done', 0))}",
             f"  Actual fills:               {doc.get('actual_fills', 0)}"
             f" (buys={doc.get('fills_buy', 0)} sells={doc.get('fills_sell', 0)})",
-            f"  Closed trades:              {doc.get('closed_trades', 0)}",
+            f"  Closed trades (learning):   {doc.get('closed_trades', 0)}"
+            f"  ← attributed exits with trigger=exit — not raw SELL fills",
             f"  Attributed trade outcomes:  {doc.get('attributed_trade_outcomes', 0)}"
             f" (all-unknown={doc.get('attributed_all_unknown', 0)})",
             f"  Trading experiences:        {doc.get('trading_experiences', 0)}"

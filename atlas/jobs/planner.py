@@ -208,6 +208,7 @@ class JobPlanner:
                     ChatMessage("system", system),
                     ChatMessage("user", objective),
                 ],
+                _atlas_purpose="job_planner_decompose",
                 **options,
             )
             raw = (resp.text or "").strip()

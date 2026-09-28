@@ -133,6 +133,28 @@ def test_partition_tiers_honest_about_deferred():
     assert "working" in deferred and "session" in deferred and "archive" in deferred
 
 
+def test_partition_tiers_findings_are_live_not_chunks():
+    from atlas.knowledge.access import (
+        DEFAULT_TIERS,
+        LIVE_TIERS,
+        TIER_EXPERIENCE,
+        TIER_FINDINGS,
+        TIER_KNOWLEDGE,
+        normalize_tiers,
+        partition_tiers,
+    )
+
+    assert TIER_FINDINGS in LIVE_TIERS
+    assert TIER_FINDINGS in DEFAULT_TIERS
+    assert TIER_EXPERIENCE not in LIVE_TIERS
+    live, deferred = partition_tiers(None)
+    assert TIER_KNOWLEDGE in live and TIER_FINDINGS in live
+    assert TIER_EXPERIENCE not in live
+    knowledge_only, _ = partition_tiers(["knowledge"])
+    assert knowledge_only == ["knowledge"]
+    assert TIER_FINDINGS in normalize_tiers(["knowledge", "findings"])
+
+
 def test_hybrid_ranking_improves_or_holds_vs_dense_only_on_fixture_style_case():
     """Acceptance: hybrid must hold/improve vs dense-only on a labeled toy case."""
     relevant = {"c1", "c3"}

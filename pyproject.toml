@@ -47,6 +47,11 @@ media = [
 speech = [
     "openai-whisper>=20231117",
 ]
+# Live Indian market quotes via Zerodha Kite Connect (OI-ZERODHA0). Optional —
+# Atlas boots without it; install when using ZERODHA_* credentials.
+market = [
+    "kiteconnect>=5.0.0",
+]
 
 [project.scripts]
 atlas = "atlas.cli.main:main"

@@ -67,6 +67,7 @@ class EmbeddingRepository(BaseRepository):
                        c.document_id,
                        c.ordinal,
                        c.content,
+                       c.created_at AS timestamp,
                        e.embedding <=> %s::vector AS distance
                 FROM knowledge.embeddings e
                 JOIN knowledge.chunks c ON c.id = e.chunk_id
@@ -84,6 +85,7 @@ class EmbeddingRepository(BaseRepository):
                    c.document_id,
                    c.ordinal,
                    c.content,
+                   c.created_at AS timestamp,
                    e.embedding <=> %s::vector AS distance
             FROM knowledge.embeddings e
             JOIN knowledge.chunks c ON c.id = e.chunk_id
@@ -96,3 +98,49 @@ class EmbeddingRepository(BaseRepository):
 
     def count(self) -> int:
         return self.fetch_val("SELECT count(*) FROM knowledge.embeddings")
+
+    def coverage(self, model: str) -> dict[str, int]:
+        """Chunk vs embedding counts for ``model`` (unembedded = chunks with no row)."""
+        chunks = int(self.fetch_val("SELECT count(*) FROM knowledge.chunks") or 0)
+        embeddings = int(
+            self.fetch_val(
+                "SELECT count(*) FROM knowledge.embeddings WHERE model = %s",
+                (model,),
+            )
+            or 0
+        )
+        unembedded = int(
+            self.fetch_val(
+                """
+                SELECT count(*) FROM knowledge.chunks c
+                LEFT JOIN knowledge.embeddings e
+                  ON e.chunk_id = c.id AND e.model = %s
+                WHERE e.chunk_id IS NULL
+                """,
+                (model,),
+            )
+            or 0
+        )
+        return {
+            "chunks": chunks,
+            "embeddings": embeddings,
+            "unembedded_chunks": unembedded,
+        }
+
+    def list_document_ids_missing_embeddings(
+        self, model: str, *, limit: int = 20
+    ) -> list[str]:
+        """Distinct documents that still have at least one unembedded chunk."""
+        rows = self.fetch_all(
+            """
+            SELECT DISTINCT c.document_id
+            FROM knowledge.chunks c
+            LEFT JOIN knowledge.embeddings e
+              ON e.chunk_id = c.id AND e.model = %s
+            WHERE e.chunk_id IS NULL
+            ORDER BY c.document_id
+            LIMIT %s
+            """,
+            (model, int(limit)),
+        )
+        return [str(r["document_id"]) for r in rows]

@@ -172,7 +172,16 @@ def build_trading_kpis(
         positions = list(positions.values())
     positions = [p for p in positions if isinstance(p, dict)]
 
-    raw_trades = [t for t in (port.get("recent_trades") or []) if isinstance(t, dict)]
+    raw_trades = [
+        t
+        for t in (
+            port.get("day_trades")
+            or port.get("trades")
+            or port.get("recent_trades")
+            or []
+        )
+        if isinstance(t, dict)
+    ]
     # Untagged blotter is not "today" — require explicit IST match (OI-STAB0 honesty).
     if any("ist_day_match" in t for t in raw_trades):
         trades = [t for t in raw_trades if t.get("ist_day_match")]

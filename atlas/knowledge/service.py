@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 from uuid import UUID
 
@@ -20,14 +21,17 @@ from atlas.knowledge.access import (
     RankedContext,
     RankedHit,
     TIER_EXPERIENCE,
+    TIER_FINDINGS,
     TIER_KNOWLEDGE,
     archive_requested,
     build_context,
     domains_for_role,
+    finding_id_of,
     fuse_dense_lexical,
     heuristic_rerank,
     normalize_tiers,
     partition_tiers,
+    row_timestamp,
 )
 from atlas.knowledge.chunking import chunk_text
 from atlas.telemetry import timed, timer
@@ -99,6 +103,25 @@ class KnowledgeService:
         # Optional PolicyService: signed operator-policy influence on ranking (C.5/CC8).
         self._policy = policy
         self._logger = logger or logging.getLogger("atlas.knowledge")
+        # Optional scheduler hooks for OI-LAB-LOOP0 Step 8 backfill (set in bootstrap).
+        self._enqueue = None
+        self._count_pending = None
+        self._findings = None
+        self._finding_embeddings = None
+        self._lifecycle = None
+
+    # Bounded drain of already-chunked docs through the existing embed_document task.
+    EMBED_BACKFILL_LIMIT = 4
+    EMBED_BACKFILL_MAX_PENDING = 8
+
+    def bind_scheduler(
+        self,
+        enqueue: Any | None = None,
+        count_pending: Any | None = None,
+    ) -> None:
+        """Defer stalled chunk embeds through the existing ``embed_document`` queue."""
+        self._enqueue = enqueue
+        self._count_pending = count_pending
 
     # --- ingestion ------------------------------------------------------
     def ingest_text(
@@ -185,7 +208,9 @@ class KnowledgeService:
         for start in range(0, len(chunks), self._embed_batch):
             batch = chunks[start : start + self._embed_batch]
             vectors = self._llm.embed(
-                [c["content"] for c in batch], model=self._model
+                [c["content"] for c in batch],
+                model=self._model,
+                _atlas_purpose="knowledge_embed",
             ).vectors
             if len(vectors) != len(batch):
                 self._documents.set_status(document_id, "failed")
@@ -239,7 +264,7 @@ class KnowledgeService:
     ) -> list[SearchResult]:
         """Dense-only semantic search (legacy). Prefer ``retrieve`` for Access Layer."""
         with timer("knowledge.search"):
-            rows = self._dense_rows(query, limit=limit, domains=domains)
+            rows = self._dense_rows(query, limit=limit, domains=domains) or []
         return [
             SearchResult(
                 chunk_id=str(r["chunk_id"]),
@@ -307,14 +332,26 @@ class KnowledgeService:
             candidate_n = max(limit * self._candidate_multiplier, limit)
             dense_rows: list[dict[str, Any]] = []
             lexical_rows: list[dict[str, Any]] = []
+            query_vector = None
+            if resolved_mode in {"hybrid", "dense"}:
+                query_vector = self._query_vector(query)
 
             if resolved_mode in {"hybrid", "dense"} and TIER_KNOWLEDGE in resolved_tiers:
-                dense_rows = self._dense_rows(
-                    query, limit=candidate_n, domains=search_domains
+                dense_rows = (
+                    self._dense_rows(
+                        query,
+                        limit=candidate_n,
+                        domains=search_domains,
+                        vector=query_vector,
+                    )
+                    or []
                 )
             if resolved_mode in {"hybrid", "lexical"} and TIER_KNOWLEDGE in resolved_tiers:
-                lexical_rows = self._lexical_rows(
-                    query, limit=candidate_n, domains=search_domains
+                lexical_rows = (
+                    self._lexical_rows(
+                        query, limit=candidate_n, domains=search_domains
+                    )
+                    or []
                 )
 
             if resolved_mode == "dense":
@@ -331,6 +368,8 @@ class KnowledgeService:
                         distance=float(r["distance"]),
                         similarity=1.0 - float(r["distance"]),
                         tier=TIER_KNOWLEDGE,
+                        finding_id=finding_id_of(r),
+                        timestamp=row_timestamp(r),
                     )
                     for r in dense_rows
                 ]
@@ -348,6 +387,8 @@ class KnowledgeService:
                         distance=None,
                         similarity=None,
                         tier=TIER_KNOWLEDGE,
+                        finding_id=finding_id_of(r),
+                        timestamp=row_timestamp(r),
                     )
                     for r in lexical_rows
                 ]
@@ -355,6 +396,18 @@ class KnowledgeService:
                 hits = fuse_dense_lexical(
                     dense_rows, lexical_rows, rrf_k=self._rrf_k
                 )
+
+            finding_hits: list[RankedHit] = []
+            if TIER_FINDINGS in resolved_tiers:
+                finding_hits = self._finding_hits(
+                    query,
+                    limit=candidate_n,
+                    domains=search_domains,
+                    mode=resolved_mode,
+                    vector=query_vector,
+                    include_archive=archive_requested(requested_tiers),
+                )
+                hits = list(hits) + list(finding_hits)
 
             # Archive excluded unless explicitly requested (D3B.21).
             if not archive_requested(requested_tiers):
@@ -386,9 +439,11 @@ class KnowledgeService:
             tiers=tuple(requested_tiers),
             mode=resolved_mode,
             diagnostics_id=diagnostics_id,
+            retrieved_at=datetime.now(timezone.utc).isoformat(),
             meta={
                 "dense_candidates": len(dense_rows),
                 "lexical_candidates": len(lexical_rows),
+                "finding_candidates": len(finding_hits),
                 "archive_excluded": not archive_requested(requested_tiers),
                 "findings_heads_only": not archive_requested(requested_tiers),
                 "live_tiers": list(resolved_tiers),
@@ -441,21 +496,337 @@ class KnowledgeService:
             self._logger.debug("policy influence failed", exc_info=True)
             return []
 
+    # --- embedding coverage / backfill (OI-LAB-LOOP0 Steps 8–9) --------
+    def embedding_coverage(self) -> dict[str, Any]:
+        """Chunk vs embedding counts for the current model (honest stall detector)."""
+        coverage: dict[str, Any] = {"model": self._model}
+        if hasattr(self._embeddings, "coverage"):
+            try:
+                coverage.update(self._embeddings.coverage(self._model) or {})
+            except Exception as exc:  # noqa: BLE001 — coverage is diagnostic
+                self._logger.warning("embedding coverage failed: %s", exc)
+        coverage["model"] = self._model
+        return coverage
+
+    def list_documents_missing_embeddings(self, *, limit: int = 20) -> list[str]:
+        """Document ids whose chunks lack embeddings for the current model.
+
+        Prefers a LEFT JOIN on the embedding table so a doc marked ``embedded``
+        with a partial write is still retried. Falls back to ``status=chunked``
+        when the embedding repo has no join helper (unit fakes).
+        """
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return []
+        ids: list[str] = []
+        if hasattr(self._embeddings, "list_document_ids_missing_embeddings"):
+            try:
+                ids = [
+                    str(x)
+                    for x in (
+                        self._embeddings.list_document_ids_missing_embeddings(
+                            self._model, limit=limit
+                        )
+                        or []
+                    )
+                ]
+            except Exception as exc:  # noqa: BLE001 — fall back to status
+                self._logger.warning("missing-embedding listing failed: %s", exc)
+                ids = []
+        if ids:
+            return ids[:limit]
+        if hasattr(self._documents, "list_by_status"):
+            return [
+                str(d.id)
+                for d in self._documents.list_by_status("chunked", limit=limit)
+            ]
+        return []
+
+    def backfill_missing_embeddings(
+        self,
+        *,
+        limit: int = EMBED_BACKFILL_LIMIT,
+        enqueue: Any | None = None,
+        count_pending: Any | None = None,
+        max_pending: int = EMBED_BACKFILL_MAX_PENDING,
+    ) -> dict[str, Any]:
+        """Drain stalled chunk embeddings via the existing ``embed_document`` path.
+
+        Does not write trades or findings into the chunk index. When ``enqueue``
+        is set, tasks go through the scheduler (same handler as filesystem ingest).
+        """
+        enqueue = enqueue if enqueue is not None else self._enqueue
+        count_pending = (
+            count_pending if count_pending is not None else self._count_pending
+        )
+        limit = max(0, int(limit))
+        coverage = self.embedding_coverage()
+        pending = 0
+        if count_pending is not None:
+            try:
+                pending = int(count_pending("embed_document") or 0)
+            except Exception:  # noqa: BLE001 — pending is a throttle, not a gate
+                pending = 0
+        if limit <= 0:
+            return {
+                "ok": True,
+                "skipped": False,
+                "enqueued": [],
+                "embedded": [],
+                "errors": [],
+                "pending_embed_document": pending,
+                **coverage,
+            }
+        if enqueue is not None and pending >= int(max_pending):
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "embed_document_queue_full",
+                "enqueued": [],
+                "embedded": [],
+                "errors": [],
+                "pending_embed_document": pending,
+                **coverage,
+            }
+        room = limit
+        if enqueue is not None:
+            room = min(limit, max(0, int(max_pending) - pending))
+        ids = self.list_documents_missing_embeddings(limit=room)
+        enqueued: list[str] = []
+        embedded: list[str] = []
+        errors: list[dict[str, str]] = []
+        for document_id in ids:
+            try:
+                if enqueue is not None:
+                    enqueue("embed_document", {"document_id": document_id})
+                    enqueued.append(document_id)
+                else:
+                    self.embed_document(document_id)
+                    embedded.append(document_id)
+            except Exception as exc:  # noqa: BLE001 — one bad doc must not stop drain
+                errors.append(
+                    {"document_id": document_id, "error": type(exc).__name__}
+                )
+                self._logger.warning(
+                    "embed backfill failed for %s: %s", document_id, exc
+                )
+        return {
+            "ok": not errors,
+            "skipped": False,
+            "enqueued": enqueued,
+            "embedded": embedded,
+            "errors": errors,
+            "pending_embed_document": pending,
+            **self.embedding_coverage(),
+        }
+
     # --- scheduler integration -----------------------------------------
     def embed_document_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Scheduler handler for task_type 'embed_document'."""
         return self.embed_document(payload["document_id"])
 
+    def embed_backfill_task(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Scheduler handler: bounded re-enqueue of stalled chunk embeddings."""
+        payload = payload or {}
+        limit = int(payload.get("limit") or self.EMBED_BACKFILL_LIMIT)
+        return self.backfill_missing_embeddings(limit=limit)
+
     # --- internals ------------------------------------------------------
+    def _query_vector(self, query: str) -> list[float] | None:
+        if not (query or "").strip():
+            return None
+        try:
+            result = self._llm.embed(
+                [query], model=self._model, _atlas_purpose="knowledge_query_embed"
+            )
+            vectors = getattr(result, "vectors", None) or []
+            if not vectors:
+                return None
+            vector = vectors[0]
+        except Exception as exc:  # noqa: BLE001 — dense is best-effort in hybrid
+            self._logger.warning("dense query embed failed: %s", exc)
+            return None
+        return list(vector) if vector else None
+
     def _dense_rows(
-        self, query: str, *, limit: int, domains: list[str] | None
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains: list[str] | None,
+        vector: list[float] | None = None,
     ) -> list[dict[str, Any]]:
+        """Cosine kNN over the chunk embedding index. Never returns None.
+
+        Findings live on ``finding_embeddings`` (Step 10) — this path must not
+        search them or dump trades into the chunk index.
+        """
         if not (query or "").strip() or limit <= 0:
             return []
-        vector = self._llm.embed([query], model=self._model).vectors[0]
-        return self._embeddings.search(
-            vector, self._model, limit=limit, domains=domains
+        if not hasattr(self._embeddings, "search"):
+            return []
+        if vector is None:
+            vector = self._query_vector(query)
+        if not vector:
+            return []
+        try:
+            rows = self._embeddings.search(
+                vector, self._model, limit=limit, domains=domains
+            )
+        except Exception as exc:  # noqa: BLE001 — dense is best-effort in hybrid
+            self._logger.warning("dense search failed: %s", exc)
+            return []
+        return list(rows or [])
+
+    def _finding_hits(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains: list[str] | None,
+        mode: str,
+        vector: list[float] | None = None,
+        include_archive: bool = False,
+    ) -> list[RankedHit]:
+        """Search validated findings as their own corpus. Never writes chunks."""
+        del include_archive  # finding_embeddings / search_lexical already heads-only
+        dense_rows: list[dict[str, Any]] = []
+        lexical_rows: list[dict[str, Any]] = []
+        if mode in {"hybrid", "dense"}:
+            dense_rows = self._finding_dense_rows(
+                query, limit=limit, domains=domains, vector=vector
+            )
+        if mode in {"hybrid", "lexical"}:
+            lexical_rows = self._finding_lexical_rows(
+                query, limit=limit, domains=domains
+            )
+        if mode == "dense":
+            return [
+                RankedHit(
+                    chunk_id=str(r["chunk_id"]),
+                    document_id=str(r["document_id"]),
+                    ordinal=0,
+                    content=str(r["content"]),
+                    dense_score=1.0 - float(r["distance"]),
+                    lexical_score=None,
+                    rrf_score=1.0 - float(r["distance"]),
+                    score=1.0 - float(r["distance"]),
+                    distance=float(r["distance"]),
+                    similarity=1.0 - float(r["distance"]),
+                    tier=TIER_FINDINGS,
+                    finding_id=finding_id_of(r),
+                    timestamp=row_timestamp(r),
+                )
+                for r in dense_rows
+            ]
+        if mode == "lexical":
+            return [
+                RankedHit(
+                    chunk_id=str(r["chunk_id"]),
+                    document_id=str(r["document_id"]),
+                    ordinal=0,
+                    content=str(r["content"]),
+                    dense_score=None,
+                    lexical_score=float(r.get("rank", 0.0)),
+                    rrf_score=float(r.get("rank", 0.0)),
+                    score=float(r.get("rank", 0.0)),
+                    distance=None,
+                    similarity=None,
+                    tier=TIER_FINDINGS,
+                    finding_id=finding_id_of(r),
+                    timestamp=row_timestamp(r),
+                )
+                for r in lexical_rows
+            ]
+        return fuse_dense_lexical(
+            dense_rows, lexical_rows, rrf_k=self._rrf_k, tier=TIER_FINDINGS
         )
+
+    def _finding_dense_rows(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains: list[str] | None,
+        vector: list[float] | None = None,
+    ) -> list[dict[str, Any]]:
+        repo = getattr(self, "_finding_embeddings", None)
+        if (
+            not (query or "").strip()
+            or repo is None
+            or not hasattr(repo, "search")
+            or limit <= 0
+        ):
+            return []
+        if vector is None:
+            vector = self._query_vector(query)
+        if not vector:
+            return []
+        try:
+            rows = repo.search(
+                vector, self._model, limit=limit, domains=domains
+            )
+        except Exception as exc:  # noqa: BLE001 — findings dense is best-effort
+            self._logger.warning("finding dense search failed: %s", exc)
+            return []
+        return [self._finding_row_as_hit_dict(r) for r in (rows or []) if r]
+
+    def _finding_lexical_rows(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains: list[str] | None,
+    ) -> list[dict[str, Any]]:
+        repo = getattr(self, "_findings", None)
+        if repo is None or limit <= 0:
+            return []
+        try:
+            if hasattr(repo, "search_lexical"):
+                rows = repo.search_lexical(
+                    query, limit=limit, domains=domains
+                ) or []
+            elif hasattr(repo, "list_active"):
+                rows = repo.list_active(limit=limit) or []
+            else:
+                return []
+        except Exception as exc:  # noqa: BLE001 — findings lexical is best-effort
+            self._logger.warning("finding lexical search failed: %s", exc)
+            return []
+        mapped = [self._finding_row_as_hit_dict(r, lexical=True) for r in rows if r]
+        if mapped and mapped[0].get("rank") is None:
+            qset = {t for t in (query or "").lower().split() if t}
+            for row in mapped:
+                tokens = {t for t in str(row["content"]).lower().split() if t}
+                row["rank"] = float(len(qset & tokens))
+            mapped = [r for r in mapped if r["rank"] > 0]
+            mapped.sort(key=lambda r: -float(r["rank"]))
+        return mapped[:limit]
+
+    @staticmethod
+    def _finding_row_as_hit_dict(
+        row: dict[str, Any], *, lexical: bool = False
+    ) -> dict[str, Any]:
+        finding_id = str(row.get("finding_id") or row.get("id") or "")
+        canonical = str(row.get("canonical_id") or finding_id)
+        statement = str(row.get("statement") or row.get("content") or "")
+        out: dict[str, Any] = {
+            "chunk_id": f"finding:{finding_id}",
+            "document_id": canonical,
+            "ordinal": 0,
+            "content": statement,
+            "tier": TIER_FINDINGS,
+            "finding_id": finding_id,
+            "timestamp": row_timestamp(row),
+        }
+        if "distance" in row and row["distance"] is not None:
+            out["distance"] = float(row["distance"])
+        if lexical:
+            if row.get("rank") is not None:
+                out["rank"] = float(row["rank"])
+            elif "distance" not in out:
+                out["rank"] = 1.0
+        return out
 
     def _lexical_rows(
         self, query: str, *, limit: int, domains: list[str] | None

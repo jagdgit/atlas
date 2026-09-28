@@ -59,6 +59,32 @@ def test_build_trading_kpis_plan_fill_and_pnl():
     assert "plan→fill" in blob.lower() or "Plan→fill" in blob
 
 
+def test_kpi_prefers_day_trades_over_truncated_recent():
+    """OI-LAB-LOOP0 — fills_today must not be capped by recent_trades[:10]."""
+    day = [
+        {
+            "side": "buy" if i % 2 == 0 else "sell",
+            "symbol": "COALINDIA.NS",
+            "quantity": 19,
+            "ist_day_match": True,
+        }
+        for i in range(110)
+    ]
+    kpis = build_trading_kpis(
+        portfolio={
+            "cash": 27000,
+            "equity": 45000,
+            "positions": [{"symbol": "COALINDIA.NS", "qty": 19}],
+            "recent_trades": day[:10],
+            "day_trades": day,
+        },
+        ist_date="2026-09-24",
+    )
+    assert kpis["fills_today"] == 110
+    assert kpis["buys_today"] == 55
+    assert kpis["sells_today"] == 55
+
+
 def test_untagged_historical_blotter_is_not_today():
     kpis = build_trading_kpis(
         portfolio={

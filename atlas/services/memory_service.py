@@ -82,7 +82,9 @@ class MemoryService:
         model = None
         if should_embed and content.strip():
             with timer("memory.embed"):
-                vector = self._llm.embed([content], model=self._model).vectors[0]
+                vector = self._llm.embed(
+                    [content], model=self._model, _atlas_purpose="memory_embed"
+                ).vectors[0]
             model = self._model
 
         expires_at = self._expiry(kind, ttl_seconds)
@@ -112,7 +114,9 @@ class MemoryService:
         """Semantic recall: most-similar, non-expired memories above the floor."""
         k = limit or self._recall_k
         with timer("memory.recall"):
-            vector = self._llm.embed([query], model=self._model).vectors[0]
+            vector = self._llm.embed(
+                [query], model=self._model, _atlas_purpose="memory_recall_embed"
+            ).vectors[0]
             results = self._repo.semantic_search(vector, kind=kind, scope=scope, limit=k)
         return [r for r in results if (r.similarity or 0.0) >= self._floor]
 

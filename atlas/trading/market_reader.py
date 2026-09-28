@@ -17,6 +17,7 @@ from atlas.trading.adapters import (
     PolygonAdapter,
     StooqAdapter,
     YahooFinanceAdapter,
+    ZerodhaBarsAdapter,
     pct_move,
 )
 
@@ -25,7 +26,10 @@ class MarketReaderService:
     """Facade over Market feed adapters (Market Program)."""
 
     name = "market_reader"
-    VERSION = "mi.3.4-stab0-session-fresh"
+    VERSION = "mi.3.5-zerodha-bar-store"
+    _INTRADAY_INTERVALS = frozenset(
+        {"1m", "1min", "minute", "5m", "5min", "5minute"}
+    )
     # Paced tip refresh: enough for open-book marks, not a watchlist Yahoo storm.
     REFRESH_WINDOW_S = 60.0
     REFRESH_MAX_PER_WINDOW = 3
@@ -85,6 +89,9 @@ class MarketReaderService:
         )
         self._adapters["bse"] = KeyedProviderAdapter(
             "bse", api_key_env="ATLAS_BSE_API_KEY", logger=self._logger
+        )
+        self._adapters["zerodha"] = ZerodhaBarsAdapter(
+            data_dir=data_dir, logger=self._logger
         )
 
     def bind_market_data_service(self, mds: Any | None) -> None:
@@ -158,12 +165,7 @@ class MarketReaderService:
         range: str,
     ) -> dict[str, Any]:
         """LOOP0 L5 — 5m chart into bars_intraday, never daily market/bars."""
-        from atlas.investment.intraday_bars import (
-            CACHE_TTL_S,
-            INTERVAL,
-            load_day_bars,
-            persist_day_bars,
-        )
+        from atlas.investment.intraday_bars import CACHE_TTL_S, INTERVAL, load_day_bars
 
         iv = interval if interval in {"5m", "1m"} else INTERVAL
         cache_key = f"{symbol}|{iv}|{range}"
@@ -197,17 +199,7 @@ class MarketReaderService:
             )
 
         if bars:
-            if self._data_dir:
-                try:
-                    persist_day_bars(
-                        self._data_dir,
-                        symbol,
-                        list(bars),
-                        provider="yahoo",
-                        interval=iv,
-                    )
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("persist 5m bars failed for %s", symbol, exc_info=True)
+            self._persist_intraday_bars(symbol, bars, provider="yahoo", interval=iv)
             move = pct_move(bars)
             clipped = bars[-max(1, int(limit)) :] if limit else bars
             doc = {
@@ -251,15 +243,155 @@ class MarketReaderService:
             network_note or "no 5m bars and yahoo refresh unavailable",
         )
 
-    def _persist_fetched_bars(self, symbol: str, bars: list[Any] | None) -> None:
+    def _persist_fetched_bars(
+        self, symbol: str, bars: list[Any] | None, *, provider: str = "yahoo"
+    ) -> None:
         if not self._data_dir or not bars:
             return
         try:
             from atlas.investment.bar_store import persist_symbol_bars
 
-            persist_symbol_bars(self._data_dir, symbol, list(bars), provider="yahoo")
+            persist_symbol_bars(
+                self._data_dir, symbol, list(bars), provider=provider
+            )
         except Exception:  # noqa: BLE001
-            self._logger.debug("persist yahoo tip failed for %s", symbol, exc_info=True)
+            self._logger.debug(
+                "persist %s tip failed for %s", provider, symbol, exc_info=True
+            )
+
+    def _persist_intraday_bars(
+        self,
+        symbol: str,
+        bars: list[Any] | None,
+        *,
+        provider: str,
+        interval: str,
+    ) -> None:
+        if not self._data_dir or not bars:
+            return
+        try:
+            from atlas.investment.intraday_bars import persist_session_tape
+
+            persist_session_tape(
+                self._data_dir,
+                symbol,
+                list(bars),
+                provider=provider,
+                interval=interval,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug(
+                "persist %s %s bars failed for %s",
+                provider,
+                interval,
+                symbol,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _is_intraday_interval(interval: str | None) -> bool:
+        iv = str(interval or "1d").strip().lower()
+        if iv in MarketReaderService._INTRADAY_INTERVALS:
+            return True
+        return "minute" in iv
+
+    def _zerodha_session_ready(self) -> bool:
+        adapter = self._adapters.get("zerodha")
+        if adapter is None:
+            return False
+        try:
+            ready = getattr(adapter, "session_ready", None)
+            if callable(ready):
+                return bool(ready())
+            if ready is not None:
+                return bool(ready)
+        except Exception:  # noqa: BLE001
+            return False
+        feed = getattr(adapter, "_feed", None)
+        return bool(
+            feed
+            and getattr(feed, "is_configured", False)
+            and getattr(feed, "has_session", False)
+        )
+
+    def _durable_source_provider(self, symbol: str) -> str:
+        if not self._data_dir:
+            return "yahoo"
+        try:
+            from atlas.investment.bar_store import load_symbol_doc
+            from atlas.investment.symbol_aliases import resolve_yahoo_symbol
+
+            canon = resolve_yahoo_symbol(symbol).canonical or symbol
+            doc = load_symbol_doc(self._data_dir, canon) or load_symbol_doc(
+                self._data_dir, symbol
+            )
+            last = str(
+                (doc or {}).get("last_write_provider")
+                or (doc or {}).get("provider")
+                or "yahoo"
+            ).strip().lower()
+            return last or "yahoo"
+        except Exception:  # noqa: BLE001
+            return "yahoo"
+
+    def _zerodha_persist_needed(self, symbol: str) -> bool:
+        """True when daily store is missing, not Zerodha-stamped, or not session-fresh."""
+        if not self._data_dir:
+            return False
+        try:
+            from atlas.investment.bar_store import load_symbol_doc, symbol_readiness
+            from atlas.investment.symbol_aliases import resolve_yahoo_symbol
+
+            canon = resolve_yahoo_symbol(symbol).canonical or symbol
+            doc = load_symbol_doc(self._data_dir, canon) or load_symbol_doc(
+                self._data_dir, symbol
+            )
+            if not doc:
+                return True
+            last = str(
+                doc.get("last_write_provider") or doc.get("provider") or ""
+            ).strip().lower()
+            if last != "zerodha":
+                return True
+            ready = symbol_readiness(doc, min_history=5, fresh_days=5)
+            return not bool(ready.get("session_fresh"))
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _try_zerodha_bars(
+        self,
+        symbol: str,
+        *,
+        limit: int,
+        interval: str,
+        asset: str | None = None,
+    ) -> list[Any] | None:
+        adapter = self._adapters.get("zerodha")
+        if adapter is None or not self._zerodha_session_ready():
+            return None
+        try:
+            bars = adapter.fetch_bars(
+                symbol, limit=limit, asset=asset, interval=interval
+            )
+        except CapabilityGap:
+            return None
+        except Exception:  # noqa: BLE001
+            self._logger.debug("zerodha bars failed for %s", symbol, exc_info=True)
+            return None
+        return list(bars) if bars else None
+
+    def _persist_zerodha_bars(
+        self, symbol: str, bars: list[Any], *, interval: str
+    ) -> None:
+        if self._is_intraday_interval(interval):
+            iv = str(interval or "5m").strip().lower() or "5m"
+            if iv in {"5minute", "5min"}:
+                iv = "5m"
+            elif iv in {"minute", "1min"}:
+                iv = "1m"
+            self._persist_intraday_bars(symbol, bars, provider="zerodha", interval=iv)
+            return
+        self._persist_fetched_bars(symbol, bars, provider="zerodha")
 
     def _durable_yahoo_bars(
         self,
@@ -356,14 +488,45 @@ class MarketReaderService:
                 interval=iv,
                 range=str(range or "1d"),
             )
-        # OI-MKT-COV / OI-STAB0: session-fresh durable first. If the tip is older
-        # than the last NSE session, paced Yahoo refresh + persist (paper sim
-        # must mark live). Cooldown / budget → honest stale durable, never invent.
+        # OI-MKT-COV / OI-STAB0 / OI-LAB-LOOP0 Step 2: prefer a live Zerodha
+        # session over Yahoo (labeled, never a silent substitution). Stamp the
+        # daily store when last_write is not zerodha or the tip is not
+        # session-fresh. Otherwise session-fresh durable first; paced Yahoo +
+        # persist; cooldown → honest stale. Never invent.
         if prov == "yahoo":
+            if self._zerodha_session_ready() and self._zerodha_persist_needed(symbol):
+                zbars = self._try_zerodha_bars(
+                    symbol,
+                    limit=max(int(limit or 0), 40),
+                    interval="1d",
+                    asset=asset,
+                )
+                if zbars:
+                    self._persist_zerodha_bars(symbol, zbars, interval="1d")
+                    move = pct_move(zbars)
+                    self._note_mds(
+                        symbol,
+                        source="zerodha_historical",
+                        bars=zbars,
+                        worker="market_reader",
+                    )
+                    return {
+                        "provider": "zerodha",
+                        "symbol": symbol,
+                        "asset": asset,
+                        "bars": zbars,
+                        "count": len(zbars),
+                        "pct_move": move,
+                        "version": self.VERSION,
+                        "source": "zerodha_historical",
+                        "note": "zerodha_session_prefer",
+                        "requested_provider": "yahoo",
+                    }
             session_bars = self._durable_yahoo_bars(
                 symbol, limit=limit, require_session_fresh=True
             )
             if session_bars:
+                src = self._durable_source_provider(symbol)
                 move = pct_move(session_bars)
                 self._note_mds(
                     symbol,
@@ -372,7 +535,7 @@ class MarketReaderService:
                     worker="market_reader",
                 )
                 return {
-                    "provider": "yahoo_durable",
+                    "provider": f"{src}_durable",
                     "symbol": symbol,
                     "asset": asset,
                     "bars": session_bars,
@@ -394,7 +557,7 @@ class MarketReaderService:
                         interval="1d",
                     )
                     if bars:
-                        self._persist_fetched_bars(symbol, bars)
+                        self._persist_fetched_bars(symbol, bars, provider="yahoo")
                         move = pct_move(bars)
                         self._note_mds(
                             symbol,
@@ -425,6 +588,7 @@ class MarketReaderService:
                 )
             stale = self._durable_yahoo_bars(symbol, limit=limit, allow_stale=True)
             if stale:
+                src = self._durable_source_provider(symbol)
                 move = pct_move(stale)
                 self._note_mds(
                     symbol,
@@ -433,7 +597,7 @@ class MarketReaderService:
                     worker="market_reader",
                 )
                 return {
-                    "provider": "yahoo_durable_stale",
+                    "provider": f"{src}_durable_stale",
                     "symbol": symbol,
                     "asset": asset,
                     "bars": stale,
@@ -448,6 +612,36 @@ class MarketReaderService:
                     "market_data:yahoo",
                     network_note or "no durable bars and yahoo refresh unavailable",
                 )
+        # OI-MDPH0 / OI-LAB-LOOP0 Step 2 — persist Zerodha candles (daily →
+        # bar_store, 5m → bars_intraday). Fetch already happened; write is local.
+        if prov == "zerodha":
+            bars = adapter.fetch_bars(
+                symbol,
+                limit=limit,
+                asset=asset,
+                interval=iv,
+                range=range,
+            )
+            if bars:
+                self._persist_zerodha_bars(symbol, bars, interval=iv)
+            move = pct_move(bars)
+            self._note_mds(
+                symbol,
+                source="zerodha_historical",
+                bars=bars,
+                worker="market_reader",
+            )
+            return {
+                "provider": "zerodha",
+                "symbol": symbol,
+                "asset": asset,
+                "bars": bars,
+                "count": len(bars or []),
+                "pct_move": move,
+                "version": self.VERSION,
+                "source": "zerodha_historical",
+                "interval": iv,
+            }
         bars = adapter.fetch_bars(symbol, limit=limit, asset=asset)
         move = pct_move(bars)
         return {

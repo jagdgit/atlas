@@ -21,8 +21,45 @@ _log = logging.getLogger("atlas.investment.market_data")
 _DEFAULT_MARK_TTL_S = 300.0  # 5 minutes
 
 
+def _zerodha_mark_provenance(
+    symbol: str,
+    mark: dict[str, Any],
+    *,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """OI-MDPH0 — attach observation provenance on Zerodha live marks."""
+    try:
+        from atlas.investment.market_data_provider_health import (
+            STATUS_READY,
+            load_health,
+            load_instrument_meta,
+            observation_provenance,
+        )
+
+        health = load_health(data_dir) if data_dir else {}
+        inst = load_instrument_meta(data_dir) if data_dir else {}
+        return observation_provenance(
+            provider="zerodha",
+            endpoint="ltp",
+            provider_status=str(health.get("status") or STATUS_READY),
+            symbol=symbol,
+            price=mark.get("last"),
+            as_of=mark.get("as_of"),
+            instrument_token=mark.get("instrument_token"),
+            instrument_dump_date=inst.get("ist_day"),
+        )
+    except Exception:  # noqa: BLE001
+        return {
+            "source_provider": "zerodha",
+            "source_endpoint": "ltp",
+            "symbol": str(symbol or "").upper(),
+            "price": mark.get("last") if isinstance(mark, dict) else None,
+            "as_of": mark.get("as_of") if isinstance(mark, dict) else None,
+        }
+
+
 class MarketDataService:
-    """Single façade for marks / bars. Yahoo only through this service."""
+    """Single façade for marks / bars. Live providers (Zerodha/Groww) + Yahoo."""
 
     def __init__(
         self,
@@ -30,10 +67,14 @@ class MarketDataService:
         data_dir: str | Path | None = None,
         mark_ttl_s: float = _DEFAULT_MARK_TTL_S,
         audit: bool = True,
+        zerodha_feed: Any | None = None,
+        prefer_zerodha: bool = True,
     ) -> None:
         self._data_dir = Path(data_dir) if data_dir else None
         self._mark_ttl_s = float(mark_ttl_s)
         self._audit = bool(audit)
+        self._prefer_zerodha = bool(prefer_zerodha)
+        self._zerodha = zerodha_feed
         self._lock = threading.Lock()
         self._mark_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._audit_path: Path | None = None
@@ -41,6 +82,15 @@ class MarketDataService:
             d = self._data_dir / "investment"
             d.mkdir(parents=True, exist_ok=True)
             self._audit_path = d / "yahoo_request_audit.jsonl"
+        if self._zerodha is None and self._prefer_zerodha:
+            try:
+                from atlas.investment.zerodha_feed import ZerodhaMarketFeed
+
+                feed = ZerodhaMarketFeed.from_env(data_dir=self._data_dir)
+                if feed.is_configured:
+                    self._zerodha = feed
+            except Exception:  # noqa: BLE001
+                _log.debug("zerodha feed init skipped", exc_info=True)
 
     @property
     def VERSION(self) -> str:  # noqa: N802
@@ -104,7 +154,7 @@ class MarketDataService:
         allow_network: bool = False,
         fetch_fn: Callable[[str], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Return best mark: cache → local bars tip → optional network fetch_fn.
+        """Return best mark: cache → Zerodha LTP → local bars tip → optional Yahoo fetch_fn.
 
         ``fetch_fn`` must already respect YahooRateGate. Prefer allow_network=False
         during RTH until callers are fully migrated.
@@ -122,6 +172,55 @@ class MarketDataService:
                 }
             )
             return {"ok": True, "source": "cache", "symbol": sym, "mark": cached}
+
+        # Prefer Zerodha live LTP when configured + session active (before stale bars).
+        if allow_network and self._prefer_zerodha and self._zerodha is not None:
+            try:
+                if getattr(self._zerodha, "has_session", False):
+                    ltp = self._zerodha.get_ltp(sym) or {}
+                    prices = ltp.get("prices") if isinstance(ltp, dict) else None
+                    mark = (prices or {}).get(sym) if isinstance(prices, dict) else None
+                    if ltp.get("ok") and isinstance(mark, dict) and mark.get("last") is not None:
+                        self.put_cached_mark(sym, mark)
+                        self._audit_write(
+                            {
+                                "worker": worker,
+                                "symbol": sym,
+                                "url_class": "zerodha_ltp",
+                                "status": 200,
+                                "cache_hit": False,
+                            }
+                        )
+                        return {
+                            "ok": True,
+                            "source": "zerodha",
+                            "symbol": sym,
+                            "mark": mark,
+                            "observation_provenance": _zerodha_mark_provenance(
+                                sym, mark, data_dir=self._data_dir
+                            ),
+                        }
+                    self._audit_write(
+                        {
+                            "worker": worker,
+                            "symbol": sym,
+                            "url_class": "zerodha_ltp",
+                            "status": 0,
+                            "cache_hit": False,
+                            "error": (ltp or {}).get("error") if isinstance(ltp, dict) else "miss",
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                self._audit_write(
+                    {
+                        "worker": worker,
+                        "symbol": sym,
+                        "url_class": "zerodha_ltp",
+                        "status": 0,
+                        "cache_hit": False,
+                        "error": type(exc).__name__,
+                    }
+                )
 
         bars = self.load_local_bars(sym, limit=3)
         if bars:
@@ -248,6 +347,12 @@ class MarketDataService:
         with self._lock:
             n = len(self._mark_cache)
         soak = self.yahoo_soak_today()
+        zstatus: dict[str, Any] | None = None
+        if self._zerodha is not None and hasattr(self._zerodha, "status"):
+            try:
+                zstatus = self._zerodha.status()
+            except Exception:  # noqa: BLE001
+                zstatus = {"error": "status_failed"}
         return {
             "version": VERSION,
             "mark_ttl_s": self._mark_ttl_s,
@@ -255,6 +360,8 @@ class MarketDataService:
             "audit_path": str(self._audit_path) if self._audit_path else None,
             "data_dir": str(self._data_dir) if self._data_dir else None,
             "yahoo_soak": soak,
+            "prefer_zerodha": self._prefer_zerodha,
+            "zerodha": zstatus,
         }
 
     def yahoo_soak_today(self, *, day_ist: str | None = None) -> dict[str, Any]:

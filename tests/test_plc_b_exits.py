@@ -13,6 +13,24 @@ def test_plc_b_enabled_defaults():
     assert plc_b_enabled({}, "india_equity_learner") is True
     assert plc_b_enabled({"plc_b_exits": False}, "india_equity_learner") is False
     assert plc_b_enabled({}, "blotter") is False
+    # OI-FNO-CONTRACT — cash-equity PLC.B must not run on F&O / futures labs
+    assert plc_b_enabled({}, "india_fno_learner") is False
+    assert plc_b_enabled({"asset_class": "futures"}, "demo") is False
+
+
+def test_nifty_index_proxy_skips_concentration():
+    """qty×NIFTY ≫ book equity must not fire concentration (live 2026-08-21 bug)."""
+    prop = evaluate_plc_b_exits(
+        symbol="NIFTY",
+        price=24231.85,
+        held=25.0,
+        avg_price=24154.90,
+        equity=103717.0,
+        cfg={"plc_b_max_name_pct": 0.40, "plc_b_stop_loss_pct": 0.50},
+    )
+    # May be None, or a non-concentration exit — never concentration on index proxy
+    if prop is not None:
+        assert prop["exit_code"] != "concentration"
 
 
 def test_stop_loss_and_time_stop_fire():

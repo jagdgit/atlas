@@ -187,7 +187,7 @@ def score_universe(
             explanations.append(
                 {
                     "sign": "−",
-                    "text": "Slight mentor caution",
+                    "text": "Cited lesson caution",
                     "component": "experience",
                 }
             )

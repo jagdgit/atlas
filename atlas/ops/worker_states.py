@@ -58,6 +58,42 @@ SLOW_RATIO = 5.0  # last tick > expected * ratio → Slow
 RECENT_WAIT_SECONDS = 300  # host/budget deferral still "fresh" for Waiting Host
 SLEEP_AFTER_TICK_SECONDS = 30  # after a successful tick, treat as Sleeping until due again
 
+# Weekly / daily workers are false-starved under a flat 6h rule.
+_CADENCE_DEFAULTS_S: dict[str, float] = {
+    "decision_meta_learning": 7 * 86400,
+    "engineering_mentor": 7 * 86400,
+    "personal_mentor": 7 * 86400,
+    "investment_mentor": 7 * 86400,
+    "company_intelligence": 86400,
+}
+
+
+def schedule_cadence_seconds(
+    worker_type: str,
+    ops: dict[str, Any] | None = None,
+    meta: dict[str, Any] | None = None,
+) -> float | None:
+    """Declared schedule interval when known — used to avoid false starvation."""
+    for src in (ops or {}, meta or {}):
+        for k in (
+            "schedule_interval_seconds",
+            "interval_seconds",
+            "cadence_seconds",
+            "latency_tolerance_seconds",
+        ):
+            v = src.get(k)
+            if v is not None:
+                try:
+                    return max(1.0, float(v))
+                except (TypeError, ValueError):
+                    pass
+        rp = src.get("resource_profile")
+        if isinstance(rp, dict) and rp.get("latency_tolerance_seconds") is not None:
+            try:
+                return max(1.0, float(rp["latency_tolerance_seconds"]))
+            except (TypeError, ValueError):
+                pass
+    return _CADENCE_DEFAULTS_S.get(str(worker_type or ""))
 
 def empty_counts() -> dict[str, int]:
     return {s: 0 for s in OPS_STATES}
@@ -209,16 +245,23 @@ def classify_worker(
         reason = wait_reason
     elif status in ("running", "recovering"):
         # Eligible tickable workers: starved / at_risk / slow / ready / sleeping
-        is_starved = age is not None and age >= STARVE_AFTER_SECONDS
+        cadence = schedule_cadence_seconds(str(wtype or ""), ops, meta)
+        starve_after = float(STARVE_AFTER_SECONDS)
+        if cadence and cadence > starve_after:
+            # Weekly/daily workers: only starved after missing a full cadence
+            starve_after = float(cadence)
+        is_starved = age is not None and age >= starve_after
         expected_s = max(1.0, float(expected) / 1000.0) if expected else 10.0
         at_risk_after = max(
             float(AT_RISK_AFTER_SECONDS),
             expected_s * float(AT_RISK_EXPECTED_MULTIPLIER),
         )
+        if cadence and cadence > at_risk_after:
+            at_risk_after = min(float(cadence), starve_after * 0.75)
         is_at_risk = (
             age is not None
             and age >= at_risk_after
-            and age < STARVE_AFTER_SECONDS
+            and age < starve_after
         )
         is_slow = (
             last_ms is not None
@@ -228,6 +271,12 @@ def classify_worker(
         if is_starved:
             state = STATE_STARVED
             reason = f"no_progress_{int(age)}s"
+        elif cadence and age is not None and age < float(cadence) and age >= float(
+            AT_RISK_AFTER_SECONDS
+        ):
+            # Intentional low cadence — waiting for next schedule, not starved
+            state = STATE_WAITING_SCHEDULE
+            reason = f"waiting_cadence_{int(cadence)}s"
         elif is_at_risk:
             state = STATE_AT_RISK
             reason = f"cadence_miss_{int(age)}s"

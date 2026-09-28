@@ -6,12 +6,32 @@ lives in the scheduler service (Sprint 2). This layer just persists state.
 
 from __future__ import annotations
 
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from atlas.repositories.base import BaseRepository
+
+
+def _json_safe(value: Any) -> Any:
+    """Normalize UUIDs/datetimes/sets/paths so they serialize cleanly into JSONB."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, set):
+        return [_json_safe(v) for v in sorted(value, key=str)]
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 VALID_STATUSES = {
     "pending",
@@ -45,7 +65,7 @@ class TaskRepository(BaseRepository):
             VALUES (%s, %s, %s, %s, now() + make_interval(secs => %s))
             RETURNING *
             """,
-            (task_type, Jsonb(payload or {}), priority, max_retries, delay_seconds),
+            (task_type, Jsonb(_json_safe(payload or {})), priority, max_retries, delay_seconds),
         )
 
     def count_pending_of_type(self, task_type: str) -> int:
@@ -56,6 +76,81 @@ class TaskRepository(BaseRepository):
             WHERE task_type = %s AND status IN ('pending', 'claimed', 'running')
             """,
             (task_type,),
+        )
+
+    def count_queued_of_type(self, task_type: str) -> int:
+        """Count only ``pending`` rows (excludes the currently running claim)."""
+        return self.fetch_val(
+            """
+            SELECT count(*) FROM scheduler.tasks
+            WHERE task_type = %s AND status = 'pending'
+            """,
+            (task_type,),
+        )
+
+    def create_if_no_pending(
+        self,
+        task_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        priority: int = 0,
+        max_retries: int = 3,
+        delay_seconds: float = 0.0,
+    ) -> dict[str, Any] | None:
+        """Insert a pending task only when none of that type is already queued.
+
+        Used by the ``schedule_tick`` singleton chain (OI-SCHED-CHURN0): concurrent
+        workers must not each re-enqueue a new tick or the queue multiplies.
+        Takes a transaction-scoped advisory lock so two workers cannot both race
+        past the NOT EXISTS check.
+        """
+        with self._db.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(87201401, hashtext(%s))",
+                    (task_type,),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO scheduler.tasks
+                        (task_type, payload, priority, max_retries, scheduled_at)
+                    SELECT %s, %s, %s, %s, now() + make_interval(secs => %s)
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM scheduler.tasks
+                        WHERE task_type = %s AND status = 'pending'
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        task_type,
+                        Jsonb(_json_safe(payload or {})),
+                        priority,
+                        max_retries,
+                        delay_seconds,
+                        task_type,
+                    ),
+                )
+                return cur.fetchone()
+
+
+    def collapse_pending_of_type(self, task_type: str, *, keep: int = 1) -> int:
+        """Cancel excess pending tasks of a type, keeping the soonest ``keep`` rows.
+
+        Clears multiplied ``schedule_tick`` backlogs without waiting for them to run.
+        """
+        keep_n = max(0, int(keep))
+        return self.execute(
+            """
+            UPDATE scheduler.tasks
+            SET status = 'cancelled', completed_at = now(), updated_at = now()
+            WHERE id IN (
+                SELECT id FROM scheduler.tasks
+                WHERE task_type = %s AND status = 'pending'
+                ORDER BY scheduled_at ASC, id ASC
+                OFFSET %s
+            )
+            """,
+            (task_type, keep_n),
         )
 
     def get(self, task_id: UUID | str) -> dict[str, Any] | None:
@@ -215,7 +310,7 @@ class TaskRepository(BaseRepository):
                 """,
                 (
                     status,
-                    Jsonb(result) if result is not None else None,
+                    Jsonb(_json_safe(result)) if result is not None else None,
                     error,
                     str(run_id),
                 ),

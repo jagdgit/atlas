@@ -508,6 +508,8 @@ exploratory_turnover_ok: true             # honesty label only
 
 **Identity:** Capital allocator with memory — not a watchlist engine.
 
+**Follow-on (2026-08-21):** Incumbent ADD / AVOID asymmetry → [`ATLAS_INCUMBENT_COMPETITION_AND_CAPITAL_REALLOCATION_PLAN.md`](ATLAS_INCUMBENT_COMPETITION_AND_CAPITAL_REALLOCATION_PLAN.md) (`OI-ICR0`). UTS remains the switching substrate; ICR makes ADD / fresh-cash / quarantine use the same Next-₹1 center.
+
 **Funnel:** Scan all → remember all → deep-watch few → review every hold → switch only on net advantage → learn from switches **and** misses.
 
 **Success:** Coverage KPIs green daily; switch hit rate and missed-opportunity rate improve over months — observable self-improvement without NN trading.

@@ -93,6 +93,9 @@ class FakeDocRepo:
         self.by_checksum[doc.checksum] = doc
         return True
 
+    def list_by_status(self, status, limit=100):
+        return [d for d in self.by_id.values() if d.status == status][:limit]
+
 
 class FakeChunkRepo:
     def __init__(self):
@@ -189,6 +192,33 @@ class FakeEmbeddingRepo:
             )
         rows.sort(key=lambda r: r["distance"])
         return rows[:limit]
+
+    def coverage(self, model):
+        chunks = len(self.chunk_meta)
+        embeddings = sum(1 for (_cid, m) in self.vectors if m == model)
+        unembedded = sum(
+            1 for cid in self.chunk_meta if (cid, model) not in self.vectors
+        )
+        return {
+            "chunks": chunks,
+            "embeddings": embeddings,
+            "unembedded_chunks": unembedded,
+        }
+
+    def list_document_ids_missing_embeddings(self, model, *, limit=20):
+        seen = []
+        seen_set = set()
+        for chunk_id, (doc_id, _ordinal, _content) in self.chunk_meta.items():
+            if (str(chunk_id), model) in self.vectors:
+                continue
+            did = str(doc_id)
+            if did in seen_set:
+                continue
+            seen_set.add(did)
+            seen.append(did)
+            if len(seen) >= limit:
+                break
+        return seen
 
 
 class FakeEmbedResponse:
@@ -316,6 +346,86 @@ def test_retrieve_hybrid_fuses_dense_and_lexical_with_scores():
     assert top.rrf_score > 0
     assert top.dense_score is not None or top.lexical_score is not None
     assert "cat" in top.content
+
+
+def test_dense_rows_returns_list_never_none():
+    svc, docs, chunks, embs = _service()
+    assert svc._dense_rows("", limit=5, domains=None) == []
+    r = svc.ingest_text("note", "the cat sat")
+    for ch in chunks.list_for_document(r["document_id"]):
+        embs.register_chunk(ch["id"], ch["document_id"], ch["ordinal"], ch["content"])
+    rows = svc._dense_rows("cat", limit=5, domains=None)
+    assert isinstance(rows, list)
+    assert rows
+    assert "cat" in rows[0]["content"]
+
+
+def test_retrieve_hybrid_survives_dense_embed_failure():
+    svc, docs, chunks, embs = _service()
+    r = svc.ingest_text("note", "the cat sat on the mat")
+    chunks.doc_domains[r["document_id"]] = "external"
+    for ch in chunks.list_for_document(r["document_id"]):
+        embs.register_chunk(ch["id"], ch["document_id"], ch["ordinal"], ch["content"])
+        embs.doc_domains[r["document_id"]] = "external"
+
+    class BoomLLM:
+        def embed(self, texts, **kw):
+            raise RuntimeError("embed down")
+
+    svc._llm = BoomLLM()
+    assert svc.search("cat") == []
+    ranked = svc.retrieve("cat", k=2, role="chat", mode="hybrid", domains=["external"])
+    assert ranked.hits
+    assert ranked.meta["dense_candidates"] == 0
+    assert "cat" in ranked.hits[0].content
+
+
+def test_backfill_embeds_chunked_documents():
+    svc, docs, chunks, embs = _service()
+    summary = svc.ingest_text("note", "cats purr and cats nap", embed=False)
+    assert summary["status"] == "chunked"
+    assert not embs.vectors
+    result = svc.backfill_missing_embeddings(limit=8)
+    assert summary["document_id"] in result["embedded"]
+    assert docs.get(summary["document_id"]).status == "embedded"
+    assert embs.vectors
+
+
+def test_backfill_enqueues_existing_embed_document_task():
+    svc, docs, chunks, embs = _service()
+    summary = svc.ingest_text("note", "cats purr", embed=False)
+    calls = []
+
+    def enqueue(task_type, payload, **kw):
+        calls.append((task_type, dict(payload)))
+        return {"id": "t1"}
+
+    result = svc.backfill_missing_embeddings(limit=4, enqueue=enqueue)
+    assert calls == [
+        ("embed_document", {"document_id": summary["document_id"]})
+    ]
+    assert result["enqueued"] == [summary["document_id"]]
+    assert result["embedded"] == []
+    assert docs.get(summary["document_id"]).status == "chunked"
+
+
+def test_backfill_skips_when_embed_document_queue_is_full():
+    svc, docs, chunks, embs = _service()
+    svc.ingest_text("note", "cats purr", embed=False)
+    calls = []
+
+    def enqueue(task_type, payload, **kw):
+        calls.append((task_type, payload))
+
+    result = svc.backfill_missing_embeddings(
+        limit=4,
+        enqueue=enqueue,
+        count_pending=lambda _t: 8,
+        max_pending=8,
+    )
+    assert result["skipped"] is True
+    assert result["reason"] == "embed_document_queue_full"
+    assert calls == []
 
 
 def test_retrieve_archive_excluded_by_default():

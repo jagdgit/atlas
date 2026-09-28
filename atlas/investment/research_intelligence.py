@@ -82,6 +82,29 @@ def curiosity_affects_allocation(
     is_open: bool = False,
 ) -> bool:
     """Research only if resolving this unknown could change the next-rupee decision."""
+    return bool(
+        research_roi_gate(
+            unknown,
+            symbol=symbol,
+            allocation_blockers=allocation_blockers,
+            is_open=is_open,
+        ).get("admit")
+    )
+
+
+def research_roi_gate(
+    unknown: str,
+    *,
+    symbol: str,
+    allocation_blockers: list[dict[str, Any]] | None = None,
+    is_open: bool = False,
+    er_completeness: float | None = None,
+) -> dict[str, Any]:
+    """OI-CU0 CU.E — admit research only when it can change allocation economics.
+
+    Can change: next-₹1 ranking, E[R], confidence, risk, or allocation action.
+    Otherwise defer/low — do not burn inference on vanity unknowns.
+    """
     norm = normalize_unknown(unknown)
     sym = str(symbol or "").strip().upper()
     blockers = allocation_blockers or []
@@ -91,14 +114,60 @@ def curiosity_affects_allocation(
         if str(b.get("symbol") or "").upper() == sym and normalize_unknown(
             str(b.get("unknown") or "")
         ) == norm:
-            return True
+            return {
+                "admit": True,
+                "priority": "high",
+                "reason": "allocation_blocker",
+                "unknown": norm,
+                "symbol": sym,
+            }
     if norm in ALLOCATION_SENSITIVE and is_open:
-        return True
-    if norm in NEWS_UNKNOWNS:
-        return is_open
-    if norm in ALLOCATION_SENSITIVE:
-        return bool(blockers) and is_open
-    return False
+        return {
+            "admit": True,
+            "priority": "high",
+            "reason": "open_book_allocation_sensitive",
+            "unknown": norm,
+            "symbol": sym,
+        }
+    if norm in NEWS_UNKNOWNS and is_open:
+        return {
+            "admit": True,
+            "priority": "normal",
+            "reason": "open_book_news_or_policy",
+            "unknown": norm,
+            "symbol": sym,
+        }
+    if er_completeness is not None:
+        try:
+            if float(er_completeness) < 0.55 and norm in ALLOCATION_SENSITIVE:
+                return {
+                    "admit": True,
+                    "priority": "high",
+                    "reason": "er_completeness_gap",
+                    "unknown": norm,
+                    "symbol": sym,
+                }
+        except (TypeError, ValueError):
+            pass
+    if norm in ALLOCATION_SENSITIVE and blockers and is_open:
+        return {
+            "admit": True,
+            "priority": "normal",
+            "reason": "blocker_context_open",
+            "unknown": norm,
+            "symbol": sym,
+        }
+    return {
+        "admit": False,
+        "priority": "defer",
+        "reason": "no_allocation_roi",
+        "unknown": norm,
+        "symbol": sym,
+        "honesty": (
+            "CU.E: resolving this unknown would not change next-₹1 / E[R] / "
+            "confidence / risk / allocation — deferred."
+        ),
+    }
 
 
 def filter_curiosity_candidates(
@@ -125,6 +194,12 @@ def filter_curiosity_candidates(
         ):
             c = dict(c)
             c["allocation_sensitive"] = True
+            c["roi"] = research_roi_gate(
+                unk,
+                symbol=sym,
+                allocation_blockers=allocation_blockers,
+                is_open=is_open,
+            )
             kept.append(c)
         else:
             skipped += 1

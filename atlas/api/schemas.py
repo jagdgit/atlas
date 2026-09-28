@@ -55,6 +55,10 @@ class CitationOut(BaseModel):
     chunk_id: str
     similarity: float
     snippet: str
+    finding_id: str | None = None
+    source: str | None = None
+    timestamp: str | None = None
+    score: float | None = None
 
 
 class RunAgentResponse(BaseModel):
@@ -125,6 +129,10 @@ class SearchResultOut(BaseModel):
     lexical_score: float | None = None
     rrf_score: float | None = None
     score: float | None = None
+    finding_id: str | None = None
+    source: str | None = None
+    timestamp: str | None = None
+    tier: str | None = None
 
 
 class SearchResponse(BaseModel):
@@ -132,6 +140,7 @@ class SearchResponse(BaseModel):
     role: str | None = None
     mode: str | None = None
     diagnostics_id: str | None = None
+    retrieved_at: str | None = None
     context: str | None = None
 
 

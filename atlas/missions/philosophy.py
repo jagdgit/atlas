@@ -192,6 +192,30 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
     },
+    "overnight_densify": {
+        "mission_kind": KIND_LEARNING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            learn=STAGE_PARTIAL,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "fel_experiment_runner": {
+        "mission_kind": KIND_LEARNING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            learn=STAGE_ACTIVE,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_PARTIAL,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
     "government_intelligence": {
         "mission_kind": KIND_LEARNING,
         "never_stops": True,
@@ -238,6 +262,19 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             learn=STAGE_ACTIVE,
             record_why=STAGE_PARTIAL,
             evaluate=STAGE_WAITING,
+            reflect=STAGE_WAITING,
+            improve=STAGE_WAITING,
+        ),
+    },
+    "fundamental_evidence": {
+        "mission_kind": KIND_LEARNING,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            learn=STAGE_ACTIVE,
+            decide=STAGE_PARTIAL,  # acquisition plan only — not trade auth
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_PARTIAL,
             reflect=STAGE_WAITING,
             improve=STAGE_WAITING,
         ),

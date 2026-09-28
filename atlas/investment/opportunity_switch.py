@@ -16,6 +16,7 @@ VERSION = "uts.d.opportunity_switch"
 REASON_ADVANTAGE_CLEARED = "switch_advantage_cleared"
 REASON_BLOCKED_COSTS = "switch_blocked_costs"
 REASON_BLOCKED_MISSING_ER = "switch_blocked_missing_er"
+REASON_ADVANTAGE_UNCLEAR = "advantage_unclear"
 REASON_BLOCKED_PLC_A = "switch_blocked_plc_a"
 REASON_BLOCKED_COLD_START = "switch_blocked_cold_start"
 REASON_HOLD_INCUMBENT = "hold_incumbent"
@@ -395,15 +396,18 @@ def review_hold_vs_challengers(
         base["honesty"] = "No open quantity — nothing to review."
         return base
     if not hold_metrics.get("computable"):
-        # Prototype_v1 always scores a dict row; this branch is the remaining
-        # fail-closed path (malformed hold / non-numeric internals).
+        # ICR.4 — prototype normally always scores a dict row. Remaining fail path
+        # is malformed hold; do **not** treat as permanent missing_er lock-in.
         conf_l = str(hold.get("confidence") or "").strip().lower()
         phase_l = str(hold.get("phase") or "").strip().lower()
         if conf_l in {"very_low", "very-low"} or phase_l == "learning":
             base["reason_code"] = REASON_BLOCKED_COLD_START
         else:
-            base["reason_code"] = REASON_BLOCKED_MISSING_ER
-        base["honesty"] = hold_metrics.get("honesty")
+            base["reason_code"] = REASON_ADVANTAGE_UNCLEAR
+        base["honesty"] = (
+            str(hold_metrics.get("honesty") or "")
+            + " Advantage unclear — cash remains competitor (ICR.4)."
+        )
         return base
 
     plc_map = {
@@ -431,6 +435,7 @@ def review_hold_vs_challengers(
                     "challenger_symbol": chal_sym,
                     "decision": "hold",
                     "reason_code": REASON_BLOCKED_LAB_CONTRACT,
+                    "challenger_status": "lab_contract_blocked",
                     "expected_advantage": None,
                     "challenger_metrics": None,
                 }
@@ -441,22 +446,14 @@ def review_hold_vs_challengers(
             pass
         c_metrics = estimate_opportunity_metrics(raw, er_scale=er_scale)
         evaluated += 1
-        if chal_sym in plc_map and not plc_map[chal_sym]:
-            blocked = {
-                "challenger_symbol": chal_sym,
-                "decision": "hold",
-                "reason_code": REASON_BLOCKED_PLC_A,
-                "expected_advantage": None,
-                "challenger_metrics": c_metrics,
-            }
-            if best_blocked is None:
-                best_blocked = blocked
-            continue
+        plc_blocked = chal_sym in plc_map and not plc_map[chal_sym]
         if not c_metrics.get("computable"):
+            # ICR.4 — still keep the challenger visible; advantage unclear, not lock-in
             blocked = {
                 "challenger_symbol": chal_sym,
                 "decision": "hold",
-                "reason_code": REASON_BLOCKED_MISSING_ER,
+                "reason_code": REASON_ADVANTAGE_UNCLEAR,
+                "challenger_status": "er_incomplete",
                 "expected_advantage": None,
                 "challenger_metrics": c_metrics,
             }
@@ -475,10 +472,28 @@ def review_hold_vs_challengers(
             penalty_k=penalty_k,
             penalty_m=penalty_m,
         )
+        if plc_blocked:
+            # ICR.4 — emit comparison with status; never silent drop; no switch execute
+            blocked = {
+                "challenger_symbol": chal_sym,
+                "decision": "hold",
+                "reason_code": REASON_BLOCKED_PLC_A,
+                "challenger_status": "plc_a_blocked",
+                "expected_advantage": ev.get("expected_advantage"),
+                "challenger_metrics": c_metrics,
+                "evaluation": ev,
+            }
+            if best_blocked is None or (
+                (ev.get("expected_advantage") or -1e9)
+                > (best_blocked.get("expected_advantage") or -1e9)
+            ):
+                best_blocked = blocked
+            continue
         row = {
             "challenger_symbol": chal_sym,
             "decision": ev.get("decision"),
             "reason_code": ev.get("reason_code"),
+            "challenger_status": "ok",
             "expected_advantage": ev.get("expected_advantage"),
             "challenger_metrics": c_metrics,
             "evaluation": ev,
@@ -503,6 +518,7 @@ def review_hold_vs_challengers(
                 "challenger_symbol": best_switch["challenger_symbol"],
                 "decision": "switch",
                 "reason_code": code,
+                "challenger_status": best_switch.get("challenger_status") or "ok",
                 "expected_advantage": best_switch.get("expected_advantage"),
                 "challenger_metrics": best_switch.get("challenger_metrics"),
                 "evaluation": best_switch.get("evaluation"),
@@ -510,18 +526,29 @@ def review_hold_vs_challengers(
         )
         return base
     if best_blocked is not None:
+        blocked_code = best_blocked.get("reason_code") or REASON_HOLD_INCUMBENT
+        # ICR.4 — missing_er as terminal lock-in is retired for scored legs
+        if blocked_code == REASON_BLOCKED_MISSING_ER:
+            blocked_code = REASON_ADVANTAGE_UNCLEAR
         base.update(
             {
                 "challenger_symbol": best_blocked.get("challenger_symbol"),
                 "decision": "hold",
-                "reason_code": best_blocked.get("reason_code") or REASON_HOLD_INCUMBENT,
+                "reason_code": blocked_code,
+                "challenger_status": best_blocked.get("challenger_status"),
                 "expected_advantage": best_blocked.get("expected_advantage"),
                 "challenger_metrics": best_blocked.get("challenger_metrics"),
                 "evaluation": best_blocked.get("evaluation"),
             }
         )
+        if blocked_code in {REASON_BLOCKED_PLC_A, REASON_ADVANTAGE_UNCLEAR}:
+            base["honesty"] = (
+                "Challenger comparison incomplete or PLC.A-blocked — "
+                "advantage unclear; cash remains competitor (ICR.4)."
+            )
         return base
-    base["honesty"] = "No eligible challengers to compare."
+    base["honesty"] = "No eligible challengers to compare — cash remains competitor."
+    base["reason_code"] = REASON_ADVANTAGE_UNCLEAR
     return base
 
 

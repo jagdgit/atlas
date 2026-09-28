@@ -167,6 +167,7 @@ def feature_contributions_v1(
     research_gate: dict[str, Any] | None = None,
     portfolio_gate: dict[str, Any] | None = None,
     research_coverage: float | None = None,
+    experience_signed: float | None = None,
 ) -> dict[str, int]:
     """Heuristic v1 signed contributions — see module docstring."""
     score = investment_score if isinstance(investment_score, dict) else {}
@@ -191,7 +192,14 @@ def feature_contributions_v1(
     out["valuation"] = axis_contrib("valuation", 14.0)
     out["technical"] = axis_contrib("technical", 12.0)
     out["macro"] = axis_contrib("macro_theme", 8.0)
-    out["experience"] = axis_contrib("risk", 6.0)
+    if experience_signed is not None:
+        try:
+            # ranking L2 cap ±0.20 → contrib about ±8
+            out["experience"] = _clamp_contrib(float(experience_signed) * 40.0)
+        except (TypeError, ValueError):
+            out["experience"] = 0
+    else:
+        out["experience"] = axis_contrib("risk", 6.0)
 
     # Technical extras from indicators
     tech_extra = 0.0
@@ -469,6 +477,8 @@ def build_packet(
     process_context: dict[str, Any] | None = None,
     meta_extra: dict[str, Any] | None = None,
     belief_context: dict[str, Any] | None = None,
+    lesson_refs: list[dict[str, Any]] | None = None,
+    experience_refs: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Build an immutable ``di.packet.1`` payload (does not persist)."""
     act = str(action or "").strip().lower()
@@ -481,6 +491,21 @@ def build_packet(
 
     exp_id = normalize_experiment_id(experiment_id)
     snap = stamp_regime_on_snapshot(dict(market_snapshot or empty_market_snapshot()))
+    bc = dict(belief_context) if isinstance(belief_context, dict) else {}
+    lessons = list(lesson_refs) if lesson_refs is not None else list(bc.get("lesson_refs") or [])
+    exp_refs = (
+        list(experience_refs)
+        if experience_refs is not None
+        else list(bc.get("experience_refs") or [])
+    )
+    experience_signed = None
+    if lessons:
+        try:
+            from atlas.investment.lesson_influence import l2_totals
+
+            experience_signed = l2_totals(lessons)["ranking"]
+        except Exception:  # noqa: BLE001
+            experience_signed = None
     contrib = feature_contributions_v1(
         investment_score=investment_score,
         indicators=indicators,
@@ -489,6 +514,7 @@ def build_packet(
         research_gate=research_gate,
         portfolio_gate=portfolio_gate,
         research_coverage=research_coverage,
+        experience_signed=experience_signed,
     )
     conf = confidence_breakdown_v1(
         investment_score=investment_score,
@@ -501,6 +527,26 @@ def build_packet(
         investment_score=investment_score,
         valuation=valuation,
     )
+    try:
+        from atlas.investment.learning_story import stamp_packet_prediction
+
+        expected_doc = stamp_packet_prediction(
+            expected if isinstance(expected, dict) else None,
+            action=act,
+            indicators=indicators if isinstance(indicators, dict) else None,
+        )
+    except Exception:  # noqa: BLE001
+        expected_doc = (
+            dict(expected)
+            if isinstance(expected, dict)
+            else {
+                "holding_horizon": "position",
+                "return_band": None,
+                "thesis_id": prior_thesis_id,
+                "falsifiers": [],
+                "prediction_status": "prediction_absent",
+            }
+        )
     pg = portfolio_gate if isinstance(portfolio_gate, dict) else {}
     gates = {
         "research": dict(research_gate) if isinstance(research_gate, dict) else {},
@@ -541,22 +587,18 @@ def build_packet(
         "evidence_refs": list(evidence_refs or []),
         "observation_ids": list(observation_ids or []),
         "unknowns": unknowns,
-        "expected": dict(expected)
-        if isinstance(expected, dict)
-        else {
-            "holding_horizon": "position",
-            "return_band": None,
-            "thesis_id": prior_thesis_id,
-            "falsifiers": [],
-        },
+        "expected": expected_doc,
         "plan_link": dict(plan_link)
         if isinstance(plan_link, dict)
         else {"rank": None, "suggested_notional": None, "in_daily_plan": False},
         "gates": gates,
-        "belief_context": dict(belief_context)
-        if isinstance(belief_context, dict)
-        else None,
+        "belief_context": bc if bc else None,
+        "lesson_refs": lessons,
+        "experience_refs": exp_refs,
+        "no_match": bool(bc.get("no_match")) if "no_match" in bc else (not lessons and not exp_refs),
     }
+    if payload["no_match"] and bc.get("no_match_reason"):
+        payload["no_match_reason"] = str(bc.get("no_match_reason"))
     meta: dict[str, Any] = {"completeness": completeness_score(payload)}
     flags = list(process_flags) if process_flags else None
     if flags is None and process_context is not None:
@@ -578,6 +620,13 @@ def build_packet(
             if v is not None and k not in meta:
                 meta[k] = v
     payload["meta"] = meta
+    # Phase 6 — evidence lineage stub (strengthen before more L5s)
+    try:
+        from atlas.investment.evidence_lineage import stamp_packet_lineage
+
+        stamp_packet_lineage(payload)
+    except Exception:  # noqa: BLE001
+        pass
     return payload
 
 

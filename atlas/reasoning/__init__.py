@@ -49,6 +49,13 @@ from atlas.reasoning.research_scientist import (
     is_scientist_event,
     run_research_scientist,
 )
+from atlas.reasoning.cognitive_core import (
+    VERSION as COGNITIVE_CORE_VERSION,
+    REVIEWED as SCIENTIST_REVIEWED,
+    UNREVIEWED as SCIENTIST_UNREVIEWED,
+    build_evidence_packet,
+    reason_as_scientist,
+)
 from atlas.reasoning.service import ReasoningService, VERSION
 from atlas.repositories.belief_repo import (
     BELIEF_DOMAINS,
@@ -61,6 +68,7 @@ __all__ = [
     "BELIEF_DOMAINS",
     "BELIEF_STATUSES",
     "BeliefRepository",
+    "COGNITIVE_CORE_VERSION",
     "DAY_ACTIVITY_VERSION",
     "DECISION_CONSULT_VERSION",
     "EXP_LOOP_VERSION",
@@ -71,12 +79,15 @@ __all__ = [
     "RESEARCH_SCIENTIST_VERSION",
     "REFLECT_VERSION",
     "ReasoningService",
+    "SCIENTIST_REVIEWED",
+    "SCIENTIST_UNREVIEWED",
     "SEED_BELIEFS",
     "VERSION",
     "answer_as_atlas",
     "answer_belief_benchmark",
     "belief_core_jis",
     "build_day_activity_brief",
+    "build_evidence_packet",
     "build_living_rag_bundle",
     "build_outcome_check",
     "build_research_packet",
@@ -92,6 +103,7 @@ __all__ = [
     "ingest_experience_to_beliefs",
     "is_scientist_event",
     "merge_jis",
+    "reason_as_scientist",
     "record_belief_candidate",
     "run_nightly_reflection",
     "run_research_scientist",

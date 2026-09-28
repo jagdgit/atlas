@@ -98,6 +98,7 @@ class ReasoningService:
         self,
         *,
         domain: str | None = None,
+        domains: list[str] | None = None,
         theme: str | None = None,
         query: str | None = None,
         statuses: list[str] | None = None,
@@ -110,28 +111,72 @@ class ReasoningService:
         ``record_mode``:
         * ``per_belief`` — one metric row per returned belief (default; chat/why).
         * ``once`` — one metric row per call (LOOP0 L2 unique decision states).
+
+        ``domains`` (CLC.1) — union filter, e.g. ``market ∪ cross`` when query
+        tokens hit abstract themes. Do not dump every seed.
         """
         statuses = statuses or ["active", "weakened"]
+        allowed: set[str] | None = None
+        if domains:
+            allowed = {str(d) for d in domains if d}
+        elif domain:
+            allowed = {str(domain)}
         rows: list[dict[str, Any]]
         if query:
             rows = self._repo.search_beliefs(query, limit=limit)
-            if domain:
-                rows = [r for r in rows if r.get("domain") == domain]
+            if allowed:
+                rows = [r for r in rows if r.get("domain") in allowed]
             # Broad query with no token hits → still surface active worldview
             if not rows:
+                if allowed and len(allowed) > 1:
+                    merged: list[dict[str, Any]] = []
+                    seen: set[str] = set()
+                    for d in allowed:
+                        for r in self._repo.list_beliefs(
+                            domain=d,
+                            statuses=statuses,
+                            theme=theme,
+                            limit=limit,
+                        ):
+                            rid = str(r.get("id") or r.get("belief_key") or "")
+                            if rid and rid in seen:
+                                continue
+                            if rid:
+                                seen.add(rid)
+                            merged.append(r)
+                    rows = merged[:limit]
+                else:
+                    rows = self._repo.list_beliefs(
+                        domain=domain,
+                        statuses=statuses,
+                        theme=theme,
+                        limit=limit,
+                    )
+        else:
+            if allowed and len(allowed) > 1:
+                merged = []
+                seen = set()
+                for d in allowed:
+                    for r in self._repo.list_beliefs(
+                        domain=d,
+                        statuses=statuses,
+                        theme=theme,
+                        limit=limit,
+                    ):
+                        rid = str(r.get("id") or r.get("belief_key") or "")
+                        if rid and rid in seen:
+                            continue
+                        if rid:
+                            seen.add(rid)
+                        merged.append(r)
+                rows = merged[:limit]
+            else:
                 rows = self._repo.list_beliefs(
                     domain=domain,
                     statuses=statuses,
                     theme=theme,
                     limit=limit,
                 )
-        else:
-            rows = self._repo.list_beliefs(
-                domain=domain,
-                statuses=statuses,
-                theme=theme,
-                limit=limit,
-            )
         enriched = [with_effective(r) for r in rows]
         mode = str(record_mode or "per_belief").strip().lower()
         if mode == "once":
@@ -464,7 +509,8 @@ class ReasoningService:
                             "New statement:"
                         ),
                     ),
-                ]
+                ],
+                _atlas_purpose="self_belief_revise_suggest",
             )
             text = (getattr(resp, "text", None) or str(resp) or "").strip()
             return text or None
@@ -625,4 +671,131 @@ class ReasoningService:
             self,
             laboratory_id=laboratory_id,
             allow_llm_narrative=allow_llm_narrative,
+        )
+
+    def reason_scientist(
+        self,
+        *,
+        packet: dict[str, Any] | None = None,
+        question: str | None = None,
+        laboratory_id: str | None = None,
+        symbol: str | None = None,
+        action: str | None = None,
+        evidence: list[Any] | None = None,
+        known: list[Any] | None = None,
+        unknowns: list[Any] | None = None,
+        contradictions: list[Any] | None = None,
+        purpose: str = "cognitive_core_scientist",
+        consult_beliefs: bool = True,
+    ) -> dict[str, Any]:
+        """NOW #5 — Cognitive Core: scientist over bounded evidence (advice-only).
+
+        LLM failure → review_status=UNREVIEWED. Never places orders.
+        """
+        from atlas.reasoning.cognitive_core import (
+            build_evidence_packet,
+            reason_as_scientist,
+        )
+
+        pkt = dict(packet) if isinstance(packet, dict) else None
+        prior = None
+        if consult_beliefs:
+            try:
+                q = (question or (pkt or {}).get("question") or symbol or "")[:120]
+                bundle = self.consult(
+                    domain="market" if (laboratory_id or symbol) else None,
+                    query=q or None,
+                    limit=6,
+                    purpose="cognitive_core_prior",
+                    record_mode="once",
+                )
+                beliefs = list((bundle or {}).get("beliefs") or [])[:4]
+                if beliefs:
+                    prior = [
+                        {
+                            "id": b.get("id"),
+                            "claim": (b.get("statement") or b.get("claim") or "")[:160],
+                            "confidence": b.get("effective_confidence", b.get("confidence")),
+                            "status": b.get("status"),
+                        }
+                        for b in beliefs
+                        if isinstance(b, dict)
+                    ]
+            except Exception:  # noqa: BLE001
+                self._logger.debug("cognitive prior consult failed", exc_info=True)
+
+        if pkt is None:
+            pkt = build_evidence_packet(
+                question=question or "Advice-only scientist review of evidence.",
+                laboratory_id=laboratory_id,
+                symbol=symbol,
+                action=action,
+                evidence=evidence,
+                known=known,
+                unknowns=unknowns,
+                contradictions=contradictions,
+                prior_belief=prior,
+            )
+        elif prior and not pkt.get("prior_belief"):
+            pkt = dict(pkt)
+            pkt["prior_belief"] = prior
+
+        return reason_as_scientist(packet=pkt, llm=self._llm, purpose=purpose)
+
+    def reason_decide_rationale(
+        self,
+        *,
+        packet: dict[str, Any] | None = None,
+        doc: dict[str, Any] | None = None,
+        laboratory_id: str | None = None,
+        allowed_evidence_ids: list[Any] | None = None,
+        purpose: str = "bre3_decide_rationale",
+        consult_beliefs: bool = True,
+    ) -> dict[str, Any]:
+        """NOW #5 densify — decide-time rationale via Cognitive Core (advice-only)."""
+        from atlas.reasoning.cognitive_core import (
+            evidence_packet_from_decide,
+            reason_decide_rationale,
+        )
+
+        pkt = dict(packet) if isinstance(packet, dict) else None
+        if pkt is None:
+            pkt = evidence_packet_from_decide(
+                doc, laboratory_id=laboratory_id
+            )
+        if consult_beliefs and not pkt.get("prior_belief"):
+            try:
+                q = (
+                    (pkt.get("question") or "")
+                    or f"{pkt.get('action')} {pkt.get('symbol')}"
+                )[:120]
+                bundle = self.consult(
+                    domain="market",
+                    query=q or None,
+                    limit=4,
+                    purpose="cognitive_core_decide_prior",
+                    record_mode="once",
+                )
+                beliefs = list((bundle or {}).get("beliefs") or [])[:3]
+                if beliefs:
+                    pkt = dict(pkt)
+                    pkt["prior_belief"] = [
+                        {
+                            "id": b.get("id"),
+                            "claim": (b.get("statement") or b.get("claim") or "")[:160],
+                            "confidence": b.get(
+                                "effective_confidence", b.get("confidence")
+                            ),
+                        }
+                        for b in beliefs
+                        if isinstance(b, dict)
+                    ]
+            except Exception:  # noqa: BLE001
+                self._logger.debug("decide prior consult failed", exc_info=True)
+
+        return reason_decide_rationale(
+            packet=pkt,
+            llm=self._llm,
+            allowed_evidence_ids=allowed_evidence_ids,
+            purpose=purpose,
         )
