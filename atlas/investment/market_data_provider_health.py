@@ -110,6 +110,15 @@ def save_health(data_dir: str | Path | None, doc: dict[str, Any]) -> None:
         return
     path = _health_path(data_dir)
     try:
+        # Preserve operator email-arm fields across evaluate rebuilds.
+        prev = load_health(data_dir)
+        for key in (
+            "login_email_sent_ist_day",
+            "login_email_message_id",
+            "login_email_public_base",
+        ):
+            if doc.get(key) is None and prev.get(key) is not None:
+                doc[key] = prev.get(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, indent=2, default=str) + "\n", encoding="utf-8")
     except OSError:
@@ -716,6 +725,7 @@ def provider_health_tick(
     )
     phase2 = stamp_phase2_session(data_dir, health=doc)
     email_note = maybe_escalate_login_email(data_dir, doc)
+    poll_note = maybe_poll_zerodha_token_email(data_dir, doc)
     return {
         "ok": True,
         "status": doc.get("status"),
@@ -723,6 +733,7 @@ def provider_health_tick(
         "trading_date": doc.get("trading_date"),
         "note": doc.get("message") or doc.get("status"),
         "email_escalate": email_note,
+        "token_email_poll": poll_note,
         "phase2": {
             "sessions_observed": phase2.get("sessions_observed"),
             "target_sessions": phase2.get("target_sessions"),
@@ -850,65 +861,39 @@ def maybe_escalate_login_email(
     data_dir: str | Path | None,
     health: dict[str, Any],
 ) -> dict[str, Any]:
-    """MDPH.8 — optional ~09:00 IST LOGIN_REQUIRED email (once per IST day)."""
-    status = str(health.get("status") or "")
-    if status not in {STATUS_LOGIN_REQUIRED, STATUS_EXPIRED}:
-        return {"sent": False, "reason": "not_login_required"}
-    now = datetime.now(_IST)
-    # Operator can typically complete 2FA around ~06:00 IST; escalate from then
-    # (not waiting until 09:00 when live labs already need the token).
-    if now.hour < 6:
-        return {"sent": False, "reason": "before_06_ist"}
-    day = _ist_day()
-    if str(health.get("login_email_sent_ist_day") or "") == day:
-        return {"sent": False, "reason": "already_sent_today"}
-    # Persist intent before send to avoid double-send storms
+    """MDPH.8 — once/day LOGIN_REQUIRED email + arm IMAP reply poll."""
     try:
-        health = dict(health)
-        health["login_email_sent_ist_day"] = day
-        save_health(data_dir, health)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        import os as _os
+        from atlas.investment.zerodha_token_email import escalate_login_email
 
-        from atlas.config import get_config
-        from atlas.notify.email import EmailSender
-
-        cfg = get_config()
-        email_cfg = cfg.email
-        password = _os.environ.get(str(getattr(email_cfg, "password_env", "") or ""), "")
-        to_addrs = list(
-            getattr(email_cfg, "investor_to_addrs", None)
-            or getattr(email_cfg, "to_addrs", None)
-            or []
-        )
-        sender = EmailSender(
-            host=str(getattr(email_cfg, "host", "") or ""),
-            port=int(getattr(email_cfg, "port", 587) or 587),
-            username=str(getattr(email_cfg, "username", "") or ""),
-            password=password,
-            from_addr=str(getattr(email_cfg, "from_addr", "") or ""),
-            to_addrs=to_addrs,
-            use_tls=bool(getattr(email_cfg, "use_tls", True)),
-            timeout=float(getattr(email_cfg, "timeout", 20.0) or 20.0),
-        )
-        if not sender.available():
-            return {"sent": False, "reason": "email_not_configured"}
-        cta = health.get("cta") or "/zerodha/login"
-        ok = sender.send(
-            subject=f"[Atlas MDPH] Zerodha {status} — live labs paused",
-            body=(
-                f"Provider status: {status}\n"
-                f"Trading date (IST): {health.get('trading_date')}\n"
-                f"Live-required labs (intraday/F&O) are paused until login.\n"
-                f"Authenticate: http://127.0.0.1:8000{cta}\n"
-            ),
-        )
-        record_mdph_event(data_dir, "login_email_escalate", status=status, ok=ok)
-        return {"sent": bool(ok), "reason": "smtp_ok" if ok else "smtp_failed"}
+        return escalate_login_email(data_dir, health)
     except Exception as exc:  # noqa: BLE001
         return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def maybe_poll_zerodha_token_email(
+    data_dir: str | Path | None,
+    health: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """While LOGIN_REQUIRED, poll IMAP ~every 5 min for request_token reply."""
+    health = health or load_health(data_dir)
+    status = str((health or {}).get("status") or "")
+    if status not in {STATUS_LOGIN_REQUIRED, STATUS_EXPIRED}:
+        # Still allow completing a pending poll if session appeared mid-wait
+        try:
+            from atlas.investment.zerodha_token_email import load_pending, poll_token_reply
+
+            pending = load_pending(data_dir)
+            if pending.get("status") == "awaiting_reply" and pending.get("ist_day") == _ist_day():
+                return poll_token_reply(data_dir)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "reason": "not_awaiting_login"}
+    try:
+        from atlas.investment.zerodha_token_email import poll_token_reply
+
+        return poll_token_reply(data_dir)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
 
 
 PHASE2_TARGET_SESSIONS = 5

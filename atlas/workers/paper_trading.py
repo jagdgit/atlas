@@ -244,14 +244,16 @@ class PaperTradingWorker(PersistentWorker):
                 "FNO-LAB-v1 early experiment flatten failed",
                 exc_info=True,
             )
-        # OI-MDPH0 — live-required labs pause when Zerodha provider not READY
+        # OI-MDPH0 — live-required labs: Zerodha READY, else labeled fallback (not silent)
         try:
             from atlas.investment.lab_contracts import live_required as _live_required
             from atlas.investment.market_data_provider_health import (
                 evaluate_zerodha_health,
                 live_trading_allowed,
                 not_evaluable_payload,
+                record_mdph_event,
             )
+            from atlas.investment.provider_fallback import resolve_live_provider_plan
 
             if _live_required(portfolio_key, cfg=cfg):
                 data_dir = None
@@ -261,14 +263,28 @@ class PaperTradingWorker(PersistentWorker):
                     data_dir = get_config().paths.data
                 except Exception:  # noqa: BLE001
                     data_dir = None
-                health = evaluate_zerodha_health(data_dir, probe=True, refresh_instruments=False)
-                if not live_trading_allowed(health):
+                health = evaluate_zerodha_health(
+                    data_dir, probe=True, refresh_instruments=False
+                )
+                plan = resolve_live_provider_plan(
+                    portfolio_key=portfolio_key,
+                    cfg=cfg,
+                    zerodha_health=health,
+                    live_required=True,
+                )
+                state["mdph"] = {
+                    "provider_status": health.get("status"),
+                    "reason_code": (not_evaluable_payload(health) or {}).get("reason_code"),
+                    "decision_status": (not_evaluable_payload(health) or {}).get(
+                        "decision_status"
+                    ),
+                    "fallback": plan.get("fallback"),
+                    "fallback_reason": plan.get("reason"),
+                    "effective_provider": plan.get("provider"),
+                    "honesty": plan.get("honesty"),
+                }
+                if plan.get("paused"):
                     nev = not_evaluable_payload(health)
-                    state["mdph"] = {
-                        "provider_status": health.get("status"),
-                        "reason_code": nev.get("reason_code"),
-                        "decision_status": nev.get("decision_status"),
-                    }
                     try:
                         from atlas.activity import record_activity
 
@@ -279,17 +295,55 @@ class PaperTradingWorker(PersistentWorker):
                             target=portfolio_key,
                             result="skipped",
                             summary=(
-                                f"{portfolio_key} paused — {nev.get('reason_code')} "
+                                f"{portfolio_key} paused — {plan.get('reason')} "
                                 f"(Zerodha {health.get('status')})"
                             ),
                             evidence={
                                 "portfolio_key": portfolio_key,
                                 "provider_status": health.get("status"),
-                                "reason_code": nev.get("reason_code"),
+                                "reason": plan.get("reason"),
                             },
                         )
                     except Exception:  # noqa: BLE001
                         pass
+                    cta = health.get("cta") or "/zerodha/login"
+                    return TickResult(
+                        state=state,
+                        note=(
+                            f"NOT_EVALUABLE:{nev.get('reason_code')} "
+                            f"live_required lab paused (Zerodha {health.get('status')}; "
+                            f"{plan.get('reason')}). Authenticate: {cta}"
+                        ),
+                    )
+                # Labeled fallback — continue tick; stamp provider for this tick
+                if plan.get("fallback"):
+                    cfg = dict(cfg)
+                    cfg["portfolio_key"] = portfolio_key
+                    cfg["live_provider"] = str(plan.get("provider") or "yahoo")
+                    cfg["_mdph_provider_fallback"] = plan.get("fallback")
+                    cfg["_mdph_fallback_honesty"] = plan.get("honesty")
+                    state["mdph"]["labeled_fallback"] = True
+                    try:
+                        record_mdph_event(
+                            data_dir,
+                            "live_provider_fallback",
+                            portfolio_key=portfolio_key,
+                            fallback=plan.get("fallback"),
+                            provider=plan.get("provider"),
+                            zerodha_status=health.get("status"),
+                            reason=plan.get("reason"),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._logger.info(
+                        "MDPH labeled fallback lab=%s provider=%s zerodha=%s",
+                        portfolio_key,
+                        plan.get("provider"),
+                        health.get("status"),
+                    )
+                elif not live_trading_allowed(health):
+                    # Defensive: plan should have paused or labeled a fallback.
+                    nev = not_evaluable_payload(health)
                     cta = health.get("cta") or "/zerodha/login"
                     return TickResult(
                         state=state,
@@ -4593,6 +4647,47 @@ class PaperTradingWorker(PersistentWorker):
             )
             att["mark_source"] = mark_src
             att["realized_pnl"] = realized
+            # Observable F&O evidence BEFORE Core — Core interprets, never invents.
+            fno_evidence: dict[str, Any] | None = None
+            fno_causal: dict[str, Any] | None = None
+            try:
+                from atlas.investment.fno_option_attribution import (
+                    build_fno_rt_evidence,
+                    evaluate_fno_causal_factors,
+                    evidence_lines_for_core,
+                )
+
+                entry_pred = None
+                try:
+                    pred_doc = lab_v1.load_entry_prediction(
+                        data_dir, option_symbol=sym
+                    )
+                    if isinstance(pred_doc, dict):
+                        entry_pred = pred_doc
+                except Exception:  # noqa: BLE001
+                    entry_pred = None
+                fno_evidence = build_fno_rt_evidence(
+                    underlying=und,
+                    option_symbol=sym,
+                    option_right=right,
+                    entry_premium=float(avg) if avg and avg > 0 else None,
+                    exit_premium=float(px),
+                    entry_time=(entry_pred or {}).get("entry_time")
+                    or (entry_pred or {}).get("recorded_at"),
+                    exit_time=None,
+                    realized_pnl=realized,
+                    prediction_error=None,
+                    data_dir=data_dir,
+                    as_of_ist=sess_day,
+                    mark_source=mark_src,
+                )
+                fno_causal = evaluate_fno_causal_factors(fno_evidence)
+                att["fno_rt_evidence"] = fno_evidence
+                att["causal_factors"] = fno_causal
+                att["attribution_status"] = fno_causal.get("status")
+            except Exception:  # noqa: BLE001
+                fno_evidence = None
+                fno_causal = None
             # Cognitive Core — honest UNREVIEWED if LLM silent / busy / fails.
             advice: dict[str, Any] | None = None
             try:
@@ -4601,36 +4696,57 @@ class PaperTradingWorker(PersistentWorker):
                     reason_as_scientist,
                 )
 
+                evidence_rows = [
+                    f"experiment_family={att.get('experiment_family')}",
+                    f"underlying={und}",
+                    f"option={sym}",
+                    f"entry_ltp={avg}",
+                    f"exit_ltp={float(px)}",
+                    f"mark_source={mark_src}",
+                    f"realized_pnl={realized}",
+                    f"exit_reason={lab_v1.REASON_EXPERIMENT_CLOSE}",
+                ]
+                unknowns = [
+                    "IV change (not in durable store)",
+                    "Option delta/gamma at entry/exit",
+                    "Whether ATM premium move generalizes",
+                ]
+                if fno_evidence:
+                    try:
+                        evidence_rows = evidence_lines_for_core(fno_evidence)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if fno_causal:
+                        evidence_rows.append(
+                            f"pre_core_attribution_status={fno_causal.get('status')}"
+                        )
+                        evidence_rows.append(
+                            f"pre_core_narrative={fno_causal.get('narrative')}"
+                        )
+                else:
+                    unknowns.insert(
+                        0, "Decide-time E[R] / underlier session bar may be absent"
+                    )
+
                 pkt = build_evidence_packet(
                     question=(
-                        "Interpret this F&O Lab v1 session_flat paper close. "
-                        "What provisional lesson about the stock ATM option "
-                        "experiment is supported? Do not recommend orders."
+                        "Interpret this F&O Lab v1 session_flat paper close using "
+                        "ONLY the listed observable evidence. State which causes are "
+                        "supported vs still unknown. Do not invent IV, delta, news, "
+                        "or sector moves. Do not recommend orders. "
+                        "Not a validated lesson."
                     ),
                     laboratory_id=portfolio_key,
                     symbol=sym,
                     action="sell",
-                    evidence=[
-                        f"experiment_family={att.get('experiment_family')}",
-                        f"underlying={und}",
-                        f"option={sym}",
-                        f"entry_ltp={avg}",
-                        f"exit_ltp={float(px)}",
-                        f"mark_source={mark_src}",
-                        f"realized_pnl={realized}",
-                        f"exit_reason={lab_v1.REASON_EXPERIMENT_CLOSE}",
-                    ],
+                    evidence=evidence_rows,
                     known=[
                         "Paper sim fill only",
                         "Experiment-scoped session_flat exit",
                         "live_orders=false",
                         "Single controlled sample is not L5",
                     ],
-                    unknowns=[
-                        "Decide-time E[R] (prediction_absent on this close path)",
-                        "Regime / vol path between entry and exit",
-                        "Whether ATM premium move generalizes",
-                    ],
+                    unknowns=unknowns,
                     experiences=[
                         {
                             "id": att.get("experiment_family"),
@@ -4646,11 +4762,16 @@ class PaperTradingWorker(PersistentWorker):
             except Exception:  # noqa: BLE001
                 advice = None
             att = lab_v1.apply_cognitive_to_attribution(att, advice=advice)
+            if fno_evidence and "fno_rt_evidence" not in att:
+                att["fno_rt_evidence"] = fno_evidence
+            if fno_causal and "causal_factors" not in att:
+                att["causal_factors"] = fno_causal
             cog = att.get("cognitive") if isinstance(att.get("cognitive"), dict) else {}
             lines.append(
                 f"{sym}: experiment_close SELL {qty:g} @ {float(px):.2f} "
                 f"PnL={realized:+.2f} ({mark_src}) family={att.get('experiment_family')} "
-                f"review={att.get('cognitive_review')}"
+                f"review={att.get('cognitive_review')} "
+                f"attr={att.get('attribution_status') or (fno_causal or {}).get('status')}"
             )
             outcomes.append(
                 {
@@ -6879,7 +7000,8 @@ class PaperTradingWorker(PersistentWorker):
                 "live feed_mode requires MarketReaderService (wire live_market= on worker)",
             )
         provider = str(cfg.get("live_provider") or "yahoo").strip() or "yahoo"
-        # OI-MDPH0 — live-required labs must not silently substitute Yahoo
+        # OI-MDPH0 — live-required labs must not silently substitute Yahoo as Zerodha.
+        # Labeled fallback (cfg._mdph_provider_fallback) is allowed and stamped.
         try:
             from atlas.investment.lab_contracts import live_required as _live_req
             from atlas.investment.market_data_provider_health import (
@@ -6887,8 +7009,9 @@ class PaperTradingWorker(PersistentWorker):
             )
 
             pk = str(cfg.get("portfolio_key") or "").strip()
+            labeled = str(cfg.get("_mdph_provider_fallback") or "").strip()
             if _live_req(pk, cfg=cfg):
-                if provider.lower() == "yahoo":
+                if provider.lower() == "yahoo" and not labeled:
                     try:
                         from atlas.config import get_config
 
@@ -6905,9 +7028,11 @@ class PaperTradingWorker(PersistentWorker):
                     raise CapabilityGap(
                         "market_data:live_required",
                         "Yahoo forbidden for live_required lab — use zerodha "
-                        "(silent substitution blocked)",
+                        "(silent substitution blocked; set labeled MDPH fallback)",
                     )
-                provider = "zerodha"
+                if not labeled:
+                    provider = "zerodha"
+                # else keep yahoo/groww as stamped fallback
         except CapabilityGap:
             raise
         except Exception:  # noqa: BLE001

@@ -2285,6 +2285,21 @@ def build_application(config: AtlasConfig | None = None) -> Application:
             logger=get_logger("atlas.workers.learning_governance"),
         )
     )
+    from atlas.agent_kernel.worker import AgentKernelWorker
+
+    agent_kernel_worker = AgentKernelWorker(
+        data_dir=str(cfg.paths.data),
+        experience_os=experience_os,
+        activity_journal=activity_journal,
+        job_planner=job_planner,
+        llm=llm_service,
+        enabled=bool(cfg.agent_kernel.enabled),
+        allow_external=bool(cfg.agent_kernel.allow_external),
+        logger=get_logger("atlas.workers.agent_kernel"),
+    )
+    worker_manager.register_worker_type(agent_kernel_worker)
+    container.register_instance("agent_kernel_worker", agent_kernel_worker)
+
     worker_manager.register_worker_type(
         SystemIntrospectionWorker(
             introspection=introspection_service,
@@ -2660,6 +2675,11 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     plugin_manager = PluginManager(logger=get_logger("atlas.plugins"))
     plugin_manager.load(cfg)
     plugin_manager.register_all(app)
+    search_plugin = next(
+        (plugin for plugin in plugin_manager.plugins if getattr(plugin, "name", "") == "search"),
+        None,
+    )
+    agent_kernel_worker.bind_web_search(search_plugin)
     container.register_instance("plugins", plugin_manager)
     capabilities.register("plugins", plugin_manager, kind="kernel")
     registry.register(plugin_manager)

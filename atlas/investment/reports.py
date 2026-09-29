@@ -1790,6 +1790,23 @@ def format_evening_report(
             ]
         )
 
+    try:
+        from atlas.agent_kernel.eod import format_autonomous_agent_lines
+
+        data_dir = None
+        if isinstance(portfolio, dict):
+            data_dir = portfolio.get("data_dir")
+        if not data_dir:
+            try:
+                from atlas.config import get_config
+
+                data_dir = str(get_config().paths.data)
+            except Exception:  # noqa: BLE001
+                data_dir = None
+        lines.extend(format_autonomous_agent_lines(data_dir))
+    except Exception:  # noqa: BLE001
+        pass
+
     lines.extend(
         [
             "",

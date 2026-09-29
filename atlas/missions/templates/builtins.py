@@ -945,4 +945,30 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "knowledge_domains": ["engineering"],
         "success_criteria": with_philosophy({}, "self_improvement"),
     },
+    {
+        "name": "agent_kernel",
+        "template_version": 1,
+        "description": (
+            "A0 Agent Kernel — persistent observe, investigate, verify, and "
+            "record loop. Advice, research, and observation only. Never orders."
+        ),
+        "config_schema_type": "generic",
+        "config_schema_version": 1,
+        "default_config": {
+            "role": "Agent Kernel",
+            "roadmap": "A0",
+            "enabled": True,
+            "action_scope": "advice_research_observation",
+            "mode": "tick",
+            "max_investigations_per_tick": 1,
+            "allow_external": True,
+            "never_orders": True,
+            "laboratory_id": "india_equity_learner",
+            "program_id": "market_intelligence",
+            "tick_interval_seconds": 600,
+        },
+        "worker_specs": [{"type": "agent_kernel", "interval_seconds": 600}],
+        "knowledge_domains": ["finance", "markets"],
+        "success_criteria": with_philosophy({}, "agent_kernel"),
+    },
 ]

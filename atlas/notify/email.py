@@ -76,6 +76,17 @@ class EmailSender:
 
     def send_to(self, to_addrs: list[str] | str, subject: str, body: str) -> bool:
         """Send a plain-text email to explicit recipients. Returns True on success; never raises."""
+        return self.send_to_with_headers(to_addrs, subject, body, headers=None)
+
+    def send_to_with_headers(
+        self,
+        to_addrs: list[str] | str,
+        subject: str,
+        body: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> bool:
+        """Like ``send_to`` with optional extra headers (Message-ID, threading)."""
         if isinstance(to_addrs, str):
             recipients = [p.strip() for p in to_addrs.split(",") if p.strip()]
         else:
@@ -86,6 +97,9 @@ class EmailSender:
         msg["Subject"] = subject
         msg["From"] = self._from
         msg["To"] = ", ".join(recipients)
+        for hk, hv in (headers or {}).items():
+            if hk and hv and hk.lower() not in {"subject", "from", "to"}:
+                msg[str(hk)] = str(hv)
         msg.set_content(body)
         try:
             if self._port == 465:

@@ -126,6 +126,16 @@ def india_equity_learner_overrides() -> dict[str, dict[str, Any]]:
         "investment_mentor": {
             "portfolio_key": "india_equity_learner",
         },
+        "agent_kernel": {
+            "enabled": True,
+            "action_scope": "advice_research_observation",
+            "mode": "tick",
+            "max_investigations_per_tick": 1,
+            "allow_external": True,
+            "never_orders": True,
+            "laboratory_id": "india_equity_learner",
+            "program_id": "market_intelligence",
+        },
         "market_observer": {
             "program_id": "market_intelligence",
             "portfolio_key": "india_equity_learner",
@@ -444,6 +454,17 @@ BUILTIN_PROGRAMS: tuple[ProgramDefinition, ...] = (
                 cadence="weekly",
                 status=MEMBER_ENABLED,
                 description="Lessons + recommendations → Experience OS (OI-MP5)",
+            ),
+            ProgramMember(
+                role="Agent Kernel",
+                template="agent_kernel",
+                kind="research",
+                cadence="every 10m, one investigation",
+                status=MEMBER_ENABLED,
+                description=(
+                    "A0 operating loop — observe uncertainty, investigate, "
+                    "verify, record. Advice/research/observation only."
+                ),
             ),
         ),
         domain_adapters=(

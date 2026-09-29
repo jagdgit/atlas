@@ -271,6 +271,8 @@ intelligence:
 # their env keys are set. NSE/BSE remain ToS-gated skeletons.
 # Zerodha Kite Connect (OI-ZERODHA0): set ZERODHA_API_KEY + ZERODHA_API_SECRET in .env;
 # complete daily login for access_token. Quotes only — no live order placement (P10).
+# OI-MDPH-FALLBACK: ATLAS_MDPH_LIVE_FALLBACK=auto|off|yahoo|groww (default auto —
+# labeled Yahoo for live cash when Zerodha down; F&O stays paused).
 market:
   default_provider: asset_replay
   yahoo_enabled: false
@@ -374,6 +376,16 @@ plugins:
     max_links: 100          # cap links returned
     respect_robots: true    # honour robots.txt via the shared net policy
     screenshot_root: null    # sandbox for screenshots; null => paths.data/screenshots
+
+# A0 Agent Kernel — persistent observe/investigate loop.
+# Advice, research, and observation only. Never orders. Never bypasses PLC.A.
+agent_kernel:
+  enabled: true
+  action_scope: advice_research_observation
+  mode: tick
+  max_investigations_per_tick: 1
+  allow_external: true
+  never_orders: true
 
 api:
   host: 127.0.0.1        # bind localhost; set 0.0.0.0 to expose on the network

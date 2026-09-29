@@ -155,6 +155,20 @@ TEMPLATE_PHILOSOPHY: dict[str, dict[str, Any]] = {
             improve=STAGE_WAITING,
         ),
     },
+    "agent_kernel": {
+        "mission_kind": KIND_RESEARCH,
+        "never_stops": True,
+        "lifecycle": _stages(
+            observe=STAGE_ACTIVE,
+            learn=STAGE_PARTIAL,
+            assess_resources=STAGE_ACTIVE,
+            decide=STAGE_PARTIAL,
+            record_why=STAGE_ACTIVE,
+            evaluate=STAGE_ACTIVE,
+            reflect=STAGE_PARTIAL,
+            improve=STAGE_WAITING,
+        ),
+    },
     "market_observer": {
         "mission_kind": KIND_MONITORING,
         "never_stops": True,

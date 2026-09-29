@@ -135,14 +135,85 @@ def ensure_close_attribution(
     trade: dict[str, Any] | None,
     laboratory_id: str | None,
     attribution: dict[str, Any] | None = None,
+    data_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """B2 — attribution satisfied or unknown_explicit (never silent empty)."""
+    """B2 — attribution satisfied or unknown_explicit (never silent empty).
+
+    F&O Lab v1 closes prefer observable underlier/premium evidence
+    (``fno_option_attribution``) over equity DAV drivers that are usually empty.
+    """
     pkt = packet if isinstance(packet, dict) else {}
     tr = trade if isinstance(trade, dict) else {}
     attr = dict(attribution) if isinstance(attribution, dict) else {}
     payload = dict(attr.get("payload") or {}) if isinstance(attr.get("payload"), dict) else {}
     causal = payload.get("causal_factors") if isinstance(payload.get("causal_factors"), dict) else None
 
+    lab = str(laboratory_id or "").strip().lower()
+    strat = str(pkt.get("strategy_tag") or "").strip().lower()
+    fno_close = (
+        lab in {"india_fno_learner", "fno_learner"}
+        or "fno_lab_v1" in strat
+        or isinstance(pkt.get("fno_lab_v1"), dict)
+    )
+
+    if causal is None and fno_close:
+        fno_att = pkt.get("fno_lab_v1") if isinstance(pkt.get("fno_lab_v1"), dict) else {}
+        if isinstance(fno_att.get("causal_factors"), dict):
+            causal = dict(fno_att["causal_factors"])
+            if isinstance(fno_att.get("fno_rt_evidence"), dict):
+                payload["fno_rt_evidence"] = fno_att["fno_rt_evidence"]
+    if causal is None and fno_close:
+        try:
+            from atlas.investment.fno_option_attribution import (
+                build_fno_rt_evidence,
+                evaluate_fno_causal_factors,
+            )
+
+            fno_att = pkt.get("fno_lab_v1") if isinstance(pkt.get("fno_lab_v1"), dict) else {}
+            entry_pred = (
+                pkt.get("entry_prediction")
+                if isinstance(pkt.get("entry_prediction"), dict)
+                else {}
+            )
+            expected = pkt.get("expected") if isinstance(pkt.get("expected"), dict) else {}
+            dd = data_dir
+            if dd is None:
+                try:
+                    from atlas.config import get_config
+
+                    dd = get_config().paths.data
+                except Exception:  # noqa: BLE001
+                    dd = None
+            evidence = build_fno_rt_evidence(
+                underlying=fno_att.get("underlying") or pkt.get("underlying"),
+                option_symbol=str(
+                    fno_att.get("option_contract") or pkt.get("symbol") or tr.get("symbol") or ""
+                )
+                or None,
+                option_right=fno_att.get("option_type"),
+                entry_premium=_f(fno_att.get("entry_ltp") or entry_pred.get("entry_premium")),
+                exit_premium=_f(fno_att.get("exit_ltp") or tr.get("price")),
+                entry_time=entry_pred.get("entry_time") or entry_pred.get("recorded_at"),
+                exit_time=tr.get("created_at") or pkt.get("closed_at"),
+                realized_pnl=_f(tr.get("realized_pnl") or fno_att.get("realized_pnl")),
+                prediction_error=pkt.get("prediction_error")
+                if isinstance(pkt.get("prediction_error"), dict)
+                else None,
+                data_dir=dd,
+                as_of_ist=str(pkt.get("as_of_ist") or "") or None,
+                mark_source=str(fno_att.get("mark_source") or pkt.get("mark_source") or "")
+                or None,
+            )
+            if evidence["observables"].get("prediction_error") is None and expected:
+                evidence["observables"]["prediction_error"] = {
+                    "predicted_er": expected.get("expected_return"),
+                    "direction_match": None,
+                    "status": expected.get("prediction_status"),
+                }
+            causal = evaluate_fno_causal_factors(evidence, packet=pkt)
+            payload["fno_rt_evidence"] = evidence
+        except Exception:  # noqa: BLE001
+            causal = None
     if causal is None:
         try:
             from atlas.investment.causal_attribution import evaluate_causal_factors
@@ -169,17 +240,22 @@ def ensure_close_attribution(
             "narrative": "unknown_explicit — insufficient evidence to label helped/hurt",
             "status": "unknown_explicit",
         }
-    elif not (causal.get("helped") or causal.get("hurt")):
-        causal = dict(causal)
-        causal.setdefault("unknown", ["cause"])
-        causal["status"] = "unknown_explicit"
-        if not causal.get("narrative"):
-            causal["narrative"] = (
-                "unknown_explicit — no helped/hurt factors with durable evidence"
-            )
     else:
         causal = dict(causal)
-        causal["status"] = "attributed"
+        st = str(causal.get("status") or "").strip().lower()
+        if st in {"evidence_backed", "partial", "attributed"}:
+            # Preserve F&O / DAV statuses that already labeled factors.
+            if st == "attributed" and not (causal.get("helped") or causal.get("hurt")):
+                causal["status"] = "unknown_explicit"
+        elif not (causal.get("helped") or causal.get("hurt")):
+            causal.setdefault("unknown", ["cause"])
+            causal["status"] = "unknown_explicit"
+            if not causal.get("narrative"):
+                causal["narrative"] = (
+                    "unknown_explicit — no helped/hurt factors with durable evidence"
+                )
+        else:
+            causal["status"] = causal.get("status") or "partial"
 
     payload["causal_factors"] = causal
     attr["payload"] = payload
@@ -272,10 +348,15 @@ def build_learning_story(
         or attr.get("status")
         or "unknown_explicit"
     )
-    if cause_status in {"unknown", "all_unknown", "partial"} and not (
+    if cause_status in {"unknown", "all_unknown"} and not (
         causal.get("helped") or causal.get("hurt")
     ):
         cause_status = "unknown_explicit"
+    if cause_status == "partial" and not (
+        causal.get("helped") or causal.get("hurt")
+    ):
+        cause_status = "unknown_explicit"
+    # evidence_backed / attributed / partial with labels stay as-is
 
     contra = contradiction_context_from_packet(pkt)
     belief = str(exp.get("belief_update") or "unchanged")
@@ -393,10 +474,22 @@ def summarize_learning_stories(events: list[dict[str, Any]] | None) -> dict[str,
         for r in rows
         if str((r.get("cause") or {}).get("status") or "") == "unknown_explicit"
     )
+    partial = sum(
+        1
+        for r in rows
+        if str((r.get("cause") or {}).get("status") or "") == "partial"
+    )
+    backed = sum(
+        1
+        for r in rows
+        if str((r.get("cause") or {}).get("status") or "") == "evidence_backed"
+    )
     return {
         "stories": len(rows),
         "prediction_absent": absent,
         "unknown_explicit_cause": unk,
+        "partial_cause": partial,
+        "evidence_backed_cause": backed,
         "latest": rows[-1] if rows else None,
     }
 

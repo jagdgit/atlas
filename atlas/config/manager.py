@@ -633,6 +633,17 @@ class ApiConfig(BaseModel):
         return value
 
 
+class AgentKernelConfig(BaseModel):
+    """A0 operating loop. Advice, research, and observation only."""
+
+    enabled: bool = True
+    action_scope: str = "advice_research_observation"
+    mode: str = "tick"
+    max_investigations_per_tick: int = 1
+    allow_external: bool = True
+    never_orders: bool = True
+
+
 class MarketConfig(BaseModel):
     """Market Intelligence feed providers (MI.3 / OI-D1). Simulation Program only."""
 
@@ -680,6 +691,7 @@ class AtlasConfig(BaseModel):
     plugins: PluginsConfig = PluginsConfig()
     api: ApiConfig = ApiConfig()
     market: MarketConfig = MarketConfig()
+    agent_kernel: AgentKernelConfig = AgentKernelConfig()
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

@@ -48,6 +48,7 @@ DEFAULT_EXPECTED_TICK_MS: dict[str, int] = {
     "owner_knowledge": 60_000,
     "personal_observer": 15_000,
     "hello_watcher": 1_000,
+    "agent_kernel": 5_000,
 }
 
 STARVE_AFTER_SECONDS = 6 * 3600  # 6h without productive progress while eligible

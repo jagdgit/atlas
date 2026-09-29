@@ -252,12 +252,16 @@ def build_trading_experience(
     attr_payload = attr.get("payload") if isinstance(attr.get("payload"), dict) else {}
     causal = attr_payload.get("causal_factors") if isinstance(attr_payload.get("causal_factors"), dict) else {}
     attr_status = "unknown"
-    if str(attr.get("status") or "").lower() == "unknown_explicit" or str(
-        causal.get("status") or ""
-    ).lower() == "unknown_explicit":
+    causal_st = str(causal.get("status") or "").lower()
+    attr_st = str(attr.get("status") or "").lower()
+    if attr_st == "unknown_explicit" or causal_st == "unknown_explicit":
         attr_status = "unknown_explicit"
-    elif causal.get("helped") or causal.get("hurt"):
-        attr_status = "attributed"
+    elif causal_st == "evidence_backed":
+        attr_status = "evidence_backed"
+    elif causal_st in {"partial", "attributed"} or causal.get("helped") or causal.get("hurt"):
+        attr_status = "partial" if causal_st == "partial" else (
+            "evidence_backed" if causal_st == "evidence_backed" else "attributed"
+        )
     elif causal.get("unknown"):
         attr_status = "all_unknown"
     elif attr:
