@@ -1173,12 +1173,21 @@ def format_three_lab_books_section(
             f"  Cash {_money(cash)} · holdings {_money(book.get('holdings_value'))} "
             f"· equity {_money(equity)}"
         )
+        # Always emit the P&L line. It used to be omitted entirely when both figures
+        # were missing, so "today's P&L did not get summarised" was indistinguishable
+        # from "today's P&L was flat" — the reader could not tell which. An explicit
+        # "unavailable" is a smaller failure than a silently absent row.
         pnl = book.get("day_pnl")
         tot = book.get("total_pnl")
-        if pnl is not None or tot is not None:
-            lines.append(
-                f"  P&L today {_signed_money(pnl)} · total {_signed_money(tot)}"
-            )
+        if tot is None:
+            # `snapshot()` reports realized/unrealized; `total_pnl` is added later by
+            # the contribution-adjusted metrics. Reconstruct it when that step did not
+            # run, rather than reporting nothing.
+            realized = book.get("realized_pnl")
+            unrealized = book.get("unrealized_pnl")
+            if realized is not None or unrealized is not None:
+                tot = float(realized or 0.0) + float(unrealized or 0.0)
+        lines.append(f"  P&L today {_signed_money(pnl)} · total {_signed_money(tot)}")
         basis = book.get("valuation_basis")
         if basis:
             lines.append(f"  Valuation: {basis}")
@@ -1437,6 +1446,30 @@ def format_evening_report(
             "Note: catch-up send — report delayed (host offline / internet / Atlas restart)."
         )
     lines.extend(format_three_lab_books_section(_lab_books_arg(portfolio)))
+    # P3 — nine-line status contract per paper laboratory (scoped counts).
+    try:
+        from atlas.investment.lab_status_contract import (
+            build_lab_status_contract,
+            format_lab_status_contract_lines,
+        )
+        from atlas.investment.laboratory import MAIL_LAB_TITLES
+
+        data_dir = portfolio.get("data_dir") if isinstance(portfolio, dict) else None
+        for lab_id in MAIL_LAB_TITLES:
+            contract = build_lab_status_contract(
+                data_dir,
+                laboratory_id=lab_id,
+                as_of_ist=str(as_of),
+            )
+            lines.extend(format_lab_status_contract_lines(contract))
+    except Exception:  # noqa: BLE001
+        lines.extend(
+            [
+                "",
+                "══ Lab status contract ══",
+                "(section failed to render — treat as observability miss)",
+            ]
+        )
     try:
         from atlas.investment.nse_xbrl.digest import format_fundamental_intelligence_section
 
@@ -1748,6 +1781,38 @@ def format_evening_report(
             lines.extend(format_cws_section(cws if isinstance(cws, dict) else None))
         except Exception:  # noqa: BLE001
             pass
+        # C0 — nightly cognition ran off the mail path; show its receipt.
+        try:
+            from atlas.investment.nightly_cognition import (
+                format_nightly_cognition_section,
+            )
+
+            lines.append("")
+            lines.extend(
+                (portfolio.get("nightly_cognition_section") if isinstance(portfolio, dict) else None)
+                or format_nightly_cognition_section(
+                    portfolio.get("nightly_cognition")
+                    if isinstance(portfolio, dict)
+                    else None
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        # C9 — Loop B ladder. The cycle is attached upstream by preview_evening;
+        # this module-level formatter has no data_dir of its own.
+        try:
+            from atlas.investment.cognitive.loop import format_cognitive_loop_section
+
+            lines.append("")
+            lines.extend(
+                format_cognitive_loop_section(
+                    portfolio.get("cognitive_cycle")
+                    if isinstance(portfolio, dict)
+                    else None
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
         cq = None
         if isinstance(portfolio, dict):
             cq = portfolio.get("curiosity_queue")
@@ -1806,6 +1871,20 @@ def format_evening_report(
         lines.extend(format_autonomous_agent_lines(data_dir))
     except Exception:  # noqa: BLE001
         pass
+
+    try:
+        from atlas.knowledge.rag_coverage import format_rag_coverage_lines
+
+        lines.extend(format_rag_coverage_lines(data_dir))
+    except Exception:  # noqa: BLE001
+        lines.extend(
+            [
+                "",
+                "━━━━━━━━ RAG COVERAGE ━━━━━━━━",
+                "Status: NOT_TESTED",
+                "Error: report_render_failed",
+            ]
+        )
 
     lines.extend(
         [
@@ -2842,6 +2921,7 @@ class InvestorReportMailer:
         program_id: str = "market_intelligence",
         portfolio: dict[str, Any] | None = None,
         catch_up: bool = False,
+        timely: bool = False,
     ) -> dict[str, Any]:
         from atlas.investment import watchlists as wl
 
@@ -2859,356 +2939,408 @@ class InvestorReportMailer:
         policy = load_snapshot(self._data_dir) if self._data_dir else None
         no_fill = None
         port = dict(portfolio) if isinstance(portfolio, dict) else {}
-        # BRE.1 — ensure WSO shells for open positions; attach evening sections
-        try:
-            from atlas.investment.world_state import (
-                evidence_delta_counts,
-                sync_open_book_wsos,
-            )
+        cognition_receipt: dict[str, Any] | None = None
+        # Timely delivery skips LLM/curiosity drains so SMTP can leave on time.
+        if not timely:
+            # BRE.1 — ensure WSO shells for open positions; attach evening sections
+            try:
+                from atlas.investment.world_state import (
+                    evidence_delta_counts,
+                    sync_open_book_wsos,
+                )
 
-            lab = str(
-                port.get("laboratory_id")
-                or port.get("portfolio_key")
-                or "india_equity_learner"
-            )
-            pos = port.get("positions") or port.get("holdings") or []
-            if isinstance(pos, dict):
-                syms = [str(k) for k in pos.keys() if k]
-            else:
-                syms = [
-                    str(p.get("symbol"))
-                    for p in (pos or [])
-                    if isinstance(p, dict) and p.get("symbol")
-                ]
-            if syms and self._data_dir:
-                # J2 — stamp WSO unknowns from open-book fundamental gaps
-                miss_map: dict[str, list[str]] = {}
-                try:
-                    from atlas.investment.fundamentals import (
-                        OPEN_BOOK_CRITICAL_FIELDS,
-                        learner_fundamentals_gaps,
-                    )
+                lab = str(
+                    port.get("laboratory_id")
+                    or port.get("portfolio_key")
+                    or "india_equity_learner"
+                )
+                pos = port.get("positions") or port.get("holdings") or []
+                if isinstance(pos, dict):
+                    syms = [str(k) for k in pos.keys() if k]
+                else:
+                    syms = [
+                        str(p.get("symbol"))
+                        for p in (pos or [])
+                        if isinstance(p, dict) and p.get("symbol")
+                    ]
+                if syms and self._data_dir:
+                    # J2 — stamp WSO unknowns from open-book fundamental gaps
+                    miss_map: dict[str, list[str]] = {}
+                    try:
+                        from atlas.investment.fundamentals import (
+                            OPEN_BOOK_CRITICAL_FIELDS,
+                            learner_fundamentals_gaps,
+                        )
 
-                    gaps_doc = learner_fundamentals_gaps(
+                        gaps_doc = learner_fundamentals_gaps(
+                            self._data_dir,
+                            syms,
+                            program_id=program_id
+                            if program_id
+                            else "market_intelligence",
+                            critical_fields=OPEN_BOOK_CRITICAL_FIELDS,
+                        )
+                        port["fundamentals_coverage"] = {
+                            **(
+                                port.get("fundamentals_coverage")
+                                if isinstance(port.get("fundamentals_coverage"), dict)
+                                else {}
+                            ),
+                            "learner_gaps": gaps_doc,
+                        }
+                        for g in gaps_doc.get("gaps") or []:
+                            if not isinstance(g, dict):
+                                continue
+                            gs = str(g.get("symbol") or "").strip()
+                            if gs:
+                                miss_map[gs] = [str(x) for x in (g.get("missing") or [])]
+                                miss_map[gs.upper()] = miss_map[gs]
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("J2 open-book gaps skipped", exc_info=True)
+                    wsos = sync_open_book_wsos(
                         self._data_dir,
+                        lab,
                         syms,
-                        program_id=program_id
-                        if program_id
-                        else "market_intelligence",
-                        critical_fields=OPEN_BOOK_CRITICAL_FIELDS,
+                        missing_fundamentals=miss_map or None,
                     )
-                    port["fundamentals_coverage"] = {
-                        **(
-                            port.get("fundamentals_coverage")
-                            if isinstance(port.get("fundamentals_coverage"), dict)
-                            else {}
-                        ),
-                        "learner_gaps": gaps_doc,
-                    }
-                    for g in gaps_doc.get("gaps") or []:
-                        if not isinstance(g, dict):
+                    port["world_states"] = wsos
+                    seed_n = 0
+                    news_n = 0
+                    for row in list(port.get("observations") or []):
+                        if not isinstance(row, dict):
                             continue
-                        gs = str(g.get("symbol") or "").strip()
-                        if gs:
-                            miss_map[gs] = [str(x) for x in (g.get("missing") or [])]
-                            miss_map[gs.upper()] = miss_map[gs]
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("J2 open-book gaps skipped", exc_info=True)
-                wsos = sync_open_book_wsos(
-                    self._data_dir,
-                    lab,
-                    syms,
-                    missing_fundamentals=miss_map or None,
-                )
-                port["world_states"] = wsos
-                seed_n = 0
-                news_n = 0
-                for row in list(port.get("observations") or []):
-                    if not isinstance(row, dict):
-                        continue
-                    from atlas.investment.symbol_aliases import news_is_evidence
+                        from atlas.investment.symbol_aliases import news_is_evidence
 
-                    kind = str(row.get("kind") or "")
-                    if "news" not in kind and "news" not in str(row.get("source") or ""):
-                        continue
-                    if news_is_evidence(row):
-                        news_n += 1
-                    else:
-                        seed_n += 1
-                port["evidence_delta"] = evidence_delta_counts(
-                    news_n=news_n,
-                    seed_news_n=seed_n,
-                    fundamentals_n=int(
-                        (port.get("fundamentals_coverage") or {}).get("with_pe") or 0
+                        kind = str(row.get("kind") or "")
+                        if "news" not in kind and "news" not in str(row.get("source") or ""):
+                            continue
+                        if news_is_evidence(row):
+                            news_n += 1
+                        else:
+                            seed_n += 1
+                    port["evidence_delta"] = evidence_delta_counts(
+                        news_n=news_n,
+                        seed_news_n=seed_n,
+                        fundamentals_n=int(
+                            (port.get("fundamentals_coverage") or {}).get("with_pe") or 0
+                        )
+                        if isinstance(port.get("fundamentals_coverage"), dict)
+                        else 0,
                     )
-                    if isinstance(port.get("fundamentals_coverage"), dict)
-                    else 0,
-                )
-                # CUR.1 / J4 — unknowns → curiosity queue + real IRA work (persist statuses)
-                try:
-                    from atlas.investment.capital_allocation import (
-                        load_allocation_table,
-                        merge_allocation_curiosity,
-                    )
-                    from atlas.investment.curiosity import (
-                        drain_queue_work,
-                        save_queue,
-                    )
-
-                    alloc_tbl = load_allocation_table(self._data_dir, lab)
-                    blockers = []
+                    # CUR.1 / J4 — unknowns → curiosity queue + real IRA work (persist statuses)
                     try:
                         from atlas.investment.capital_allocation import (
-                            allocation_blocking_unknowns,
+                            load_allocation_table,
+                            merge_allocation_curiosity,
+                        )
+                        from atlas.investment.curiosity import (
+                            drain_queue_work,
+                            save_queue,
                         )
 
-                        blockers = allocation_blocking_unknowns(alloc_tbl)
-                    except Exception:  # noqa: BLE001
+                        alloc_tbl = load_allocation_table(self._data_dir, lab)
                         blockers = []
-                    qdoc = drain_queue_work(
-                        self._data_dir,
-                        laboratory_id=lab,
-                        research=self._research,
-                        wsos=wsos,
-                        open_symbols=set(syms),
-                        max_starts=2,
-                        trigger="evening_curiosity",
-                        allocation_blockers=blockers,
-                    )
-                    qdoc = merge_allocation_curiosity(qdoc, alloc_tbl)
-                    save_queue(self._data_dir, qdoc)
-                    port["curiosity_queue"] = qdoc
-                    started = list(qdoc.get("work_started") or [])
-                    if started:
-                        port["curiosity_ira_started"] = started
-                        ed = dict(port.get("evidence_delta") or {})
-                        ed["research"] = int(ed.get("research") or 0) + len(started)
-                        ed["material"] = bool(
-                            ed.get("bars")
-                            or ed.get("fundamentals")
-                            or ed.get("news")
-                            or ed.get("policy")
-                            or ed.get("research")
-                        )
-                        port["evidence_delta"] = ed
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("curiosity enqueue skipped", exc_info=True)
-                # BRE.3 — last-chance drain of decide-time rationales before BRE.2
-                try:
-                    from atlas.investment.decide_rationale import (
-                        DEFAULT_DECIDE_LLM_PASSES,
-                        drain_pending_rationales,
-                    )
-
-                    bre3 = drain_pending_rationales(
-                        self._data_dir,
-                        laboratory_id=lab,
-                        llm=getattr(self, "_llm", None),
-                        reasoning=getattr(self, "_reasoning", None),
-                        max_passes=DEFAULT_DECIDE_LLM_PASSES,
-                    )
-                    port["decide_rationale"] = {
-                        "done": bre3.get("done"),
-                        "deferred": bre3.get("deferred"),
-                        "skipped": bre3.get("skipped"),
-                        "pending": bre3.get("pending"),
-                    }
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("BRE.3 evening drain skipped", exc_info=True)
-                # BRE.2 — budgeted LLM semantic revise (or honest skip)
-                try:
-                    from atlas.investment.belief_revision import revise_beliefs_budgeted
-
-                    revised = revise_beliefs_budgeted(
-                        port.get("world_states"),
-                        evidence_delta=port.get("evidence_delta"),
-                        llm=getattr(self, "_llm", None),
-                        data_dir=self._data_dir,
-                    )
-                    port["world_states"] = revised
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("BRE.2 revise skipped", exc_info=True)
-                # BRE.5 — distill global WSO from revision history (deterministic + budgeted LLM)
-                try:
-                    from atlas.investment.global_mind import distill_global_mind
-
-                    gw = distill_global_mind(
-                        self._data_dir,
-                        laboratory_id=lab,
-                        wsos=port.get("world_states"),
-                        llm=getattr(self, "_llm", None),
-                        # Phase 3: Belief Core exists — allow budgeted LLM narrative
-                        allow_llm_narrative=bool(getattr(self, "_llm", None)),
-                    )
-                    port["global_wso"] = gw
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("BRE.5 global distill skipped", exc_info=True)
-                # MEM.1 — episodic → semantic/procedural distill
-                try:
-                    from atlas.investment.memory_distill import run_memory_distill
-
-                    md = run_memory_distill(
-                        self._data_dir,
-                        laboratory_id=lab,
-                        wsos=port.get("world_states"),
-                        llm=getattr(self, "_llm", None),
-                        allow_llm=bool(getattr(self, "_llm", None)),
-                    )
-                    port["memory_distill"] = md
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("MEM.1 distill skipped", exc_info=True)
-                # OI-SELF-REFLECT — nightly Belief Core reflection
-                try:
-                    from atlas.reasoning.reflection import (
-                        format_reflection_section,
-                        merge_jis,
-                        run_nightly_reflection,
-                    )
-
-                    reflection = run_nightly_reflection(
-                        getattr(self, "_reasoning", None),
-                        laboratory_id=lab,
-                        allow_llm_narrative=bool(getattr(self, "_llm", None)),
-                    )
-                    port["reflection"] = reflection
-                    port["reflection_section"] = format_reflection_section(reflection)
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("SELF-REFLECT evening skipped", exc_info=True)
-                # IQ.1 — revision calibration snapshot for evening
-                try:
-                    from atlas.investment.learning_intelligence import (
-                        build_revision_calibration,
-                    )
-
-                    port["revision_calibration"] = build_revision_calibration(
-                        port.get("world_states")
-                    )
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("IQ.1 revision calibration skipped", exc_info=True)
-                # META.1 — reasoning-pattern ledger
-                try:
-                    from atlas.investment.meta_cognition import run_meta_cognition
-
-                    meta = run_meta_cognition(
-                        self._data_dir,
-                        laboratory_id=lab,
-                        wsos=port.get("world_states"),
-                    )
-                    port["meta_cognition"] = meta
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("META.1 ledger skipped", exc_info=True)
-                # GENE.1 — assemble genealogy for today's material decisions
-                try:
-                    from atlas.investment.decision_genealogy import build_genealogy
-                    from atlas.investment.decision_packets import DecisionPacketStore
-
-                    gene_rows: list = []
-                    packets = list(port.get("decisions") or [])[:12]
-                    pkt_store = DecisionPacketStore(data_dir=self._data_dir)
-                    attr_store = getattr(self, "_decision_attributions", None)
-                    for p in packets:
-                        if not isinstance(p, dict):
-                            continue
-                        if str(p.get("action") or "").lower() not in {"buy", "sell"}:
-                            continue
-                        did = p.get("decision_id") or p.get("id")
-                        if not did:
-                            continue
-                        gene_rows.append(
-                            build_genealogy(
-                                str(did),
-                                data_dir=self._data_dir,
-                                packet=p,
-                                packets_store=pkt_store,
-                                attributions_store=attr_store,
-                                laboratory_id=lab,
-                                persist=True,
-                            )
-                        )
-                    port["genealogies"] = gene_rows
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("GENE.1 assemble skipped", exc_info=True)
-                # CWS — daily cognitive quota drain (structural)
-                try:
-                    from atlas.investment.cognitive_work import run_cws_pass
-
-                    pos = port.get("positions") or port.get("holdings") or []
-                    if isinstance(pos, dict):
-                        syms = [str(k) for k in pos.keys()]
-                    else:
-                        syms = [
-                            str(p.get("symbol"))
-                            for p in (pos or [])
-                            if isinstance(p, dict) and p.get("symbol")
-                        ]
-                    port["cognitive_work"] = run_cws_pass(
-                        self._data_dir,
-                        laboratory_id=lab,
-                        wsos=port.get("world_states")
-                        if isinstance(port.get("world_states"), list)
-                        else None,
-                        open_symbols=syms,
-                        research=self._research,
-                    )
-                    # Attach agenda + JIS revision counts for evening sections
-                    try:
-                        from atlas.investment.daily_cognitive_agenda import (
-                            count_belief_revisions,
-                            load_agenda,
-                        )
-
-                        cws = port.get("cognitive_work")
-                        if isinstance(cws, dict) and isinstance(
-                            cws.get("cognitive_agenda"), dict
-                        ):
-                            port["cognitive_agenda"] = cws["cognitive_agenda"]
-                        else:
-                            port["cognitive_agenda"] = load_agenda(
-                                self._data_dir, lab
-                            )
-                        port["jis_revisions"] = count_belief_revisions(
-                            self._data_dir, lab, days=7
-                        )
-                        # Merge Belief Core JIS (OI-SELF-REFLECT)
                         try:
-                            from atlas.reasoning.reflection import (
-                                belief_core_jis,
-                                merge_jis,
+                            from atlas.investment.capital_allocation import (
+                                allocation_blocking_unknowns,
                             )
 
-                            core = None
-                            if getattr(self, "_reasoning", None) is not None:
-                                core = belief_core_jis(self._reasoning, days=7)
-                            elif isinstance(port.get("reflection"), dict):
-                                core = (port.get("reflection") or {}).get("jis")
-                            if core:
-                                port["jis_revisions"] = merge_jis(
-                                    port.get("jis_revisions"), core
+                            blockers = allocation_blocking_unknowns(alloc_tbl)
+                        except Exception:  # noqa: BLE001
+                            blockers = []
+                        qdoc = drain_queue_work(
+                            self._data_dir,
+                            laboratory_id=lab,
+                            research=self._research,
+                            wsos=wsos,
+                            open_symbols=set(syms),
+                            max_starts=2,
+                            trigger="evening_curiosity",
+                            allocation_blockers=blockers,
+                        )
+                        qdoc = merge_allocation_curiosity(qdoc, alloc_tbl)
+                        save_queue(self._data_dir, qdoc)
+                        port["curiosity_queue"] = qdoc
+                        started = list(qdoc.get("work_started") or [])
+                        if started:
+                            port["curiosity_ira_started"] = started
+                            ed = dict(port.get("evidence_delta") or {})
+                            ed["research"] = int(ed.get("research") or 0) + len(started)
+                            ed["material"] = bool(
+                                ed.get("bars")
+                                or ed.get("fundamentals")
+                                or ed.get("news")
+                                or ed.get("policy")
+                                or ed.get("research")
+                            )
+                            port["evidence_delta"] = ed
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("curiosity enqueue skipped", exc_info=True)
+                    # BRE.3 — last-chance drain of decide-time rationales before BRE.2
+                    try:
+                        from atlas.investment.decide_rationale import (
+                            DEFAULT_DECIDE_LLM_PASSES,
+                            drain_pending_rationales,
+                        )
+
+                        bre3 = drain_pending_rationales(
+                            self._data_dir,
+                            laboratory_id=lab,
+                            llm=getattr(self, "_llm", None),
+                            reasoning=getattr(self, "_reasoning", None),
+                            max_passes=DEFAULT_DECIDE_LLM_PASSES,
+                        )
+                        port["decide_rationale"] = {
+                            "done": bre3.get("done"),
+                            "deferred": bre3.get("deferred"),
+                            "skipped": bre3.get("skipped"),
+                            "pending": bre3.get("pending"),
+                        }
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("BRE.3 evening drain skipped", exc_info=True)
+                    # BRE.2 — budgeted LLM semantic revise (or honest skip)
+                    try:
+                        from atlas.investment.belief_revision import revise_beliefs_budgeted
+
+                        revised = revise_beliefs_budgeted(
+                            port.get("world_states"),
+                            evidence_delta=port.get("evidence_delta"),
+                            llm=getattr(self, "_llm", None),
+                            data_dir=self._data_dir,
+                        )
+                        port["world_states"] = revised
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("BRE.2 revise skipped", exc_info=True)
+                    # BRE.5 — distill global WSO from revision history (deterministic + budgeted LLM)
+                    try:
+                        from atlas.investment.global_mind import distill_global_mind
+
+                        gw = distill_global_mind(
+                            self._data_dir,
+                            laboratory_id=lab,
+                            wsos=port.get("world_states"),
+                            llm=getattr(self, "_llm", None),
+                            # Phase 3: Belief Core exists — allow budgeted LLM narrative
+                            allow_llm_narrative=bool(getattr(self, "_llm", None)),
+                        )
+                        port["global_wso"] = gw
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("BRE.5 global distill skipped", exc_info=True)
+                    # MEM.1 — episodic → semantic/procedural distill
+                    try:
+                        from atlas.investment.memory_distill import run_memory_distill
+
+                        md = run_memory_distill(
+                            self._data_dir,
+                            laboratory_id=lab,
+                            wsos=port.get("world_states"),
+                            llm=getattr(self, "_llm", None),
+                            allow_llm=bool(getattr(self, "_llm", None)),
+                        )
+                        port["memory_distill"] = md
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("MEM.1 distill skipped", exc_info=True)
+                    # OI-SELF-REFLECT — nightly Belief Core reflection
+                    try:
+                        from atlas.reasoning.reflection import (
+                            format_reflection_section,
+                            merge_jis,
+                            run_nightly_reflection,
+                        )
+
+                        reflection = run_nightly_reflection(
+                            getattr(self, "_reasoning", None),
+                            laboratory_id=lab,
+                            allow_llm_narrative=bool(getattr(self, "_llm", None)),
+                        )
+                        port["reflection"] = reflection
+                        port["reflection_section"] = format_reflection_section(reflection)
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("SELF-REFLECT evening skipped", exc_info=True)
+                    # IQ.1 — revision calibration snapshot for evening
+                    try:
+                        from atlas.investment.learning_intelligence import (
+                            build_revision_calibration,
+                        )
+
+                        port["revision_calibration"] = build_revision_calibration(
+                            port.get("world_states")
+                        )
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("IQ.1 revision calibration skipped", exc_info=True)
+                    # META.1 — reasoning-pattern ledger
+                    try:
+                        from atlas.investment.meta_cognition import run_meta_cognition
+
+                        meta = run_meta_cognition(
+                            self._data_dir,
+                            laboratory_id=lab,
+                            wsos=port.get("world_states"),
+                        )
+                        port["meta_cognition"] = meta
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("META.1 ledger skipped", exc_info=True)
+                    # GENE.1 — assemble genealogy for today's material decisions
+                    try:
+                        from atlas.investment.decision_genealogy import build_genealogy
+                        from atlas.investment.decision_packets import DecisionPacketStore
+
+                        gene_rows: list = []
+                        packets = list(port.get("decisions") or [])[:12]
+                        pkt_store = DecisionPacketStore(data_dir=self._data_dir)
+                        attr_store = getattr(self, "_decision_attributions", None)
+                        for p in packets:
+                            if not isinstance(p, dict):
+                                continue
+                            if str(p.get("action") or "").lower() not in {"buy", "sell"}:
+                                continue
+                            did = p.get("decision_id") or p.get("id")
+                            if not did:
+                                continue
+                            gene_rows.append(
+                                build_genealogy(
+                                    str(did),
+                                    data_dir=self._data_dir,
+                                    packet=p,
+                                    packets_store=pkt_store,
+                                    attributions_store=attr_store,
+                                    laboratory_id=lab,
+                                    persist=True,
+                                )
+                            )
+                        port["genealogies"] = gene_rows
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("GENE.1 assemble skipped", exc_info=True)
+                    # CWS — daily cognitive quota drain (structural)
+                    try:
+                        from atlas.investment.cognitive_work import run_cws_pass
+
+                        pos = port.get("positions") or port.get("holdings") or []
+                        if isinstance(pos, dict):
+                            syms = [str(k) for k in pos.keys()]
+                        else:
+                            syms = [
+                                str(p.get("symbol"))
+                                for p in (pos or [])
+                                if isinstance(p, dict) and p.get("symbol")
+                            ]
+                        port["cognitive_work"] = run_cws_pass(
+                            self._data_dir,
+                            laboratory_id=lab,
+                            wsos=port.get("world_states")
+                            if isinstance(port.get("world_states"), list)
+                            else None,
+                            open_symbols=syms,
+                            research=self._research,
+                        )
+                        # Attach agenda + JIS revision counts for evening sections
+                        try:
+                            from atlas.investment.daily_cognitive_agenda import (
+                                count_belief_revisions,
+                                load_agenda,
+                            )
+
+                            cws = port.get("cognitive_work")
+                            if isinstance(cws, dict) and isinstance(
+                                cws.get("cognitive_agenda"), dict
+                            ):
+                                port["cognitive_agenda"] = cws["cognitive_agenda"]
+                            else:
+                                port["cognitive_agenda"] = load_agenda(
+                                    self._data_dir, lab
+                                )
+                            port["jis_revisions"] = count_belief_revisions(
+                                self._data_dir, lab, days=7
+                            )
+                            # Merge Belief Core JIS (OI-SELF-REFLECT)
+                            try:
+                                from atlas.reasoning.reflection import (
+                                    belief_core_jis,
+                                    merge_jis,
+                                )
+
+                                core = None
+                                if getattr(self, "_reasoning", None) is not None:
+                                    core = belief_core_jis(self._reasoning, days=7)
+                                elif isinstance(port.get("reflection"), dict):
+                                    core = (port.get("reflection") or {}).get("jis")
+                                if core:
+                                    port["jis_revisions"] = merge_jis(
+                                        port.get("jis_revisions"), core
+                                    )
+                            except Exception:  # noqa: BLE001
+                                self._logger.debug(
+                                    "Belief Core JIS merge skipped", exc_info=True
                                 )
                         except Exception:  # noqa: BLE001
-                            self._logger.debug(
-                                "Belief Core JIS merge skipped", exc_info=True
-                            )
+                            self._logger.debug("DCA/JIS evening attach skipped", exc_info=True)
                     except Exception:  # noqa: BLE001
-                        self._logger.debug("DCA/JIS evening attach skipped", exc_info=True)
-                except Exception:  # noqa: BLE001
-                    self._logger.debug("CWS evening skipped", exc_info=True)
+                        self._logger.debug("CWS evening skipped", exc_info=True)
+            except Exception:  # noqa: BLE001
+                pass
+            # C0 — report which cognitive stages produced output so the nightly
+            # runner can persist a receipt the timely digest reads back.
+            try:
+                from atlas.investment.nightly_cognition import build_receipt
+
+                cognition_receipt = build_receipt(
+                    port, laboratory_id=_laboratory_label(port or portfolio)
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("nightly cognition receipt skipped", exc_info=True)
+        else:
+            port["evening_timely"] = True
+            # Timely digest shows the last receipt rather than running the stages.
+            try:
+                from atlas.investment.nightly_cognition import (
+                    format_nightly_cognition_section,
+                    load_receipt,
+                )
+
+                port["nightly_cognition"] = load_receipt(
+                    self._data_dir,
+                    laboratory_id=_laboratory_label(port or portfolio),
+                )
+                port["nightly_cognition_section"] = format_nightly_cognition_section(
+                    port.get("nightly_cognition")
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("nightly cognition read skipped", exc_info=True)
+        # Loop B ladder is read from disk on both paths — the digest never runs a cycle.
+        try:
+            from atlas.investment.cognitive.loop import load_cycle
+            from atlas.investment.laboratory import DEFAULT_FNO_LAB
+
+            port["cognitive_cycle"] = load_cycle(
+                self._data_dir, laboratory_id=DEFAULT_FNO_LAB
+            )
         except Exception:  # noqa: BLE001
-            pass
+            self._logger.debug("cognitive cycle read skipped", exc_info=True)
         if isinstance(port, dict):
             no_fill = port.get("no_fill_reasons")
+        # Timely path skips research digest — live InvestmentResearchService can
+        # stall on Yahoo/LLM and block SMTP for minutes.
+        research_digest = None if timely else self._research_digest(program_id)
         subject, body = format_evening_report(
             plan=plan,
             portfolio=port or None,
             policy_snap=policy,
             program_id=program_id,
             trades=port.get("recent_trades") if port else None,
-            research_digest=self._research_digest(program_id),
+            research_digest=research_digest,
             no_fill_reasons=list(no_fill) if no_fill else None,
             catch_up=catch_up,
             decisions=port.get("decisions") if port else None,
             laboratory_id=_laboratory_label(port or portfolio),
         )
+        if self._data_dir:
+            try:
+                from atlas.investment.ops_health import digest_lines
+
+                ops = digest_lines(self._data_dir, str(self.ist_today()))
+                body = body.rstrip("\n") + "\n\n" + "\n".join(ops) + "\n"
+            except Exception:  # noqa: BLE001
+                self._logger.debug("ops health digest section skipped", exc_info=True)
         return {
             "subject": subject,
             "body": body,
@@ -3217,7 +3349,9 @@ class InvestorReportMailer:
             "has_plan": bool(plan and (plan.get("candidates") or plan.get("summary"))),
             "as_of": (plan or {}).get("as_of"),
             "catch_up": catch_up,
+            "timely": bool(timely),
             "laboratory_id": _laboratory_label(portfolio),
+            "nightly_cognition": cognition_receipt,
         }
 
     def send_evening(
@@ -3228,10 +3362,14 @@ class InvestorReportMailer:
         force: bool = False,
         catch_up: bool = False,
         laboratory_id: str | None = None,
+        timely: bool = True,
     ) -> dict[str, Any]:
         lab = _laboratory_label(portfolio, laboratory_id)
         preview = self.preview_evening(
-            program_id=program_id, portfolio=portfolio, catch_up=catch_up
+            program_id=program_id,
+            portfolio=portfolio,
+            catch_up=catch_up,
+            timely=timely,
         )
         if not self.available():
             return {

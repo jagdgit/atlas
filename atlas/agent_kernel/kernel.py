@@ -183,6 +183,15 @@ class AgentKernel:
         self._tools = tools
         self._refresh_ops_learning_context()
 
+    def bind_workers(self, workers: Any = None) -> None:
+        """P4 — attach WorkerManager for the narrow worker.lifecycle resume action."""
+        self._workers = workers
+        if workers is not None:
+            self.bus.available["worker.lifecycle"] = True
+            self.bus.generation["worker.lifecycle"] = int(
+                self.bus.generation.get("worker.lifecycle") or 0
+            ) + 1
+
     def _refresh_ops_learning_context(self) -> None:
         """Phase 8 — load accepted ops belief into kernel state for later ticks."""
         try:
@@ -732,6 +741,8 @@ class AgentKernel:
             return self._interpret(task)
         if kind == "hypothesis_test":
             return self._dispatch_hypothesis_test(task)
+        if capability == "worker.lifecycle" or kind == "worker.lifecycle":
+            return self._dispatch_worker_lifecycle(task, step)
         if kind == "job_step":
             return self._run_job_step(task, step)
         requirement = str(step.get("requirement") or "")
@@ -873,6 +884,43 @@ class AgentKernel:
                 "error": str(out.get("reason") or "not_evaluable"),
             }
         task["evidence"]["hypothesis_test"] = out
+        return {"ok": True, "value": out}
+
+    def _dispatch_worker_lifecycle(
+        self, task: dict[str, Any], step: dict[str, Any]
+    ) -> dict[str, Any]:
+        """P4 — resume a Phase-5-stale paper lab only. Never pause/stop/create."""
+        task["attempt_count"] = int(task.get("attempt_count") or 0) + 1
+        task["attempted_capabilities"] = _append(
+            task.get("attempted_capabilities"), "worker.lifecycle"
+        )
+        args = dict(step.get("args") or {})
+        action = str(args.get("action") or task.get("action") or "resume_paused_paper_lab")
+        lab = str(
+            args.get("laboratory_id")
+            or task.get("laboratory_id")
+            or "india_fno_learner"
+        )
+        if action != "resume_paused_paper_lab":
+            err = f"action_not_allowed:{action}"
+            task["last_error"] = err
+            return {"ok": False, "refused": True, "error": err}
+        workers = getattr(self, "_workers", None)
+        if workers is None:
+            task["last_error"] = "workers_unbound"
+            return {"ok": False, "error": "workers_unbound"}
+        try:
+            from atlas.workers.lifecycle import resume_paused_paper_lab
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"lifecycle_unavailable:{exc}"}
+        try:
+            out = resume_paused_paper_lab(workers=workers, laboratory_id=lab)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"resume_failed:{exc}"}
+        task["evidence"]["worker.lifecycle"] = out
+        if not out.get("ok"):
+            task["last_error"] = str(out.get("error") or "resume_failed")
+            return {"ok": False, "refused": True, "error": task["last_error"], "value": out}
         return {"ok": True, "value": out}
 
     def _acquire(self, task: dict[str, Any], capability: str, requirement: str) -> dict[str, Any]:

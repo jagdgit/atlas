@@ -38,6 +38,14 @@ _IST = ZoneInfo("Asia/Kolkata")
 VERSION = "ops.health.v1"
 STORE_REL = Path("investment") / "ops_health"
 FNO_LAB = "india_fno_learner"
+# Optional bootstrap-bound resume for Phase-5 stale F&O paper worker.
+_paper_worker_resume: Callable[[], dict[str, Any]] | None = None
+
+
+def bind_paper_worker_resume(fn: Callable[[], dict[str, Any]] | None) -> None:
+    """Wire WorkerManager.resume for the accidental Phase-5 F&O pause only."""
+    global _paper_worker_resume
+    _paper_worker_resume = fn
 EQUITY_LAB = "india_equity_learner"
 SUBJECT_PREFIX = "[Atlas OPS]"
 
@@ -751,7 +759,7 @@ def ops_health_tick(
         return _tick(
             Path(data_dir), health or {}, now=now, feed=feed, sender=sender,
             sender_factory=sender_factory or _email_sender, email=email,
-            resume_paper_worker=resume_paper_worker,
+            resume_paper_worker=resume_paper_worker or _paper_worker_resume,
         )
     except Exception as exc:  # noqa: BLE001
         _log.warning("ops health tick failed: %s", exc, exc_info=True)

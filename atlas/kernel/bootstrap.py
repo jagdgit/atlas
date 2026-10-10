@@ -174,7 +174,17 @@ from atlas.system.versioning import build_artifact_versions
 from atlas.utils.logging import get_logger, setup_logging
 
 
-def build_application(config: AtlasConfig | None = None) -> Application:
+def build_application(
+    config: AtlasConfig | None = None,
+    *,
+    ephemeral: bool = False,
+) -> Application:
+    """Wire the Atlas kernel.
+
+    ``ephemeral=True`` (F1): used by CLI one-shots and tests that must not mutate the
+    live scheduler — no new schedule rows, no ``schedule_tick`` seed, no claim workers.
+    The long-running ``atlas serve`` / systemd unit always uses ``ephemeral=False``.
+    """
     # 1. Config
     cfg = config or get_config()
 
@@ -351,6 +361,13 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     knowledge_service._lifecycle = None  # noqa: SLF001 — set below after scheduler
     # Deferred/resilient embedding path: enqueue an 'embed_document' task.
     handlers.register("embed_document", knowledge_service.embed_document_task)
+    from atlas.knowledge.rag_coverage import bind_knowledge_service, record_rag_coverage
+
+    bind_knowledge_service(knowledge_service)
+    try:
+        record_rag_coverage(str(cfg.paths.data))
+    except Exception:  # noqa: BLE001 — coverage must not stop startup
+        get_logger("atlas.knowledge").debug("rag coverage snapshot skipped", exc_info=True)
     # OI-LAB-LOOP0 Step 8 — bounded re-enqueue of already-chunked docs that
     # never received an embed_document task (ingest only enqueues new files).
     handlers.register("embed_backfill", knowledge_service.embed_backfill_task)
@@ -431,11 +448,14 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         task_repo=task_repo,
         handlers=handlers,
         events=events,
-        workers=cfg.scheduler.workers,
+        # F1: ephemeral processes must not claim/recover against the live queue.
+        workers=0 if ephemeral else cfg.scheduler.workers,
         poll_interval=cfg.scheduler.poll_interval,
         backoff_base=cfg.scheduler.backoff_base,
         drain_timeout=cfg.scheduler.drain_timeout,
         logger=get_logger("atlas.scheduler"),
+        failure_data_dir=str(cfg.paths.data),
+        mutate_queue=not ephemeral,
     )
     knowledge_service.bind_scheduler(
         enqueue=scheduler_service.enqueue,
@@ -496,6 +516,25 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         logger=get_logger("atlas.ops.backup"),
     )
     handlers.register("backup", backup_manager.backup_task)
+
+    # Retention (O6): the tick tables had no policy and reached ~37M rows each, which
+    # is what filled the root filesystem. Disabled by default — it reports first.
+    from atlas.ops.retention import RetentionManager, default_rules
+
+    retention_manager = RetentionManager(
+        db_manager,
+        default_rules(
+            audit_days=cfg.retention.audit_days,
+            scheduler_days=cfg.retention.scheduler_days,
+            health_days=cfg.retention.health_days,
+        ),
+        enabled=cfg.retention.enabled,
+        batch_rows=cfg.retention.batch_rows,
+        max_batches=cfg.retention.max_batches,
+        interval_seconds=cfg.retention.interval_seconds,
+        logger=get_logger("atlas.ops.retention"),
+    )
+    handlers.register("retention_prune", retention_manager.prune_task)
 
     # Storage Manager (Phase 0 · ATLAS_OS_ROADMAP §5.8, P8): the one subsystem all
     # durable files flow through — versioned + checksummed put/get, workspace
@@ -579,8 +618,18 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         mission_repo=mission_repo,  # fire tasks at the owning mission's priority (A.6)
         events=events,
         logger=get_logger("atlas.scheduler.schedules"),
+        seed_tick_on_start=not ephemeral,
+        data_dir=cfg.paths.data,
     )
+    # Phase 8 / C8: identity-reuse cites accepted ops self-diagnosis learning.
+    schedule_service.bind_ops_learning(cfg.paths.data)
     handlers.register("schedule_tick", schedule_service.tick)
+    # F2: a frozen `schedule_tick` cannot repair itself — nothing becomes due, including
+    # any task that would fix it. The scheduler's own worker loop keeps running, so it
+    # re-seeds the clock after a sustained idle window. Ephemeral boots must not wire
+    # this (would insert schedule_tick into the shared DB).
+    if not ephemeral:
+        scheduler_service.set_idle_callback(schedule_service.ensure_running)
 
     # Worker Manager (Phase A · §A.4) — the payoff: supervises mission-owned Persistent Workers
     # as short-task + checkpoint loops (reusing the Phase-0 CheckpointStore, owner_type='worker').
@@ -773,112 +822,49 @@ def build_application(config: AtlasConfig | None = None) -> Application:
     from atlas.investment.market_data_provider_health import provider_health_tick
 
     handlers.register("provider_health_tick", provider_health_tick)
-    # Periodically resume capacity-queued workers when the host is safe again.
-    _hg_existing = [
-        s
-        for s in schedule_service.list_schedules()
-        if getattr(s, "task_type", None) == "host_guard_tick"
-    ]
-    if not _hg_existing:
-        schedule_service.register_schedule(
+    # F5: system schedules are ensure_* (idempotent by identity). F1: ephemeral
+    # boots skip this block entirely so CLI/status/pytest cannot mint duplicates.
+    if not ephemeral:
+        schedule_service.ensure_schedule(
             "host_guard_tick",
             interval_seconds=60,
             payload={},
             first_run_delay=30.0,
         )
-    else:
-        # Ensure at least one remains enabled after upgrades.
-        for s in _hg_existing:
-            if not getattr(s, "enabled", True):
-                try:
-                    schedule_service.enable(s.id)
-                except Exception:  # noqa: BLE001
-                    pass
-                break
-
-    _mdph_existing = [
-        s
-        for s in schedule_service.list_schedules()
-        if getattr(s, "task_type", None) == "provider_health_tick"
-    ]
-    if not _mdph_existing:
-        schedule_service.register_schedule(
+        # Retention: only when policy is enabled. ensure_schedule will re-enable an
+        # existing disabled row if called with enabled=True — so we must not call it
+        # at all while the 7-day freeze / config says disabled.
+        if cfg.retention.enabled:
+            schedule_service.ensure_schedule(
+                "retention_prune",
+                interval_seconds=max(300.0, float(cfg.retention.interval_seconds)),
+                payload={},
+                first_run_delay=120.0,
+            )
+        schedule_service.ensure_schedule(
             "provider_health_tick",
             interval_seconds=120,
             payload={},
             first_run_delay=45.0,
         )
-    else:
-        for s in _mdph_existing:
-            if not getattr(s, "enabled", True):
-                try:
-                    schedule_service.enable(s.id)
-                except Exception:  # noqa: BLE001
-                    pass
-                break
-
-    _embed_bf_existing = [
-        s
-        for s in schedule_service.list_schedules()
-        if getattr(s, "task_type", None) == "embed_backfill"
-    ]
-    if not _embed_bf_existing:
-        schedule_service.register_schedule(
+        schedule_service.ensure_schedule(
             "embed_backfill",
             interval_seconds=90,
             payload={"limit": knowledge_service.EMBED_BACKFILL_LIMIT},
             first_run_delay=60.0,
         )
-    else:
-        for s in _embed_bf_existing:
-            if not getattr(s, "enabled", True):
-                try:
-                    schedule_service.enable(s.id)
-                except Exception:  # noqa: BLE001
-                    pass
-                break
-
-    _s11_existing = [
-        s
-        for s in schedule_service.list_schedules()
-        if getattr(s, "task_type", None) == "lab_loop0_s11_canary"
-    ]
-    if not _s11_existing:
-        schedule_service.register_schedule(
+        schedule_service.ensure_schedule(
             "lab_loop0_s11_canary",
             interval_seconds=120,
             payload={},
             first_run_delay=90.0,
         )
-    else:
-        for s in _s11_existing:
-            if not getattr(s, "enabled", True):
-                try:
-                    schedule_service.enable(s.id)
-                except Exception:  # noqa: BLE001
-                    pass
-                break
-
-    _fs_existing = [
-        s
-        for s in schedule_service.list_schedules()
-        if getattr(s, "task_type", None) == "fundamental_summary_publish"
-    ]
-    if not _fs_existing:
-        schedule_service.register_schedule(
+        schedule_service.ensure_schedule(
             "fundamental_summary_publish",
             interval_seconds=900,
             payload={"symbols": ["HBLPOWER.NS", "TATACHEM.NS"]},
             first_run_delay=180.0,
         )
-    else:
-        for s in _fs_existing:
-            if not getattr(s, "enabled", True):
-                try:
-                    schedule_service.enable(s.id)
-                except Exception:  # noqa: BLE001
-                    pass
-                break
 
     # Template service (Phase A · §A.5, B7): seeds built-in mission blueprints on boot and
     # instantiates a template → Mission + config v1 + worker rows in one call. Composes the
@@ -2667,6 +2653,7 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         lifecycle=lifecycle,
         capabilities=capabilities,
         tools=tools,
+        ephemeral=ephemeral,
     )
 
     # 8. Plugins (ADR-0041/0049): load from config, let each self-register its
@@ -2680,6 +2667,26 @@ def build_application(config: AtlasConfig | None = None) -> Application:
         None,
     )
     agent_kernel_worker.bind_web_search(search_plugin)
+    # J1: Agent Kernel plans against the same live toolbox Job Engine / plugins use.
+    agent_kernel_worker.bind_live_toolbox(app.capabilities, app.tools)
+    # P4: narrow Phase-5 stale paper-lab resume (same WorkerManager ops_health uses).
+    agent_kernel_worker.bind_workers(worker_manager)
+    try:
+        from atlas.investment.ops_health import bind_paper_worker_resume
+        from atlas.workers.lifecycle import resume_fno_paper_if_phase5_stale
+
+        bind_paper_worker_resume(
+            lambda: resume_fno_paper_if_phase5_stale(workers=worker_manager)
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    # J5: let the job planner resolve real column names instead of recalling them.
+    job_planner.bind_schema_source(
+        next(
+            (plugin for plugin in plugin_manager.plugins if getattr(plugin, "name", "") == "sql"),
+            None,
+        )
+    )
     container.register_instance("plugins", plugin_manager)
     capabilities.register("plugins", plugin_manager, kind="kernel")
     registry.register(plugin_manager)

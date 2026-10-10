@@ -1,7 +1,9 @@
 """Capability surface the kernel can plan against.
 
-Descriptors point at existing Atlas capability ids. Handlers are injected;
-the kernel does not become a second tool runtime.
+Investment evidence adapters (ladder) live here. Live toolbox entries
+(``sql``, ``logs``, ``git``, ``code``, …) are merged from
+``CapabilityRegistry`` / ``ToolRegistry`` via :func:`build_unified_catalog`
+so Agent Kernel does not keep a parallel orphan tool list (J1).
 """
 
 from __future__ import annotations
@@ -26,6 +28,9 @@ DERIVED_REQUIREMENTS = {
     "relative_strength": ("price_history", "sector_benchmark"),
 }
 
+# Toolbox ids that must come from the live registry, never a hard-coded orphan list.
+LIVE_TOOLBOX = frozenset({"sql", "logs", "git", "code", "python"})
+
 
 @dataclass(frozen=True)
 class KernelCapability:
@@ -42,7 +47,104 @@ class KernelCapability:
     output_schema: dict[str, Any] = field(default_factory=dict)
 
 
+def _live_toolbox_specs() -> dict[str, KernelCapability]:
+    """Descriptors for registry-backed toolbox capabilities (added only when live)."""
+    evidence_out = {"ok": "bool", "outcome": "str", "error": "str"}
+    return {
+        "sql": KernelCapability(
+            "sql",
+            "Read-only SQL over Atlas Postgres / local DBs (sql.query / tables / schema).",
+            "sql",
+            "cheap",
+            "low",
+            ("general", "ops"),
+            "read",
+            "structured rows + outcome",
+            ("blocked", "unavailable", "error"),
+            {"sql": "str", "source": "str", "limit": "int"},
+            evidence_out,
+        ),
+        "logs": KernelCapability(
+            "logs",
+            "List, tail, and search Atlas's own log files (secret-redacted).",
+            "logs",
+            "cheap",
+            "low",
+            ("general", "ops"),
+            "read",
+            "redacted log lines",
+            ("blocked", "empty", "unavailable"),
+            {"pattern": "str", "file": "str", "lines": "int"},
+            evidence_out,
+        ),
+        "git": KernelCapability(
+            "git",
+            "Read-only local git status, log, diff, branches, file history.",
+            "git",
+            "cheap",
+            "low",
+            ("general", "engineering"),
+            "read",
+            "repo snapshot",
+            ("unavailable", "not_a_repo"),
+            {"repo": "str"},
+            evidence_out,
+        ),
+        "code": KernelCapability(
+            "code",
+            "Parse and map the local codebase (symbols, graph, patterns).",
+            "code",
+            "cheap",
+            "low",
+            ("general", "engineering"),
+            "read",
+            "structured code facts",
+            ("unavailable",),
+            {"path": "str", "query": "str"},
+            evidence_out,
+        ),
+        "python": KernelCapability(
+            "python",
+            "Deterministic Python execution for calculations on retrieved inputs.",
+            "python",
+            "cheap",
+            "low",
+            ("general", "investment"),
+            "read",
+            "value + provenance",
+            ("inputs_missing", "error"),
+            {"code": "str", "inputs": "list"},
+            {"value": "number", "provenance": "list"},
+        ),
+    }
+
+
+def _live_name_present(name: str, capabilities: Any, tools: Any) -> bool:
+    if capabilities is not None and hasattr(capabilities, "has") and capabilities.has(name):
+        return True
+    if tools is None:
+        return False
+    names = list(tools.names()) if hasattr(tools, "names") else []
+    prefix = f"{name}."
+    return any(str(n).startswith(prefix) or str(n) == name for n in names)
+
+
+def build_unified_catalog(
+    capabilities: Any = None,
+    tools: Any = None,
+) -> dict[str, KernelCapability]:
+    """Investment ladder + live toolbox entries that are actually registered (J1)."""
+    catalog = dict(default_catalog())
+    for name, spec in _live_toolbox_specs().items():
+        if _live_name_present(name, capabilities, tools):
+            catalog[name] = spec
+    return catalog
+
+
 def default_catalog() -> dict[str, KernelCapability]:
+    """Investment evidence adapters (ladder). Live toolbox is layered by
+    :func:`build_unified_catalog` — do not hard-code sql/logs/git/code here.
+    """
     common_in = {"requirement": "str", "symbol": "str", "objective": "str"}
     evidence_out = {"ok": "bool", "evidence": "object", "citations": "list", "error": "str"}
     rows = [
@@ -176,6 +278,19 @@ def default_catalog() -> dict[str, KernelCapability]:
             {"packet": "object"},
             {"review_status": "str", "conclusion": "str"},
         ),
+        KernelCapability(
+            "worker.lifecycle",
+            "Resume a paper lab worker paused by Phase-5 accidental dedupe only.",
+            "worker.lifecycle",
+            "cheap",
+            "low",
+            ("ops",),
+            "write",
+            "resume receipt; never pause/stop/create",
+            ("not_allowed", "pause_reason_not_phase5_stale", "unavailable"),
+            {"action": "str", "laboratory_id": "str"},
+            {"ok": "bool", "worker_id": "str", "status": "str", "error": "str"},
+        ),
     ]
     return {row.name: row for row in rows}
 
@@ -183,18 +298,31 @@ def default_catalog() -> dict[str, KernelCapability]:
 class EvidenceBus:
     """What each capability can currently return. Tests and adapters fill slots."""
 
-    def __init__(self) -> None:
-        self.available: dict[str, bool] = {name: True for name in default_catalog()}
+    def __init__(self, catalog: dict[str, KernelCapability] | None = None) -> None:
+        self._catalog: dict[str, KernelCapability] = dict(catalog or default_catalog())
+        self.available: dict[str, bool] = {name: True for name in self._catalog}
         self.slots: dict[tuple[str, str], dict[str, Any]] = {}
         self.calls: list[dict[str, Any]] = []
-        self.generation: dict[str, int] = {name: 0 for name in default_catalog()}
+        self.generation: dict[str, int] = {name: 0 for name in self._catalog}
         self.forced: set[str] = set()
         self.status_reason: dict[str, str] = {}
 
+    def catalog_names(self) -> list[str]:
+        return list(self._catalog)
+
+    def replace_catalog(self, catalog: dict[str, KernelCapability]) -> None:
+        """J1 — swap in a unified catalog (ladder + live toolbox). Preserves slots."""
+        self._catalog = dict(catalog)
+        for name in self._catalog:
+            self.available.setdefault(name, True)
+            self.generation.setdefault(name, 0)
+
+    def sync_from_registries(self, capabilities: Any = None, tools: Any = None) -> None:
+        self.replace_catalog(build_unified_catalog(capabilities, tools))
+
     def catalog_view(self) -> list[dict[str, Any]]:
-        catalog = default_catalog()
         out = []
-        for name, spec in catalog.items():
+        for name, spec in self._catalog.items():
             out.append(
                 {
                     "name": spec.name,

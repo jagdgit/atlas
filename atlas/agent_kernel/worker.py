@@ -46,6 +46,19 @@ class AgentKernelWorker(PersistentWorker):
         if self._kernel is not None:
             self._kernel.bind_web_search(client)
 
+    def bind_live_toolbox(self, capabilities: Any = None, tools: Any = None) -> None:
+        """J1 — planning catalog follows the live CapabilityRegistry / ToolRegistry."""
+        self._capabilities = capabilities
+        self._tools = tools
+        if self._kernel is not None:
+            self._kernel.bind_live_toolbox(capabilities, tools)
+
+    def bind_workers(self, workers: Any = None) -> None:
+        """P4 — WorkerManager for the narrow Phase-5 stale paper-lab resume."""
+        self._workers = workers
+        if self._kernel is not None:
+            self._kernel.bind_workers(workers)
+
     def kernel(self) -> AgentKernel:
         if self._kernel is None:
             self._kernel = AgentKernel(
@@ -57,6 +70,13 @@ class AgentKernelWorker(PersistentWorker):
                 web_search=self._web,
                 logger=self._logger,
             )
+            caps = getattr(self, "_capabilities", None)
+            tools = getattr(self, "_tools", None)
+            if caps is not None or tools is not None:
+                self._kernel.bind_live_toolbox(caps, tools)
+            workers = getattr(self, "_workers", None)
+            if workers is not None:
+                self._kernel.bind_workers(workers)
         return self._kernel
 
     def do_tick(self, ctx: TickContext) -> TickResult:

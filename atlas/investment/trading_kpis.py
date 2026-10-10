@@ -203,6 +203,31 @@ def build_trading_kpis(
     filled_syms = {
         str(t.get("symbol") or "").upper() for t in buys if t.get("symbol")
     }
+    # F&O KPIs must not advertise the cash watchlist as planned contracts.
+    portfolio_key = str(
+        port.get("portfolio_key")
+        or notes.get("portfolio_key")
+        or plan_d.get("portfolio_key")
+        or plan_d.get("laboratory_id")
+        or ""
+    )
+    planned_meta: dict[str, Any] = {
+        "planned_symbols_status": "ok",
+        "planned_symbols_note": None,
+    }
+    try:
+        from atlas.investment.lab_status_contract import sanitize_fno_planned_symbols
+
+        cleaned = sanitize_fno_planned_symbols(
+            sorted(planned_syms), laboratory_id=portfolio_key
+        )
+        planned_syms = set(cleaned.get("planned_symbols") or [])
+        planned_meta = {
+            "planned_symbols_status": cleaned.get("planned_symbols_status") or "ok",
+            "planned_symbols_note": cleaned.get("planned_symbols_note"),
+        }
+    except Exception:  # noqa: BLE001
+        pass
     candidates_filled = len(planned_syms & filled_syms) if planned_syms else len(filled_syms)
     candidates_planned = len(planned_syms)
     plan_fill_rate = (
@@ -263,6 +288,8 @@ def build_trading_kpis(
         "ist_date": ist_date,
         "filled_symbols": sorted(filled_syms),
         "planned_symbols": sorted(planned_syms),
+        "planned_symbols_status": planned_meta.get("planned_symbols_status"),
+        "planned_symbols_note": planned_meta.get("planned_symbols_note"),
         "kpi_label": _kpi_label_for(port, notes),
     }
 
