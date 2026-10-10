@@ -11,13 +11,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from atlas.agent_kernel.bus import DERIVED_REQUIREMENTS, EvidenceBus, default_catalog
+from atlas.agent_kernel.bus import DERIVED_REQUIREMENTS, EvidenceBus
 from atlas.agent_kernel.local_evidence import lookup_local
 from atlas.agent_kernel.models import (
     DIAGNOSTIC_FIELDS,
     NON_SUCCESS,
     PRIORITY_RANK,
     STATUS_ACTIVE,
+    STATUS_BLOCKED,
     STATUS_CAPABILITY_GAP,
     STATUS_FAILED,
     STATUS_PARTIAL,
@@ -110,6 +111,13 @@ class AgentKernel:
         self.llm = llm
         self.cognitive_fn = cognitive_fn
         self.laboratory_id = laboratory_id
+        # Cognitive pickup scans every paper lab. Equity remains the default home
+        # lab for uncertainty / fundamental work; F&O hypotheses must not be invisible.
+        self.cognitive_laboratory_ids: tuple[str, ...] = (
+            "india_equity_learner",
+            "equity_intraday_learner",
+            "india_fno_learner",
+        )
         self.bus = bus or EvidenceBus()
         self._logger = logger or _log
         self._allow_external = True
@@ -167,6 +175,26 @@ class AgentKernel:
             if self._allow_external and self._web.available():
                 self.bus.available["web_search"] = True
 
+    def bind_live_toolbox(self, capabilities: Any = None, tools: Any = None) -> None:
+        """J1 — merge live CapabilityRegistry/ToolRegistry into the planning catalog."""
+        self.bus.sync_from_registries(capabilities, tools)
+        # Keep a handle for resolve()/future job_step execution without a second catalog.
+        self._capabilities = capabilities
+        self._tools = tools
+        self._refresh_ops_learning_context()
+
+    def _refresh_ops_learning_context(self) -> None:
+        """Phase 8 — load accepted ops belief into kernel state for later ticks."""
+        try:
+            from atlas.agent_kernel.ops_learning import belief_context_for_ops
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            ctx = belief_context_for_ops(self.data_dir)
+        except Exception:  # noqa: BLE001
+            return
+        self.state["ops_learning_context"] = ctx
+
     def resolve(self, name: str) -> dict[str, Any]:
         """Resolve a capability name to an executable implementation, if one exists."""
         cap = str(name or "").strip()
@@ -220,6 +248,22 @@ class AgentKernel:
                 "status": SUCCESS,
                 "capability": self._web,
             }
+        tools = getattr(self, "_tools", None)
+        tool_name, _kwargs = _tool_call_for(cap, {})
+        if (
+            tool_name
+            and tools is not None
+            and hasattr(tools, "has")
+            and tools.has(tool_name)
+        ):
+            return {
+                "name": cap,
+                "executable": True,
+                "available": True,
+                "status": SUCCESS,
+                "capability": tools,
+                "tool": tool_name,
+            }
         return {
             "name": cap,
             "executable": False,
@@ -247,12 +291,41 @@ class AgentKernel:
             web_reason=str(ready.get("status") or ""),
         )
         mode = (mode or "tick").strip().lower()
+        try:
+            from atlas.investment.data_quality import sync_fundamental_queue
+
+            sync_fundamental_queue(self.data_dir, self.laboratory_id)
+        except Exception:  # noqa: BLE001
+            _log.debug("fundamental queue sync skipped", exc_info=True)
         created = self.observe(observations or [])
         resumed = self._resume_ready()
+        try:
+            from atlas.investment.data_quality import (
+                align_kernel_fundamental_tasks,
+                release_blocked_kernel_tasks,
+            )
+
+            resumed.extend(
+                release_blocked_kernel_tasks(
+                    self.state, self.data_dir, laboratory_id=self.laboratory_id
+                )
+            )
+            align_kernel_fundamental_tasks(
+                self.state, self.data_dir, laboratory_id=self.laboratory_id
+            )
+        except Exception:  # noqa: BLE001
+            _log.debug("capability recovery check skipped", exc_info=True)
         limit = max_investigations
         if limit is None:
             limit = {"deep": 2, "event": 1, "tick": 1, "wait": 1}.get(mode, 1)
+        blocked_before = {
+            t.get("id")
+            for t in self.state["tasks"].values()
+            if isinstance(t, dict) and t.get("status") == STATUS_CAPABILITY_GAP
+        }
         selected = self._select(mode, limit=limit)
+        if selected and blocked_before.difference(selected):
+            self.state["continued_after_blockage"] = True
         reports = []
         for task_id in selected:
             reports.append(self._execute(self.state["tasks"][task_id]))
@@ -283,6 +356,7 @@ class AgentKernel:
         payloads: list[dict[str, Any]] = []
         payloads.extend(self._inbox_payloads())
         payloads.extend(self._uncertainty_payloads())
+        payloads.extend(self._cognitive_payloads())
         payloads.extend(extra)
         created = []
         for payload in payloads:
@@ -326,6 +400,20 @@ class AgentKernel:
             rows = list_tasks(self.data_dir, self.laboratory_id, status="PENDING")
         except Exception:  # noqa: BLE001
             return []
+        parked = {
+            STATUS_SUCCESS,
+            STATUS_CAPABILITY_GAP,
+            STATUS_BLOCKED,
+            STATUS_WAITING,
+            STATUS_FAILED,
+            STATUS_PLANNING_FAILED,
+            STATUS_UNVERIFIED,
+            STATUS_PARTIAL,
+        }
+        known: dict[str, str] = {}
+        for task in (self.state.get("tasks") or {}).values():
+            if isinstance(task, dict) and task.get("fingerprint"):
+                known[str(task["fingerprint"])] = str(task.get("status") or "")
         out = []
         for row in rows:
             if str(row.get("importance") or "").upper() != "HIGH":
@@ -333,26 +421,110 @@ class AgentKernel:
             symbol = str(row.get("symbol") or "")
             unknown = str(row.get("unknown") or "unknown")
             requirement = unknown.replace("_missing", "").replace("_unknown", "")
+            objective = str(row.get("action") or f"Resolve {unknown} for {symbol}")
+            required = [requirement] if requirement else [unknown]
+            fp = fingerprint(
+                symbol=symbol.upper(),
+                objective=objective,
+                required=required,
+                domain="investment",
+            )
+            status = known.get(fp)
+            if status in {STATUS_RETRY, STATUS_ACTIVE}:
+                # This unknown is already the next runnable investigation.
+                break
+            if status in parked:
+                # A blocked or finished task must not hide the next unknown.
+                continue
             out.append(
                 {
                     "source": "uncertainty_queue",
                     "domain": "investment",
                     "symbol": symbol,
-                    "objective": str(row.get("action") or f"Resolve {unknown} for {symbol}"),
+                    "objective": objective,
                     "reason": str(row.get("why") or unknown),
                     "decision_impact": True,
                     "importance": "HIGH",
                     "urgency": 0.8,
-                    "required": [requirement] if requirement else [unknown],
+                    "required": required,
                     "uncertainty_refs": [row.get("id")],
                     "decision_id": None,
                     "priority_class": "P1",
                     "interpretive": False,
                 }
             )
-            if len(out) >= 1:
-                break
+            break
         return out
+
+    def _cognitive_payloads(self) -> list[dict[str, Any]]:
+        """C4 — an open, admitted hypothesis becomes one P3 scientific task.
+
+        P3 so it can never outrank operational work: ``_select`` already drops P3
+        whenever any P0/P1/P2 investigation is due. Refusals are recorded by the
+        cognitive worker, not here — the kernel only picks up admitted questions.
+
+        Scans every paper laboratory so an F&O admission is not invisible to an
+        equity-defaulted kernel.
+        """
+        try:
+            from atlas.investment.cognitive.queue import next_admitted_hypothesis
+        except Exception:  # noqa: BLE001
+            return []
+        labs = list(self.cognitive_laboratory_ids or ())
+        if self.laboratory_id and self.laboratory_id not in labs:
+            labs.insert(0, self.laboratory_id)
+        for lab in labs:
+            try:
+                row = next_admitted_hypothesis(self.data_dir, laboratory_id=lab)
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(row, dict) or not row.get("hypothesis_id"):
+                continue
+            objective = (
+                f"[{lab}] Test hypothesis on {row.get('dimension')}: "
+                f"{row.get('statement')}"
+            )
+            fp = fingerprint(
+                symbol="",
+                objective=objective,
+                required=["hypothesis_test"],
+                domain="cognitive",
+            )
+            already = False
+            for task in (self.state.get("tasks") or {}).values():
+                if isinstance(task, dict) and task.get("fingerprint") == fp:
+                    already = True
+                    break
+                if (
+                    isinstance(task, dict)
+                    and task.get("hypothesis_id") == row.get("hypothesis_id")
+                    and task.get("laboratory_id") == lab
+                ):
+                    already = True
+                    break
+            if already:
+                continue
+            return [
+                {
+                    "source": "cognitive_loop",
+                    "domain": "cognitive",
+                    "symbol": "",
+                    "objective": objective[:400],
+                    "reason": str(row.get("falsifier") or "")[:400],
+                    "decision_impact": False,
+                    "importance": "LOW",
+                    "urgency": 0.1,
+                    "required": ["hypothesis_test"],
+                    "hypothesis_id": row.get("hypothesis_id"),
+                    "experiment_spec": row.get("experiment_spec"),
+                    "laboratory_id": lab,
+                    "decision_id": None,
+                    # Never outranks live-session or closeout work.
+                    "priority_class": "P3",
+                    "interpretive": False,
+                }
+            ]
+        return []
 
     def _upsert(self, obs: dict[str, Any]) -> dict[str, Any] | None:
         objective = str(obs.get("objective") or "").strip()
@@ -406,6 +578,9 @@ class AgentKernel:
             "updated_at": now_iso(),
             **diag,
         }
+        if obs.get("hypothesis_id"):
+            task["hypothesis_id"] = str(obs["hypothesis_id"])
+            task["experiment_spec"] = obs.get("experiment_spec")
         if task["deterministic_only"]:
             task["interpretive"] = False
         self.state["tasks"][work_id] = task
@@ -483,7 +658,7 @@ class AgentKernel:
         if not task.get("plan"):
             planned = plan_investigation(
                 task,
-                catalog_names=list(default_catalog()),
+                catalog_names=self.bus.catalog_names(),
                 availability=dict(self.bus.available),
                 generations=dict(self.bus.generation),
                 failure_memory=self.state.get("failure_memory") or {},
@@ -555,15 +730,150 @@ class AgentKernel:
             return self._calculate(task)
         if kind == "interpret":
             return self._interpret(task)
+        if kind == "hypothesis_test":
+            return self._dispatch_hypothesis_test(task)
         if kind == "job_step":
-            task["attempted_capabilities"] = _append(task.get("attempted_capabilities"), capability)
-            task["attempt_count"] = int(task.get("attempt_count") or 0) + 1
-            return {
-                "ok": False,
-                "error": "job_step_recorded_not_executed_as_order",
-            }
+            return self._run_job_step(task, step)
         requirement = str(step.get("requirement") or "")
         return self._acquire(task, capability, requirement)
+
+    def _run_job_step(self, task: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+        """Execute a planner job_step through the live ToolRegistry (J1 → Phase 7)."""
+        capability = str(step.get("capability") or "")
+        task["attempted_capabilities"] = _append(task.get("attempted_capabilities"), capability)
+        task["attempt_count"] = int(task.get("attempt_count") or 0) + 1
+        tools = getattr(self, "_tools", None)
+        if tools is None or not hasattr(tools, "invoke"):
+            task["failed"] = _append(task.get("failed"), f"{capability}:tool_registry_unbound")
+            task["last_error"] = "tool_registry_unbound"
+            return {"ok": False, "error": "tool_registry_unbound"}
+        tool_name, kwargs = _tool_call_for(capability, dict(step.get("args") or {}))
+        if not tool_name:
+            task["failed"] = _append(task.get("failed"), f"{capability}:no_tool_mapping")
+            task["last_error"] = f"no_tool_mapping:{capability}"
+            return {"ok": False, "error": task["last_error"]}
+        if hasattr(tools, "has") and not tools.has(tool_name):
+            task["failed"] = _append(task.get("failed"), f"{capability}:tool_missing:{tool_name}")
+            task["last_error"] = f"tool_missing:{tool_name}"
+            return {"ok": False, "error": task["last_error"]}
+        try:
+            result = tools.invoke(tool_name, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            task["failed"] = _append(task.get("failed"), f"{capability}:{type(exc).__name__}")
+            task["last_error"] = str(exc)[:300]
+            return {"ok": False, "error": task["last_error"]}
+        ok = _tool_result_ok(result)
+        task.setdefault("evidence", {})[capability] = result
+        task["evidence_refs"] = _append(
+            task.get("evidence_refs"), f"tool:{tool_name}"
+        )
+        if ok:
+            task["succeeded"] = _append(task.get("succeeded"), capability)
+            self._note_ops_findings(task, capability, result)
+            return {"ok": True, "evidence": result}
+        err = _tool_result_error(result) or f"{capability}_failed"
+        task["failed"] = _append(task.get("failed"), f"{capability}:{err}")
+        task["last_error"] = err
+        return {"ok": False, "error": err, "evidence": result}
+
+    def _note_ops_findings(
+        self, task: dict[str, Any], capability: str, result: Any
+    ) -> None:
+        """Derive next_question + ops learning candidate from real tool evidence."""
+        if capability != "sql" or not isinstance(result, dict):
+            return
+        rows = result.get("rows") if isinstance(result.get("rows"), list) else []
+        top_err = ""
+        if rows:
+            first = rows[0] if isinstance(rows[0], dict) else {}
+            top_err = str(first.get("err") or first.get("error") or first.get("task_type") or "")
+        if "retention_prune" in top_err or "no handler registered" in top_err.lower():
+            q = (
+                "Should retention_prune stay disabled until the handler freeze ends "
+                "and schedule identity is uniquely indexed?"
+            )
+        elif top_err:
+            q = f"What generator still produces '{top_err[:80]}' after Phase 1–5 fixes?"
+        else:
+            q = "Which remaining failed task_type clusters are unexplained after today's prune?"
+        task["next_question"] = q
+        questions = list(self.state.get("open_questions") or [])
+        questions.insert(
+            0,
+            {
+                "task_id": task.get("id"),
+                "missing": None,
+                "objective": q,
+                "source": "agent_kernel_derived",
+                "not_operator_supplied": True,
+            },
+        )
+        self.state["open_questions"] = questions[:40]
+        # Genuine candidate from measured failure rows — not a synthetic lesson.
+        cand_dir = self.data_dir / "agent_kernel" / "learning_candidates"
+        cand_dir.mkdir(parents=True, exist_ok=True)
+        cand = {
+            "kind": "ops_learning_candidate",
+            "validated": False,
+            "provisional": True,
+            "not_a_lesson": True,
+            "source": "agent_kernel_self_diagnosis",
+            "work_id": task.get("id"),
+            "episode_id": task.get("episode_id"),
+            "statement": (
+                "Scheduled-task mass failures must be classified by error signature "
+                "before treating volume as learning; duplicate or handler-less schedules "
+                "are generators, not intelligence."
+            ),
+            "evidence": {
+                "top_error": top_err[:200],
+                "row_count": len(rows),
+                "sql_outcome": result.get("outcome"),
+            },
+            "next_question": q,
+            "at": now_iso(),
+        }
+        path = cand_dir / f"{task.get('id') or new_id('AK')}.json"
+        try:
+            path.write_text(json.dumps(cand, indent=2, default=str) + "\n", encoding="utf-8")
+            task["learning_candidate_path"] = str(path)
+            task["lineage"] = dict(task.get("lineage") or {})
+            task["lineage"]["learning_candidate"] = str(path)
+        except OSError:
+            self._logger.debug("learning candidate write failed", exc_info=True)
+
+    def _dispatch_hypothesis_test(self, task: dict[str, Any]) -> dict[str, Any]:
+        """C5 — hand the experiment to the FEL queue. The kernel runs no models."""
+        task["attempt_count"] = int(task.get("attempt_count") or 0) + 1
+        hypothesis_id = str(task.get("hypothesis_id") or "")
+        if not hypothesis_id:
+            return {"ok": False, "error": "hypothesis_id missing"}
+        try:
+            from atlas.investment.cognitive.experiment_bridge import (
+                enqueue_hypothesis_test,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"experiment bridge unavailable: {exc}"}
+        lab = str(task.get("laboratory_id") or self.laboratory_id or "")
+        try:
+            out = enqueue_hypothesis_test(
+                self.data_dir,
+                laboratory_id=lab,
+                hypothesis_id=hypothesis_id,
+                experiment_spec=task.get("experiment_spec"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"enqueue failed: {exc}"}
+        if not out.get("ok"):
+            # A refusal is a real answer, not a failure to retry forever.
+            task["evidence"]["hypothesis_test"] = out
+            return {
+                "ok": False,
+                "refused": True,
+                "error": str(out.get("reason") or "not_evaluable"),
+            }
+        task["evidence"]["hypothesis_test"] = out
+        return {"ok": True, "value": out}
 
     def _acquire(self, task: dict[str, Any], capability: str, requirement: str) -> dict[str, Any]:
         task["attempt_count"] = int(task.get("attempt_count") or 0) + 1
@@ -603,6 +913,21 @@ class AgentKernel:
         if result.get("invented"):
             task["failed"] = _append(task.get("failed"), "manufactured_evidence_rejected")
             task["last_error"] = "manufactured_evidence_rejected"
+            return result
+        if result.get("quality_hold"):
+            holds = task.get("quality_holds")
+            if not isinstance(holds, dict):
+                holds = {}
+                task["quality_holds"] = holds
+            holds[requirement] = {
+                "quality": result.get("quality"),
+                "acquired": bool(result.get("acquired")),
+                "usable": False,
+                "tradable": False,
+                "reason": result.get("error"),
+            }
+            task["registry_state"] = result.get("quality")
+            task["last_error"] = str(result.get("error") or result.get("quality") or "pending_validation")
             return result
         if result.get("ok"):
             task["evidence"][requirement] = result.get("evidence")
@@ -849,7 +1174,24 @@ class AgentKernel:
                     next_action="route_safe_steps_only",
                     retry_policy="manual",
                 )
-        missing = self._missing(task)
+        held_map = task.get("quality_holds") if isinstance(task.get("quality_holds"), dict) else {}
+        missing = [item for item in self._missing(task) if item not in held_map]
+        held = [item for item in self._missing(task) if item in held_map]
+        if not missing and held:
+            quality = str((held_map.get(held[0]) or {}).get("quality") or "PENDING_VALIDATION")
+            return self._finish(
+                task,
+                STATUS_BLOCKED,
+                reason=f"registry_{quality}",
+                next_action=(
+                    "await_validation"
+                    if quality == "PENDING_VALIDATION"
+                    else "await_conflict_resolution"
+                ),
+                retry_policy="on_capability_change",
+                last_error=task.get("last_error"),
+                missing=None,
+            )
         if missing:
             primary = missing[0]
             gap_name = _gap_name(str(task.get("missing_requirement") or primary))
@@ -959,6 +1301,19 @@ class AgentKernel:
             }
             self.state["capability_gaps"] = _prepend(self.state.get("capability_gaps"), gap, 40)
             self.state["recent_failures"] = _prepend(self.state.get("recent_failures"), gap, 40)
+            try:
+                from atlas.investment.data_quality import note_capability_gap
+
+                note_capability_gap(
+                    self.data_dir,
+                    symbol=str(task.get("symbol") or ""),
+                    metric=str(missing or task.get("missing_requirement") or ""),
+                    laboratory_id=self.laboratory_id,
+                    reason=reason,
+                    attempted=list(task.get("attempted_capabilities") or []),
+                )
+            except Exception:  # noqa: BLE001
+                _log.debug("capability registry gap note skipped", exc_info=True)
         elif status == STATUS_SUCCESS:
             task["next_retry_at"] = None
             task["missing_requirement"] = None
@@ -1147,7 +1502,18 @@ class AgentKernel:
     def _refresh_indexes(self) -> None:
         raw = self.state.get("tasks") or {}
         tasks = [t for t in raw.values() if isinstance(t, dict)]
-        self.state["open_questions"] = [
+        derived = [
+            {
+                "task_id": t.get("id"),
+                "missing": None,
+                "objective": t.get("next_question"),
+                "source": "agent_kernel_derived",
+                "not_operator_supplied": True,
+            }
+            for t in tasks
+            if t.get("next_question")
+        ]
+        gaps = [
             {
                 "task_id": t.get("id"),
                 "missing": t.get("missing_requirement"),
@@ -1155,7 +1521,8 @@ class AgentKernel:
             }
             for t in tasks
             if t.get("status") in NON_SUCCESS and t.get("missing_requirement")
-        ][:40]
+        ]
+        self.state["open_questions"] = (derived + gaps)[:40]
         self.state["next_actions"] = [
             {
                 "task_id": t.get("id"),
@@ -1234,6 +1601,11 @@ def _lesson(task: dict[str, Any]) -> str:
             "Retry only when that capability changes. Provisional — not a validated lesson."
         )
     if task.get("status") == STATUS_SUCCESS:
+        if task.get("next_question"):
+            return (
+                f"Ops finding recorded; next question: {task.get('next_question')}. "
+                "Provisional — not a validated lesson."
+            )
         return (
             "When a similar question appears, retrieve the cited evidence before interpreting it. "
             "Provisional — not a validated lesson."
@@ -1242,6 +1614,68 @@ def _lesson(task: dict[str, Any]) -> str:
         f"Episode ended {task.get('status')}: {task.get('reason') or ''}. "
         "Provisional — not a validated lesson."
     )
+
+
+def _tool_call_for(capability: str, args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    """Map a live capability id + planner args onto one ToolRegistry name."""
+    cap = str(capability or "").strip().lower()
+    args = dict(args or {})
+    if cap == "sql":
+        return "sql.query", {
+            "sql": args.get("sql") or "",
+            "source": args.get("source") or "atlas",
+            "limit": args.get("limit"),
+        }
+    if cap == "logs":
+        if args.get("pattern"):
+            return "logs.search", {
+                "pattern": args.get("pattern"),
+                "file": args.get("file") or "all",
+                "max_matches": args.get("max_matches") or 40,
+            }
+        if args.get("lines") is not None or args.get("file"):
+            return "logs.tail", {
+                "file": args.get("file") or "atlas.log",
+                "lines": args.get("lines") or 200,
+            }
+        return "logs.list", {}
+    if cap == "git":
+        return "git.status", {"repo": args.get("repo") or "."}
+    if cap == "code":
+        return "code.repo_map", {"root": args.get("root") or args.get("path") or "."}
+    if cap == "python":
+        # Prefer the registered tool name when present; callers may pass code/inputs.
+        return "python.execute", {
+            k: v
+            for k, v in {
+                "code": args.get("code"),
+                "inputs": args.get("inputs"),
+            }.items()
+            if v is not None
+        }
+    return None, {}
+
+
+def _tool_result_ok(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return result is not None
+    outcome = str(result.get("outcome") or "").lower()
+    if outcome in {"blocked", "unavailable", "error"}:
+        return False
+    if result.get("ok") is False:
+        return False
+    return True
+
+
+def _tool_result_error(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "tool_failed"
+    return str(
+        result.get("reason")
+        or result.get("error")
+        or result.get("outcome")
+        or "tool_failed"
+    )[:300]
 
 
 def _clip(value: Any) -> str:
