@@ -381,8 +381,9 @@ beats baseline on the pre-registered metric.
 | 0A R2 operator SQL | **still open** — journal shows no fills; that is not proof of no other DB writes |
 | Step 2 P0.1 commit | **done** `d0f85aa` (§9.5); no restart; F18 limitation remains until P0.2 |
 | Step 3 decision gate | **done** (§9.6) — shared first target = P0.4 lineage + order_intent; F&O linkage coupled; NIFTY return not shared-first |
-| Step 0B single-instance protection | **code ready, not deployed** — L1–L6 + L3 shadow wired; I1–I13 tests green; operator must install unit + `systemctl restart` after 15:45 IST + drill (§9.4) before Steps 4+ |
-| Post-gate deploy order | after 0B: Priority 1 P0.4 → Priority 2 P0.5/P0.6 → Priority 3 entry snapshot + prediction id → Priority 4 P0.2/P0.3 |
+| Step 0B single-instance protection | **live** — unit installed; MainPID=lock pid; `--manual` → exit 75; watchdog `ok`; L1–L6 + L3 shadow |
+| P0.4 trade lineage | **shadow code in tree** — `trade_lineage.py` + `apply_trade` hook + paper fill intent; needs process restart to load; not committed |
+| Post-gate deploy order | after 0B: Priority 1 P0.4 (in progress) → Priority 2 P0.5/P0.6 → Priority 3 entry snapshot + prediction id → Priority 4 P0.2/P0.3 |
 | F13 HBLPOWER mark | not started (P1) |
 
 ---
@@ -865,3 +866,5 @@ feasibility (Step 0B sub-step 2).
 | 2026-10-12 21:35 | Step 2 | Isolated P0.1 via temp worktree + hunk patch: `_add_cash_and_pnl_metrics` (full day ledger + same-day realized fallback + `fees_paid_today`); `build_trading_kpis` day P&L/fees; ledger endpoint day P&L; 2 tests. Excluded unrelated `skip_live_marks` / nightly cognition / Yahoo gate. **F18:** flat-book Σ sell `realized_pnl` still omits entry fees — correct under zero-fee `paper_demo`; wrong under fees until P0.2 | worktree: 20 passed (`day_pnl`, `trading_kpis`, `outage_resilience_reports`, `evening_learned_today`); `lab_book_visibility` needs unrelated `skip_live_marks` (not included; A2 not triggered) | not deployed; no restart | `d0f85aa` |
 | 2026-10-12 21:45 | Step 0B.1–0B.2 | Side-effect inventory → final L3 list (scheduler, schedules, workers, investor_mailer, zerodha_token_mail, recovery, backup); serve path docs — L2 feasible via pre-bound socket + uvicorn `fd`/`sockets` (0.51.0); current order starts services before bind | read-only code path | not deployed | — |
 | 2026-10-12 21:55 | Step 0B.3 | L1 flock (`atlas/ops/instance_lock.py`); L2+L5 (`serve_boot.py` + `api/server.py` pre-bind before lifespan); L3 shadow manager + wire scheduler/schedules/workers/recovery/backup/mailer/zerodha; L4 unit `RestartPreventExitStatus=75` + start limits; L6 watchdog multi-instance / lock-pid / errno98 / override-P1; CLI `--manual` | 21 passed: `test_instance_lock`, `test_serve_boot_order`, `test_service_locks`, `test_ops_watchdog_l6`, `test_side_effect_idempotency` | **not deployed**; no restart; L3 default `ATLAS_SERVICE_LOCK_MODE=shadow` | uncommitted |
+| 2026-10-12 22:05–22:14 | Step 0B drill | Operator `install.sh` + restart; lock pid=MainPID; `--manual` → 75; watchdog false-positive fixed (sandbox argv); early L1 before `build_application` | operator drill PASS; watchdog `{"ok": true}` | **live** | uncommitted |
+| 2026-10-12 22:20 | P0.4 shadow | `atlas/investment/trade_lineage.py`; `Portfolio.apply_trade` always shadow-writes lineage (or write_failure); paper path builds `order_intent` before fill; demotes engine HOLD linked as BUY entry to parent; paths under `investment/trade_lineage/` + `integrity/` | 6 passed `test_trade_lineage_p04` | **not loaded until restart** | uncommitted |

@@ -6225,6 +6225,76 @@ class PaperTradingWorker(PersistentWorker):
             )
             fee = float(breakdown.total)
             fees_doc = breakdown.as_dict()
+        # OI-DELI0 P0.4 — explicit order intent before fill (never from outcome).
+        lineage_ctx: dict[str, Any] = {}
+        try:
+            from atlas.investment.trade_lineage import build_order_intent
+
+            overlay_used = bool(option_overlay and option_overlay.get("used"))
+            engine_action = None
+            if overlay_used:
+                engine_action = str(
+                    option_overlay.get("control_action") or kind or "hold"
+                ).lower()
+            else:
+                engine_action = str(kind or "hold").lower()
+            # Before overlay rewrite, control was HOLD while buy is overlay-driven.
+            if overlay_used and kind == "buy":
+                engine_action = str(
+                    option_overlay.get("control_action") or "hold"
+                ).lower()
+            rationale_source = "fno_overlay" if overlay_used else "engine"
+            intent = build_order_intent(
+                side=str(kind),
+                symbol=symbol,
+                quantity=float(qty),
+                price=float(price),
+                rationale_source=rationale_source,
+                rationale_text=why_short or None,
+                engine_decision_id=str(getattr(decision, "id", None) or "") or None,
+                engine_action=engine_action,
+                overlay_used=overlay_used,
+                laboratory_id=portfolio_key,
+                instrument_path="buy",
+            )
+            lineage_ctx["order_intent"] = intent
+            if overlay_used and kind == "buy":
+                # Engine decision is parent only; overlay id arrives in P0.6.
+                lineage_ctx["parent_decision_id"] = (
+                    str(getattr(decision, "id", None) or "") or None
+                )
+                lineage_ctx["entry_decision_id"] = None
+                lineage_ctx["trade_class"] = "CONTROLLED_EXPERIMENT"
+            else:
+                lineage_ctx["entry_decision_id"] = (
+                    str(getattr(decision, "id", None) or "") or None
+                )
+            if kind == "sell":
+                lineage_ctx["exit_decision_id"] = (
+                    str(getattr(decision, "id", None) or "") or None
+                )
+                lineage_ctx["exit_reason_code"] = exit_reason_code
+            pred = None
+            if overlay_used and isinstance(option_overlay, dict):
+                pred = option_overlay.get("entry_prediction")
+            if isinstance(pred, dict):
+                lineage_ctx["prediction_id"] = str(
+                    pred.get("prediction_id") or pred.get("id") or ""
+                ) or None
+                pack = option_overlay.get("fno_pack") or option_overlay.get("pack")
+                if isinstance(pack, dict):
+                    lineage_ctx["evidence_snapshot"] = {
+                        "as_of": pack.get("as_of"),
+                        "spot": pack.get("spot"),
+                        "atm_strike": pack.get("atm_strike"),
+                        "status": pack.get("status"),
+                    }
+                    lineage_ctx["evidence_snapshot_ref"] = str(
+                        pack.get("path") or pack.get("ref") or ""
+                    ) or None
+        except Exception:  # noqa: BLE001
+            self._logger.debug("order_intent build skipped", exc_info=True)
+            lineage_ctx = {}
         try:
             trade = self._portfolio.apply_trade(
                 portfolio_id,
@@ -6238,6 +6308,7 @@ class PaperTradingWorker(PersistentWorker):
                 decision_id=decision.id,
                 laboratory_id=portfolio_key,
                 instrument_path="buy",
+                lineage_ctx=lineage_ctx or None,
             )
         except Exception as exc:  # noqa: BLE001 - a rejected sim fill is reported, never fatal
             totals["errors"] += 1

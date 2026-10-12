@@ -204,7 +204,19 @@ def write_trade_lineage(
     elif evidence_snapshot is not None:
         snap_hash = content_hash(evidence_snapshot)
 
-    # For overlay BUY: do not use engine HOLD decision as entry_decision_id.
+    # Validate against what the caller claimed, then demote HOLD→BUY linkage for storage.
+    issues = _validate(
+        order_intent=order_intent,
+        side=side,
+        entry_decision_id=entry_decision_id if side == "buy" else exit_decision_id,
+        overlay_decision_id=overlay_decision_id,
+        parent_decision_id=parent_decision_id,
+    )
+    if side == "sell":
+        issues = [i for i in issues if i != "missing_entry_decision_id"]
+        if not exit_decision_id and "missing_exit_decision_id" not in issues:
+            issues.append("missing_exit_decision_id")
+
     eng_act = None
     if isinstance(order_intent, dict):
         eng_act = str(order_intent.get("engine_action") or "").lower() or None
@@ -221,20 +233,8 @@ def write_trade_lineage(
         # Demote engine HOLD to parent; leave entry empty until P0.6 mints overlay id.
         effective_parent = entry_decision_id
         effective_entry = None
-
-    issues = _validate(
-        order_intent=order_intent,
-        side=side,
-        entry_decision_id=effective_entry or exit_decision_id,
-        overlay_decision_id=overlay_decision_id,
-        parent_decision_id=effective_parent,
-    )
-    if side == "sell":
-        # Re-classify sell decision gap
-        issues = [i for i in issues if i != "missing_entry_decision_id"]
-        if not exit_decision_id:
-            if "missing_exit_decision_id" not in issues:
-                issues.append("missing_exit_decision_id")
+        if "engine_hold_linked_as_entry_buy" not in issues:
+            issues.append("engine_hold_linked_as_entry_buy")
 
     incomplete = bool(issues)
     record = {
