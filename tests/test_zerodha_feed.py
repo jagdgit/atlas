@@ -360,6 +360,74 @@ def test_clear_session(tmp_path: Path):
     assert not (tmp_path / "investment" / "zerodha" / "session.json").exists()
 
 
+def test_failed_nfo_download_does_not_pin_an_empty_option_list(tmp_path: Path):
+    import json
+    from datetime import date, timedelta
+
+    from atlas.investment.zerodha_feed import _ist_today
+
+    class _Flaky(_FakeKite):
+        def __init__(self) -> None:
+            super().__init__()
+            self.nfo_calls = 0
+
+        def instruments(self, exchange=None):
+            if str(exchange or "").upper() == "NFO":
+                self.nfo_calls += 1
+                if self.nfo_calls == 1:
+                    raise RuntimeError("Too many requests")
+                return [
+                    {
+                        "tradingsymbol": "NIFTY26OCT25000CE",
+                        "name": "NIFTY",
+                        "instrument_type": "CE",
+                        "instrument_token": 9,
+                        "expiry": date.today() + timedelta(days=10),
+                        "strike": 25000,
+                        "lot_size": 25,
+                        "exchange": "NFO",
+                        "segment": "NFO-OPT",
+                    }
+                ]
+            return super().instruments(exchange)
+
+    cache = tmp_path / "investment" / "zerodha"
+    cache.mkdir(parents=True)
+    (cache / "nfo_fut.json").write_text(
+        json.dumps(
+            {
+                "ist_day": _ist_today().isoformat(),
+                "count": 1,
+                "rows": [
+                    {
+                        "tradingsymbol": "NIFTY26OCTFUT",
+                        "name": "NIFTY",
+                        "instrument_type": "FUT",
+                        "instrument_token": 1,
+                        "expiry": (date.today() + timedelta(days=10)).isoformat(),
+                        "lot_size": 25,
+                        "exchange": "NFO",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    kite = _Flaky()
+    feed = ZerodhaMarketFeed(
+        api_key="key",
+        api_secret="secret",
+        data_dir=tmp_path,
+        client=kite,
+    )
+    assert feed.complete_login("req123")["ok"]
+    feed._nfo_retry_backoff_s = 0.0
+    assert feed.list_nfo_options() == []
+    assert feed._nfo_opts is None
+    again = feed.list_nfo_options()
+    assert [row["tradingsymbol"] for row in again] == ["NIFTY26OCT25000CE"]
+
+
 def test_force_login_route_clears_and_redirects(monkeypatch, tmp_path: Path):
     from fastapi.testclient import TestClient
 

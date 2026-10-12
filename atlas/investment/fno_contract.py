@@ -584,6 +584,55 @@ def atm_strike(spot: float, *, step: float = STRIKE_STEP) -> float | None:
     return round(px / st) * st
 
 
+def fno_control_action(
+    *,
+    kind: str | None,
+    sma_margin: float,
+    positions: list[dict[str, Any]] | None,
+    symbol: str,
+    rsi: float | None = None,
+    rsi_oversold: float = 30.0,
+) -> str:
+    """Map the existing SMA sign onto the ATM overlay control.
+
+    The cash rule emits a buy only when the fast average is above the slow one,
+    and a sell only when the shares themselves are held. A flat bearish book
+    therefore never reached the overlay's put entry. This does not add a new
+    signal: a negative margin uses the overlay's existing buy-put path, and a
+    call held against that margin uses the existing sell-to-close path.
+    """
+    action = str(kind or "hold").strip().lower()
+    if action not in {"buy", "sell", "hold"}:
+        action = "hold"
+    if action == "sell":
+        return "sell"
+    try:
+        margin = float(sma_margin)
+    except (TypeError, ValueError):
+        margin = 0.0
+    try:
+        rsi_v = float(rsi) if rsi is not None else None
+    except (TypeError, ValueError):
+        rsi_v = None
+    oversold = rsi_v is not None and rsi_v <= float(rsi_oversold)
+    underlier = str(symbol or "").strip().upper()
+    if underlier.endswith(".NS") or underlier.endswith(".BO"):
+        underlier = underlier[:-3]
+    held = option_positions_for_underlier(positions, underlier=underlier)
+    rights = {str(p.get("right") or "") for p in held}
+    if margin < 0:
+        if oversold:
+            return action if action == "buy" else "hold"
+        if "CE" in rights:
+            return "sell"
+        if "PE" in rights:
+            return "hold"
+        return "buy"
+    if margin > 0 and "PE" in rights and action != "sell":
+        return "sell"
+    return action
+
+
 def sma_margin(indicators: dict[str, Any] | None) -> float:
     """(sma_fast - sma_slow) / sma_slow — same sign convention as StrategyDecisionRule."""
     ind = indicators if isinstance(indicators, dict) else {}

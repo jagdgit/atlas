@@ -1,0 +1,669 @@
+{
+  "cells": [
+    {
+      "blocked_by": [],
+      "dimension": "IDENTITY",
+      "field": "round_trip_pair",
+      "gap_class": null,
+      "note": "unique equal-quantity buy/sell pair on symbol+portfolio+day",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-09-24T10:01:16.004264+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:0d9a5313-cf68-4dd6-b883-002e21313023",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 1,
+      "value": {
+        "candidates": [],
+        "entry_id": "0d9a5313-cf68-4dd6-b883-002e21313023",
+        "exit_id": "013fa880-909a-4ccb-96ab-edf86995a5cd"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "IDENTITY",
+      "field": "quantities",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-09-24T10:01:16.004264+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:0d9a5313-cf68-4dd6-b883-002e21313023",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-09T05:19:46.194196+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:013fa880-909a-4ccb-96ab-edf86995a5cd",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 1,
+      "value": {
+        "entry_qty": 19.0,
+        "entry_side": "buy",
+        "exit_qty": 19.0,
+        "exit_side": "sell"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "stored_realized_pnl",
+      "gap_class": null,
+      "note": "stored sell realized_pnl is exit-fee net (F18); check = (exit-entry)*qty - exit_fee",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-09T05:19:46.194196+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:013fa880-909a-4ccb-96ab-edf86995a5cd",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": -280.25
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "fees",
+      "gap_class": null,
+      "note": "zero-fee paper_demo expected for this lab profile",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-09-24T10:01:16.004264+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:0d9a5313-cf68-4dd6-b883-002e21313023",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-09T05:19:46.194196+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:013fa880-909a-4ccb-96ab-edf86995a5cd",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": {
+        "entry_fee": 0.0,
+        "exit_fee": 0.0,
+        "profile": "paper_demo"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "return_on_cost_roc_v1",
+      "gap_class": null,
+      "note": "entry_cost=8066.45; round_trip_net=-280.25",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "roc.v1 = round_trip_net / (qty*entry_price + entry_fee) * 100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 7,
+      "value": -3.4743
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "stored_realized_return_pct",
+      "gap_class": null,
+      "note": "cash equity has no F&O lab_v1 prediction return field; roc.v1 calculated above",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 7,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_decision",
+      "gap_class": null,
+      "note": "entry decision linked",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-09-24T10:01:16.004264+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:0d9a5313-cf68-4dd6-b883-002e21313023",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-09-24T10:01:15.320418+00:00",
+          "original_tz": "UTC",
+          "ref": "decision.decisions:3f962391-4762-43ac-b0f7-681754e56cbc",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 3,
+      "value": {
+        "action": "buy",
+        "created_at_ist": "2026-09-24T15:31:15.320418+05:30",
+        "decision_id": "3f962391-4762-43ac-b0f7-681754e56cbc",
+        "symbol": "COALINDIA.NS",
+        "why": "Chose 'buy:COALINDIA.NS' (score 1.1849, medium confidence). SMA10 (422.1450) crossed above SMA30 (413.4733); margin +2.10%, RSI 55.4; ctx memory:long_term Influenced by policy exp-bias:18. Preferred over 'hold' (0.6600)."
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_prediction",
+      "gap_class": null,
+      "note": "cash equity control-rule trade has no F&O lab_v1 prediction file; engine decision why is the record",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 2,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_decision_packet",
+      "gap_class": null,
+      "note": "packet found",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-09-24T16:16:29.272075+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/decisions/by_day/india_equity_learner/2026-09-24.jsonl",
+          "sha256": "dffc9b13b801b78968f2fd05176a106c6c89658075411ffc26ea9a19dc58ecff"
+        }
+      ],
+      "status": "OK",
+      "step": 3,
+      "value": {
+        "matches": 1
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "exit_decision",
+      "gap_class": null,
+      "note": "exit decision linked",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-09T05:19:46.194196+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:013fa880-909a-4ccb-96ab-edf86995a5cd",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-09T05:19:46.079909+00:00",
+          "original_tz": "UTC",
+          "ref": "decision.decisions:f1a64240-49bd-44d2-8db9-87a7ee98768f",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 6,
+      "value": {
+        "action": "sell",
+        "created_at_ist": "2026-10-09T10:49:46.079909+05:30",
+        "decision_id": "f1a64240-49bd-44d2-8db9-87a7ee98768f",
+        "why": "Chose 'sell:COALINDIA.NS' (score 1.8915, high confidence). SMA fast (418.3700) fell below SMA slow (419.3317); margin -0.23%, RSI 42.3; ctx No Mission Context for 'markets trading COALINDIA.NS portfolio:india_equity_lear Influenced by policy exp-bias:16, exp-bias:24, exp-bias:30, exp-bias:36, exp-bias:42, exp-bias:48, exp-bias:54, exp-bias:60, exp-bias:66, exp-bias:77, exp-bias:88. Preferred over 'hold' (0.5800)."
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "exit_trigger",
+      "gap_class": null,
+      "note": "cash equity: exit trigger is the engine sell decision why (no F&O integrity flatten)",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-09T05:19:46.079909+00:00",
+          "original_tz": "UTC",
+          "ref": "decision.decisions:f1a64240-49bd-44d2-8db9-87a7ee98768f",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 6,
+      "value": {
+        "source": "exit_decision.why",
+        "why": "Chose 'sell:COALINDIA.NS' (score 1.8915, high confidence). SMA fast (418.3700) fell below SMA slow (419.3317); margin -0.23%, RSI 42.3; ctx No Mission Context for 'markets trading COALINDIA.NS portfolio:india_equity_lear Influenced by policy exp-bias:16, exp-bias:24, exp-bias:30, exp-bias:36, exp-bias:42, exp-bias:48, exp-bias:54, exp-bias:60, exp-bias:66, exp-bias:77, exp-bias:88. Preferred over 'hold' (0.5800)."
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "entry_pack_snapshot",
+      "gap_class": null,
+      "note": "F&O pack snapshot not applicable to cash equity; entry evidence is engine decision + marks",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 1,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "order_intent",
+      "gap_class": "PERSISTENCE",
+      "note": "no order-intent record on paper path (A6); fill price/qty are execution facts, not intent records",
+      "sources": [],
+      "status": "MISSING",
+      "step": 4,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_session_context",
+      "gap_class": null,
+      "note": "session context only \u2014 not entry-to-exit underlier path (A8)",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T21:16:18.093887+05:30",
+          "original_ts": "2026-09-24T00:00:00+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/market/bars/COALINDIA.NS.json#bars[2026-09-24]",
+          "sha256": "36ced394f879df43d0283117615ee8479791f7f7b6c2f271f2b3ccf7cefd0708"
+        }
+      ],
+      "status": "OK",
+      "step": 5,
+      "value": {
+        "alias": "COALINDIA.NS",
+        "close_to_close_pct": -0.6006,
+        "day_close": 422.0,
+        "day_open": 422.0,
+        "open_to_close_pct": 0.0,
+        "prior_close": 424.55
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_open_to_close_pct",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "(close-open)/open*100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 5,
+      "value": 0.0
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_close_to_close_pct",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "(close-prior_close)/prior_close*100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 5,
+      "value": -0.6006
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_entry_to_exit_path",
+      "gap_class": null,
+      "note": "cash equity: fill prices are the asset path endpoints (not a separate underlier)",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-09-24T10:01:16.004264+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:0d9a5313-cf68-4dd6-b883-002e21313023",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-09T05:19:46.194196+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:013fa880-909a-4ccb-96ab-edf86995a5cd",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 5,
+      "value": {
+        "entry_at_ist": "2026-09-24T15:31:16.004264+05:30",
+        "entry_price": 424.55,
+        "exit_at_ist": "2026-10-09T10:49:46.194196+05:30",
+        "exit_price": 409.8,
+        "move_pct": -3.4743
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "iv_greeks",
+      "gap_class": null,
+      "note": "IV and option Greeks not applicable to cash-equity trades",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 5,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ATTRIBUTION",
+      "field": "stored_attribution_status",
+      "gap_class": null,
+      "note": "stored label reported verbatim",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-09T14:52:25.774855+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_equity_learner/2026-10-09.jsonl#EXPERIENCE.attribution",
+          "sha256": "00606ec5f312f5a3e756698812a134a5f3c6a5c7b40cc9eecee0113f0402fd64"
+        }
+      ],
+      "status": "OK",
+      "step": 8,
+      "value": "unknown_explicit"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ATTRIBUTION",
+      "field": "trace_attribution_state",
+      "gap_class": "ATTRIBUTION",
+      "note": "classified per \u00a74.1",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-09T14:52:25.774855+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_equity_learner/2026-10-09.jsonl",
+          "sha256": "00606ec5f312f5a3e756698812a134a5f3c6a5c7b40cc9eecee0113f0402fd64"
+        }
+      ],
+      "status": "OK",
+      "step": 8,
+      "value": "PARTIAL"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "hypothesis",
+      "gap_class": "LEARNING",
+      "note": "observation-style lesson text is not a named hypothesis",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-09T14:52:25.774855+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_equity_learner/2026-10-09.jsonl",
+          "sha256": "00606ec5f312f5a3e756698812a134a5f3c6a5c7b40cc9eecee0113f0402fd64"
+        }
+      ],
+      "status": "MISSING",
+      "step": 9,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "validation_test",
+      "gap_class": "LEARNING",
+      "note": "no validation test defined",
+      "sources": [],
+      "status": "MISSING",
+      "step": 10,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "learning_story",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-09T14:52:25.774855+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_equity_learner/2026-10-09.jsonl#LEARNING_STORY",
+          "sha256": "00606ec5f312f5a3e756698812a134a5f3c6a5c7b40cc9eecee0113f0402fd64"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "belief_update": "unchanged",
+        "cause": {
+          "helped": [],
+          "hurt": [],
+          "narrative": "unknown: sector, news, policy, thesis",
+          "status": "unknown_explicit",
+          "unknown": [
+            "sector",
+            "news",
+            "policy",
+            "thesis"
+          ]
+        },
+        "story_id": "c3a53305-ed38-4372-9b09-cc5fe0fec7b8"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "fel_features",
+      "gap_class": null,
+      "note": "FEL features present",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-09T11:05:31.593649+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/fel/datasets/india_equity_learner/DS-E-paper-round-trip-india_equity_learner.jsonl",
+          "sha256": "346d63d36edc3451b6205f7fc932b576593451085d478c5f04b8bffb450aa136"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "keys_sample": [
+          "kind",
+          "as_of",
+          "symbol",
+          "laboratory_id",
+          "features",
+          "target",
+          "experience_id",
+          "fingerprint"
+        ],
+        "null_fields": {}
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "thesis_tracker_instrument_class",
+      "gap_class": null,
+      "note": "thesis tracker present for cash-equity symbol",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-09T10:49:46.238929+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/thesis_tracker/market_intelligence/COALINDIA.NS.json",
+          "sha256": "7d77fe6f1918463c6e6ed9dde2e27a05f09d859c1c49e45ebcc8d858cd0209c5"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "decision": "buy",
+        "horizon": "long_term",
+        "hypothesis": "Coal India operates in Oil Gas & Fuels. The business appears interesting because of regulated or commodity-linked cash flows where capacity utilisation, tariffs, fuel cost pass-through, and leverage dominate. However, valuation / margin of safety, free cash flow, management capital allocation, plf / utilisation, tariff / realisation remain insufficiently understood from hermetic/hint seeds alone.",
+        "symbol": "COALINDIA.NS"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "lab_day_pnl_kpi",
+      "gap_class": null,
+      "note": "lab-level day_pnl (all symbols); not this trade alone",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-09-24T23:59:45.515163+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/market/trading_kpis/india_equity_learner/2026-09-24.json#kpis.day_pnl",
+          "sha256": "c65f9f51030d693fa06a1377c809d2a6049f3545a9826796af4ec4b60207842d"
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": -9502.999841308654
+    }
+  ],
+  "first_blocking_dependency": {
+    "dimension": "DECISION_EVIDENCE",
+    "fields": [
+      "order_intent"
+    ],
+    "gap_classes": [
+      "PERSISTENCE"
+    ]
+  },
+  "generated_at_ist": "2026-10-12T21:24:47.517255+05:30",
+  "git_sha": "fe3d009",
+  "meta": {
+    "accounting": {
+      "check_realized_exit_fee_net": -280.25,
+      "entry_cost": 8066.45,
+      "entry_fee_allocated": 0.0,
+      "exit_fee": 0.0,
+      "gross": -280.25,
+      "roc_v1_pct": -3.4742668708043807,
+      "round_trip_net": -280.25,
+      "stored_realized": -280.25,
+      "stored_return_pct": null
+    },
+    "db_mode": "dump:/data/atlas/docs/traces/_db_dump/swing",
+    "entry": {
+      "cash_after": 27408.499908447313,
+      "created_at": "2026-09-24T10:01:16.004264+00:00",
+      "decision_id": "3f962391-4762-43ac-b0f7-681754e56cbc",
+      "fee": 0.0,
+      "fees": {
+        "brokerage": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "profile_id": "paper_demo",
+        "side": "buy",
+        "stamp": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "total": 0.0,
+        "turnover": 8066.45
+      },
+      "id": "0d9a5313-cf68-4dd6-b883-002e21313023",
+      "mission_id": "9bcc3175-c613-486c-bcbb-e2f094ba5dfd",
+      "portfolio_id": "40d5cf03-e312-45d0-a3d4-b93ac44a76f7",
+      "price": 424.55,
+      "quantity": 19.0,
+      "realized_pnl": 0.0,
+      "side": "buy",
+      "symbol": "COALINDIA.NS"
+    },
+    "exit": {
+      "cash_after": 35194.699908447314,
+      "created_at": "2026-10-09T05:19:46.194196+00:00",
+      "decision_id": "f1a64240-49bd-44d2-8db9-87a7ee98768f",
+      "fee": 0.0,
+      "fees": {
+        "brokerage": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "profile_id": "paper_demo",
+        "side": "sell",
+        "stamp": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "total": 0.0,
+        "turnover": 7786.2
+      },
+      "id": "013fa880-909a-4ccb-96ab-edf86995a5cd",
+      "mission_id": "9bcc3175-c613-486c-bcbb-e2f094ba5dfd",
+      "portfolio_id": "40d5cf03-e312-45d0-a3d4-b93ac44a76f7",
+      "price": 409.8,
+      "quantity": 19.0,
+      "realized_pnl": -280.25,
+      "side": "sell",
+      "symbol": "COALINDIA.NS"
+    },
+    "instrument_class": "cash_equity",
+    "ist_day": "2026-09-24",
+    "lab": "india_equity_learner",
+    "portfolio_id": "40d5cf03-e312-45d0-a3d4-b93ac44a76f7",
+    "symbol": "COALINDIA.NS",
+    "trade_id_seed": "0d9a5313-cf68-4dd6-b883-002e21313023",
+    "underlying": "COALINDIA"
+  },
+  "script_version": "trace_trade.v1"
+}

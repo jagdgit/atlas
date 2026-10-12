@@ -14,6 +14,7 @@ from atlas.investment.fundamentals import get_symbol, upsert_rows
 from atlas.investment.uncertainty_queue import (
     STATUS_DONE,
     STATUS_PENDING,
+    STATUS_PENDING_VALIDATION,
     enqueue_from_unknowns,
     list_tasks,
 )
@@ -81,8 +82,13 @@ def test_acquire_yahoo_fcf_reported_closes_uq(tmp_path: Path):
         t.get("symbol") == "WELCORP.NS" and t.get("unknown") == "fcf_missing"
         for t in pending
     )
-    done = list_tasks(tmp_path, "india_equity_learner", status=STATUS_DONE)
-    assert any(t.get("unknown") == "fcf_missing" for t in done)
+    # Acquisition closes the *gap*, not the question: a fetched value is PENDING_VALIDATION
+    # until it is verified, and a later enqueue must not reopen it as missing.
+    validating = list_tasks(
+        tmp_path, "india_equity_learner", status=STATUS_PENDING_VALIDATION
+    )
+    assert any(t.get("unknown") == "fcf_missing" for t in validating)
+    assert not list_tasks(tmp_path, "india_equity_learner", status=STATUS_DONE)
 
 
 def test_acquire_yahoo_fcf_derived_provenance():

@@ -118,6 +118,42 @@ def _features(indicators: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def _decide_time_features(prediction: dict[str, Any] | None) -> dict[str, Any]:
+    """Control features known when the entry was decided — never back-filled.
+
+    Absent inputs stay absent rather than becoming 0.0: a missing RSI is UNKNOWN,
+    not neutral.
+    """
+    pred = prediction if isinstance(prediction, dict) else {}
+    out: dict[str, Any] = {}
+    for key in ("rsi", "sma_fast", "sma_slow", "sma_margin"):
+        val = _f(pred.get(key))
+        if val is not None:
+            out[key] = val
+    for key in ("control_action", "option_type", "underlying_type", "direction", "er_model"):
+        val = pred.get(key)
+        if val:
+            out[key] = val
+    for ev in pred.get("key_evidence") or []:
+        text = str(ev)
+        if text.startswith("control=") and "signal" not in out:
+            out["signal"] = text.split("=", 1)[1].split(" ", 1)[0]
+    return out
+
+
+def _holding_minutes(entry_at: Any, exit_at: Any) -> float | None:
+    if not entry_at or not exit_at:
+        return None
+    try:
+        start = datetime.fromisoformat(str(entry_at))
+        end = datetime.fromisoformat(str(exit_at))
+    except (TypeError, ValueError):
+        return None
+    if start.tzinfo is None or end.tzinfo is None:
+        return None
+    return round((end - start).total_seconds() / 60.0, 2)
+
+
 def build_blocked_buy_experience(
     *,
     laboratory_id: str,
@@ -510,15 +546,25 @@ def attach_round_trip_l10(
         or None,
         "unmatched_buy": oc.get("unmatched_buy"),
     }
+    # Lab v1 closes carry no live indicator block — recover the decide-time control
+    # features (and the entry timestamp) from the prediction persisted at entry.
+    entry_pred = extras.get("entry_prediction")
+    if not feats:
+        feats = _decide_time_features(entry_pred)
+        if feats:
+            feats["features_source"] = "entry_prediction"
     row["features"] = feats
     row["action"] = str(tr.get("side") or pkt.get("action") or "sell").lower()
+    entry_at = oc.get("entry_at") or (
+        entry_pred.get("entry_time") if isinstance(entry_pred, dict) else None
+    )
     row["entry"] = (
         {
             "price": oc.get("entry_price"),
-            "at": oc.get("entry_at"),
+            "at": entry_at,
             "trade_id": oc.get("buy_trade_id"),
         }
-        if oc.get("entry_price") is not None or oc.get("entry_at")
+        if oc.get("entry_price") is not None or entry_at
         else None
     )
     row["exit"] = {
@@ -526,6 +572,7 @@ def attach_round_trip_l10(
         "at": str(oc.get("exit_at") or ""),
         "trade_id": oc.get("trade_id"),
     }
+    row["holding_minutes"] = _holding_minutes(entry_at, oc.get("exit_at"))
     row["pnl"] = oc.get("realized_pnl")
     row["costs"] = {
         "fee": oc.get("fee"),

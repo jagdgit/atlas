@@ -468,6 +468,93 @@ def test_paper_trading_session_flat_closes_open_option(tmp_path, monkeypatch):
     assert outcomes[-1]["attribution"]["exit_reason"] == "fno_lab_v1_experiment_close"
 
 
+def test_session_flat_emails_all_closes_before_scientist_review(tmp_path, monkeypatch):
+    """Fill mail goes out for every open lot before any scientist call."""
+    import uuid
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from atlas.trading.portfolio import PortfolioService
+    from atlas.workers.paper_trading import PaperTradingWorker
+    from tests.test_trading_portfolio import InMemorySimRepo
+
+    class _Cfg:
+        class paths:
+            data = str(tmp_path)
+
+    monkeypatch.setattr("atlas.config.get_config", lambda: _Cfg())
+    order: list[str] = []
+
+    def _email(**kwargs):
+        order.append(f"email:{kwargs.get('symbol')}")
+
+    def _slow_review(**kwargs):
+        order.append("llm")
+        return {"review_status": "REVIEWED", "summary": "paper close only"}
+
+    monkeypatch.setattr(
+        "atlas.reasoning.cognitive_core.reason_as_scientist",
+        _slow_review,
+    )
+
+    repo = InMemorySimRepo()
+    portfolio = PortfolioService(repo)
+    prow = portfolio.ensure_portfolio(
+        mission_id=None,
+        name="india_fno_learner",
+        starting_cash=500_000.0,
+        base_currency="INR",
+    )
+    pid = prow["id"]
+    for sym, px in (("AAA26OCT100CE", 10.0), ("BBB26OCT200PE", 8.0)):
+        portfolio.apply_trade(
+            pid,
+            symbol=sym,
+            side="buy",
+            quantity=100,
+            price=px,
+            fee=0.0,
+            laboratory_id="india_fno_learner",
+            instrument_path="buy",
+        )
+
+    class _LLM:
+        pass
+
+    class _Reasoning:
+        _llm = _LLM()
+
+    ist = ZoneInfo("Asia/Kolkata")
+    worker = PaperTradingWorker(
+        assets=type("A", (), {"get_by_name": lambda *a, **k: None})(),
+        market_data=type("M", (), {"read": lambda *a, **k: {"outcome": "ok", "bars": [], "count": 0}})(),
+        decision_engine=__import__("atlas.decision.engine", fromlist=["DecisionEngine"]).DecisionEngine(
+            type("R", (), {"record": lambda self, d: {"id": str(uuid.uuid4())}})()
+        ),
+        portfolio=portfolio,
+        clock=lambda: datetime(2026, 10, 5, 15, 31, tzinfo=ist),
+        reasoning=_Reasoning(),
+    )
+    worker._nfo_ltp = lambda tsym: 9.0  # type: ignore[method-assign]
+    worker._record_di_packet = lambda **kw: None  # type: ignore[method-assign]
+    worker._notify_fill = _email  # type: ignore[method-assign]
+    worker._remember_outcome = lambda *a, **k: order.append("learn")  # type: ignore[method-assign]
+
+    lines = worker._flatten_fno_lab_v1_experiments(
+        cfg={"broker_profile": ""},
+        portfolio_id=pid,
+        portfolio_key="india_fno_learner",
+        mission_id=None,
+        state={},
+        pack=None,
+    )
+    emails = [x for x in order if x.startswith("email:")]
+    assert len(emails) == 2
+    assert order.index("llm") > order.index(emails[-1])
+    assert any("experiment_close SELL" in ln for ln in lines)
+    assert any("review=REVIEWED" in ln for ln in lines)
+
+
 def test_session_flat_blocks_new_buy_after_close():
     from datetime import datetime
     from zoneinfo import ZoneInfo

@@ -1,0 +1,11 @@
+{
+  "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "action": {
+    "key": "sell",
+    "payload": {
+      "kind": "sell"
+    }
+  },
+  "why": "session_flat flatten",
+  "created_at": "2026-10-12T10:02:29.696643+00:00"
+}

@@ -105,6 +105,9 @@ def load_stored_xml(
                     "canonical": bool(item.get("canonical") or meta.get("canonical")),
                     "role": meta.get("role"),
                     "available_at": meta.get("available_at"),
+                    "filed_at": meta.get("filed_at"),
+                    "period_end": meta.get("period_end"),
+                    "scope": meta.get("scope"),
                     "bytes": item.get("bytes"),
                 }
             )

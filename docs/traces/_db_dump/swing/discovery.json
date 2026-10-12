@@ -1,0 +1,14 @@
+{
+  "entry_at": "2026-09-24T10:01:16.004264+00:00",
+  "entry_id": "0d9a5313-cf68-4dd6-b883-002e21313023",
+  "entry_ist_date": "2026-09-24",
+  "exit_at": "2026-10-09T05:19:46.194196+00:00",
+  "exit_id": "013fa880-909a-4ccb-96ab-edf86995a5cd",
+  "exit_ist_date": "2026-10-09",
+  "method": "most_recent_sell_with_realized_pnl_fifo_single_lot",
+  "notes": "No intervening COALINDIA.NS fills between entry buy and exit sell.",
+  "portfolio_id": "40d5cf03-e312-45d0-a3d4-b93ac44a76f7",
+  "portfolio_name": "india_equity_learner",
+  "realized_pnl": -280.25,
+  "symbol": "COALINDIA.NS"
+}

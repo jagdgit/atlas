@@ -161,6 +161,23 @@ class AuditConfig(BaseModel):
     retention_days: int = 90
 
 
+class RetentionConfig(BaseModel):
+    """O6 — pruning for the high-churn tick tables.
+
+    Defaults to ``enabled: false`` because this deletes history irreversibly: a disabled
+    manager reports what it *would* remove so the policy can be reviewed against real
+    counts before it runs.
+    """
+
+    enabled: bool = False
+    interval_seconds: float = 3600.0
+    audit_days: int = 30
+    scheduler_days: int = 14
+    health_days: int = 30
+    batch_rows: int = 20000
+    max_batches: int = 50
+
+
 class MonitoringConfig(BaseModel):
     health_interval: int = 30  # seconds between periodic health checks
 
@@ -353,6 +370,10 @@ class SQLPluginConfig(BaseModel):
     default_source: str | None = None  # default db file if a call omits `source`
     max_rows: int = 1000  # cap rows returned by a query
     timeout: float = 15.0  # soft per-query wall-clock (interrupts the connection)
+    # J0a: let Atlas read its own Postgres (read-only) via `source="atlas"`. Without it
+    # Atlas cannot inspect its own state and so cannot diagnose its own failures.
+    self_inspect: bool = True
+    self_source: str = "atlas"  # reserved `source` name routed to Atlas's own database
 
 
 class OCRPluginConfig(BaseModel):
@@ -669,6 +690,7 @@ class AtlasConfig(BaseModel):
     scheduler: SchedulerConfig
     logging: LoggingConfig
     audit: AuditConfig
+    retention: RetentionConfig = RetentionConfig()
     monitoring: MonitoringConfig = MonitoringConfig()
     storage: StorageConfig = StorageConfig()
     notifications: NotificationsConfig = NotificationsConfig()

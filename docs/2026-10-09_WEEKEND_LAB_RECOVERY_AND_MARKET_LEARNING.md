@@ -2,10 +2,10 @@
 
 **Date:** 2026-10-09 (Friday evening, IST)  
 **Window:** Saturday 10 Oct – Sunday 11 Oct. Market is closed. Do not require a live pack as proof.  
-**Status:** PLAN ONLY. No worker, schedule, database, or trading gate was changed while writing this.  
+**Status:** EXECUTED (2026-10-10). P0–P5 closed on disk. Blind suite: T2 only. No validated market lesson.  
 **Constraint:** Paper only. Do not lower switch thresholds, PLC.A, or capital gates to create activity. Do not delete knowledge, experiences, learning, trading history, embeddings, or documents. Do not remove Ollama models.
 
-This is the runbook for Monday. Each step has a command or a file to open, a number you should see, and a pass/fail. If a check fails, stop that package and fix the cause before the next package.
+This was the runbook for the weekend. Outcomes live under `/data/atlas_data/ops/weekend_2026-10-10/` — especially `STATUS.json` and `MONDAY_CARD.md`. Read the Monday card before the open.
 
 Related: `docs/2026-10-08_AUTONOMOUS_SELF_DIAGNOSIS_V1_PLAN.md` (Phases 1–8 closed on ops learning, not market learning).
 
@@ -526,3 +526,24 @@ Monday’s trading session is then a measurement, not a repair. F&O should write
 | Sunday afternoon | §7 Steps 13–14, then T3, T4, T5. |
 | Sunday evening | §9 Monday card. Step 15 (MCP) only if 13–14 passed and time remains. |
 | Monday 09:00 IST | Read the card. Confirm Zerodha and that the F&O worker ticked. Do not retune thresholds before the open. |
+
+---
+
+## 12. Execution record (2026-10-10)
+
+Executed Saturday 10 Oct (compressed clock). Receipts: `/data/atlas_data/ops/weekend_2026-10-10/`. Monday card: `MONDAY_CARD.md`. Machine summary: `STATUS.json`.
+
+| Package | Result | Evidence |
+|---|---|---|
+| **P0** | PASS — F&O resumed; role key `(program, worker_type, laboratory_id)`; three workers ACTIVE on dry-run; ops_health no longer treats market-close as recovery | `step1_resume.json`, `step2_dedupe_dry_run.json`, `atlas/workers/role_identity.py`, `atlas/investment/ops_health.py` |
+| **P1** | DONE honest — hypothesis `5623ea11-…` scored **`NOT_EVALUABLE`** (`bars_not_replayable:BANKNIFTY`); kernel scans all three labs | `p1_hypothesis_dispatch.json`, `atlas/agent_kernel/kernel.py` |
+| **P2** | PASS — 54 blocked-switch decisions scored on history; **threshold unchanged** | `swing_regret_summary.json`, `atlas/investment/swing_switch_regret.py` |
+| **P3** | PASS — lab status contract + F&O `planned_symbols` cash guard; intraday 9 Oct reconcile on disk | `lab_status_contract.py`, `intraday_2026-10-09_reconcile.json` |
+| **P4** | PASS — `worker.lifecycle` resume capability bound; action cannot pause/stop/trade | `atlas/workers/lifecycle.py`, tests |
+| **P5** | PASS — Monday card written; **no validated market lesson claimed** | `MONDAY_CARD.md` |
+
+**Blind tests:** T2 PASS (`CORRECT_REFUSAL`, 0 patterns). T1, T3, T4, T5 not run.
+
+**Commits (local, not pushed):** `fb869d1` Restore F&O paper lab and wire honest weekend market learning. · `fe3d009` Add lab status contract and Phase-5-safe worker resume.
+
+**Honesty (unchanged):** Machinery restored and one hypothesis scored. No live threshold change. No market belief validated. F&O result stays `NOT_EVALUABLE` until BANKNIFTY bars are replayable. Do not treat `ACCEPTED_OPS` as an L5 market lesson.

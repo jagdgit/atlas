@@ -59,6 +59,11 @@ def format_autonomous_agent_lines(data_dir: str | Path | None) -> list[str]:
         lines.append(
             f"  - {row.get('status')} {row.get('symbol') or ''}: {row.get('reason')}"
         )
+    if failed or gaps:
+        lines.append(
+            "Work continued after blockage: "
+            + ("YES" if state.get("continued_after_blockage") else "NO")
+        )
     lines.append(f"Capability gaps: {len(gaps)}")
     for gap in gaps[:5]:
         lines.append(

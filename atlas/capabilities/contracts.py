@@ -37,6 +37,7 @@ CAP_LEARNING = "learning"
 CAP_INTELLIGENCE = "intelligence"
 CAP_GIT = "git"
 CAP_SQL = "sql"
+CAP_LOGS = "logs"
 CAP_OCR = "ocr"
 CAP_MAIL = "mail"
 CAP_BROWSER = "browser"
@@ -207,6 +208,15 @@ class SQLCapability(Protocol):
     def query(self, sql: str, *args: Any, **kwargs: Any) -> Any: ...
     def tables(self, *args: Any, **kwargs: Any) -> Any: ...
     def schema(self, table: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class LogsCapability(Protocol):
+    """Read Atlas's own log files (J0b / J1)."""
+
+    def list_files(self, *args: Any, **kwargs: Any) -> Any: ...
+    def tail(self, *args: Any, **kwargs: Any) -> Any: ...
+    def search(self, pattern: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @runtime_checkable
@@ -432,6 +442,13 @@ CAPABILITY_CATALOG: dict[str, CapabilitySpec] = {
         "Run a read-only SQL query over a local database; list tables/schema.",
         "Structured-data analysis (read-only); result sets are L5 evidence.",
         "S20",
+    ),
+    CAP_LOGS: CapabilitySpec(
+        CAP_LOGS,
+        LogsCapability,
+        "List, tail, and search Atlas's own log files (secret-redacted).",
+        "Self-diagnosis of runtime failures that never reached the database.",
+        "J0b",
     ),
     CAP_OCR: CapabilitySpec(
         CAP_OCR,

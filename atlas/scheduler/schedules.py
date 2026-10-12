@@ -41,6 +41,8 @@ class ScheduleService:
         mission_repo: Any | None = None,
         events: "EventDispatcher | None" = None,
         logger: logging.Logger | None = None,
+        seed_tick_on_start: bool = True,
+        data_dir: Any | None = None,
     ) -> None:
         self._repo = schedule_repo
         self._tasks = task_repo
@@ -50,6 +52,30 @@ class ScheduleService:
         self._missions = mission_repo
         self._events = events
         self._logger = logger or logging.getLogger("atlas.scheduler.schedules")
+        # F1: CLI / ephemeral boots must not seed a live schedule_tick into the shared DB.
+        self._seed_tick_on_start = bool(seed_tick_on_start)
+        # Phase 8 / C8: when set, identity-reuse cites accepted ops learning.
+        self._data_dir = data_dir
+        self._on_identity_reuse: Any | None = None
+
+    def bind_ops_learning(
+        self,
+        data_dir: Any | None = None,
+        *,
+        on_identity_reuse: Any | None = None,
+    ) -> None:
+        """Wire ops learning consumption (Phase 8). Loose callback — no hard import."""
+        if data_dir is not None:
+            self._data_dir = data_dir
+        if on_identity_reuse is not None:
+            self._on_identity_reuse = on_identity_reuse
+        elif self._on_identity_reuse is None and self._data_dir is not None:
+            try:
+                from atlas.agent_kernel.ops_learning import note_identity_reuse
+
+                self._on_identity_reuse = note_identity_reuse
+            except Exception:  # noqa: BLE001
+                self._on_identity_reuse = None
 
     # --- schedule CRUD --------------------------------------------------
 
@@ -66,6 +92,71 @@ class ScheduleService:
         kind: str = "interval",
         cron_expr: str | None = None,
     ) -> Schedule:
+        """Register a schedule, or return the existing row with the same identity (F5).
+
+        Identity = (task_type, kind, cron_expr, worker_id, mission_id, payload).
+        A second boot / CLI process must not create another row for the same identity.
+        """
+        return self.ensure_schedule(
+            task_type,
+            interval_seconds,
+            payload=payload,
+            mission_id=mission_id,
+            worker_id=worker_id,
+            enabled=enabled,
+            first_run_delay=first_run_delay,
+            kind=kind,
+            cron_expr=cron_expr,
+        )
+
+    def ensure_schedule(
+        self,
+        task_type: str,
+        interval_seconds: int = 60,
+        *,
+        payload: dict[str, Any] | None = None,
+        mission_id: str | None = None,
+        worker_id: str | None = None,
+        enabled: bool = True,
+        first_run_delay: float = 0.0,
+        kind: str = "interval",
+        cron_expr: str | None = None,
+    ) -> Schedule:
+        find = getattr(self._repo, "find_by_identity", None)
+        if callable(find):
+            existing = find(
+                task_type=task_type,
+                payload=payload,
+                mission_id=mission_id,
+                worker_id=worker_id,
+                kind=kind,
+                cron_expr=cron_expr,
+            )
+        else:
+            existing = None
+        if existing is not None:
+            if enabled and not existing.enabled:
+                try:
+                    self._repo.set_enabled(existing.id, True)
+                    existing = self._repo.get(existing.id) or existing
+                    self._logger.info(
+                        "re-enabled schedule %s (%s)", existing.id, task_type
+                    )
+                except Exception:  # noqa: BLE001
+                    self._logger.exception(
+                        "failed to re-enable schedule %s", existing.id
+                    )
+            if int(existing.interval_seconds or 0) != int(interval_seconds or 0):
+                try:
+                    self._repo.set_interval(existing.id, int(interval_seconds))
+                    existing = self._repo.get(existing.id) or existing
+                except Exception:  # noqa: BLE001
+                    self._logger.exception(
+                        "failed to sync interval on schedule %s", existing.id
+                    )
+            self._cite_identity_reuse(task_type, existing.id)
+            return existing
+
         schedule = self._repo.create(
             task_type=task_type,
             interval_seconds=interval_seconds,
@@ -88,6 +179,21 @@ class ScheduleService:
                 schedule.id, task_type, interval_seconds,
             )
         return schedule
+
+    def _cite_identity_reuse(self, task_type: str, schedule_id: Any) -> None:
+        """Phase 8 — when identity match wins, cite accepted ops learning if bound."""
+        cb = self._on_identity_reuse
+        if cb is None or self._data_dir is None:
+            return
+        try:
+            cb(
+                self._data_dir,
+                task_type=str(task_type),
+                schedule_id=str(schedule_id),
+                reused=True,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("ops learning cite skipped", exc_info=True)
 
     def register_cron_schedule(
         self,
@@ -244,6 +350,8 @@ class ScheduleService:
 
     def ensure_running(self) -> None:
         """Seed the recurring tick if none is in flight (idempotent across reboots)."""
+        if not self._seed_tick_on_start:
+            return
         try:
             collapse = getattr(self._tasks, "collapse_pending_of_type", None)
             if callable(collapse):
@@ -263,6 +371,19 @@ class ScheduleService:
     # --- lifecycle (kernel service) ------------------------------------
 
     def start(self) -> None:
+        try:
+            from atlas.ops.service_locks import get_service_lock_manager
+
+            mgr = get_service_lock_manager()
+            if mgr is not None:
+                lock = mgr.acquire("atlas.svc.schedules")
+                if lock.passive:
+                    self._logger.error(
+                        "schedules staying passive — service lock not held"
+                    )
+                    return
+        except Exception:  # noqa: BLE001
+            self._logger.exception("schedules service lock acquire failed")
         self.ensure_running()
 
     def stop(self) -> None:

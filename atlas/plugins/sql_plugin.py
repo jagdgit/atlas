@@ -83,6 +83,24 @@ class SQLPlugin(BasePlugin):
 def build(config: "AtlasConfig") -> SQLPlugin:
     sql = config.plugins.sql
     root = sql.root or config.paths.data
-    backend = SQLiteBackend(root, default_source=sql.default_source or None)
+    backend: Any = SQLiteBackend(root, default_source=sql.default_source or None)
+    # J0a: `source="atlas"` reaches Atlas's own Postgres, read-only. Without this no
+    # capability can inspect Atlas's own state, so Atlas cannot diagnose itself.
+    if getattr(sql, "self_inspect", False):
+        from atlas.sql.postgres_backend import PostgresBackend, RoutingBackend
+
+        db = config.database
+        backend = RoutingBackend(
+            backend,
+            PostgresBackend(
+                host=db.host,
+                port=db.port,
+                dbname=db.database,
+                user=db.user,
+                password=db.password,
+                statement_timeout=sql.timeout,
+            ),
+            self_source=str(getattr(sql, "self_source", "atlas") or "atlas"),
+        )
     client = SQLClient(backend, max_rows=sql.max_rows, timeout=sql.timeout)
     return SQLPlugin(client)

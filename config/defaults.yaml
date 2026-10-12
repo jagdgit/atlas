@@ -115,7 +115,24 @@ logging:
   backup_count: 5
 
 audit:
-  retention_days: 90
+  retention_days: 90          # NOTE: read by nothing; see `retention` below (O6)
+
+# O6 — retention for the high-churn tick tables. Added 2026-10-07 after the root
+# filesystem hit 100%: audit.events, scheduler.task_runs and scheduler.tasks held
+# ~37 million rows EACH, accumulated since 2026-07-11 because nothing ever deleted
+# them, and 28 GB of the 40 GB database was expired ticks.
+# Starts disabled: it reports what it would delete (loudly, at WARNING) so the policy
+# can be checked against real counts before history is removed irreversibly.
+# DELETE makes space reusable inside the table and stops the growth; it does not
+# return space to the filesystem — that needs an operator-run VACUUM FULL.
+retention:
+  enabled: false              # set true to actually prune
+  interval_seconds: 3600
+  audit_days: 30              # audit.events, processed rows only
+  scheduler_days: 14          # scheduler.tasks (cascades to task_runs); keeps failed
+  health_days: 30             # system.health samples
+  batch_rows: 20000           # per transaction, so a tick never waits long
+  max_batches: 50             # ceiling per run: 1M rows
 
 backup:
   enabled: true
@@ -143,8 +160,14 @@ jobs:
   llm_decompose: true         # D2c: planner-role LLM decomposition into multiple steps
   max_steps: 6                # cap on decomposed steps per job
   research_first: true        # lone open-ended objective => research loop (sources), not a bare react answer
-  planner_timeout: 60.0       # 3.2e: planner-role wall-clock; then deterministic fallback
-  planner_num_predict: 512    # keep decompose responses short (JSON steps only)
+  # Planning is the slowest and most valuable thought Atlas has, and it runs in a
+  # background job — it must not inherit a chat-sized budget. Measured on this
+  # CPU-only host (24 cores, no GPU, ~5.5 tok/s): schema-constrained qwen3:4b plans
+  # in 47-70s. Unconstrained it never emits valid JSON at any budget (277s / 1536
+  # tokens and still narrating), which is why every job silently fell back to a
+  # single generic research step. The schema lives in atlas/jobs/planner.py.
+  planner_timeout: 180.0      # 3.2e: planner-role wall-clock; then deterministic fallback
+  planner_num_predict: 700    # schema-constrained plans need ~233-500 tokens
 
 net:
   # Resilient/polite HTTP layer (D10 / §5c) shared by every web-facing plugin.
@@ -303,6 +326,9 @@ plugins:
     - atlas.plugins.live_captions_plugin
     - atlas.plugins.mail_plugin
     - atlas.plugins.browser_plugin
+    # J0b: Atlas reading its own logs (read-only, secret-redacted). Together with the
+    # sql `self_inspect` source this is what lets Atlas diagnose its own failures.
+    - atlas.plugins.logs_plugin
   filesystem:
     root: null              # sandbox root for reads/lists; null => paths.documents
     max_bytes: 1048576      # 1 MiB per-file read cap
@@ -339,6 +365,11 @@ plugins:
     default_source: null    # default db file when a call omits `source`
     max_rows: 1000          # cap rows returned by a query
     timeout: 15             # soft per-query wall-clock
+    # J0a self-inspection: `source: atlas` runs the query against Atlas's own Postgres,
+    # READ ONLY, with a statement timeout, credential relations refused and
+    # secret-named columns redacted. `source: atlas.<schema>` scopes tables/schema.
+    self_inspect: true
+    self_source: atlas
   ocr:                      # S20c: image → text (Tesseract; degrades if not installed)
     root: null              # sandbox root for images; null => paths.documents
     lang: eng               # default tesseract language code

@@ -3704,6 +3704,16 @@ class InvestorReportMailer:
         }
 
     def _deliver(self, subject: str, body: str) -> bool:
+        try:
+            from atlas.ops.service_locks import require_service
+
+            if not require_service("atlas.svc.investor_mailer"):
+                self._logger.error(
+                    "investor mailer passive — service lock not held; not sending"
+                )
+                return False
+        except Exception:  # noqa: BLE001
+            pass
         to = self.recipients()
         try:
             if hasattr(self._email, "send_to"):

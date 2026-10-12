@@ -380,7 +380,7 @@ def test_lessons_dict_track_completes_chain(tmp_path: Path):
                     "predicted_er": 0.01,
                     "realized_return_pct": -3.29,
                 },
-                "attribution": {"required": True, "satisfied": True, "status": "unknown_explicit"},
+                "attribution": {"required": True, "satisfied": True, "status": "evidence_backed"},
                 "lessons": {
                     "strategy": None,
                     "relative_opportunity": "Next-rupee vs WELCORP.NS: action=KEEP",

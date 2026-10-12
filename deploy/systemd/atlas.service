@@ -26,7 +26,11 @@ ExecStart=/data/atlas/.venv/bin/atlas serve
 
 # Always come back after crash, OOM kill, or unclean exit.
 # Use `systemctl stop atlas` when you intentionally want it down.
+# OI-OPS-1INST L4: exit 75 = instance conflict (lock or bind) — do not crash-loop.
 Restart=always
+RestartPreventExitStatus=75
+StartLimitIntervalSec=300
+StartLimitBurst=5
 RestartSec=8
 TimeoutStopSec=45
 KillMode=mixed

@@ -32,16 +32,31 @@ STORE_REL = Path("investment") / "market_data_provider"
 PENDING_NAME = "token_email_pending.json"
 
 REQUEST_TOKEN_LINE = re.compile(
-    r"(?im)^\s*ATLAS_ZERODHA_REQUEST_TOKEN\s*[:=]\s*([A-Za-z0-9_\-]{6,})\s*$"
+    r"(?im)^\s*ATLAS_ZERODHA_REQUEST_TOKEN\s*[:=]\s*([A-Za-z0-9_\-]{10,64})\s*$"
 )
 REQUEST_TOKEN_INLINE = re.compile(
-    r"(?i)ATLAS_ZERODHA_REQUEST_TOKEN\s*[:=]\s*([A-Za-z0-9_\-]{6,})"
+    r"(?i)ATLAS_ZERODHA_REQUEST_TOKEN\s*[:=]\s*([A-Za-z0-9_\-]{10,64})"
 )
 REQUEST_TOKEN_QUERY = re.compile(
-    r"(?i)(?:\?|&)request_token=([A-Za-z0-9_\-]{6,})"
+    r"(?i)(?:\?|&)request_token=([A-Za-z0-9_\-]{10,64})"
+)
+# Kite requires ≥10 chars. Never accept instructional English from our own mail.
+_REQUEST_TOKEN_VALUE = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
+_REQUEST_TOKEN_BLOCKLIST = frozenset(
+    {
+        "optional",
+        "request",
+        "token",
+        "prefix",
+        "success",
+        "login",
+        "callback",
+        "zerodha",
+        "required",
+    }
 )
 
-POLL_INTERVAL_S = 300  # 5 minutes
+POLL_INTERVAL_S = 60  # Kite request_token dies in minutes; 5m was too slow
 SUBJECT_PREFIX = "[Atlas MDPH] Zerodha"
 
 
@@ -85,31 +100,56 @@ def login_cta_url(*, force: bool = False) -> str:
     return f"{base}{path}"
 
 
+def _plausible_request_token(value: str | None) -> str | None:
+    """Accept only Kite-shaped tokens. Reject instructional prose like ``... even though``."""
+    tok = str(value or "").strip()
+    if not tok or not _REQUEST_TOKEN_VALUE.fullmatch(tok):
+        return None
+    if set(tok) <= {".", "-", "_"} or tok.lower() in _REQUEST_TOKEN_BLOCKLIST:
+        return None
+    return tok
+
+
 def parse_request_token_from_text(text: str | None) -> str | None:
-    """Extract a short-lived Kite request_token from a reply body. Never log it."""
+    """Extract a short-lived Kite request_token from a reply body. Never log it.
+
+    Prefer ``?request_token=`` in a callback URL over the ATLAS_… label form, so
+    instructional text like ``ATLAS_ZERODHA_REQUEST_TOKEN: prefix…`` cannot beat
+    a real pasted login URL in the same reply.
+    """
     blob = str(text or "")
     if not blob.strip():
         return None
-    for rx in (REQUEST_TOKEN_LINE, REQUEST_TOKEN_INLINE, REQUEST_TOKEN_QUERY):
-        m = rx.search(blob)
-        if m:
-            tok = (m.group(1) or "").strip()
-            if tok:
-                return tok
-    # Full callback URL on its own line
+    # 1) Callback / redirect URL (primary path from phone replies)
     for line in blob.splitlines():
         line = line.strip()
-        if "request_token=" in line.lower():
-            try:
-                if "://" in line:
-                    qs = parse_qs(urlparse(line).query)
-                else:
-                    qs = parse_qs(line.split("?", 1)[-1])
-                vals = qs.get("request_token") or qs.get("requestToken") or []
-                if vals and str(vals[0]).strip():
-                    return str(vals[0]).strip()
-            except Exception:  # noqa: BLE001
+        if "request_token=" not in line.lower():
+            continue
+        try:
+            if "://" in line:
+                qs = parse_qs(urlparse(line).query)
+            else:
+                qs = parse_qs(line.split("?", 1)[-1])
+            vals = qs.get("request_token") or qs.get("requestToken") or []
+            if not vals:
                 continue
+            tok = _plausible_request_token(str(vals[0]))
+            if tok:
+                return tok
+        except Exception:  # noqa: BLE001
+            continue
+    m = REQUEST_TOKEN_QUERY.search(blob)
+    if m:
+        tok = _plausible_request_token(m.group(1))
+        if tok:
+            return tok
+    # 2) Explicit ATLAS_ZERODHA_REQUEST_TOKEN line (operator paste of bare token)
+    for rx in (REQUEST_TOKEN_LINE, REQUEST_TOKEN_INLINE):
+        m = rx.search(blob)
+        if m:
+            tok = _plausible_request_token(m.group(1))
+            if tok:
+                return tok
     return None
 
 
@@ -205,14 +245,15 @@ def build_escalate_body(
             "     'site can't be reached' / Connection refused.",
             "     THAT IS EXPECTED — login already succeeded at Zerodha.",
             "  4) Do NOT close the tab. Copy the FULL address-bar URL",
-            "     (long-press the URL → Copy). It still contains",
-            "     ?request_token=... even though the page failed.",
+            "     (long-press the URL → Copy). It still contains the",
+            "     request_token query param even though the page failed.",
             "  5) Reply to this email and paste the copied URL alone.",
-            "     No special prefix needed — just the http://127.0.0.1:8000/...?request_token=... line.",
-            "     (ATLAS_ZERODHA_REQUEST_TOKEN: is optional.)",
+            "     No label needed — paste the full",
+            "     http://127.0.0.1:8000/... callback URL on one line.",
             "",
-            "Atlas reads this mailbox about every 5 minutes and exchanges the",
+            "Atlas reads this mailbox about every minute and exchanges the",
             "request_token server-side. Do NOT paste the daily access_token.",
+            "Send the reply within a couple of minutes — Kite expires it quickly.",
             "",
             "OPTIONAL — only if you SSH-tunnel to the Atlas host first",
             "  (ssh -L 8000:127.0.0.1:8000 <host>), then:",
@@ -237,8 +278,9 @@ def build_escalate_body(
             "Option B — reply to THIS email with one line:",
             "  ATLAS_ZERODHA_REQUEST_TOKEN: <paste_request_token_or_full_redirect_url>",
             "",
-            "After 2FA, copy ?request_token=... from the redirect URL (page load optional).",
-            "Do NOT paste the daily access_token. Atlas polls mail ~every 5 minutes.",
+            "After 2FA, copy the redirect URL (it includes request_token).",
+            "Do NOT paste the daily access_token. Atlas polls mail ~every minute.",
+            "Reply within a couple of minutes — Kite expires the token quickly.",
             f"Public base: {public_base}",
         ]
     return "\n".join(lines) + "\n"
@@ -347,7 +389,12 @@ def escalate_login_email(
     sender: Any | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Send once-per-IST-day LOGIN_REQUIRED / EXPIRED escalate email."""
+    """Email when a Zerodha token is required.
+
+    One mail while a reply is still outstanding. Send again when that reply
+    already completed and the session died, or when Zerodha rejected the
+    request_token. A once-per-day gate would stay silent after an expired token.
+    """
     status = str(health.get("status") or "")
     if status not in {"LOGIN_REQUIRED", "EXPIRED"}:
         return {"sent": False, "reason": "not_login_required"}
@@ -359,10 +406,27 @@ def escalate_login_email(
     if (
         not force
         and pending.get("ist_day") == day
-        and pending.get("status") in {"awaiting_reply", "completed"}
+        and pending.get("status") == "awaiting_reply"
     ):
         return {"sent": False, "reason": "already_sent_today", "pending": pending.get("status")}
-    if not force and str(health.get("login_email_sent_ist_day") or "") == day:
+    relogin = bool(
+        pending.get("ist_day") == day and pending.get("status") == "completed"
+    )
+    exchange_rejected = bool(
+        pending.get("ist_day") == day and pending.get("status") == "exchange_rejected"
+    )
+    if exchange_rejected and not force and _rejection_notice_is_fresh(pending):
+        return {
+            "sent": False,
+            "reason": "rejection_notice_already_sent",
+            "pending": pending.get("status"),
+        }
+    if (
+        not force
+        and not relogin
+        and not exchange_rejected
+        and str(health.get("login_email_sent_ist_day") or "") == day
+    ):
         return {"sent": False, "reason": "already_sent_today"}
 
     sender = sender if sender is not None else _email_sender()
@@ -373,7 +437,16 @@ def escalate_login_email(
     login_url = login_cta_url(force=False)
     force_url = login_cta_url(force=True)
     kite_url = resolve_kite_login_url(data_dir=data_dir)
-    subject = f"{SUBJECT_PREFIX} {status} — live labs paused ({day})"
+    if exchange_rejected:
+        subject = (
+            f"{SUBJECT_PREFIX} {status} — request token rejected, new token required ({day})"
+        )
+    elif relogin:
+        subject = (
+            f"{SUBJECT_PREFIX} {status} — session inactive, new token required ({day})"
+        )
+    else:
+        subject = f"{SUBJECT_PREFIX} {status} — live labs paused ({day})"
     body = build_escalate_body(
         status=status,
         trading_date=str(health.get("trading_date") or day),
@@ -382,6 +455,20 @@ def escalate_login_email(
         public_base=public_base,
         kite_login_url=kite_url,
     )
+    if exchange_rejected:
+        body = (
+            "Atlas received a reply, but Zerodha rejected that request_token.\n"
+            "Kite said it is invalid or expired. A request_token is single-use "
+            "and only valid for a few minutes.\n"
+            "Generate a new one and reply with that fresh token only.\n\n"
+            + body
+        )
+    elif relogin:
+        body = (
+            "The Zerodha session that was active earlier today is no longer valid.\n"
+            "Live labs are paused until a new request_token is exchanged.\n\n"
+            + body
+        )
     message_id = f"<atlas-mdph-{day}-{uuid.uuid4().hex[:12]}@atlas.local>"
     ok = False
     try:
@@ -415,9 +502,15 @@ def escalate_login_email(
         "sent_at": _now_iso(),
         "last_poll_at": None,
         "poll_count": 0,
-        "consumed_uids": [],
+        "consumed_uids": list(pending.get("consumed_uids") or [])
+        if (relogin or exchange_rejected)
+        else [],
         "completed_at": None,
         "result": None,
+        "last_exchange_error": pending.get("last_exchange_error")
+        if exchange_rejected
+        else None,
+        "rejection_notice_sent_at": _now_iso() if exchange_rejected else None,
     }
     save_pending(data_dir, pending_doc)
 
@@ -456,6 +549,21 @@ def escalate_login_email(
     }
 
 
+def _rejection_notice_is_fresh(pending: dict[str, Any], *, within_s: float = 1800) -> bool:
+    """One rejection mail per half hour. Further expired replies must not re-mail."""
+    raw = pending.get("rejection_notice_sent_at")
+    if not raw:
+        return False
+    try:
+        prev = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if prev.tzinfo is None:
+            prev = prev.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - prev).total_seconds()
+        return age < within_s
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _should_poll(pending: dict[str, Any], *, now: datetime | None = None) -> bool:
     if pending.get("status") != "awaiting_reply":
         return False
@@ -491,10 +599,9 @@ def poll_token_reply(
         return {"ok": True, "reason": "already_completed", "result": pending.get("result")}
     if pending.get("status") != "awaiting_reply":
         return {"ok": False, "reason": f"status={pending.get('status')}"}
-    if not force and not _should_poll(pending):
-        return {"ok": False, "reason": "poll_throttled", "poll_count": pending.get("poll_count")}
 
-    # Browser login may have already succeeded — stop waiting.
+    # Browser / manual login may have already succeeded — close the wait even
+    # when IMAP poll is throttled, so email activation does not keep nagging.
     try:
         from atlas.investment.zerodha_feed import ZerodhaMarketFeed
 
@@ -503,10 +610,14 @@ def poll_token_reply(
             pending["status"] = "completed"
             pending["completed_at"] = _now_iso()
             pending["result"] = {"ok": True, "via": "session_already_present"}
+            pending["last_poll_reason"] = "session_already_present"
             save_pending(data_dir, pending)
             return {"ok": True, "reason": "session_already_present"}
     except Exception:  # noqa: BLE001
         pass
+
+    if not force and not _should_poll(pending):
+        return {"ok": False, "reason": "poll_throttled", "poll_count": pending.get("poll_count")}
 
     client = mail_client if mail_client is not None else _mail_client()
     if client is None:
@@ -540,14 +651,27 @@ def poll_token_reply(
     consumed = {str(x) for x in (pending.get("consumed_uids") or []) if x}
     found_token: str | None = None
     found_uid: str | None = None
+    found_is_reply = False
 
+    # Prefer operator replies (Re:) over Atlas's own escalate notices in the same thread.
+    ordered: list[dict[str, Any]] = []
     for summary in messages:
-        if not isinstance(summary, dict):
-            continue
+        if isinstance(summary, dict):
+            ordered.append(summary)
+    ordered.sort(
+        key=lambda s: (
+            0
+            if str(s.get("subject") or "").lower().startswith("re:")
+            else 1
+        )
+    )
+
+    for summary in ordered:
         uid = str(summary.get("uid") or "")
         if not uid or uid in consumed:
             continue
         subj = str(summary.get("subject") or "")
+        is_reply = subj.lower().lstrip().startswith("re:")
         # Prefer replies (Re:) or same subject thread
         if day not in subj and SUBJECT_PREFIX not in subj and "Re:" not in subj:
             # still open — body may carry the token without subject echo
@@ -564,11 +688,22 @@ def poll_token_reply(
                 body = str(full.get("body") or "")
         if not body:
             body = str(summary.get("snippet") or summary.get("body") or "")
+        # Skip Atlas escalate/rejection notices — they must never be exchanged.
+        if (not is_reply) and (
+            "Provider status:" in body
+            or "Live-required labs" in body
+            or "request token rejected" in subj.lower()
+            or "live labs paused" in subj.lower()
+        ):
+            consumed.add(uid)
+            continue
         tok = parse_request_token_from_text(body)
+        # Always mark read-through UIDs so instructional mail is not retried forever.
         consumed.add(uid)
         if tok:
             found_token = tok
             found_uid = uid
+            found_is_reply = is_reply
             break
 
     pending["last_poll_at"] = _now_iso()
@@ -592,7 +727,13 @@ def poll_token_reply(
         zfeed = feed or ZerodhaMarketFeed.from_env(data_dir=data_dir)
         result = zfeed.complete_login(found_token)
     except Exception as exc:  # noqa: BLE001
+        pending["last_exchange_error"] = type(exc).__name__
         pending["last_poll_reason"] = f"complete_login_failed:{type(exc).__name__}"
+        # Only a failed *operator reply* may arm a rejection notice email.
+        if found_is_reply and not _rejection_notice_is_fresh(pending):
+            pending["status"] = "exchange_rejected"
+        else:
+            pending["status"] = "awaiting_reply"
         save_pending(data_dir, pending)
         _log.warning(
             "zerodha token email complete_login failed uid=%s err=%s",
@@ -602,7 +743,14 @@ def poll_token_reply(
         return {"ok": False, "reason": f"complete_login_failed:{type(exc).__name__}"}
 
     if not result.get("ok"):
-        pending["last_poll_reason"] = f"complete_login:{result.get('error')}"
+        err = str(result.get("error") or "rejected")
+        pending["last_exchange_error"] = err[:180]
+        pending["last_poll_reason"] = f"complete_login:{err[:180]}"
+        # Keep polling. Second mail only if a real Re: reply was rejected by Kite.
+        if found_is_reply and not _rejection_notice_is_fresh(pending):
+            pending["status"] = "exchange_rejected"
+        else:
+            pending["status"] = "awaiting_reply"
         save_pending(data_dir, pending)
         _log.warning(
             "zerodha token email exchange rejected uid=%s error=%s",

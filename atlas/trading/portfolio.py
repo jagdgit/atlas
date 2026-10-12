@@ -62,6 +62,7 @@ class PortfolioService:
         decision_id: UUID | str | None = None,
         laboratory_id: str | None = None,
         instrument_path: str = "buy",
+        lineage_ctx: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute a simulated ``buy``/``sell`` fill; returns the recorded trade row.
 
@@ -69,6 +70,9 @@ class PortfolioService:
         against the average cost and credit cash. Raises :class:`PortfolioError` for an unknown
         portfolio, insufficient cash, or selling more than held (honesty over silent clamping).
         ``fees`` (IL.7) is an optional component breakdown persisted alongside scalar ``fee``.
+
+        OI-DELI0 P0.4: after a successful fill, shadow-write ``trade_lineage`` (never blocks).
+        Pass ``lineage_ctx`` with a pre-built ``order_intent`` when available.
         """
         side = side.lower()
         if side not in ("buy", "sell"):
@@ -162,6 +166,24 @@ class PortfolioService:
             realized_pnl=realized,
             fees=dict(fees or {}),
         )
+        # P0.4 shadow lineage — fill already committed; never raise from here.
+        try:
+            from atlas.investment.trade_lineage import shadow_after_fill
+
+            ctx = dict(lineage_ctx or {})
+            if decision_id and not ctx.get("entry_decision_id") and side == "buy":
+                ctx.setdefault("entry_decision_id", str(decision_id))
+            if decision_id and side == "sell" and not ctx.get("exit_decision_id"):
+                ctx.setdefault("exit_decision_id", str(decision_id))
+            shadow_after_fill(
+                trade=trade,
+                laboratory_id=laboratory_id,
+                lineage_ctx=ctx,
+                instrument_path=instrument_path,
+                logger=self._logger,
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("trade lineage shadow skipped", exc_info=True)
         return trade
 
     def withdraw(

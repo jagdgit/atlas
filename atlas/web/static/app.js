@@ -1720,6 +1720,20 @@ function startLearnerPoll() {
   }, 15000);
 }
 
+function restoreViewScroll(view, scroll) {
+  if (!view || scroll == null) return;
+  const apply = () => {
+    view.scrollTop = scroll;
+  };
+  apply();
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => {
+      apply();
+      requestAnimationFrame(apply);
+    });
+  }
+}
+
 function learnerPageBusy() {
   const view = $("#view-learner");
   if (!view) return false;
@@ -2545,7 +2559,7 @@ async function loadLearner(opts = {}) {
   }
   loadLearnerLedgers({ quiet });
   if (!quiet) startLearnerPoll();
-  if (scroll != null && view) view.scrollTop = scroll;
+  if (scroll != null) restoreViewScroll(view, scroll);
 }
 
 async function loadLearnerLedgers(opts = {}) {
@@ -2568,11 +2582,19 @@ async function loadLearnerLedgers(opts = {}) {
       }
       return;
     }
-    lastLedgersFp = fp;
     const view = $("#view-learner");
+    // The book block sits above the rest of the page. Rebuilding it while the
+    // reader is further down shifts that text back to the top. Hold the refresh
+    // until they are near the top again.
+    if (quiet && view && view.scrollTop > 80 && box.querySelector(".learner-lab-card")) {
+      const stamp = $("#learner-ledgers-stamp");
+      if (stamp) stamp.textContent = "refresh held while reading";
+      return;
+    }
+    lastLedgersFp = fp;
     const scroll = view ? view.scrollTop : 0;
     renderLearnerLedgers(box, data);
-    if (view) view.scrollTop = scroll;
+    restoreViewScroll(view, scroll);
     const stamp = $("#learner-ledgers-stamp");
     if (stamp) {
       const now = new Date();

@@ -329,6 +329,12 @@ class _Outcome:
     blocked_reason: str | None = None
     # Optional step extras (e.g. research pipeline / usage) persisted on the job step.
     extras: dict[str, Any] = field(default_factory=dict)
+    # J3 — honest completion. The step ran, raised nothing, and produced no usable
+    # evidence. That is neither success nor an exception, and conflating it with
+    # success is how a job with four empty steps reported "completed — 4/4 done".
+    # Chat ignores this (it just reads `answer`); the Job Engine acts on it.
+    productive: bool = True
+    gap_reason: str | None = None
 
 
 class ResponseBuilder:
@@ -1052,7 +1058,9 @@ class AssistantService:
         )
         if not results:
             return _Outcome(
-                answer="I don't have anything remembered about that yet."
+                answer="I don't have anything remembered about that yet.",
+                productive=False,
+                gap_reason="nothing is remembered about that yet",
             )
         lines = "\n".join(f"- {r.content}" for r in results)
         return _Outcome(answer=f"Here's what I remember:\n{lines}")
@@ -1565,7 +1573,13 @@ class AssistantService:
     def _do_sql(self, args, context, tool_calls) -> _Outcome:
         sql = (args.get("sql") or "").strip()
         if not sql:
-            return _Outcome(answer="What SQL query should I run?")
+            # In chat this is a sensible prompt back to the user. In a job there is
+            # nobody to answer it, so it must not count as a completed step (J3).
+            return _Outcome(
+                answer="What SQL query should I run?",
+                productive=False,
+                gap_reason="no SQL was planned for this step",
+            )
         result = self._executor.execute(
             self._sql_tool,
             {"sql": sql, "source": args.get("source"), "limit": args.get("limit")},
@@ -1596,6 +1610,14 @@ class AssistantService:
             )
         if outcome == "error":
             return _Outcome(answer=f"The query errored: {data.get('reason')}")
+        if outcome == "empty" or not (data.get("rows") or []):
+            # A valid query that matched nothing is a real finding in chat, but as a
+            # job step it is evidence of a wrong predicate, not of work done (J3).
+            return _Outcome(
+                answer=_format_sql(data),
+                productive=False,
+                gap_reason="the query ran but matched no rows",
+            )
         return _Outcome(answer=_format_sql(data))
 
     def _do_ocr(self, args, context, tool_calls) -> _Outcome:

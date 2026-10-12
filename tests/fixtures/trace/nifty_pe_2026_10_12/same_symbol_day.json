@@ -1,0 +1,60 @@
+{
+  "portfolio_id": "9f237a93-0945-4bcd-8309-d2eda576b4fa",
+  "symbol": "NIFTY26OCT22550PE",
+  "filter": "ist_day_2026-10-12",
+  "count": 2,
+  "trades": [
+    {
+      "id": "70109538-b48c-4d03-a600-5e2482d606e1",
+      "portfolio_id": "9f237a93-0945-4bcd-8309-d2eda576b4fa",
+      "mission_id": "5ff9fb98-330e-4eee-a31d-9a4065a73a14",
+      "decision_id": "0cb0d567-2ee9-4a91-a564-e2adbd3b75fc",
+      "symbol": "NIFTY26OCT22550PE",
+      "side": "buy",
+      "quantity": 65.0,
+      "price": 264.5,
+      "fee": 0.0,
+      "cash_after": 110693.18100625002,
+      "realized_pnl": 0.0,
+      "created_at": "2026-10-12T04:45:59.866877+00:00",
+      "fees": {
+        "gst": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "side": "buy",
+        "stamp": 0.0,
+        "total": 0.0,
+        "exchange": 0.0,
+        "turnover": 17192.5,
+        "brokerage": 0.0,
+        "profile_id": "paper_demo"
+      }
+    },
+    {
+      "id": "17b5cb05-a102-40c4-b5b3-35594405f127",
+      "portfolio_id": "9f237a93-0945-4bcd-8309-d2eda576b4fa",
+      "mission_id": "5ff9fb98-330e-4eee-a31d-9a4065a73a14",
+      "decision_id": null,
+      "symbol": "NIFTY26OCT22550PE",
+      "side": "sell",
+      "quantity": 65.0,
+      "price": 342.95,
+      "fee": 0.0,
+      "cash_after": 121240.93100625002,
+      "realized_pnl": 5099.249999999999,
+      "created_at": "2026-10-12T10:02:29.696643+00:00",
+      "fees": {
+        "gst": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "side": "sell",
+        "stamp": 0.0,
+        "total": 0.0,
+        "exchange": 0.0,
+        "turnover": 22291.75,
+        "brokerage": 0.0,
+        "profile_id": "paper_demo"
+      }
+    }
+  ]
+}

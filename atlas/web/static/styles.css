@@ -697,7 +697,12 @@ button { cursor: pointer; font: inherit; }
 .learner-intro { padding: 0 22px 10px; margin: 0; max-width: 720px; }
 .learner-auto { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .learner-auto input { margin: 0; }
-#view-learner { min-height: 0; overflow-y: auto; }
+#view-learner {
+  min-height: 0;
+  overflow-y: auto;
+  /* Replacing the book panel must not drag the reading position back to the top. */
+  overflow-anchor: none;
+}
 /* Flex children must not shrink — otherwise IRA / email panels collapse under the grid */
 #view-learner > * { flex-shrink: 0; }
 .learner-summary {

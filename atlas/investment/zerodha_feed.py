@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -30,6 +31,19 @@ _log = logging.getLogger("atlas.investment.zerodha_feed")
 _IST = ZoneInfo("Asia/Kolkata")
 VERSION = "zerodha.feed.v1"
 STORE_REL = Path("investment") / "zerodha"
+
+# Instrument-master fetch states (O3). Only READY / EMPTY_VALID are ever cached for the day;
+# every other state leaves the cache unset so the next call retries (after the backoff).
+NFO_NOT_ATTEMPTED = "NOT_ATTEMPTED"
+NFO_FETCHING = "FETCHING"
+NFO_READY = "READY"
+NFO_READY_STALE = "READY_STALE"
+NFO_FAILED = "FAILED"
+NFO_EMPTY_VALID = "EMPTY_VALID"
+NFO_EMPTY_FAILED = "EMPTY_FAILED"
+NFO_USABLE_STATES = frozenset({NFO_READY, NFO_EMPTY_VALID})
+NFO_RETRY_BACKOFF_S = 60.0
+NFO_STATE_REL = STORE_REL / "nfo_master_state.json"
 
 
 def _ist_today() -> date:
@@ -70,6 +84,14 @@ class ZerodhaMarketFeed:
         self._nfo_futs_ist_day: str | None = None
         self._nfo_opts: list[dict[str, Any]] | None = None
         self._nfo_opts_ist_day: str | None = None
+        self._nfo_session_mark: str | None = None
+        self._nfo_last_fail_mono: float | None = None
+        self._nfo_last_fail_mark: str | None = None
+        self._nfo_retry_backoff_s = NFO_RETRY_BACKOFF_S
+        self._nfo_state: dict[str, dict[str, Any]] = {
+            "futures": {"state": NFO_NOT_ATTEMPTED},
+            "options": {"state": NFO_NOT_ATTEMPTED},
+        }
 
     @classmethod
     def from_env(cls, *, data_dir: str | Path | None = None) -> "ZerodhaMarketFeed":
@@ -151,6 +173,7 @@ class ZerodhaMarketFeed:
         self._access_token = None
         self._client = None
         self._initialized = False
+        self.invalidate_nfo_caches(reason="session_cleared")
         return {
             "ok": True,
             "cleared": removed,
@@ -250,6 +273,7 @@ class ZerodhaMarketFeed:
                 "login_time": datetime.now(timezone.utc).isoformat(),
             }
             self._save_session(sess)
+            self.invalidate_nfo_caches(reason="login_recovered")
             return {
                 "ok": True,
                 "user_id": data.get("user_id"),
@@ -280,9 +304,209 @@ class ZerodhaMarketFeed:
             return None
         return Path(self._data_dir) / STORE_REL / "nfo_fut.json"
 
-    def list_nfo_futures(self, *, force: bool = False) -> list[dict[str, Any]]:
-        """NFO futures only (never persist the options chain)."""
+    # --- NFO instrument master (O3: a failed fetch never becomes a valid empty cache) ---
+
+    def _session_mark(self) -> str | None:
+        """Identity of the current login (day + login time), never the token itself."""
+        doc = self._load_session()
+        if not doc.get("access_token"):
+            return None
+        return f"{doc.get('ist_day')}|{doc.get('login_time')}"
+
+    def _nfo_state_path(self) -> Path | None:
+        return Path(self._data_dir) / NFO_STATE_REL if self._data_dir else None
+
+    def _mark_nfo(self, kind: str, state: str, **fields: Any) -> None:
+        prev = self._nfo_state.get(kind) or {}
+        entry = {
+            "state": state,
+            "ist_day": _ist_today().isoformat(),
+            "at": datetime.now(timezone.utc).isoformat(),
+            **fields,
+        }
+        self._nfo_state[kind] = entry
+        if (
+            prev.get("state") == state
+            and prev.get("reason") == fields.get("reason")
+            and prev.get("ist_day") == entry["ist_day"]
+        ):
+            return
+        path = self._nfo_state_path()
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"version": VERSION, **self._nfo_state}, indent=2, default=str) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            _log.debug("nfo master state write failed", exc_info=True)
+
+    def nfo_master_status(self) -> dict[str, Any]:
+        """Per-dependency state of the NFO masters (futures, options) for health checks."""
+        return {kind: dict(entry) for kind, entry in self._nfo_state.items()}
+
+    def invalidate_nfo_caches(self, *, reason: str) -> None:
+        """Drop provider-dependent NFO caches so the next call refetches (login recovery)."""
+        self._nfo_futs = None
+        self._nfo_futs_ist_day = None
+        self._nfo_opts = None
+        self._nfo_opts_ist_day = None
+        self._nfo_session_mark = None
+        self._nfo_last_fail_mono = None
+        self._nfo_last_fail_mark = None
+        for kind in ("futures", "options"):
+            self._mark_nfo(kind, NFO_NOT_ATTEMPTED, reason=f"invalidated:{reason}")
+
+    def refresh_nfo_masters(self) -> dict[str, Any]:
+        """Invalidate and refetch both masters now; returns the resulting per-dependency state."""
+        self.invalidate_nfo_caches(reason="refresh")
+        self.list_nfo_futures(force=True)
+        self.list_nfo_options()
+        return self.nfo_master_status()
+
+    def _sync_nfo_session(self) -> None:
+        """A new login (seen via the session file, from any process) invalidates cached masters."""
+        mark = self._session_mark()
+        if self._nfo_session_mark is not None and mark is not None and mark != self._nfo_session_mark:
+            self.invalidate_nfo_caches(reason="login_changed")
+
+    def _stale_fut_cache_day(self, day: str) -> str | None:
+        path = self._nfo_fut_cache_path()
+        if path is None or not path.is_file():
+            return None
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if isinstance(doc, dict) and doc.get("rows") and doc.get("ist_day") != day:
+            return str(doc.get("ist_day"))
+        return None
+
+    def _nfo_fetch_failed(self, day: str, *, reason: str, futures_state: str = NFO_FAILED) -> None:
+        self._nfo_last_fail_mono = time.monotonic()
+        self._nfo_last_fail_mark = self._session_mark()
+        if not (self._nfo_futs is not None and self._nfo_futs_ist_day == day):
+            stale_day = self._stale_fut_cache_day(day)
+            if stale_day:
+                self._mark_nfo(
+                    "futures", NFO_READY_STALE, reason=reason, stale_ist_day=stale_day, served=False
+                )
+            else:
+                self._mark_nfo("futures", futures_state, reason=reason)
+        if not (self._nfo_opts is not None and self._nfo_opts_ist_day == day):
+            self._mark_nfo("options", futures_state, reason=reason)
+
+    def _parse_nfo(self, raw: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        from atlas.investment.fno_contract import INDEX_UNIVERSE, is_index_option_row
+        from atlas.investment.fno_lab_v1 import load_stock_seed
+
+        seed_names = set(load_stock_seed(self._data_dir))
+        futs: list[dict[str, Any]] = []
+        opts: list[dict[str, Any]] = []
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            itype = str(row.get("instrument_type") or "").upper()
+            slim = {
+                "tradingsymbol": row.get("tradingsymbol"),
+                "name": row.get("name"),
+                "instrument_type": row.get("instrument_type"),
+                "instrument_token": row.get("instrument_token"),
+                "expiry": row.get("expiry"),
+                "lot_size": row.get("lot_size"),
+                "exchange": row.get("exchange") or "NFO",
+                "segment": row.get("segment") or "NFO-FUT",
+            }
+            if itype == "FUT":
+                futs.append(slim)
+            elif itype in {"CE", "PE"}:
+                keep_index = any(is_index_option_row(row, fam) for fam in INDEX_UNIVERSE)
+                row_name = " ".join(str(row.get("name") or "").upper().split())
+                if keep_index or row_name in seed_names:
+                    slim["segment"] = row.get("segment") or "NFO-OPT"
+                    slim["strike"] = row.get("strike")
+                    opts.append(slim)
+        return futs, opts
+
+    def _fetch_nfo_master(self, *, force: bool = False) -> None:
+        """One ``instruments("NFO")`` pull feeding both caches. Only success is cached."""
         day = _ist_today().isoformat()
+        if not self.has_session:
+            self._nfo_fetch_failed(day, reason="no_session")
+            return
+        mark = self._session_mark()
+        if (
+            not force
+            and self._nfo_last_fail_mono is not None
+            and mark == self._nfo_last_fail_mark
+            and time.monotonic() - self._nfo_last_fail_mono < self._nfo_retry_backoff_s
+        ):
+            return
+        if not (self._init_client(require_session=True) and self._client is not None):
+            self._nfo_fetch_failed(day, reason="client_unavailable")
+            return
+        self._mark_nfo("futures", NFO_FETCHING)
+        try:
+            raw = self._client.instruments("NFO")
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Zerodha NFO instruments() failed: %s", exc)
+            self._nfo_fetch_failed(day, reason=f"fetch_error:{type(exc).__name__}")
+            return
+        if not isinstance(raw, list) or not raw:
+            self._nfo_fetch_failed(day, reason="empty_response", futures_state=NFO_EMPTY_FAILED)
+            return
+        futs, opts = self._parse_nfo(raw)
+        self._nfo_session_mark = mark
+        futs_cached = self._nfo_futs is not None and self._nfo_futs_ist_day == day
+        if futs:
+            self._nfo_futs = futs
+            self._nfo_futs_ist_day = day
+            self._nfo_last_fail_mono = None
+            self._mark_nfo("futures", NFO_READY, count=len(futs), source="provider")
+            self._write_fut_cache(day, futs)
+        elif not futs_cached:
+            self._nfo_last_fail_mono = time.monotonic()
+            self._nfo_last_fail_mark = mark
+            stale_day = self._stale_fut_cache_day(day)
+            if stale_day:
+                self._mark_nfo(
+                    "futures", NFO_READY_STALE, reason="no_futures_in_response",
+                    stale_ist_day=stale_day, served=False,
+                )
+            else:
+                self._mark_nfo("futures", NFO_EMPTY_FAILED, reason="no_futures_in_response")
+        if opts:
+            self._nfo_opts = opts
+            self._nfo_opts_ist_day = day
+            self._mark_nfo("options", NFO_READY, count=len(opts), source="provider")
+        elif futs:
+            # A genuine dump (futures present) with no seed/index options is a valid empty set.
+            self._nfo_opts = []
+            self._nfo_opts_ist_day = day
+            self._mark_nfo("options", NFO_EMPTY_VALID, count=0, source="provider")
+        elif not (self._nfo_opts is not None and self._nfo_opts_ist_day == day):
+            self._mark_nfo("options", NFO_EMPTY_FAILED, reason="no_options_in_response")
+
+    def _write_fut_cache(self, day: str, rows: list[dict[str, Any]]) -> None:
+        path = self._nfo_fut_cache_path()
+        if path is None or not rows:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"ist_day": day, "count": len(rows), "rows": rows}, indent=2, default=str)
+                + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            _log.debug("nfo_fut cache write failed", exc_info=True)
+
+    def list_nfo_futures(self, *, force: bool = False) -> list[dict[str, Any]]:
+        """NFO futures only (never persist the options chain). ``[]`` = not available now."""
+        day = _ist_today().isoformat()
+        self._sync_nfo_session()
         if (
             not force
             and self._nfo_futs is not None
@@ -293,81 +517,26 @@ class ZerodhaMarketFeed:
         if not force and path is not None and path.is_file():
             try:
                 doc = json.loads(path.read_text(encoding="utf-8"))
-                if (
-                    isinstance(doc, dict)
-                    and doc.get("ist_day") == day
-                    and isinstance(doc.get("rows"), list)
-                ):
-                    self._nfo_futs = [r for r in doc["rows"] if isinstance(r, dict)]
+                rows = doc.get("rows") if isinstance(doc, dict) else None
+                if doc.get("ist_day") == day and isinstance(rows, list) and rows:
+                    self._nfo_futs = [r for r in rows if isinstance(r, dict)]
                     self._nfo_futs_ist_day = day
+                    self._nfo_session_mark = self._session_mark()
+                    self._mark_nfo("futures", NFO_READY, count=len(self._nfo_futs), source="day_cache")
                     return self._nfo_futs
-            except (OSError, json.JSONDecodeError):
+            except (OSError, json.JSONDecodeError, AttributeError):
                 pass
-        rows: list[dict[str, Any]] = []
-        opt_rows: list[dict[str, Any]] = []
-        if self.has_session and self._init_client(require_session=True) and self._client is not None:
-            try:
-                raw = self._client.instruments("NFO")
-            except Exception as exc:  # noqa: BLE001
-                _log.warning("Zerodha NFO instruments() failed: %s", exc)
-                raw = None
-            if isinstance(raw, list):
-                from atlas.investment.fno_contract import INDEX_UNIVERSE, is_index_option_row
-                from atlas.investment.fno_lab_v1 import load_stock_seed
-
-                seed_names = set(load_stock_seed(self._data_dir))
-                for row in raw:
-                    if not isinstance(row, dict):
-                        continue
-                    itype = str(row.get("instrument_type") or "").upper()
-                    slim = {
-                        "tradingsymbol": row.get("tradingsymbol"),
-                        "name": row.get("name"),
-                        "instrument_type": row.get("instrument_type"),
-                        "instrument_token": row.get("instrument_token"),
-                        "expiry": row.get("expiry"),
-                        "lot_size": row.get("lot_size"),
-                        "exchange": row.get("exchange") or "NFO",
-                        "segment": row.get("segment") or "NFO-FUT",
-                    }
-                    if itype == "FUT":
-                        rows.append(slim)
-                    elif itype in {"CE", "PE"}:
-                        keep_index = any(
-                            is_index_option_row(row, fam) for fam in INDEX_UNIVERSE
-                        )
-                        row_name = " ".join(str(row.get("name") or "").upper().split())
-                        keep_stock = row_name in seed_names
-                        if keep_index or keep_stock:
-                            slim["segment"] = row.get("segment") or "NFO-OPT"
-                            slim["strike"] = row.get("strike")
-                            opt_rows.append(slim)
-        self._nfo_futs = rows
-        self._nfo_futs_ist_day = day
-        if opt_rows or self._nfo_opts is None:
-            self._nfo_opts = opt_rows
-            self._nfo_opts_ist_day = day
-        if path is not None and rows:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(
-                    json.dumps(
-                        {"ist_day": day, "count": len(rows), "rows": rows},
-                        indent=2,
-                        default=str,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
-            except OSError:
-                _log.debug("nfo_fut cache write failed", exc_info=True)
-        return rows
+        self._fetch_nfo_master(force=force)
+        if self._nfo_futs is not None and self._nfo_futs_ist_day == day:
+            return self._nfo_futs
+        return []
 
     def list_nfo_options(
         self, *, expiry: str | date | datetime | None = None, force: bool = False
     ) -> list[dict[str, Any]]:
         """Index-family CE/PE (NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY) — memory, never persist the chain."""
         day = _ist_today().isoformat()
+        self._sync_nfo_session()
         if (
             not force
             and self._nfo_opts is not None
@@ -377,47 +546,10 @@ class ZerodhaMarketFeed:
         else:
             # Reuse the FUT fetch when it already parsed options from instruments().
             self.list_nfo_futures(force=force)
-            rows = list(self._nfo_opts or [])
-            if not rows and self.has_session and self._init_client(require_session=True) and self._client is not None:
-                try:
-                    raw = self._client.instruments("NFO")
-                except Exception as exc:  # noqa: BLE001
-                    _log.warning("Zerodha NFO options instruments() failed: %s", exc)
-                    raw = None
-                parsed: list[dict[str, Any]] = []
-                if isinstance(raw, list):
-                    from atlas.investment.fno_contract import INDEX_UNIVERSE, is_index_option_row
-                    from atlas.investment.fno_lab_v1 import load_stock_seed
-
-                    seed_names = set(load_stock_seed(self._data_dir))
-                    for row in raw:
-                        if not isinstance(row, dict):
-                            continue
-                        itype = str(row.get("instrument_type") or "").upper()
-                        if itype not in {"CE", "PE"}:
-                            continue
-                        keep_index = any(
-                            is_index_option_row(row, fam) for fam in INDEX_UNIVERSE
-                        )
-                        row_name = " ".join(str(row.get("name") or "").upper().split())
-                        if not (keep_index or row_name in seed_names):
-                            continue
-                        parsed.append(
-                            {
-                                "tradingsymbol": row.get("tradingsymbol"),
-                                "name": row.get("name"),
-                                "instrument_type": row.get("instrument_type"),
-                                "instrument_token": row.get("instrument_token"),
-                                "expiry": row.get("expiry"),
-                                "lot_size": row.get("lot_size"),
-                                "strike": row.get("strike"),
-                                "exchange": row.get("exchange") or "NFO",
-                                "segment": row.get("segment") or "NFO-OPT",
-                            }
-                        )
-                self._nfo_opts = parsed
-                self._nfo_opts_ist_day = day
-                rows = parsed
+            if not (self._nfo_opts is not None and self._nfo_opts_ist_day == day):
+                self._fetch_nfo_master()
+            usable = self._nfo_opts is not None and self._nfo_opts_ist_day == day
+            rows = list(self._nfo_opts or []) if usable else []
         if expiry is None:
             return rows
         from atlas.investment.fno_contract import _expiry_date

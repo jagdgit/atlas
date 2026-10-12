@@ -58,6 +58,19 @@ class RecoveryManager:
 
     def start(self) -> None:
         try:
+            from atlas.ops.service_locks import get_service_lock_manager
+
+            mgr = get_service_lock_manager()
+            if mgr is not None:
+                lock = mgr.acquire("atlas.svc.recovery")
+                if lock.passive:
+                    self._logger.error(
+                        "recovery staying passive — service lock not held"
+                    )
+                    return
+        except Exception:  # noqa: BLE001
+            self._logger.exception("recovery service lock acquire failed")
+        try:
             self.run()
         except Exception:  # noqa: BLE001 - recovery must never block boot (P4)
             self._logger.exception("recovery pass failed")

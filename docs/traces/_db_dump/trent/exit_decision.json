@@ -1,0 +1,62 @@
+{
+  "action": {
+    "key": "sell:TRENT.NS",
+    "kind": "recommend",
+    "payload": {
+      "kind": "sell",
+      "price": 2937.3,
+      "quantity": 1.0,
+      "symbol": "TRENT.NS"
+    }
+  },
+  "action_kind": "recommend",
+  "alternatives_rejected": [
+    {
+      "base_score": 0.5,
+      "key": "hold",
+      "policy_boost": 0.08,
+      "policy_ids": [
+        "exp-bias:31"
+      ],
+      "rationale": "no actionable signal; ctx No Mission Context for 'markets trading TRENT.NS portfolio:equity_intraday_learn",
+      "score": 0.58,
+      "side_effecting": false
+    }
+  ],
+  "confidence": "high",
+  "confidence_score": 0.812756,
+  "config_id": null,
+  "config_version": 2,
+  "created_at": "2026-10-12T05:50:44.665415+00:00",
+  "decision_rule": "paper_trading",
+  "evidence_refs": [],
+  "experience_refs": [],
+  "id": "97bdd505-c8aa-4afd-bbbc-52d2dc84faeb",
+  "knowledge_refs": [],
+  "mission_id": "d806c8e6-6fba-4603-84eb-b88fb408af9b",
+  "mission_type": "paper_trading",
+  "model_versions": {
+    "decision_engine": "1.0.0",
+    "intelligence": "0.1.0",
+    "policy": "1.0.0"
+  },
+  "policy_ids": [
+    "exp-bias:1",
+    "exp-bias:4",
+    "exp-bias:16",
+    "exp-bias:29",
+    "exp-bias:43",
+    "exp-bias:50",
+    "exp-bias:56",
+    "exp-bias:62",
+    "exp-bias:68",
+    "exp-bias:74",
+    "exp-bias:80",
+    "exp-bias:86",
+    "exp-bias:92"
+  ],
+  "requires_approval": false,
+  "rule_version": "1.0.0",
+  "status": "recorded",
+  "why": "Chose 'sell:TRENT.NS' (score 2.0480, high confidence). SMA fast (2938.9100) fell below SMA slow (2943.6300); margin -0.16%, RSI 46.8; ctx No Mission Context for 'markets trading TRENT.NS portfolio:equity_intraday_learn Influenced by policy exp-bias:1, exp-bias:4, exp-bias:16, exp-bias:29, exp-bias:43, exp-bias:50, exp-bias:56, exp-bias:62, exp-bias:68, exp-bias:74, exp-bias:80, exp-bias:86, exp-bias:92. Preferred over 'hold' (0.5800)."
+}

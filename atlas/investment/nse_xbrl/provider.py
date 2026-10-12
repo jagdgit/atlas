@@ -826,3 +826,104 @@ def acquire_from_nse(
     out["reason"] = "complete" if cov.get("complete") else ("partial" if acquired else "calc_unknown")
     out["raw"] = stored.get("path") if isinstance(stored, dict) else None
     return out
+
+
+def commit_stored_xbrl(
+    data_dir: str | Path | None,
+    symbol: str,
+    *,
+    price: float | None = None,
+    price_as_of: str | None = None,
+    evidence_as_of: str | None = None,
+    laboratory_id: str = "india_equity_learner",
+    now: datetime | None = None,
+    eps_fy_fallback: bool = False,
+) -> dict[str, Any]:
+    """Calculate one already-stored filing and commit it to the quality registry.
+
+    Does not fetch NSE and does not replace the fundamentals store.
+    """
+    from atlas.investment.data_quality import commit_xbrl_calculation
+    from atlas.investment.fundamentals import normalize_symbol
+    from atlas.investment.nse_xbrl.raw_store import load_stored_xml
+
+    if not data_dir:
+        return {"ok": False, "reason": "no_data_dir"}
+    sym = normalize_symbol(symbol)
+    docs = load_stored_xml(data_dir, sym)
+    if not docs:
+        return {"ok": False, "reason": "no_stored_filing", "symbol": sym}
+    facts: list[dict[str, Any]] = []
+    evidence_id = None
+    period_end = None
+    for doc in docs:
+        meta_period = doc.get("period_end")
+        one = parse_xbrl(
+            str(doc.get("xml") or ""),
+            symbol=sym,
+            source_document=doc.get("path"),
+            filed_at=doc.get("filed_at"),
+            available_at=doc.get("available_at"),
+            default_scope=str(doc.get("scope") or "CONSOLIDATED"),
+        )
+        if not one.get("ok"):
+            continue
+        facts.extend(one.get("facts") or [])
+        if doc.get("canonical") or evidence_id is None:
+            evidence_id = doc.get("sha256") or one.get("raw_evidence_id")
+            period_end = str(meta_period)[:10] if meta_period else period_end
+    if not facts:
+        return {
+            "ok": False,
+            "reason": "parse_failure",
+            "symbol": sym,
+            "evidence_id": evidence_id,
+        }
+    if period_end is None:
+        ends = [
+            str(f.get("period_end") or "")[:10]
+            for f in facts
+            if f.get("period_end")
+        ]
+        period_end = max(ends) if ends else None
+    px = price
+    stamp = price_as_of
+    if px is None:
+        try:
+            from atlas.investment.bar_store import load_bars
+
+            bars = load_bars(data_dir, sym, limit=1) or load_bars(
+                data_dir, _nse_code(sym), limit=1
+            )
+            last = bars[-1] if bars else None
+            if isinstance(last, dict) and last.get("close") is not None:
+                px = float(last["close"])
+                stamp = stamp or str(last.get("date") or last.get("t") or "") or None
+        except Exception:  # noqa: BLE001
+            _log.debug("stored xbrl price from bars skipped", exc_info=True)
+    calc = calculate_metrics(
+        facts,
+        price=px,
+        eps_fy_fallback=eps_fy_fallback,
+        evidence_as_of=evidence_as_of,
+    )
+    saved = commit_xbrl_calculation(
+        data_dir,
+        symbol=sym,
+        calculation=calc,
+        evidence_id=str(evidence_id) if evidence_id else None,
+        period_end=period_end,
+        price_as_of=stamp,
+        laboratory_id=laboratory_id,
+        now=now,
+    )
+    return {
+        "ok": True,
+        "symbol": sym,
+        "evidence_id": evidence_id,
+        "price": px,
+        "price_as_of": stamp,
+        "period_end": period_end,
+        "unknown": list(calc.get("unknown") or []),
+        "metrics": saved.get("metrics") or [],
+    }

@@ -1,0 +1,669 @@
+{
+  "cells": [
+    {
+      "blocked_by": [],
+      "dimension": "IDENTITY",
+      "field": "round_trip_pair",
+      "gap_class": null,
+      "note": "unique equal-quantity buy/sell pair on symbol+portfolio+day",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:46:53.062461+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 1,
+      "value": {
+        "candidates": [],
+        "entry_id": "c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+        "exit_id": "f79f5a92-9e90-40fe-b70d-5c9765d9efec"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "IDENTITY",
+      "field": "quantities",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:46:53.062461+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T05:50:44.681191+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:f79f5a92-9e90-40fe-b70d-5c9765d9efec",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 1,
+      "value": {
+        "entry_qty": 1.0,
+        "entry_side": "buy",
+        "exit_qty": 1.0,
+        "exit_side": "sell"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "stored_realized_pnl",
+      "gap_class": null,
+      "note": "stored sell realized_pnl is exit-fee net (F18); check = (exit-entry)*qty - exit_fee",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T05:50:44.681191+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:f79f5a92-9e90-40fe-b70d-5c9765d9efec",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": -17.799999999999727
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "fees",
+      "gap_class": null,
+      "note": "zero-fee paper_demo expected for this lab profile",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:46:53.062461+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T05:50:44.681191+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:f79f5a92-9e90-40fe-b70d-5c9765d9efec",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": {
+        "entry_fee": 0.0,
+        "exit_fee": 0.0,
+        "profile": "paper_demo"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "return_on_cost_roc_v1",
+      "gap_class": null,
+      "note": "entry_cost=2955.1; round_trip_net=-17.799999999999727",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "roc.v1 = round_trip_net / (qty*entry_price + entry_fee) * 100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 7,
+      "value": -0.6023
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "stored_realized_return_pct",
+      "gap_class": null,
+      "note": "cash equity has no F&O lab_v1 prediction return field; roc.v1 calculated above",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 7,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_decision",
+      "gap_class": null,
+      "note": "entry decision linked",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:46:53.062461+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:46:30.843904+00:00",
+          "original_tz": "UTC",
+          "ref": "decision.decisions:e6180671-8b69-4677-b31c-1296246d7ae3",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 3,
+      "value": {
+        "action": "buy",
+        "created_at_ist": "2026-10-12T10:16:30.843904+05:30",
+        "decision_id": "e6180671-8b69-4677-b31c-1296246d7ae3",
+        "symbol": "TRENT.NS",
+        "why": "Chose 'buy:TRENT.NS' (score 1.3541, high confidence). SMA10 (2954.3100) crossed above SMA30 (2934.2967); margin +0.68%, RSI 63.4; ctx No Mission Context for 'markets trading TRENT.NS portfolio:equity_intraday_learn Influenced by policy exp-bias:1, exp-bias:4, exp-bias:16, exp-bias:18. Preferred over 'hold' (0.5800)."
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_prediction",
+      "gap_class": null,
+      "note": "cash equity control-rule trade has no F&O lab_v1 prediction file; engine decision why is the record",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 2,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_decision_packet",
+      "gap_class": "LINKAGE",
+      "note": "no by_day packet for engine decision / fill",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T13:02:01.226630+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/decisions/by_day/equity_intraday_learner/2026-10-12.jsonl",
+          "sha256": "0b77fdc1b69b8d38fe7de8723c0f6c2d6f5962baaa00f6f8b74a57463960a8d9"
+        }
+      ],
+      "status": "MISSING",
+      "step": 3,
+      "value": {
+        "matches": 0
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "exit_decision",
+      "gap_class": null,
+      "note": "exit decision linked",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T05:50:44.681191+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:f79f5a92-9e90-40fe-b70d-5c9765d9efec",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T05:50:44.665415+00:00",
+          "original_tz": "UTC",
+          "ref": "decision.decisions:97bdd505-c8aa-4afd-bbbc-52d2dc84faeb",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 6,
+      "value": {
+        "action": "sell",
+        "created_at_ist": "2026-10-12T11:20:44.665415+05:30",
+        "decision_id": "97bdd505-c8aa-4afd-bbbc-52d2dc84faeb",
+        "why": "Chose 'sell:TRENT.NS' (score 2.0480, high confidence). SMA fast (2938.9100) fell below SMA slow (2943.6300); margin -0.16%, RSI 46.8; ctx No Mission Context for 'markets trading TRENT.NS portfolio:equity_intraday_learn Influenced by policy exp-bias:1, exp-bias:4, exp-bias:16, exp-bias:29, exp-bias:43, exp-bias:50, exp-bias:56, exp-bias:62, exp-bias:68, exp-bias:74, exp-bias:80, exp-bias:86, exp-bias:92. Preferred over 'hold' (0.5800)."
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "exit_trigger",
+      "gap_class": null,
+      "note": "cash equity: exit trigger is the engine sell decision why (no F&O integrity flatten)",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T05:50:44.665415+00:00",
+          "original_tz": "UTC",
+          "ref": "decision.decisions:97bdd505-c8aa-4afd-bbbc-52d2dc84faeb",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 6,
+      "value": {
+        "source": "exit_decision.why",
+        "why": "Chose 'sell:TRENT.NS' (score 2.0480, high confidence). SMA fast (2938.9100) fell below SMA slow (2943.6300); margin -0.16%, RSI 46.8; ctx No Mission Context for 'markets trading TRENT.NS portfolio:equity_intraday_learn Influenced by policy exp-bias:1, exp-bias:4, exp-bias:16, exp-bias:29, exp-bias:43, exp-bias:50, exp-bias:56, exp-bias:62, exp-bias:68, exp-bias:74, exp-bias:80, exp-bias:86, exp-bias:92. Preferred over 'hold' (0.5800)."
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "entry_pack_snapshot",
+      "gap_class": null,
+      "note": "F&O pack snapshot not applicable to cash equity; entry evidence is engine decision + marks",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 1,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "order_intent",
+      "gap_class": "PERSISTENCE",
+      "note": "no order-intent record on paper path (A6); fill price/qty are execution facts, not intent records",
+      "sources": [],
+      "status": "MISSING",
+      "step": 4,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_session_context",
+      "gap_class": null,
+      "note": "session context only \u2014 not entry-to-exit underlier path (A8)",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T21:16:20.070941+05:30",
+          "original_ts": "2026-10-12T00:00:00+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/market/bars/TRENT.NS.json#bars[2026-10-12]",
+          "sha256": "db57dac6eba4c182f4be411231a8ee3b105bef76e02e37d55b3b3cdf043dc4e2"
+        }
+      ],
+      "status": "OK",
+      "step": 5,
+      "value": {
+        "alias": "TRENT.NS",
+        "close_to_close_pct": -0.5311,
+        "day_close": 2902.7,
+        "day_open": 2928.0,
+        "open_to_close_pct": -0.8641,
+        "prior_close": 2918.2
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_open_to_close_pct",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "(close-open)/open*100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 5,
+      "value": -0.8641
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_close_to_close_pct",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "(close-prior_close)/prior_close*100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 5,
+      "value": -0.5311
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_entry_to_exit_path",
+      "gap_class": null,
+      "note": "cash equity: fill prices are the asset path endpoints (not a separate underlier)",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:46:53.062461+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T05:50:44.681191+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:f79f5a92-9e90-40fe-b70d-5c9765d9efec",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 5,
+      "value": {
+        "entry_at_ist": "2026-10-12T10:16:53.062461+05:30",
+        "entry_price": 2955.1,
+        "exit_at_ist": "2026-10-12T11:20:44.681191+05:30",
+        "exit_price": 2937.3,
+        "move_pct": -0.6023
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "iv_greeks",
+      "gap_class": null,
+      "note": "IV and option Greeks not applicable to cash-equity trades",
+      "sources": [],
+      "status": "NOT_APPLICABLE",
+      "step": 5,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ATTRIBUTION",
+      "field": "stored_attribution_status",
+      "gap_class": null,
+      "note": "stored label reported verbatim",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T11:21:15.689725+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/equity_intraday_learner/2026-10-12.jsonl#EXPERIENCE.attribution",
+          "sha256": "f4d693ea7557cc9daa105657df292797200eeca11b33132c3595b44f44eee4fe"
+        }
+      ],
+      "status": "OK",
+      "step": 8,
+      "value": "unknown_explicit"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ATTRIBUTION",
+      "field": "trace_attribution_state",
+      "gap_class": "ATTRIBUTION",
+      "note": "classified per \u00a74.1",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T11:21:15.689725+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/equity_intraday_learner/2026-10-12.jsonl",
+          "sha256": "f4d693ea7557cc9daa105657df292797200eeca11b33132c3595b44f44eee4fe"
+        }
+      ],
+      "status": "OK",
+      "step": 8,
+      "value": "PARTIAL"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "hypothesis",
+      "gap_class": "LEARNING",
+      "note": "observation-style lesson text is not a named hypothesis",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T11:21:15.689725+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/equity_intraday_learner/2026-10-12.jsonl",
+          "sha256": "f4d693ea7557cc9daa105657df292797200eeca11b33132c3595b44f44eee4fe"
+        }
+      ],
+      "status": "MISSING",
+      "step": 9,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "validation_test",
+      "gap_class": "LEARNING",
+      "note": "no validation test defined",
+      "sources": [],
+      "status": "MISSING",
+      "step": 10,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "learning_story",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T11:21:15.689725+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/equity_intraday_learner/2026-10-12.jsonl#LEARNING_STORY",
+          "sha256": "f4d693ea7557cc9daa105657df292797200eeca11b33132c3595b44f44eee4fe"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "belief_update": "unchanged",
+        "cause": {
+          "helped": [],
+          "hurt": [],
+          "narrative": "unknown: sector, news, policy, thesis",
+          "status": "unknown_explicit",
+          "unknown": [
+            "sector",
+            "news",
+            "policy",
+            "thesis"
+          ]
+        },
+        "story_id": "fb2b9d47-3bc7-495a-9cdc-fc6c4c7aab5e"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "fel_features",
+      "gap_class": null,
+      "note": "FEL features present",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T11:56:47.519144+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/fel/datasets/equity_intraday_learner/DS-E-paper-round-trip-equity_intraday_learner.jsonl",
+          "sha256": "afa67a231a4218d0e0d14268d11186207bd66203c008a15b5f46f1566e042dbe"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "keys_sample": [
+          "kind",
+          "as_of",
+          "symbol",
+          "laboratory_id",
+          "features",
+          "target",
+          "experience_id",
+          "fingerprint"
+        ],
+        "null_fields": {}
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "thesis_tracker_instrument_class",
+      "gap_class": null,
+      "note": "thesis tracker present for cash-equity symbol",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T11:20:50.093048+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/thesis_tracker/market_intelligence/TRENT.NS.json",
+          "sha256": "223658f4cf5222dd4a6ff17ec5aac2d44ab70223cce3302361571aa46ccb8b08"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "decision": "buy",
+        "horizon": "long_term",
+        "hypothesis": "Trent operates in Consumer Services. The business appears interesting because of brand + distribution + mix where volume, pricing power, and rural/urban demand determine compounding. However, valuation / margin of safety, free cash flow, management capital allocation, volume growth, realisation / mix remain insufficiently understood from hermetic/hint seeds alone. Current conclusion: WATCH \u2014 not B",
+        "symbol": "TRENT.NS"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "lab_day_pnl_kpi",
+      "gap_class": null,
+      "note": "lab-level day_pnl (all symbols); not this trade alone",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T21:25:31.730027+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/market/trading_kpis/equity_intraday_learner/2026-10-12.json#kpis.day_pnl",
+          "sha256": "c15bdef326f6a01f11b41bf24721a6f8e985266449d2597d2799918959a62016"
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": -17.799999999999727
+    }
+  ],
+  "first_blocking_dependency": {
+    "dimension": "DECISION_LINKAGE",
+    "fields": [
+      "entry_decision_packet"
+    ],
+    "gap_classes": [
+      "LINKAGE"
+    ]
+  },
+  "generated_at_ist": "2026-10-12T21:25:31.995899+05:30",
+  "git_sha": "fe3d009",
+  "meta": {
+    "accounting": {
+      "check_realized_exit_fee_net": -17.799999999999727,
+      "entry_cost": 2955.1,
+      "entry_fee_allocated": 0.0,
+      "exit_fee": 0.0,
+      "gross": -17.799999999999727,
+      "roc_v1_pct": -0.6023484822848543,
+      "round_trip_net": -17.799999999999727,
+      "stored_realized": -17.799999999999727,
+      "stored_return_pct": null
+    },
+    "db_mode": "dump:/data/atlas/docs/traces/_db_dump/trent",
+    "entry": {
+      "cash_after": 46439.073704834,
+      "created_at": "2026-10-12T04:46:53.062461+00:00",
+      "decision_id": "e6180671-8b69-4677-b31c-1296246d7ae3",
+      "fee": 0.0,
+      "fees": {
+        "brokerage": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "profile_id": "paper_demo",
+        "side": "buy",
+        "stamp": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "total": 0.0,
+        "turnover": 2955.1
+      },
+      "id": "c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+      "mission_id": "d806c8e6-6fba-4603-84eb-b88fb408af9b",
+      "portfolio_id": "b0e49817-6cc2-468e-8061-a123454bf504",
+      "price": 2955.1,
+      "quantity": 1.0,
+      "realized_pnl": 0.0,
+      "side": "buy",
+      "symbol": "TRENT.NS"
+    },
+    "exit": {
+      "cash_after": 49376.373704834004,
+      "created_at": "2026-10-12T05:50:44.681191+00:00",
+      "decision_id": "97bdd505-c8aa-4afd-bbbc-52d2dc84faeb",
+      "fee": 0.0,
+      "fees": {
+        "brokerage": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "profile_id": "paper_demo",
+        "side": "sell",
+        "stamp": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "total": 0.0,
+        "turnover": 2937.3
+      },
+      "id": "f79f5a92-9e90-40fe-b70d-5c9765d9efec",
+      "mission_id": "d806c8e6-6fba-4603-84eb-b88fb408af9b",
+      "portfolio_id": "b0e49817-6cc2-468e-8061-a123454bf504",
+      "price": 2937.3,
+      "quantity": 1.0,
+      "realized_pnl": -17.799999999999727,
+      "side": "sell",
+      "symbol": "TRENT.NS"
+    },
+    "instrument_class": "cash_equity",
+    "ist_day": "2026-10-12",
+    "lab": "equity_intraday_learner",
+    "portfolio_id": "b0e49817-6cc2-468e-8061-a123454bf504",
+    "symbol": "TRENT.NS",
+    "trade_id_seed": "c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+    "underlying": "TRENT"
+  },
+  "script_version": "trace_trade.v1"
+}

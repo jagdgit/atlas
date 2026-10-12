@@ -583,6 +583,7 @@ def persist_acp(data_dir: str | Path | None, acp: dict[str, Any]) -> dict[str, A
                 fundamentals=aw.get("fundamentals")
                 if isinstance(aw.get("fundamentals"), dict)
                 else None,
+                data_dir=data_dir,
             )
             acp["evidence_completeness"] = {
                 "decision": comp.get("decision"),

@@ -21,6 +21,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from atlas.investment.learning_objects import (
+    ATTRIBUTION_ADDRESSED_STATUSES,
+    attribution_is_satisfied,
+)
+
 VERSION = "learn_audit.la4.v1"
 VERSION_WEEKLY = "learn_audit.la2.weekly.v1"
 KIND = "LEARNING_AUDIT"
@@ -657,6 +662,21 @@ def classify_learning_category(rec: dict[str, Any]) -> str:
     return "investment"
 
 
+def attribution_addressed(attr: dict[str, Any] | None) -> bool:
+    """Was the attribution slot filled, including an explicit unknown?
+
+    This is honesty (the close was not left blank). It is not the learning score.
+    A satisfied cause is the narrower ``attribution_is_satisfied``.
+    """
+    a = attr if isinstance(attr, dict) else {}
+    status = str(a.get("status") or "").strip().lower()
+    if status in ATTRIBUTION_ADDRESSED_STATUSES:
+        return True
+    if status:
+        return False
+    return bool(a.get("satisfied"))
+
+
 def classify_learning_level(rec: dict[str, Any]) -> str:
     """L0–L5 per MDPH learning contract."""
     pe = rec.get("prediction") if isinstance(rec.get("prediction"), dict) else {}
@@ -669,15 +689,14 @@ def classify_learning_level(rec: dict[str, Any]) -> str:
     if not has_pred_out and not rec.get("outcome"):
         return "L0"
     level = "L1"
-    if attr.get("satisfied") or str(attr.get("status") or "") in {
-        "unknown_explicit",
-        "attributed",
-        "partial",
-    }:
+    satisfied = attribution_is_satisfied(attr)
+    if satisfied:
         level = "L2"
-    if lesson:
+    if lesson and satisfied:
         level = "L3"
-    if belief in {"candidate", "weaken", "strengthen"} or rec.get("belief_candidate"):
+    if satisfied and (
+        belief in {"candidate", "weaken", "strengthen"} or rec.get("belief_candidate")
+    ):
         level = "L4"
     if (
         rec.get("subsequent_test")
@@ -716,7 +735,9 @@ def _provisional_learning_from_events(
             if pe.get("status") != "computed":
                 continue
             lesson = _derive_candidate_lesson(ev, pe, attr)
-            if not lesson and not attr.get("satisfied"):
+            addressed = attribution_addressed(attr)
+            satisfied = attribution_is_satisfied(attr)
+            if not lesson and not addressed:
                 continue
             belief_update = ev.get("belief_update")
             rec = {
@@ -735,7 +756,7 @@ def _provisional_learning_from_events(
                 "lessons": ev.get("lessons"),
                 "belief_update": belief_update,
                 "confidence": ev.get("confidence"),
-                "chain_complete": bool(attr.get("satisfied") and lesson),
+                "chain_complete": bool(satisfied and lesson),
                 "source": "experience_event",
                 "experience_id": ev.get("experience_id"),
                 "category": "investment",

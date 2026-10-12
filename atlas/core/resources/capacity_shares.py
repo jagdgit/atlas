@@ -31,6 +31,39 @@ FLOOR_MIN_PROGRAMS: frozenset[str] = frozenset(
 )
 
 
+def market_priority_window(now: object | None = None) -> bool:
+    """True for morning digests, NSE cash hours, and evening catch-up to 23:00 IST.
+
+    Morning investor mail (07–10), flatten/fill mail, and the evening digest need
+    a market floor even when the cash-session flag is off. Catch-up matches
+    InvestorReportsWorker.catch_up_until_hour (default 23). Weekends stay closed.
+    """
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+
+    ist = ZoneInfo("Asia/Kolkata")
+    try:
+        from atlas.trading.sessions import is_session_open
+
+        if is_session_open("nse_equity", now=now):  # type: ignore[arg-type]
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    clock = now if isinstance(now, datetime) else datetime.now(ist)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=ist)
+    else:
+        clock = clock.astimezone(ist)
+    if clock.weekday() >= 5:
+        return False
+    t = clock.timetz().replace(tzinfo=None)
+    # 07:00–10:00 morning digest window (before cash open).
+    if time(7, 0) <= t < time(10, 0):
+        return True
+    # 15:30–23:00 covers the scheduled evening window and the catch-up hours.
+    return time(15, 30) <= t < time(23, 0)
+
+
 def normalize_program_id(raw: str | None) -> str:
     p = (raw or "").strip()
     if not p:
@@ -74,8 +107,9 @@ class ProgramCapacityPolicy:
             floor = max(1, raw) if effective_slots >= 1 else 0
         else:
             floor = max(0, raw)
-        # NSE RTH: paper labs (equity/intraday/FNO) must tick together. Leave ≥1
-        # slot borrowable for hourly BATCH / other programs.
+        # NSE cash session and the 15:30–18:00 IST close-out: paper labs must
+        # keep a floor so flatten, fill mail, and the evening digest are not
+        # deferred once the cash session flag drops. Leave ≥1 slot borrowable.
         if nse_rth and prog == "market_intelligence" and effective_slots >= 2:
             floor = max(floor, min(3, effective_slots - 1))
         return floor

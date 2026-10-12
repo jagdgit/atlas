@@ -64,13 +64,39 @@ def test_parse_request_token_variants():
     )
     assert (
         parse_request_token_from_text(
-            "see http://127.0.0.1:8000/zerodha/callback?request_token=tok_99XYZ&action=login"
+            "see http://127.0.0.1:8000/zerodha/callback?request_token=tok_99XYZab&action=login"
         )
-        == "tok_99XYZ"
+        == "tok_99XYZab"
     )
     assert parse_request_token_from_text("no token here") is None
     # Must not treat access_token line as request token without marker
     assert parse_request_token_from_text("access_token=should_not_match_alone") is None
+    # Instructional escalate prose used to parse as a 32-char "token" via parse_qs.
+    assert (
+        parse_request_token_from_text(
+            "     ?request_token=... even though the page failed."
+        )
+        is None
+    )
+    assert (
+        parse_request_token_from_text(
+            "just the http://127.0.0.1:8000/...?request_token=... line."
+        )
+        is None
+    )
+    # "prefix" from old instruction text must not beat a real callback URL.
+    mixed = (
+        "http://127.0.0.1:8000/?action=login&type=login&status=success"
+        "&request_token=AbCdEfGhIjKlMnOpQrStUvWxYz0123\n\n"
+        "(ATLAS_ZERODHA_REQUEST_TOKEN: prefix is optional.)\n"
+    )
+    assert (
+        parse_request_token_from_text(mixed)
+        == "AbCdEfGhIjKlMnOpQrStUvWxYz0123"
+    )
+    assert parse_request_token_from_text(
+        "ATLAS_ZERODHA_REQUEST_TOKEN: prefix is optional."
+    ) is None
 
 
 def test_public_base_url_env(monkeypatch):
@@ -140,6 +166,144 @@ def test_escalate_email_arms_pending(tmp_path: Path, monkeypatch):
     assert out2["reason"] == "already_sent_today"
 
 
+def test_completed_session_that_dies_sends_again(tmp_path: Path, monkeypatch):
+    from datetime import datetime as real_datetime
+    from datetime import timezone
+
+    import atlas.investment.zerodha_token_email as zmail
+
+    class _Clock(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None and getattr(tz, "key", None) == "Asia/Kolkata":
+                return real_datetime(2026, 9, 30, 10, 0, tzinfo=tz)
+            return real_datetime.now(tz or timezone.utc)
+
+    monkeypatch.setattr(zmail, "datetime", _Clock)
+    day = zmail._ist_day()
+    save_pending(
+        tmp_path,
+        {
+            "version": "test",
+            "ist_day": day,
+            "status": "completed",
+            "sent_at": "2026-09-30T00:31:10+00:00",
+            "completed_at": "2026-09-30T00:44:33+00:00",
+        },
+    )
+    sender = _FakeSender()
+    health = {
+        "status": mdph.STATUS_LOGIN_REQUIRED,
+        "trading_date": day,
+        "login_email_sent_ist_day": day,
+    }
+    out = escalate_login_email(tmp_path, health, sender=sender, force=True)
+    assert out["sent"] is True
+    assert "session inactive" in sender.sent[0]["subject"]
+    assert "no longer valid" in sender.sent[0]["body"]
+    assert load_pending(tmp_path)["status"] == "awaiting_reply"
+    # While that reply is outstanding, do not send a third mail.
+    out2 = escalate_login_email(tmp_path, health, sender=sender, force=False)
+    assert out2["sent"] is False
+    assert out2["reason"] == "already_sent_today"
+
+
+def test_rejected_request_token_sends_again(tmp_path: Path, monkeypatch):
+    from datetime import datetime as real_datetime
+    from datetime import timezone
+
+    import atlas.investment.zerodha_token_email as zmail
+
+    class _Clock(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None and getattr(tz, "key", None) == "Asia/Kolkata":
+                return real_datetime(2026, 10, 5, 10, 0, tzinfo=tz)
+            return real_datetime.now(tz or timezone.utc)
+
+    monkeypatch.setattr(zmail, "datetime", _Clock)
+    day = zmail._ist_day()
+    save_pending(
+        tmp_path,
+        {
+            "version": "test",
+            "ist_day": day,
+            "status": "exchange_rejected",
+            "consumed_uids": ["83443", "83444"],
+            "last_exchange_error": "TokenException: Token is invalid or has expired.",
+        },
+    )
+    sender = _FakeSender()
+    health = {
+        "status": mdph.STATUS_LOGIN_REQUIRED,
+        "trading_date": day,
+        "login_email_sent_ist_day": day,
+    }
+    out = escalate_login_email(tmp_path, health, sender=sender, force=False)
+    assert out["sent"] is True
+    assert "request token rejected" in sender.sent[0]["subject"]
+    assert "invalid or expired" in sender.sent[0]["body"]
+    pending = load_pending(tmp_path)
+    assert pending["status"] == "awaiting_reply"
+    assert pending["consumed_uids"] == ["83443", "83444"]
+    out2 = escalate_login_email(tmp_path, health, sender=sender, force=False)
+    assert out2["sent"] is False
+    assert out2["reason"] == "already_sent_today"
+    # A second expired reply inside the notice window must not send another mail.
+    save_pending(
+        tmp_path,
+        {
+            **load_pending(tmp_path),
+            "status": "exchange_rejected",
+        },
+    )
+    out3 = escalate_login_email(tmp_path, health, sender=sender, force=False)
+    assert out3["sent"] is False
+    assert out3["reason"] == "rejection_notice_already_sent"
+
+
+def test_poll_rejection_arms_another_email(tmp_path: Path):
+    day = __import__("atlas.investment.zerodha_token_email", fromlist=["_ist_day"])._ist_day()
+    save_pending(
+        tmp_path,
+        {
+            "version": "test",
+            "ist_day": day,
+            "status": "awaiting_reply",
+            "subject": f"[Atlas MDPH] Zerodha LOGIN_REQUIRED ({day})",
+            "sent_at": "2026-10-05T01:21:34+00:00",
+            "last_poll_at": None,
+            "poll_count": 0,
+            "consumed_uids": [],
+        },
+    )
+
+    class _ExpiredKite(_FakeKite):
+        def generate_session(self, request_token: str, api_secret: str) -> dict:
+            raise RuntimeError("Token is invalid or has expired.")
+
+    feed = ZerodhaMarketFeed(
+        api_key="key", api_secret="secret", data_dir=tmp_path, client=_ExpiredKite()
+    )
+    mail = _FakeMail(
+        [
+            {
+                "uid": "83443",
+                "subject": f"Re: [Atlas MDPH] Zerodha LOGIN_REQUIRED ({day})",
+                "body": "ATLAS_ZERODHA_REQUEST_TOKEN: expiredtoken99\n",
+            }
+        ]
+    )
+    result = poll_token_reply(tmp_path, mail_client=mail, feed=feed, force=True)
+    assert result["ok"] is False
+    assert result["reason"] in {"complete_login_rejected", "complete_login_failed:RuntimeError"}
+    pending = load_pending(tmp_path)
+    assert pending["status"] == "exchange_rejected"
+    assert "83443" in pending["consumed_uids"]
+    assert "expiredtoken99" not in str(pending)
+    assert feed.has_session is False
+
+
 def test_escalate_body_loopback_is_reply_first():
     from atlas.investment.zerodha_token_email import build_escalate_body
 
@@ -155,7 +319,7 @@ def test_escalate_body_loopback_is_reply_first():
     assert "no public URL" in body
     assert "kite.zerodha.com/connect/login" in body
     assert body.index("PRIMARY") < body.index("OPTIONAL")
-    assert "No special prefix needed" in body or "just the http://" in body
+    assert "No label needed" in body or "callback URL on one line" in body
     # Atlas LAN links are demoted, not removed
     assert "127.0.0.1:8000/zerodha/login" in body
 
@@ -177,7 +341,13 @@ def test_poll_reply_completes_login(tmp_path: Path, monkeypatch):
             "consumed_uids": [],
         },
     )
-    kite = _FakeKite()
+    class _Kite(_FakeKite):
+        def generate_session(self, request_token: str, api_secret: str) -> dict:
+            assert request_token == "req1234567"
+            assert api_secret == "secret"
+            return {"access_token": "acc-day", "user_id": "AB1234"}
+
+    kite = _Kite()
     feed = ZerodhaMarketFeed(
         api_key="key", api_secret="secret", data_dir=tmp_path, client=kite
     )
@@ -186,7 +356,10 @@ def test_poll_reply_completes_login(tmp_path: Path, monkeypatch):
             {
                 "uid": "42",
                 "subject": f"Re: [Atlas MDPH] Zerodha LOGIN_REQUIRED ({day})",
-                "body": "ATLAS_ZERODHA_REQUEST_TOKEN: req123\n",
+                "body": (
+                    "http://127.0.0.1:8000/?action=login&type=login&status=success"
+                    "&request_token=req1234567\n"
+                ),
             }
         ]
     )
@@ -200,10 +373,10 @@ def test_poll_reply_completes_login(tmp_path: Path, monkeypatch):
     assert feed.has_session
     pending = load_pending(tmp_path)
     assert pending["status"] == "completed"
-    assert pending["result"]["token_len"] == len("req123")
+    assert pending["result"]["token_len"] == len("req1234567")
     # confirm mail sent, no raw token in confirm body
     assert sender.sent
-    assert "req123" not in sender.sent[-1]["body"]
+    assert "req1234567" not in sender.sent[-1]["body"]
 
 
 def test_poll_throttled(tmp_path: Path):
@@ -222,7 +395,38 @@ def test_poll_throttled(tmp_path: Path):
     )
     out = poll_token_reply(tmp_path, mail_client=_FakeMail(), force=False)
     assert out["reason"] == "poll_throttled"
-    assert POLL_INTERVAL_S == 300
+    assert POLL_INTERVAL_S == 60
+
+
+def test_poll_session_already_present_closes_wait_even_when_throttled(tmp_path: Path):
+    """Manual /zerodha/callback login must complete the email pending without IMAP."""
+    from datetime import datetime, timezone
+
+    day = __import__("atlas.investment.zerodha_token_email", fromlist=["_ist_day"])._ist_day()
+    save_pending(
+        tmp_path,
+        {
+            "ist_day": day,
+            "status": "awaiting_reply",
+            "last_poll_at": datetime.now(timezone.utc).isoformat(),
+            "poll_count": 3,
+            "consumed_uids": [],
+        },
+    )
+    kite = _FakeKite()
+    feed = ZerodhaMarketFeed(
+        api_key="key", api_secret="secret", data_dir=tmp_path, client=kite
+    )
+    assert feed.complete_login("req123")["ok"]
+    assert feed.has_session
+    out = poll_token_reply(
+        tmp_path, mail_client=_FakeMail(), feed=feed, force=False
+    )
+    assert out["ok"] is True
+    assert out["reason"] == "session_already_present"
+    pending = load_pending(tmp_path)
+    assert pending["status"] == "completed"
+    assert pending["result"]["via"] == "session_already_present"
 
 
 def test_save_health_preserves_login_email_flag(tmp_path: Path):

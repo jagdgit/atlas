@@ -108,6 +108,53 @@ def lookup_local(
         # A sector label is not a price series. Do not synthesize one.
         return _miss(req, error="sector_index_history_not_available", missing="durable_sector_OHLCV_provider")
     if req in {"pe", "fcf", "roe", "pb", "debt", "mos"}:
+        if req != "mos":
+            try:
+                from atlas.investment.data_quality import lookup_usability
+
+                use = lookup_usability(root, sym, req, laboratory_id)
+            except Exception:  # noqa: BLE001
+                use = None
+            if use is not None and not use.get("usable"):
+                quality = str(use.get("quality") or "UNKNOWN")
+                if use.get("acquired") and quality in {
+                    "PENDING_VALIDATION",
+                    "CONFLICT",
+                    "STALE",
+                    "INVALID",
+                    "TRUSTED",
+                }:
+                    # Acquired and not decision-usable. This is not a missing fact.
+                    return {
+                        "ok": False,
+                        "quality_hold": True,
+                        "quality": quality,
+                        "acquired": True,
+                        "usable": False,
+                        "tradable": False,
+                        "error": f"registry_{quality}",
+                        "missing": None,
+                        "citations": [],
+                        "invented": False,
+                        "evidence": None,
+                    }
+                return _miss(req, error=str(use.get("reason") or "not_decision_usable"))
+            if use is not None and use.get("usable") and use.get("value") is not None:
+                return {
+                    "ok": True,
+                    "evidence": {
+                        "value": use.get("value"),
+                        "source": use.get("provider") or "data_quality",
+                        "symbol": sym,
+                        "field": req,
+                        "evidence_id": use.get("evidence_id"),
+                        "quality": use.get("quality"),
+                    },
+                    "citations": [str(use.get("evidence_id") or "data_quality")],
+                    "invented": False,
+                    "error": None,
+                    "missing": None,
+                }
         comp = _completeness_item(root, sym, laboratory_id, req)
         research = _read(root / "investment" / "research" / "market_intelligence" / f"{sym}.json")
         value = None

@@ -15,6 +15,42 @@ def test_market_floor_at_least_one_on_eff_4():
     assert pol.floor_slots("engineering_intelligence", 4) >= 1
 
 
+def test_closeout_window_keeps_the_market_floor():
+    """After 15:30 the cash flag drops; flatten and the evening digest still need a floor."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from atlas.core.resources.capacity_shares import market_priority_window
+
+    ist = ZoneInfo("Asia/Kolkata")
+    # Morning digest window (before cash open).
+    assert market_priority_window(datetime(2026, 10, 5, 7, 30, tzinfo=ist)) is True
+    assert market_priority_window(datetime(2026, 10, 5, 9, 0, tzinfo=ist)) is True
+    assert market_priority_window(datetime(2026, 10, 5, 16, 0, tzinfo=ist)) is True
+    assert market_priority_window(datetime(2026, 10, 5, 17, 50, tzinfo=ist)) is True
+    assert market_priority_window(datetime(2026, 10, 5, 18, 0, tzinfo=ist)) is True
+    assert market_priority_window(datetime(2026, 10, 5, 22, 30, tzinfo=ist)) is True
+    assert market_priority_window(datetime(2026, 10, 5, 23, 0, tzinfo=ist)) is False
+    assert market_priority_window(datetime(2026, 10, 10, 16, 0, tzinfo=ist)) is False  # Saturday
+    pol = ProgramCapacityPolicy()
+    assert pol.floor_slots("market_intelligence", 4, nse_rth=True) == 3
+    assert (
+        pol.blocks_admit(
+            admit_program="market_intelligence",
+            effective_slots=4,
+            total_inflight=2,
+            program_inflight={"market_intelligence": 2},
+            programs_with_demand={
+                "market_intelligence",
+                "engineering_intelligence",
+                "personal_intelligence",
+            },
+            nse_rth=True,
+        )
+        is None
+    )
+
+
 def test_nse_rth_raises_market_floor_for_paper_labs():
     pol = ProgramCapacityPolicy()
     assert pol.floor_slots("market_intelligence", 4) == 1

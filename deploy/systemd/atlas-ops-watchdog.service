@@ -1,0 +1,17 @@
+[Unit]
+Description=Atlas Loop 0 external watchdog (alerts when Atlas cannot alert itself)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=jagd
+Group=jagd
+WorkingDirectory=/data/atlas
+EnvironmentFile=-/etc/atlas/atlas.env
+Environment=PATH=/data/atlas/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/data/atlas/.venv/bin/python /data/atlas/scripts/ops_watchdog.py
+TimeoutStartSec=120
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/data/atlas_data/investment/ops_health

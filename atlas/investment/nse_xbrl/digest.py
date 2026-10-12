@@ -135,10 +135,29 @@ def format_fundamental_intelligence_section(
                 ok_counts[item["field"]] = ok_counts.get(item["field"], 0) + 1
         marks = []
         missing = []
+        registry_state = []
+        try:
+            from atlas.investment.data_quality import current_capability
+        except Exception:  # noqa: BLE001
+            current_capability = None  # type: ignore[assignment]
+        held = {"PENDING_VALIDATION", "CONFLICT", "TRUSTED", "STALE", "INVALID"}
         for item in cov.get("fields") or []:
             mark = "✓" if item.get("ok") else "✗"
+            cap = None
+            if current_capability is not None and root:
+                cap = current_capability(
+                    root,
+                    raw_sym if "." in raw_sym else f"{raw_sym}.NS",
+                    str(item.get("field") or ""),
+                    laboratory_id=laboratory_id,
+                )
+                if cap and cap.get("quality_status"):
+                    mark = str(cap.get("quality_status"))
             marks.append(f"{item['field']} {mark}")
-            if not item.get("ok"):
+            quality = str((cap or {}).get("quality_status") or "")
+            if quality in held:
+                registry_state.append(f"{item['field']}={quality}")
+            elif not item.get("ok"):
                 missing.append(item["field"])
         sector = sector_from_sources(fundamentals=row) or ident.get("sector")
         plc = evaluate_fundamental_sanity(row or {}, sector=sector)
@@ -151,12 +170,20 @@ def format_fundamental_intelligence_section(
                 if k.replace(".NS", "") == raw_sym.upper().replace(".NS", ""):
                     uq = v
                     break
-        reason = ",".join(missing) if missing else "complete"
+        if registry_state:
+            reason = "registry " + ", ".join(registry_state)
+            state_label = "state"
+        elif missing:
+            reason = ",".join(missing)
+            state_label = "missing"
+        else:
+            reason = "complete"
+            state_label = "state"
         provider = (row or {}).get("source") or "none"
         detail.append(raw_sym.replace(".NS", ""))
         detail.append("  " + "   ".join(marks))
         detail.append(
-            f"  provider={provider}   PLC.A={plc.get('code')}   missing: {reason}"
+            f"  provider={provider}   PLC.A={plc.get('code')}   {state_label}: {reason}"
         )
         detail.append(
             f"  UQ: {'pending ' + ','.join(uq) if uq else 'none'}   "
@@ -201,4 +228,12 @@ def format_fundamental_intelligence_section(
         )
     lines.append("")
     lines.extend(detail or ["(no material incompletes listed)"])
+    try:
+        from atlas.investment.data_quality import format_capability_lines
+
+        lines.extend(
+            format_capability_lines(root, laboratory_id=laboratory_id)
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return lines

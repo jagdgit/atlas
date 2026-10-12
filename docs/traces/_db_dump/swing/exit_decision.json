@@ -1,0 +1,60 @@
+{
+  "action": {
+    "key": "sell:COALINDIA.NS",
+    "kind": "recommend",
+    "payload": {
+      "kind": "sell",
+      "price": 409.8,
+      "quantity": 19.0,
+      "symbol": "COALINDIA.NS"
+    }
+  },
+  "action_kind": "recommend",
+  "alternatives_rejected": [
+    {
+      "base_score": 0.5,
+      "key": "hold",
+      "policy_boost": 0.08,
+      "policy_ids": [
+        "exp-bias:79"
+      ],
+      "rationale": "no actionable signal; ctx No Mission Context for 'markets trading COALINDIA.NS portfolio:india_equity_lear",
+      "score": 0.58,
+      "side_effecting": false
+    }
+  ],
+  "confidence": "high",
+  "confidence_score": 0.787758,
+  "config_id": null,
+  "config_version": 8,
+  "created_at": "2026-10-09T05:19:46.079909+00:00",
+  "decision_rule": "paper_trading",
+  "evidence_refs": [],
+  "experience_refs": [],
+  "id": "f1a64240-49bd-44d2-8db9-87a7ee98768f",
+  "knowledge_refs": [],
+  "mission_id": "9bcc3175-c613-486c-bcbb-e2f094ba5dfd",
+  "mission_type": "paper_trading",
+  "model_versions": {
+    "decision_engine": "1.0.0",
+    "intelligence": "0.1.0",
+    "policy": "1.0.0"
+  },
+  "policy_ids": [
+    "exp-bias:16",
+    "exp-bias:24",
+    "exp-bias:30",
+    "exp-bias:36",
+    "exp-bias:42",
+    "exp-bias:48",
+    "exp-bias:54",
+    "exp-bias:60",
+    "exp-bias:66",
+    "exp-bias:77",
+    "exp-bias:88"
+  ],
+  "requires_approval": false,
+  "rule_version": "1.0.0",
+  "status": "recorded",
+  "why": "Chose 'sell:COALINDIA.NS' (score 1.8915, high confidence). SMA fast (418.3700) fell below SMA slow (419.3317); margin -0.23%, RSI 42.3; ctx No Mission Context for 'markets trading COALINDIA.NS portfolio:india_equity_lear Influenced by policy exp-bias:16, exp-bias:24, exp-bias:30, exp-bias:36, exp-bias:42, exp-bias:48, exp-bias:54, exp-bias:60, exp-bias:66, exp-bias:77, exp-bias:88. Preferred over 'hold' (0.5800)."
+}

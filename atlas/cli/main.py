@@ -59,6 +59,11 @@ if TYPE_CHECKING:
     from atlas.kernel.application import Application
 
 
+def _cli_app(app: "Application | None" = None) -> "Application":
+    """F1 — CLI one-shots must not mutate the live scheduler / claim tasks."""
+    return app or build_application(ephemeral=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="atlas", description="Atlas — a personal AI Operating System"
@@ -68,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve = sub.add_parser("serve", help="run the REST API server")
     p_serve.add_argument("--host", default=None, help="bind host (default: config)")
     p_serve.add_argument("--port", type=int, default=None, help="bind port")
+    p_serve.add_argument(
+        "--manual",
+        action="store_true",
+        help="allow serve outside systemd (OI-OPS-1INST L5); L1–L3 still apply",
+    )
 
     sub.add_parser("status", help="bootstrap, run health checks, print status, exit")
 
@@ -376,15 +386,21 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_serve(args: argparse.Namespace, app: "Application | None" = None) -> int:
     from atlas.api import serve
 
-    serve(host=args.host, port=args.port)
-    return 0
+    return int(
+        serve(
+            host=args.host,
+            port=args.port,
+            manual=bool(getattr(args, "manual", False)),
+        )
+        or 0
+    )
 
 
 _STATUS_FLAG = {"ok": "OK", "degraded": "WARN", "failed": "FAIL"}
 
 
 def cmd_status(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     app.start()
     try:
         report = app.health()
@@ -415,7 +431,7 @@ def cmd_doctor(args: argparse.Namespace, app: "Application | None" = None) -> in
     checks = check_config(cfg)
     if not args.offline:
         try:
-            app = app or build_application()
+            app = _cli_app(app)
             checks.extend(probe_dependencies(app))
         except Exception as exc:  # noqa: BLE001 - report, don't crash the doctor
             print(f"  [FAIL] bootstrap: could not build application: {exc}",
@@ -431,7 +447,7 @@ def cmd_doctor(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 
 def cmd_chat(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     assistant = app.container.resolve("chat")
 
     if args.message:
@@ -458,7 +474,7 @@ def cmd_chat(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_agents(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     agent_service = app.container.resolve("agent")
     names = agent_service.list()
     if not names:
@@ -469,7 +485,7 @@ def cmd_agents(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 
 def cmd_ask(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     agent_service = app.container.resolve("agent")
     options = {}
     if args.k is not None:
@@ -480,7 +496,7 @@ def cmd_ask(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_search(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     knowledge = app.container.resolve("knowledge")
     results = knowledge.search(args.query, limit=args.limit)
     if not results:
@@ -501,7 +517,7 @@ def cmd_ingest(args: argparse.Namespace, app: "Application | None" = None) -> in
 
     # Media Reader Family (M.6): remote URL → SourceFetcher → Asset → Readers → Knowledge.
     if parsed.scheme in ("http", "https"):
-        app = app or build_application()
+        app = _cli_app(app)
         media = app.container.resolve("media_ingestor")
         result = media.ingest_url(raw, embed=True)
         fetch = result.get("fetch") or {}
@@ -535,7 +551,7 @@ def cmd_ingest(args: argparse.Namespace, app: "Application | None" = None) -> in
 
     # Media Reader Family (M.4): Asset → metadata → transcript/demux → Knowledge.
     if infer_media_kind(path.name) is not None:
-        app = app or build_application()
+        app = _cli_app(app)
         media = app.container.resolve("media_ingestor")
         result = media.ingest_file(path, embed=True)
         ingest = result.get("ingest") or {}
@@ -557,7 +573,7 @@ def cmd_ingest(args: argparse.Namespace, app: "Application | None" = None) -> in
     if not text:
         print(f"error: no extractable text in {path}", file=sys.stderr)
         return 1
-    app = app or build_application()
+    app = _cli_app(app)
     # OI-C5: prefer unified Asset→Reader→chunks(+candidates) bridge when available.
     try:
         bridge = app.container.resolve("ingestion_bridge")
@@ -610,7 +626,7 @@ def cmd_backfill_assets(args: argparse.Namespace, app: "Application | None" = No
     """OI-C4 — link orphan knowledge.documents to Assets."""
     import json
 
-    app = app or build_application()
+    app = _cli_app(app)
     try:
         bridge = app.container.resolve("ingestion_bridge")
     except Exception as exc:  # noqa: BLE001
@@ -622,7 +638,7 @@ def cmd_backfill_assets(args: argparse.Namespace, app: "Application | None" = No
 
 
 def cmd_remember(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     memory = app.container.resolve("memory")
     item = memory.remember(
         args.content,
@@ -636,7 +652,7 @@ def cmd_remember(args: argparse.Namespace, app: "Application | None" = None) -> 
 
 
 def cmd_recall(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     memory = app.container.resolve("memory")
     results = memory.recall(
         args.query, limit=args.limit, kind=args.kind, scope=args.scope
@@ -651,7 +667,7 @@ def cmd_recall(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 
 def cmd_forget(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     memory = app.container.resolve("memory")
     ok = memory.forget(args.id)
     print("forgotten" if ok else "(not found)")
@@ -659,7 +675,7 @@ def cmd_forget(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 
 def cmd_plugins(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     manager = app.container.resolve("plugins")
     infos = manager.describe()
     if not infos:
@@ -670,7 +686,7 @@ def cmd_plugins(args: argparse.Namespace, app: "Application | None" = None) -> i
 
 
 def cmd_tools(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     tools = app.tools.describe()
     if not tools:
         print("(no tools registered)")
@@ -682,7 +698,7 @@ def cmd_tools(args: argparse.Namespace, app: "Application | None" = None) -> int
 def cmd_capabilities(args: argparse.Namespace, app: "Application | None" = None) -> int:
     from atlas.capabilities import describe_capabilities
 
-    app = app or build_application()
+    app = _cli_app(app)
     rows = describe_capabilities(app.capabilities)
     for row in rows:
         flag = "ok " if row["provided"] else "-- "
@@ -698,7 +714,7 @@ def cmd_capability_gaps(args: argparse.Namespace, app: "Application | None" = No
     """P15 first-class gap self-report (OI-F5)."""
     import json
 
-    app = app or build_application()
+    app = _cli_app(app)
     report = app.capabilities.self_report_gaps(
         include_missions=not bool(getattr(args, "no_missions", False))
     )
@@ -730,7 +746,7 @@ def cmd_tool(args: argparse.Namespace, app: "Application | None" = None) -> int:
             return 1
         key, value = pair.split("=", 1)
         kwargs[key] = value
-    app = app or build_application()
+    app = _cli_app(app)
     result = app.invoke_tool(args.name, **kwargs)
     if isinstance(result, (dict, list)):
         print(json.dumps(result, indent=2, default=str))
@@ -755,7 +771,7 @@ def _print_job_detail(detail) -> None:
 
 
 def cmd_jobs(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     jobs = app.container.resolve("jobs")
     if getattr(args, "blocked", False):
         blocked = jobs.list_blocked(limit=args.limit)
@@ -774,7 +790,7 @@ def cmd_jobs(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_job(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     jobs = app.container.resolve("jobs")
     if args.action == "start":
         detail = jobs.create_job(args.target, session_id=args.session)
@@ -796,14 +812,14 @@ def cmd_job(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_formats(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     documents = app.container.resolve("documents")
     print("document formats: " + ", ".join(documents.supported()))
     return 0
 
 
 def cmd_websearch(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     result = app.invoke_tool("web.search", query=args.query, max_results=args.limit)
     outcome = result.get("outcome")
     if outcome != "ok":
@@ -825,14 +841,14 @@ def cmd_websearch(args: argparse.Namespace, app: "Application | None" = None) ->
 
 
 def cmd_download(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     result = app.invoke_tool("web.download", url=args.url, filename=args.filename)
     print(f"downloaded {result['bytes']} bytes -> {result['path']}")
     return 0
 
 
 def cmd_scholar(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     result = app.invoke_tool("scholar.search", query=args.query, max_results=args.limit)
     outcome = result.get("outcome")
     if outcome != "ok":
@@ -855,7 +871,7 @@ def cmd_scholar(args: argparse.Namespace, app: "Application | None" = None) -> i
 
 
 def cmd_youtube(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     result = app.invoke_tool("youtube.transcript", video=args.video)
     outcome = result.get("outcome")
     if outcome != "ok":
@@ -869,7 +885,7 @@ def cmd_youtube(args: argparse.Namespace, app: "Application | None" = None) -> i
 
 
 def cmd_code(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     code = app.container.resolve("code")
     action = args.action
     if action == "parse":
@@ -931,7 +947,7 @@ def cmd_code(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_python(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     sandbox = app.container.resolve("python")
     if args.file:
         result = sandbox.run_file(args.file, timeout=args.timeout)
@@ -959,7 +975,7 @@ def cmd_python(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 
 def cmd_git(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     action = args.action
     if action == "log":
         result = app.invoke_tool("git.log", repo=args.repo, max_count=args.max_count)
@@ -1006,7 +1022,7 @@ def cmd_git(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_sql(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     action = args.action
     if action == "tables":
         result = app.invoke_tool("sql.tables", source=args.source)
@@ -1048,7 +1064,7 @@ def cmd_sql(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_ocr(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     result = app.invoke_tool("ocr.image", path=args.path, lang=args.lang)
     outcome = result.get("outcome")
     if outcome not in ("ok", "empty"):
@@ -1063,7 +1079,7 @@ def cmd_ocr(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_mail(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     if args.action == "folders":
         result = app.invoke_tool("mail.folders")
     elif args.action == "message":
@@ -1105,7 +1121,7 @@ def cmd_mail(args: argparse.Namespace, app: "Application | None" = None) -> int:
 
 
 def cmd_browser(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     if args.screenshot:
         result = app.invoke_tool("browser.screenshot", url=args.url, path=args.screenshot)
     else:
@@ -1132,7 +1148,7 @@ def cmd_browser(args: argparse.Namespace, app: "Application | None" = None) -> i
 
 
 def cmd_research(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     result = app.invoke_tool(
         "research.run", objective=args.objective, max_iterations=args.max_iterations
     )
@@ -1160,7 +1176,7 @@ def cmd_report(args: argparse.Namespace, app: "Application | None" = None) -> in
     from pathlib import Path
 
     data = json.loads(Path(args.path).read_text(encoding="utf-8"))
-    app = app or build_application()
+    app = _cli_app(app)
     reports = app.container.resolve("reports")
     result = reports.report(
         data.get("objective", ""),
@@ -1177,7 +1193,7 @@ def cmd_verify(args: argparse.Namespace, app: "Application | None" = None) -> in
     from pathlib import Path
 
     data = json.loads(Path(args.path).read_text(encoding="utf-8"))
-    app = app or build_application()
+    app = _cli_app(app)
     verification = app.container.resolve("verification")
     result = verification.verify(
         {"claims": data.get("claims", []), "sources": data.get("sources", [])},
@@ -1198,7 +1214,7 @@ def cmd_verify(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 
 def cmd_learn(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     learning = app.container.resolve("learning")
     action = args.action
 
@@ -1319,7 +1335,7 @@ def cmd_learn(args: argparse.Namespace, app: "Application | None" = None) -> int
 
 
 def cmd_intel(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     intel = app.container.resolve("intelligence")
     action = args.action
 
@@ -1397,7 +1413,7 @@ def cmd_intel(args: argparse.Namespace, app: "Application | None" = None) -> int
 
 
 def cmd_coverage(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     summary = app.container.resolve("coverage").summary()
     domains = summary.get("domains") or []
     if not domains:
@@ -1413,7 +1429,7 @@ def cmd_coverage(args: argparse.Namespace, app: "Application | None" = None) -> 
 
 
 def cmd_policy(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     policy = app.container.resolve("policy")
     action = args.action
 
@@ -1503,7 +1519,7 @@ def cmd_policy(args: argparse.Namespace, app: "Application | None" = None) -> in
 
 
 def cmd_personal(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     personal = app.container.resolve("personal")
     action = args.action
 
@@ -1584,7 +1600,7 @@ def cmd_personal(args: argparse.Namespace, app: "Application | None" = None) -> 
 
 
 def cmd_decision(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     decision = app.container.resolve("decision")
     action = args.action
 
@@ -1622,7 +1638,7 @@ def cmd_decision(args: argparse.Namespace, app: "Application | None" = None) -> 
 def cmd_approvals(args: argparse.Namespace, app: "Application | None" = None) -> int:
     from atlas.decision import ApprovalError
 
-    app = app or build_application()
+    app = _cli_app(app)
     approvals = app.container.resolve("approvals")
     action = args.action
 
@@ -1668,7 +1684,7 @@ def cmd_approvals(args: argparse.Namespace, app: "Application | None" = None) ->
 
 
 def cmd_backup(args: argparse.Namespace, app: "Application | None" = None) -> int:
-    app = app or build_application()
+    app = _cli_app(app)
     backup = app.container.resolve("backup")
     path = backup.backup()
     print(f"backup written to {path}")

@@ -1,0 +1,93 @@
+{
+  "version": "fno.data_pack.v1",
+  "underlying": "NIFTY",
+  "status": "READY",
+  "quality_status": "TRUSTED",
+  "freshness": "PASS",
+  "instrument_status": "PASS",
+  "session": {
+    "broker": "PASS",
+    "market": "PASS"
+  },
+  "spot": {
+    "status": "PASS",
+    "value": 22387.9,
+    "reason": "ok",
+    "as_of": "2026-10-12T09:56:34.066983+00:00",
+    "age_seconds": 0.196349
+  },
+  "instrument_master": {
+    "status": "PASS",
+    "rows": 10082,
+    "futures_rows": 653,
+    "options_rows": 9429,
+    "futures_state": "READY"
+  },
+  "expiry": {
+    "status": "PASS",
+    "value": "2026-10-27"
+  },
+  "atm": {
+    "status": "PASS",
+    "strike": 22400.0
+  },
+  "ce": {
+    "instrument": {
+      "status": "PASS",
+      "reason": "ok",
+      "instrument": {
+        "tradingsymbol": "NIFTY26OCT22400CE",
+        "instrument_token": 13139458,
+        "exchange": "NFO",
+        "expiry": "2026-10-27",
+        "strike": 22400.0,
+        "instrument_type": "CE"
+      }
+    },
+    "ltp": {
+      "status": "PASS",
+      "value": 251.3,
+      "reason": "ok",
+      "as_of": "2026-10-12T09:56:34.263332+00:00",
+      "age_seconds": 0.0
+    }
+  },
+  "pe": {
+    "instrument": {
+      "status": "PASS",
+      "reason": "ok",
+      "instrument": {
+        "tradingsymbol": "NIFTY26OCT22400PE",
+        "instrument_token": 13139714,
+        "exchange": "NFO",
+        "expiry": "2026-10-27",
+        "strike": 22400.0,
+        "instrument_type": "PE"
+      }
+    },
+    "ltp": {
+      "status": "PASS",
+      "value": 267.75,
+      "reason": "ok",
+      "as_of": "2026-10-12T09:56:34.263332+00:00",
+      "age_seconds": 0.0
+    }
+  },
+  "ohlc": {
+    "status": "PASS",
+    "reason": "no_ohlc_supplied"
+  },
+  "ticks": {
+    "status": "PASS",
+    "duplicates": 0,
+    "out_of_order": 0,
+    "gaps": 0
+  },
+  "provider": "zerodha",
+  "reason": "ok",
+  "reasons": [],
+  "retry": null,
+  "decision": null,
+  "as_of": "2026-10-12T09:56:34.269394+00:00",
+  "live_orders": false
+}

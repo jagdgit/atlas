@@ -437,6 +437,17 @@ class JobService:
             )
             return
 
+        if not getattr(outcome, "productive", True):
+            self._on_step_gap(
+                job,
+                step,
+                recorder,
+                outcome,
+                tool_calls,
+                getattr(outcome, "gap_reason", None) or "produced no usable result",
+            )
+            return
+
         recorder.record(
             PHASE_STEP,
             f"Step {step.ordinal + 1} completed.",
@@ -459,6 +470,71 @@ class JobService:
             bump_attempts=True,
         )
 
+    def _on_step_gap(
+        self,
+        job: Job,
+        step: JobStep,
+        recorder: Any,
+        outcome: Any,
+        tool_calls: list[dict[str, Any]],
+        reason: str,
+    ) -> None:
+        """A step that ran cleanly and produced nothing (J3).
+
+        Not an exception, so it cannot be ``error``; not work done, so it must not be
+        ``done``. It reuses the retry ladder — a wrong predicate is often right on the
+        second attempt — and on exhaustion lands in ``failed`` with the gap spelled
+        out, so the job reports ``failed`` rather than claiming it completed. There is
+        no ``gap`` step status to write: ``job_steps_status_check`` permits only
+        pending/running/done/failed/blocked/skipped, and inventing one would need a
+        migration deployed in lockstep with this code.
+        """
+        gap_result: dict[str, Any] = {
+            "answer": outcome.answer,
+            "citations": getattr(outcome, "citations", []) or [],
+            "run_id": getattr(outcome, "run_id", None),
+            "tool_calls": tool_calls,
+            "productive": False,
+            "gap_reason": reason,
+        }
+        if getattr(outcome, "extras", None):
+            gap_result.update(outcome.extras)
+        last_attempt = step.attempts + 1 >= self._step_max_retries
+        recorder.record(
+            PHASE_STEP,
+            f"Step {step.ordinal + 1} produced no usable result: {reason}"
+            + ("." if last_attempt else " — retrying."),
+            ordinal=step.ordinal,
+            state="gap",
+            reason=reason,
+            tools=[tc.get("action") or tc.get("intent") for tc in tool_calls],
+        )
+        if last_attempt:
+            self._repo.set_step_status(
+                step.id,
+                STEP_FAILED,
+                result=gap_result,
+                error=f"no usable result: {reason}",
+                bump_attempts=True,
+            )
+            self._logger.warning(
+                "job %s step %s produced no usable result: %s", job.id, step.ordinal, reason
+            )
+        else:
+            self._repo.set_step_status(
+                step.id,
+                STEP_PENDING,
+                result=gap_result,
+                error=f"no usable result: {reason}",
+                bump_attempts=True,
+            )
+            self._logger.info(
+                "job %s step %s produced no usable result (%s); will retry",
+                job.id,
+                step.ordinal,
+                reason,
+            )
+
     def _on_step_error(self, step: JobStep, error: str) -> None:
         # Simple step-level retry mirroring the scheduler's backoff intent.
         if step.attempts + 1 < self._step_max_retries:
@@ -471,6 +547,26 @@ class JobService:
                 step.id, STEP_FAILED, error=error, bump_attempts=True
             )
             self._logger.error("job step %s failed permanently: %s", step.id, error)
+
+    @staticmethod
+    def _gaps(steps: list[JobStep]) -> list[dict[str, Any]]:
+        """Steps that ran without raising and produced nothing usable (J3)."""
+        gaps: list[dict[str, Any]] = []
+        for step in steps:
+            result = step.result if isinstance(step.result, dict) else {}
+            if result.get("productive") is not False:
+                continue
+            gaps.append(
+                {
+                    "ordinal": step.ordinal,
+                    "intent": step.intent,
+                    "capability": step.capability,
+                    "description": step.description or "",
+                    "reason": result.get("gap_reason") or "produced no usable result",
+                    "attempts": step.attempts,
+                }
+            )
+        return gaps
 
     def _finalize(self, job_id: str, steps: list[JobStep]) -> str:
         statuses = [s.status for s in steps]
@@ -487,6 +583,11 @@ class JobService:
             "answer": self._answer(steps),
             "progress": self._progress(steps),
         }
+        # J3: name what was attempted and produced nothing, so "failed" is actionable
+        # rather than just negative — this is the attempts ladder the operator reads.
+        gaps = self._gaps(steps)
+        if gaps:
+            result["gaps"] = gaps
         report = self._build_report(job_id, steps)
         if report is not None:
             result["report"] = report.get("markdown", "")

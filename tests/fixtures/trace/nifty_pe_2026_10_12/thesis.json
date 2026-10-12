@@ -1,0 +1,28 @@
+{
+  "assumptions": [
+    {
+      "id": "a1",
+      "kind": "other",
+      "status": "open",
+      "text": "Core hypothesis remains intact"
+    }
+  ],
+  "attributions": [],
+  "closed_at": null,
+  "decision": "buy",
+  "decision_at": "2026-10-12T04:46:05Z",
+  "horizon": "long_term",
+  "hypothesis": "idle",
+  "investment_confidence_at_entry": "low",
+  "lessons": [],
+  "opened_at": "2026-10-12T04:46:05Z",
+  "outcome_summary": null,
+  "research_confidence_at_entry": "very_low",
+  "revisits": [],
+  "size_note": "score_path=watch; band=insufficient",
+  "status": "open",
+  "symbol": "NIFTY26OCT22550PE.NS",
+  "theme_links": [],
+  "updated_at": "2026-10-12T04:46:05Z",
+  "version": "iip.8.thesis_tracker"
+}

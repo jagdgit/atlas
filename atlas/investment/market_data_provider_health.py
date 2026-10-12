@@ -726,7 +726,15 @@ def provider_health_tick(
     phase2 = stamp_phase2_session(data_dir, health=doc)
     email_note = maybe_escalate_login_email(data_dir, doc)
     poll_note = maybe_poll_zerodha_token_email(data_dir, doc)
+    ops_note: dict[str, Any] | None = None
+    if payload.get("ops_health", True):
+        from atlas.investment.ops_health import ops_health_tick
+
+        ops_note = ops_health_tick(
+            data_dir, doc, email=bool(payload.get("ops_alert_email", True))
+        )
     return {
+        "ops_health": ops_note,
         "ok": True,
         "status": doc.get("status"),
         "live_trading_allowed": doc.get("live_trading_allowed"),
@@ -875,6 +883,13 @@ def maybe_poll_zerodha_token_email(
     health: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """While LOGIN_REQUIRED, poll IMAP ~every 5 min for request_token reply."""
+    try:
+        from atlas.ops.service_locks import require_service
+
+        if not require_service("atlas.svc.zerodha_token_mail"):
+            return {"ok": False, "reason": "service_lock_passive"}
+    except Exception:  # noqa: BLE001
+        pass
     health = health or load_health(data_dir)
     status = str((health or {}).get("status") or "")
     if status not in {STATUS_LOGIN_REQUIRED, STATUS_EXPIRED}:

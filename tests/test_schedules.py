@@ -53,6 +53,38 @@ class FakeScheduleRepo:
         row = self.rows.get(str(sid))
         return Schedule.from_row(row) if row else None
 
+    def find_by_identity(
+        self,
+        *,
+        task_type,
+        payload=None,
+        mission_id=None,
+        worker_id=None,
+        kind="interval",
+        cron_expr=None,
+    ) -> Schedule | None:
+        payload = payload or {}
+        kind = (kind or "interval").strip().lower()
+        matches = []
+        for row in self.rows.values():
+            if row["task_type"] != task_type:
+                continue
+            if (row.get("kind") or "interval") != kind:
+                continue
+            if (row.get("cron_expr") or None) != (cron_expr or None):
+                continue
+            if (row.get("worker_id") or None) != (worker_id or None):
+                continue
+            if (row.get("mission_id") or None) != (mission_id or None):
+                continue
+            if (row.get("payload") or {}) != payload:
+                continue
+            matches.append(row)
+        if not matches:
+            return None
+        matches.sort(key=lambda r: (not r["enabled"], str(r["id"])))
+        return Schedule.from_row(matches[0])
+
     def list(self, *, enabled=None, mission_id=None, limit=200) -> list[Schedule]:
         out = []
         for row in self.rows.values():
@@ -370,3 +402,40 @@ def test_health_degraded_without_tick(svc):
     assert service.health_check().degraded  # no tick seeded yet
     service.start()
     assert service.health_check().healthy
+
+
+# --- F5 idempotent registration -----------------------------------------
+
+
+def test_register_schedule_is_idempotent_by_identity(svc):
+    service, srepo, _ = svc
+    a = service.register_schedule("host_guard_tick", 60, payload={})
+    b = service.register_schedule("host_guard_tick", 60, payload={})
+    assert a.id == b.id
+    assert len(srepo.rows) == 1
+
+
+def test_register_schedule_different_payload_is_distinct(svc):
+    service, srepo, _ = svc
+    a = service.register_schedule("worker_tick", 60, payload={"worker_id": "w1"})
+    b = service.register_schedule("worker_tick", 60, payload={"worker_id": "w2"})
+    assert a.id != b.id
+    assert len(srepo.rows) == 2
+
+
+def test_ensure_reenables_disabled_match(svc):
+    service, srepo, _ = svc
+    s = service.register_schedule("provider_health_tick", 120, payload={})
+    service.disable(s.id)
+    assert srepo.get(s.id).enabled is False
+    again = service.ensure_schedule("provider_health_tick", 120, payload={})
+    assert again.id == s.id
+    assert again.enabled is True
+
+
+def test_ephemeral_schedule_service_does_not_seed_tick():
+    srepo = FakeScheduleRepo()
+    trepo = FakeTaskRepo()
+    service = ScheduleService(srepo, trepo, seed_tick_on_start=False)
+    service.start()
+    assert trepo.count_pending_of_type(TICK_TASK_TYPE) == 0

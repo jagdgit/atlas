@@ -736,6 +736,18 @@ def apply_completeness_to_uncertainty(
     lab = str(doc.get("laboratory_id") or "")
     sym = str(doc.get("symbol") or "")
     codes = list(doc.get("acquisition_codes") or [])
+    try:
+        from atlas.investment.data_quality import (
+            blocks_missing_code,
+            reconcile_symbol_from_store,
+        )
+
+        reconcile_symbol_from_store(
+            data_dir, symbol=sym, laboratory_id=lab
+        )
+        codes = [c for c in codes if blocks_missing_code(data_dir, lab, sym, c)]
+    except Exception:  # noqa: BLE001
+        _log.debug("capability reconcile skipped", exc_info=True)
     created = enqueue_from_unknowns(
         data_dir, laboratory_id=lab, symbol=sym, unknowns=codes
     )

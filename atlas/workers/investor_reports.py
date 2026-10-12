@@ -171,7 +171,17 @@ class InvestorReportsWorker(PersistentWorker):
             and now_ist.weekday() < 6  # Mon–Sat (incl. prep days)
         )
 
-        if not send_morning and not send_evening and not send_hourly:
+        # C0 — nightly cognition has its own window, after the digest is already out.
+        # It never shares a tick with an unsent evening mail, so it cannot delay SMTP.
+        run_nightly = self._nightly_cognition_due(
+            cfg=cfg,
+            now_ist=now_ist,
+            ist_date=ist_date,
+            laboratory_id=portfolio_key,
+            evening_pending=bool(send_evening),
+        )
+
+        if not send_morning and not send_evening and not send_hourly and not run_nightly:
             state["skipped"] = "outside_report_windows_ist"
             return TickResult(
                 state=state,
@@ -186,16 +196,32 @@ class InvestorReportsWorker(PersistentWorker):
         if self._mailer is None:
             return TickResult(state=state, note="idle: investor mailer not configured")
 
+        # Evening/hourly must not wait on Yahoo marks when the feed is 429'd.
+        lean = bool(send_evening or send_hourly)
         portfolio_doc = self._with_lab_books(
-            self._portfolio_doc(portfolio_key, ist_date=ist_date),
+            self._portfolio_doc(
+                portfolio_key,
+                ist_date=ist_date,
+                compact=lean,
+                skip_live_marks=lean,
+            ),
             ist_date=ist_date,
+            skip_live_marks=lean,
         )
 
         notes: list[str] = []
         if send_morning:
+            if lean:
+                # Morning still wants a fuller book when evening is not the only job.
+                morning_doc = self._with_lab_books(
+                    self._portfolio_doc(portfolio_key, ist_date=ist_date),
+                    ist_date=ist_date,
+                )
+            else:
+                morning_doc = portfolio_doc
             result = self._mailer.send_morning(
                 program_id=program_id,
-                portfolio=portfolio_doc if isinstance(portfolio_doc, dict) else None,
+                portfolio=morning_doc if isinstance(morning_doc, dict) else None,
                 force=force,
                 catch_up=catch_up_morning,
             )
@@ -237,24 +263,156 @@ class InvestorReportsWorker(PersistentWorker):
             else:
                 notes.append(f"hourly not sent: {result.get('reason') or result}")
 
+        # Nightly cognition goes last: every mail for this tick has already left.
+        if run_nightly:
+            nightly = self._run_nightly_cognition(
+                state,
+                program_id=program_id,
+                portfolio_key=portfolio_key,
+                ist_date=ist_date,
+            )
+            if not notes:
+                return nightly
+            state = dict(nightly.state or state)
+            notes.append(str(nightly.note or "nightly cognition"))
+
         if not notes:
             return TickResult(state=state, note="idle: no matching report window")
         return TickResult(state=state, note="; ".join(notes))
 
-    def _mail_lab_books(self, *, ist_date: str) -> list[dict[str, Any]]:
+    def _nightly_cognition_due(
+        self,
+        *,
+        cfg: dict[str, Any],
+        now_ist: datetime,
+        ist_date: str,
+        laboratory_id: str | None,
+        evening_pending: bool,
+    ) -> bool:
+        """Own window, once per IST day, and only once the digest is already out."""
+        if cfg.get("nightly_cognition") is False:
+            return False
+        if evening_pending:
+            # Mail wins. Cognition waits for a later tick.
+            return False
+        if self._mailer is None or not self._data_dir or not laboratory_id:
+            return False
+        start = int(cfg.get("nightly_cognition_hour_start") or 18)
+        end = int(cfg.get("nightly_cognition_hour_end") or 23)
+        if not (start <= now_ist.hour < end):
+            return False
+        # Fail closed: if the sent flag cannot be read, assume the digest is still owed.
+        if not hasattr(self._mailer, "already_sent_evening"):
+            return False
+        try:
+            if not self._mailer.already_sent_evening(
+                ist_date, laboratory_id=laboratory_id
+            ):
+                return False
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            from atlas.investment.nightly_cognition import load_receipt
+
+            if load_receipt(
+                self._data_dir, laboratory_id=laboratory_id, as_of_ist=ist_date
+            ):
+                return False
+        except Exception:  # noqa: BLE001
+            return False
+        return True
+
+    def _run_nightly_cognition(
+        self,
+        state: dict[str, Any],
+        *,
+        program_id: str,
+        portfolio_key: str | None,
+        ist_date: str,
+    ) -> TickResult:
+        """Drive the stages the timely digest skips, then persist a receipt."""
+        from atlas.investment.nightly_cognition import build_receipt, persist_receipt
+
+        try:
+            doc = self._with_lab_books(
+                self._portfolio_doc(portfolio_key, ist_date=ist_date),
+                ist_date=ist_date,
+            )
+            preview = self._mailer.preview_evening(
+                program_id=program_id,
+                portfolio=doc if isinstance(doc, dict) else None,
+                timely=False,
+            )
+            receipt = (preview or {}).get("nightly_cognition")
+            if not isinstance(receipt, dict):
+                receipt = build_receipt(
+                    None,
+                    laboratory_id=str(portfolio_key or ""),
+                    as_of_ist=ist_date,
+                    skipped_reason="preview returned no cognition receipt",
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("nightly cognition failed", exc_info=True)
+            receipt = build_receipt(
+                None,
+                laboratory_id=str(portfolio_key or ""),
+                as_of_ist=ist_date,
+                skipped_reason=f"error:{type(exc).__name__}",
+            )
+        receipt["laboratory_id"] = str(portfolio_key or "")
+        receipt["as_of_ist"] = ist_date
+        # C9 — the cognitive cycle runs here too: same BATCH window, off the mail path.
+        try:
+            from atlas.investment.cognitive.loop import run_cycle
+            from atlas.investment.laboratory import DEFAULT_FNO_LAB
+
+            cycle = run_cycle(
+                self._data_dir, laboratory_id=DEFAULT_FNO_LAB, as_of_ist=ist_date
+            )
+            receipt["cognitive_loop"] = cycle.get("ladder")
+            receipt["cognitive_open_questions"] = len(cycle.get("open_questions") or [])
+        except Exception:  # noqa: BLE001
+            self._logger.debug("cognitive cycle skipped", exc_info=True)
+        persist_receipt(self._data_dir, receipt)
+        state["nightly_cognition"] = {
+            "as_of_ist": ist_date,
+            "ran": bool(receipt.get("ran")),
+            "stages_ran": receipt.get("stages_ran"),
+            "skipped_reason": receipt.get("skipped_reason"),
+        }
+        ran = ", ".join(receipt.get("stages_ran") or []) or "nothing"
+        return TickResult(
+            state=state,
+            note=f"nightly cognition ({ist_date}): {ran}",
+        )
+
+    def _mail_lab_books(
+        self, *, ist_date: str, skip_live_marks: bool = False
+    ) -> list[dict[str, Any]]:
         from atlas.investment.laboratory import MAIL_SNAPSHOT_LABS
 
         books: list[dict[str, Any]] = []
         for key in MAIL_SNAPSHOT_LABS:
-            snap = self._portfolio_doc(key, ist_date=ist_date, compact=True)
+            snap = self._portfolio_doc(
+                key,
+                ist_date=ist_date,
+                compact=True,
+                skip_live_marks=skip_live_marks,
+            )
             if isinstance(snap, dict):
                 books.append(snap)
         return books
 
     def _with_lab_books(
-        self, primary: dict[str, Any] | None, *, ist_date: str
+        self,
+        primary: dict[str, Any] | None,
+        *,
+        ist_date: str,
+        skip_live_marks: bool = False,
     ) -> dict[str, Any] | None:
-        books = self._mail_lab_books(ist_date=ist_date)
+        books = self._mail_lab_books(
+            ist_date=ist_date, skip_live_marks=skip_live_marks
+        )
         if primary is None and not books:
             return None
         out = dict(primary) if isinstance(primary, dict) else {}
@@ -262,7 +420,8 @@ class InvestorReportsWorker(PersistentWorker):
         return out
 
     def _portfolio_doc(
-        self, portfolio_key: str | None, *, ist_date: str, compact: bool = False
+        self, portfolio_key: str | None, *, ist_date: str, compact: bool = False,
+        skip_live_marks: bool = False,
     ) -> dict[str, Any] | None:
         if not portfolio_key:
             return None
@@ -287,6 +446,20 @@ class InvestorReportsWorker(PersistentWorker):
             }
             # Registry identity is durable, but the sim id/cash live in Postgres.
             # Resolve by (mission, portfolio_key) after every restart.
+            #
+            # `skip_live_marks` used to skip this too, which is what made the hourly
+            # mail say "holdings unavailable · equity unavailable" with "Positions:
+            # (none)" while `india_equity_learner` held 2 open positions (qty 32) in
+            # Postgres the whole time. The registry stores `sim_portfolio_id: None`, so
+            # skipping the resolve left `pid` None, which skipped the snapshot, which
+            # dropped holdings, equity and both P&L figures. Only `cash` survived
+            # because it is read from the registry persona.
+            #
+            # The flag exists so evening/hourly SMTP never waits on *Yahoo* (which
+            # 429s); it was implemented as "never touch Postgres", which is a different
+            # and much more expensive trade. Postgres is local — the self-inspection
+            # work measured these reads at ~40 ms — so it stays in the timely path and
+            # only the market-marks fetch below is skipped.
             if (
                 not portfolio_doc.get("sim_portfolio_id")
                 and mission_id
@@ -303,16 +476,27 @@ class InvestorReportsWorker(PersistentWorker):
                 portfolio_doc["starting_cash"] = ensured.get("starting_cash")
                 portfolio_doc["cash"] = ensured.get("cash")
             pid = portfolio_doc.get("sim_portfolio_id")
-            if pid and self._portfolio is not None and hasattr(self._portfolio, "snapshot"):
+            # Timely evening/hourly: read the book from Postgres, but value it at
+            # average cost rather than waiting on live marks. A position reported at
+            # cost is honest and labelled; a position not reported at all reads as "we
+            # don't know what we hold", which was false.
+            if (
+                pid
+                and self._portfolio is not None
+                and hasattr(self._portfolio, "snapshot")
+            ):
                 try:
                     positions = []
                     repo = getattr(self._portfolio, "_repo", None)
                     if repo is not None and hasattr(repo, "list_positions"):
                         positions = list(repo.list_positions(pid) or [])
-                    marks, previous = self._market_marks(
-                        [str(p.get("symbol") or "") for p in positions]
-                    )
-                    snap = self._portfolio.snapshot(pid, prices=marks)
+                    if skip_live_marks or self._market_reader is None:
+                        marks, previous = {}, {}
+                    else:
+                        marks, previous = self._market_marks(
+                            [str(p.get("symbol") or "") for p in positions]
+                        )
+                    snap = self._portfolio.snapshot(pid, prices=marks or None)
                     if isinstance(snap, dict):
                         portfolio_doc.update(snap)
                         portfolio_doc["positions"] = snap.get("positions") or snap.get(
@@ -328,7 +512,11 @@ class InvestorReportsWorker(PersistentWorker):
                         ) or (
                             "latest daily market bars"
                             if marks
-                            else "average cost (market marks unavailable)"
+                            else (
+                                "average cost (live marks skipped for timely delivery)"
+                                if skip_live_marks
+                                else "average cost (market marks unavailable)"
+                            )
                         )
                 except Exception:  # noqa: BLE001
                     self._logger.debug("sim portfolio snapshot failed", exc_info=True)
@@ -641,6 +829,28 @@ class InvestorReportsWorker(PersistentWorker):
         previous: dict[str, float] = {}
         if self._market_reader is None:
             return latest, previous
+        # Fail fast when Yahoo is cooling down — evening mail must not wait minutes.
+        #
+        # Bind the gate to this worker's own data dir. `get_yahoo_rate_gate()` is a
+        # process-global singleton that ignores its argument once another caller has
+        # bound it, so asking it here answered for whichever data dir happened to
+        # initialise first. The cooldown itself lives in a file that the gate reads on
+        # construction, so a per-dir instance honors exactly the same cooldown as the
+        # shared one while no longer depending on who constructed it first.
+        try:
+            from atlas.investment.yahoo_fundamentals import YahooRateGate
+
+            data_dir = self._data_dir
+            if not data_dir:
+                from atlas.config import get_config
+
+                data_dir = getattr(get_config().paths, "data", None)
+            if data_dir and float(
+                YahooRateGate(data_dir=data_dir).remaining_cooldown_s() or 0
+            ) > 0:
+                return latest, previous
+        except Exception:  # noqa: BLE001
+            pass
         for symbol in dict.fromkeys(s for s in symbols if s):
             try:
                 out = self._market_reader.bars_for(

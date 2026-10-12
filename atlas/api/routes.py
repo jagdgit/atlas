@@ -2945,7 +2945,13 @@ def _ist_today() -> str:
     return datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
 
 
-def _investor_portfolio_doc(request: Request, program_id: str = "market_intelligence") -> dict | None:
+def _investor_portfolio_doc(
+    request: Request,
+    program_id: str = "market_intelligence",
+    *,
+    compact: bool = False,
+    skip_live_marks: bool = False,
+) -> dict | None:
     """Live learner book for preview/send — same path the evening worker uses."""
     try:
         from atlas.workers.investor_reports import InvestorReportsWorker
@@ -2955,17 +2961,20 @@ def _investor_portfolio_doc(request: Request, program_id: str = "market_intellig
         mailer = c.resolve("investor_mailer")
         portfolio = None
         market_reader = None
-        try:
-            portfolio = c.resolve("portfolio")
-        except Exception:  # noqa: BLE001
+        # Evening/timely path must not touch the live portfolio/DB/Yahoo stack —
+        # those paths can stall under ledger polling + Yahoo 429 and block SMTP.
+        if not skip_live_marks:
             try:
-                portfolio = c.resolve("sim_portfolio")
+                portfolio = c.resolve("portfolio")
             except Exception:  # noqa: BLE001
-                portfolio = None
-        try:
-            market_reader = c.resolve("market_reader")
-        except Exception:  # noqa: BLE001
-            market_reader = None
+                try:
+                    portfolio = c.resolve("sim_portfolio")
+                except Exception:  # noqa: BLE001
+                    portfolio = None
+            try:
+                market_reader = c.resolve("market_reader")
+            except Exception:  # noqa: BLE001
+                market_reader = None
         data_dir = getattr(mailer, "_data_dir", None)
         if not data_dir:
             try:
@@ -2977,14 +2986,19 @@ def _investor_portfolio_doc(request: Request, program_id: str = "market_intellig
         worker = InvestorReportsWorker(
             mailer=mailer,
             portfolio=portfolio,
-            market_reader=market_reader,
+            market_reader=None if skip_live_marks else market_reader,
             data_dir=data_dir,
         )
         # Prefer explicit config key; fall back to India learner.
         pkey = "india_equity_learner"
         if program_id and program_id != "market_intelligence":
             pkey = program_id
-        return worker._portfolio_doc(pkey, ist_date=_ist_today())
+        return worker._portfolio_doc(
+            pkey,
+            ist_date=_ist_today(),
+            compact=compact,
+            skip_live_marks=skip_live_marks,
+        )
     except Exception:  # noqa: BLE001
         return None
 
@@ -3015,7 +3029,13 @@ def market_investor_evening_report(
         mailer = _app(request).container.resolve("investor_mailer")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
-    portfolio = _investor_portfolio_doc(request, program_id=program_id)
+    # Compact + no live Yahoo marks: evening must leave even when Yahoo is 429.
+    portfolio = _investor_portfolio_doc(
+        request,
+        program_id=program_id,
+        compact=True,
+        skip_live_marks=True,
+    )
     return mailer.send_evening(program_id=program_id, portfolio=portfolio, force=force)
 
 
@@ -3040,10 +3060,20 @@ def market_investor_report_preview(
         mailer = _app(request).container.resolve("investor_mailer")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"investor mailer unavailable: {exc}") from exc
-    portfolio = _investor_portfolio_doc(request, program_id=program_id)
     k = str(kind or "morning").strip().lower()
     if k == "evening":
-        return mailer.preview_evening(program_id=program_id, portfolio=portfolio)
+        # Same lean path as send — preview must not hang on Yahoo 429 / LLM drains.
+        # Do not build the full portfolio first; that path stalls under ledger/Yahoo load.
+        portfolio = _investor_portfolio_doc(
+            request,
+            program_id=program_id,
+            compact=True,
+            skip_live_marks=True,
+        )
+        return mailer.preview_evening(
+            program_id=program_id, portfolio=portfolio, timely=True
+        )
+    portfolio = _investor_portfolio_doc(request, program_id=program_id)
     if k in {"weekly", "research_weekly", "weekly_research"}:
         return mailer.preview_weekly_research(program_id=program_id)
     return mailer.preview_morning(program_id=program_id, portfolio=portfolio)

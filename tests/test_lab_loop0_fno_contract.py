@@ -7,6 +7,7 @@ from pathlib import Path
 
 from atlas.investment.fno_contract import (
     choose_atm_overlay,
+    fno_control_action,
     is_nifty50_fut_row,
     is_nifty50_option_row,
     is_phase2_underlying,
@@ -351,6 +352,64 @@ def test_zerodha_atm_options_quote_not_remapped_to_fut(tmp_path: Path):
     assert ltp["ok"] is True
     assert ltp["prices"][ce]["last"] == 100.5
     assert "CE" in ltp["prices"][ce]["instrument"]
+
+
+def test_flat_bearish_cash_hold_becomes_put_control():
+    """The cash SMA rule emits hold when shares are flat and the margin is negative.
+
+    The overlay already buys one ATM put when that control is buy. The worker
+    must hand it that control. A held call against the same margin is a close.
+    A positive margin still does not force a call when the cash rule withheld it.
+    """
+    assert fno_control_action(
+        kind="hold",
+        sma_margin=-0.02,
+        positions=[],
+        symbol="RELIANCE.NS",
+        rsi=45.0,
+    ) == "buy"
+    assert fno_control_action(
+        kind="hold",
+        sma_margin=-0.02,
+        positions=[],
+        symbol="RELIANCE.NS",
+        rsi=20.0,
+    ) == "hold"
+    assert fno_control_action(
+        kind="hold",
+        sma_margin=-0.02,
+        positions=[{"symbol": "RELIANCE26OCT1400CE", "quantity": 500.0}],
+        symbol="RELIANCE.NS",
+        rsi=45.0,
+    ) == "sell"
+    assert fno_control_action(
+        kind="hold",
+        sma_margin=-0.02,
+        positions=[{"symbol": "RELIANCE26OCT1400PE", "quantity": 500.0}],
+        symbol="RELIANCE.NS",
+        rsi=45.0,
+    ) == "hold"
+    assert fno_control_action(
+        kind="buy",
+        sma_margin=0.01,
+        positions=[],
+        symbol="HDFCBANK.NS",
+        rsi=55.0,
+    ) == "buy"
+    assert fno_control_action(
+        kind="hold",
+        sma_margin=0.01,
+        positions=[],
+        symbol="HDFCBANK.NS",
+        rsi=80.0,
+    ) == "hold"
+    assert fno_control_action(
+        kind="buy",
+        sma_margin=0.01,
+        positions=[{"symbol": "HDFCBANK26OCT710PE", "quantity": 550.0}],
+        symbol="HDFCBANK.NS",
+        rsi=55.0,
+    ) == "sell"
 
 
 def test_overlay_hold_does_not_open_atm():

@@ -12,6 +12,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from atlas.repositories.base import BaseRepository
+from atlas.repositories.task_repo import _json_safe
 
 
 class RecoveryRepository(BaseRepository):
@@ -66,7 +67,7 @@ class CheckpointRepository(BaseRepository):
                 SET state = EXCLUDED.state, updated_at = now()
             RETURNING *
             """,
-            (owner_type, owner_id, label, Jsonb(state or {})),
+            (owner_type, owner_id, label, Jsonb(_json_safe(state or {}))),
         )
 
     def load(

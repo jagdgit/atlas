@@ -1,0 +1,26 @@
+{
+  "cash_after": 46439.073704834,
+  "created_at": "2026-10-12T04:46:53.062461+00:00",
+  "decision_id": "e6180671-8b69-4677-b31c-1296246d7ae3",
+  "fee": 0.0,
+  "fees": {
+    "brokerage": 0.0,
+    "exchange": 0.0,
+    "gst": 0.0,
+    "profile_id": "paper_demo",
+    "side": "buy",
+    "stamp": 0.0,
+    "stt": 0.0,
+    "tds": 0.0,
+    "total": 0.0,
+    "turnover": 2955.1
+  },
+  "id": "c8ce4b9e-ef35-4230-a73b-33321736d4b7",
+  "mission_id": "d806c8e6-6fba-4603-84eb-b88fb408af9b",
+  "portfolio_id": "b0e49817-6cc2-468e-8061-a123454bf504",
+  "price": 2955.1,
+  "quantity": 1.0,
+  "realized_pnl": 0.0,
+  "side": "buy",
+  "symbol": "TRENT.NS"
+}

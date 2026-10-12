@@ -53,6 +53,37 @@ LESSON_TRACKS = (
 
 _INTRADAY_LABS = frozenset({"equity_intraday_learner"})
 
+# Labs that must be flat by the session close: every close there is an exit, so
+# attribution is mandatory rather than optional.
+_SESSION_FLAT_LABS = frozenset({"india_fno_learner"})
+
+# Literal rather than an import of fno_lab_v1.REASON_EXPERIMENT_CLOSE — learning
+# objects must stay importable without the lab modules.
+_CLOSE_TAGS = frozenset(
+    {
+        "exit",
+        "sell",
+        "reduce",
+        "eod_flatten",
+        "fno_lab_v1_experiment_close",
+    }
+)
+
+# Satisfied — the cause was labeled from evidence. Only these complete a learning
+# chain. Saying the cause is unknown is honest, and it is not a satisfied cause.
+ATTRIBUTION_SATISFIED_STATUSES = frozenset({"attributed", "evidence_backed"})
+
+# Addressed — the slot was filled. Includes an explicit unknown and a partial label.
+# Required on a close, and not a learning score.
+ATTRIBUTION_ADDRESSED_STATUSES = ATTRIBUTION_SATISFIED_STATUSES | frozenset(
+    {"partial", "all_unknown", "unknown_explicit"}
+)
+
+# A named weaker status beats a stale satisfied=True left by older writers.
+_WEAKER_ATTRIBUTION_STATUSES = frozenset(
+    {"partial", "all_unknown", "unknown_explicit", "unknown"}
+)
+
 
 def ist_today() -> str:
     return datetime.now(_IST).strftime("%Y-%m-%d")
@@ -188,9 +219,43 @@ def attribution_required_for_close(
 ) -> bool:
     lab = str(laboratory_id or "").strip().lower()
     tag = str(strategy_tag or "").strip().lower()
-    if lab in _INTRADAY_LABS or tag == "eod_flatten":
+    if lab in _INTRADAY_LABS or lab in _SESSION_FLAT_LABS or tag == "eod_flatten":
         return True
-    return tag in {"exit", "sell", "reduce", "eod_flatten"}
+    return tag in _CLOSE_TAGS
+
+
+def _attribution_required(row: dict[str, Any]) -> bool:
+    """Re-derive the requirement so rows written before the close tags were
+    recognized are counted on their real lab/tag, not on a stale stored flag."""
+    attr = row.get("attribution") if isinstance(row.get("attribution"), dict) else {}
+    if attr.get("required"):
+        return True
+    ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
+    return attribution_required_for_close(
+        laboratory_id=row.get("laboratory_id"),
+        strategy_tag=ctx.get("strategy_tag") or row.get("event_kind"),
+    )
+
+
+def attribution_is_satisfied(attr: dict[str, Any] | None) -> bool:
+    """True only when the cause was labeled from evidence.
+
+    ``unknown_explicit`` and ``partial`` stay false even if an older writer stored
+    ``satisfied=True``. Documenting uncertainty must not raise the learning score.
+    A row with no status still trusts the stored flag.
+    """
+    a = attr if isinstance(attr, dict) else {}
+    status = str(a.get("status") or "").strip().lower()
+    if status in ATTRIBUTION_SATISFIED_STATUSES:
+        return True
+    if status in _WEAKER_ATTRIBUTION_STATUSES:
+        return False
+    return bool(a.get("satisfied"))
+
+
+def _attribution_addressed(row: dict[str, Any]) -> bool:
+    attr = row.get("attribution") if isinstance(row.get("attribution"), dict) else {}
+    return attribution_is_satisfied(attr)
 
 
 def build_trading_experience(
@@ -360,8 +425,7 @@ def build_trading_experience(
         "attribution": {
             "status": attr_status,
             "required": bool(need_attr and closed),
-            "satisfied": attr_status
-            in {"attributed", "all_unknown", "partial", "unknown_explicit"},
+            "satisfied": attr_status in ATTRIBUTION_SATISFIED_STATUSES,
             "causal_factors": causal or None,
         },
         "lessons": build_lessons(
@@ -463,13 +527,12 @@ def summarize_learning_day(events: list[dict[str, Any]] | None) -> dict[str, Any
         if (r.get("prediction_error") or {}).get("direction_match") == "missed"
     )
     attr_required = sum(
-        1 for r in experiences if (r.get("attribution") or {}).get("required")
+        1 for r in experiences if _attribution_required(r)
     )
     attr_ok = sum(
         1
         for r in experiences
-        if (r.get("attribution") or {}).get("required")
-        and (r.get("attribution") or {}).get("satisfied")
+        if _attribution_required(r) and _attribution_addressed(r)
     )
     by_kind: dict[str, int] = {}
     for r in rows:

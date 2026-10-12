@@ -577,3 +577,45 @@ def test_a0_production_slice_coalindia(tmp_path: Path):
     )
     assert "AUTONOMOUS AGENT" in body
     assert "Capability gaps:" in body
+
+
+def test_capability_gap_does_not_starve_the_next_uncertainty(tmp_path: Path, monkeypatch):
+    rows = [
+        {
+            "id": "UQ-roe",
+            "importance": "HIGH",
+            "symbol": "ADANIENT.NS",
+            "unknown": "roe_missing",
+            "action": "Acquire evidence for roe_missing on ADANIENT.NS",
+            "why": "roe missing",
+        },
+        {
+            "id": "UQ-promoter",
+            "importance": "HIGH",
+            "symbol": "COALINDIA.NS",
+            "unknown": "promoter_holding_missing",
+            "action": "Acquire evidence for promoter_holding on COALINDIA.NS",
+            "why": "promoter holding missing",
+        },
+    ]
+    monkeypatch.setattr(
+        "atlas.investment.uncertainty_queue.list_tasks",
+        lambda *args, **kwargs: rows,
+    )
+    kernel = _kernel(tmp_path, laboratory_id="india_equity_learner")
+    first = kernel.cycle(mode="tick", allow_external=False, max_investigations=1)
+    assert first["ran"]
+    blocked = kernel.task(first["ran"][0])
+    assert blocked["symbol"] == "ADANIENT.NS"
+    assert blocked["status"] == "CAPABILITY_GAP"
+    assert "roe" in (blocked.get("attempted_capabilities") or []) or blocked.get("missing_requirement")
+
+    second = kernel.cycle(mode="tick", allow_external=False, max_investigations=1)
+    assert second["ran"]
+    assert second["ran"][0] != blocked["id"]
+    nxt = kernel.task(second["ran"][0])
+    assert nxt["symbol"] == "COALINDIA.NS"
+    assert kernel.task(blocked["id"])["status"] == "CAPABILITY_GAP"
+    assert kernel.state.get("continued_after_blockage") is True
+    lines = format_autonomous_agent_lines(tmp_path)
+    assert any(line == "Work continued after blockage: YES" for line in lines)

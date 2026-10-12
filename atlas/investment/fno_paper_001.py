@@ -141,6 +141,49 @@ def policy() -> dict[str, Any]:
     }
 
 
+def _entry_data_pack(
+    *,
+    spot: float,
+    now: datetime,
+    bundle: dict[str, Any],
+    ce_ltp: float | None,
+    pe_ltp: float | None,
+    rows: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Quote time is this call's clock — the LTP was supplied with the plan."""
+    from atlas.investment.fno_data_pack import build_fno_data_pack
+
+    ce = bundle.get("ce") if isinstance(bundle.get("ce"), dict) else None
+    pe = bundle.get("pe") if isinstance(bundle.get("pe"), dict) else None
+    expiry = str((ce or {}).get("expiry") or (pe or {}).get("expiry") or "")
+    stamp = now.isoformat()
+    return build_fno_data_pack(
+        underlying=str(bundle.get("underlying") or PHASE2_UNDERLYING),
+        spot=spot,
+        spot_as_of=stamp,
+        spot_provider="caller",
+        instrument_rows=list(rows or []),
+        expiry=expiry,
+        atm_strike=_f_pack(bundle.get("atm_strike")),
+        ce=ce,
+        pe=pe,
+        ce_ltp=ce_ltp,
+        pe_ltp=pe_ltp,
+        ce_ltp_as_of=stamp,
+        pe_ltp_as_of=stamp,
+        session_open=True,
+        now=now,
+        session_ready=True,
+    )
+
+
+def _f_pack(v: Any) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _fail(reason: str, **extra: Any) -> dict[str, Any]:
     body = {
         "ok": False,
@@ -274,8 +317,28 @@ def plan_entry(
             bundle=bundle,
         )
 
+    pack = _entry_data_pack(
+        spot=spot_f,
+        now=clock,
+        bundle=bundle,
+        ce_ltp=ce_ltp,
+        pe_ltp=pe_ltp,
+        rows=instrument_rows,
+    )
+    from atlas.investment.fno_data_pack import option_decision_permitted
+
+    gate = option_decision_permitted(pack)
+    if not gate.get("ok"):
+        return _fail(
+            str(gate.get("reason") or "fno_data_pack_not_ready"),
+            spot=spot_f,
+            honesty="F&O data pack is not READY — no option decision and no fabricated LTP.",
+            fno_data_pack=pack,
+        )
+
     return {
         "ok": True,
+        "fno_data_pack": pack,
         "experiment_id": EXPERIMENT_ID,
         "version": VERSION,
         "status": "planned_entry",

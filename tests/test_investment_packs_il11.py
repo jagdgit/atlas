@@ -18,6 +18,15 @@ from atlas.workers.paper_trading import PaperTradingWorker
 from tests.test_trading_portfolio import InMemorySimRepo
 
 
+def _MID_SESSION_CLOCK() -> datetime:
+    """11:00 IST — inside the F&O session, before the 15:30 flatten rule applies."""
+    from zoneinfo import ZoneInfo
+
+    return datetime(2026, 10, 5, 11, 0, tzinfo=ZoneInfo("Asia/Kolkata")).astimezone(
+        timezone.utc
+    )
+
+
 class _FakeDecisionRepo:
     def __init__(self) -> None:
         self.rows: list[Any] = []
@@ -207,6 +216,9 @@ def test_futures_pack_is_ready_and_reaches_engine():
         market_data=reader,
         decision_engine=TrackingEngine(),
         portfolio=FakePortfolio(),
+        # Pinned inside the F&O session: after 15:30 IST Lab v1 correctly refuses new
+        # experiments, so an unpinned clock would test the flatten rule, not the engine.
+        clock=_MID_SESSION_CLOCK,
     )
     result = worker.do_tick(
         TickContext(

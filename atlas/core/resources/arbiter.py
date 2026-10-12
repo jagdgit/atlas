@@ -377,9 +377,9 @@ class MissionArbiter:
                 demanding = self._programs_with_demand_locked(now)
                 nse_rth = False
                 try:
-                    from atlas.trading.sessions import is_session_open
+                    from atlas.core.resources.capacity_shares import market_priority_window
 
-                    nse_rth = bool(is_session_open("nse_equity", now=now))
+                    nse_rth = bool(market_priority_window(now))
                 except Exception:  # noqa: BLE001
                     nse_rth = False
                 block = self._capacity_policy.blocks_admit(

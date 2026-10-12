@@ -56,9 +56,19 @@ _VALID_INTENTS = {
 
 _DECOMPOSE_SYSTEM = (
     "You are Atlas's job planner. Break the user's objective into an ordered list "
-    "of concrete steps. Respond with ONLY a JSON array; each element is an object "
+    "of concrete steps. Respond with ONLY JSON: an object with a single key \"steps\" "
+    "whose value is the array of steps. Each step is an object "
     "with keys: intent, capability, args (object), description, depends_on (integer "
     "index of a prerequisite step, or null). "
+    "Prefer Atlas's own local evidence (sql_query over its database, log files, "
+    "git history, python analysis) when the objective is about Atlas itself or about "
+    "data Atlas already holds; use web_search only for genuinely external knowledge. "
+    "Every step MUST carry the concrete arguments it needs in `args` — a step without "
+    "them does nothing. In particular: sql_query needs "
+    "{\"sql\": \"<a complete SELECT statement>\", \"source\": \"atlas\"} where source "
+    "'atlas' is Atlas's own PostgreSQL database. web_search needs {\"query\": \"...\"}; "
+    "run_python needs {\"code\": \"...\"}; research needs {\"objective\": \"...\"}; "
+    "react needs {\"query\": \"...\"}; ask_knowledge needs {\"question\": \"...\"}. "
     "Allowed intents: smalltalk, recall, remember, web_fetch, web_search, "
     "scholar_search, youtube_transcript, media_learn, run_python, git_status, sql_query, "
     "ocr_image, mail_search, browse_url, research, list_documents, ingest_path, "
@@ -78,7 +88,64 @@ _DECOMPOSE_SYSTEM = (
     "Do not include any prose outside the JSON array."
 )
 
+# J5: resolved schema, not a hand-written one. The previous prose hint listed the columns
+# of two scheduler tables in one sentence; the model merged them and emitted a column that
+# does not exist. Column names are facts — they get looked up, not recalled.
+_SCHEMA_PREAMBLE = (
+    "Real schema of Atlas's own database (source \"atlas\"), resolved just now. These "
+    "are the ONLY columns that exist on these tables — never use a column that is not "
+    "listed here, and never assume a column exists on a table because it exists on a "
+    "similarly named one. Any step that runs SQL must use intent \"sql_query\" and "
+    "capability \"sql\"; do not put SQL in a \"recall\" step. Never state a conclusion "
+    "in a \"remember\" step — the conclusion is not known until the earlier steps run. "
+    "When a line below lists \"actual values\" for a column, any filter on that column "
+    "MUST use one of those exact strings — copy it verbatim. Do NOT build a LIKE "
+    "pattern out of words from the objective: the objective describes the problem in "
+    "the user's words, which are not the words stored in the database, and such a "
+    "filter matches zero rows:"
+)
+
 _JSON_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _decompose_schema() -> dict[str, Any]:
+    """JSON schema for the planner response (grammar-constrained decoding).
+
+    Asking for JSON in prose does not work on a small CPU-hosted model: unconstrained,
+    ``qwen3:4b`` narrates past 1536 tokens without ever emitting the array. Constrained
+    by this schema the same model answers in ~233 tokens, inside the planner budget.
+    Token cost, not token rate, is the binding resource here (ADR: resource awareness).
+
+    Derived from ``_VALID_INTENTS`` / ``CAPABILITY_CATALOG`` so it cannot drift from
+    the validator in ``_validate``.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 6,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "intent": {"type": "string", "enum": sorted(str(i) for i in _VALID_INTENTS)},
+                        "capability": {"type": "string", "enum": sorted(CAPABILITY_CATALOG)},
+                        "description": {"type": "string"},
+                        # `args` is required: a step planned without its arguments is a
+                        # no-op that still reports done. The first schema-constrained
+                        # run produced `sql_query` with no `sql`, so the step replied
+                        # "What SQL query should I run?" and was marked complete.
+                        "args": {"type": "object"},
+                        "depends_on": {"type": ["integer", "null"]},
+                    },
+                    "required": ["intent", "capability", "description", "args"],
+                },
+            }
+        },
+        "required": ["steps"],
+    }
 
 
 @dataclass(frozen=True)
@@ -101,9 +168,11 @@ class JobPlanner:
         timeout: float | None = 60.0,
         num_predict: int | None = 512,
         learning: Any = None,
+        schema_source: Any = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._planner = planner or Planner()
+        self._schema_source = schema_source
         self._llm = llm
         self._max_steps = max_steps
         self._research_first = research_first
@@ -187,7 +256,7 @@ class JobPlanner:
     def _llm_decompose(self, objective: str) -> list[DecomposedStep]:
         from atlas.llm.provider import ChatMessage
 
-        options: dict[str, Any] = {"think": False}
+        options: dict[str, Any] = {"think": False, "format": _decompose_schema()}
         if self._timeout is not None:
             options["timeout"] = float(self._timeout)
         if self._num_predict is not None:
@@ -195,6 +264,9 @@ class JobPlanner:
 
         try:
             system = _DECOMPOSE_SYSTEM
+            digest = self._schema_digest(objective)
+            if digest:
+                system = f"{system}\n\n{_SCHEMA_PREAMBLE}\n{digest}"
             if self.last_advice and self.last_advice.get("advice"):
                 # Advice only — never auto-rewrites planner rules or capabilities.
                 system = (
@@ -230,6 +302,30 @@ class JobPlanner:
         parsed = self._parse(raw)
         return self._validate(parsed)
 
+    def bind_schema_source(self, source: Any) -> None:
+        """Late-bind the SQL plugin (J5).
+
+        Plugins load after the planner is constructed, so grounding is attached the
+        same way web search is attached to the Agent Kernel worker.
+        """
+        self._schema_source = source
+
+    def _schema_digest(self, objective: str) -> str:
+        """Real column names for the tables this objective is about (J5), or ``""``.
+
+        Never raises and never blocks planning: with no digest the prompt is exactly
+        what it was before, so grounding can only help.
+        """
+        if self._schema_source is None:
+            return ""
+        from atlas.sql.schema_digest import build_digest
+
+        try:
+            return build_digest(self._schema_source, objective, logger=self._logger)
+        except Exception:  # noqa: BLE001
+            self._logger.debug("planner schema grounding failed", exc_info=True)
+            return ""
+
     def _advice_for(self, objective: str) -> dict[str, Any] | None:
         if self._learning is None or not objective or not hasattr(self._learning, "advice_for"):
             return None
@@ -241,16 +337,47 @@ class JobPlanner:
 
     @staticmethod
     def _parse(raw: str) -> list[dict[str, Any]]:
+        """Accept either ``{"steps": [...]}`` (schema-constrained) or a bare array.
+
+        Schema-constrained decoding returns the object form; providers without
+        structured-output support still return the array form described in the prompt.
+        """
         if not raw:
             return []
-        match = _JSON_ARRAY_RE.search(raw)
-        if not match:
-            return []
-        try:
-            data = json.loads(match.group(0))
-        except (ValueError, TypeError):
-            return []
-        return data if isinstance(data, list) else []
+        for pattern in (_JSON_OBJECT_RE, _JSON_ARRAY_RE):
+            match = pattern.search(raw)
+            if not match:
+                continue
+            try:
+                data = json.loads(match.group(0))
+            except (ValueError, TypeError):
+                continue
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                steps = data.get("steps")
+                if isinstance(steps, list):
+                    return steps
+        return []
+
+    @staticmethod
+    def _repair_intent(intent: str, capability: str, args: dict[str, Any]) -> tuple[str, str]:
+        """Route a step by the arguments it actually carries, not only by its label.
+
+        Observed with schema grounding on: ``qwen3:4b`` produced correct SQL over the
+        real columns but labelled the steps ``recall``, so the queries would have been
+        handed to memory lookup and never run. The arguments are unambiguous evidence
+        of what a step is, so the mislabel is repaired here rather than asked away in
+        the prompt — a deterministic fix costs nothing and cannot time out.
+        """
+        if isinstance(args.get("sql"), str) and args["sql"].strip():
+            if intent != Intent.SQL_QUERY:
+                return Intent.SQL_QUERY, "sql"
+            return intent, capability
+        if isinstance(args.get("code"), str) and args["code"].strip():
+            if intent != Intent.RUN_PYTHON:
+                return Intent.RUN_PYTHON, "python"
+        return intent, capability
 
     def _validate(self, items: list[dict[str, Any]]) -> list[DecomposedStep]:
         steps: list[DecomposedStep] = []
@@ -267,6 +394,7 @@ class JobPlanner:
             args = item.get("args")
             if not isinstance(args, dict):
                 args = {}
+            intent, capability = self._repair_intent(intent, capability, args)
             depends_on = item.get("depends_on")
             if not isinstance(depends_on, int) or depends_on < 0 or depends_on >= i:
                 depends_on = None

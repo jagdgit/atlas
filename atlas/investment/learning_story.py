@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from atlas.investment.learning_objects import (
+    ATTRIBUTION_SATISFIED_STATUSES,
     attribution_required_for_close,
     ist_today,
     record_learning_event,
@@ -137,7 +138,10 @@ def ensure_close_attribution(
     attribution: dict[str, Any] | None = None,
     data_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """B2 — attribution satisfied or unknown_explicit (never silent empty).
+    """B2 — the attribution slot is never left empty.
+
+    ``satisfied`` is true only when the cause was labeled from evidence.
+    ``unknown_explicit`` fills the slot and stays unsatisfied: looked, and still unknown.
 
     F&O Lab v1 closes prefer observable underlier/premium evidence
     (``fno_option_attribution``) over equity DAV drivers that are usually empty.
@@ -265,7 +269,7 @@ def ensure_close_attribution(
         strategy_tag=str(pkt.get("strategy_tag") or ""),
     )
     attr["required"] = bool(need)
-    attr["satisfied"] = True  # satisfied means addressed — incl. unknown_explicit
+    attr["satisfied"] = str(attr["status"] or "") in ATTRIBUTION_SATISFIED_STATUSES
     return attr
 
 

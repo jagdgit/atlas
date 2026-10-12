@@ -23,7 +23,7 @@ def _json_safe(value: Any) -> Any:
         return {str(k): _json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
-    if isinstance(value, set):
+    if isinstance(value, (set, frozenset)):
         return [_json_safe(v) for v in sorted(value, key=str)]
     if isinstance(value, UUID):
         return str(value)
@@ -217,6 +217,34 @@ class TaskRepository(BaseRepository):
             RETURNING *
             """,
             (),
+        )
+
+    def release_to_pending(
+        self, task_id: UUID | str, delay_seconds: float = 0.0, error: str | None = None
+    ) -> bool:
+        """Hand a claimed task back without consuming a retry.
+
+        For "this worker cannot run it" (no handler registered), as opposed to "the
+        task failed". The distinction matters: a process without the full handler set
+        used to mark such tasks permanently failed, and when the victim was
+        ``schedule_tick`` — the only task that advances ``next_run_at`` — every
+        recurring schedule froze. Releasing lets the process that *does* own the
+        handler pick the task up. ``retry_count`` is untouched by design.
+        """
+        return (
+            self.execute(
+                """
+                UPDATE scheduler.tasks
+                SET status = 'pending',
+                    claimed_at = NULL,
+                    scheduled_at = now() + (%s || ' seconds')::interval,
+                    last_error = COALESCE(%s, last_error),
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (str(float(delay_seconds)), error, str(task_id)),
+            )
+            > 0
         )
 
     def recover_interrupted(self) -> int:

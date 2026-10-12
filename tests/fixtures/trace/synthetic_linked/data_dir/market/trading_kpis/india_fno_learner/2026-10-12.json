@@ -1,0 +1,76 @@
+{
+  "ist_date": "2026-10-12",
+  "kpis": {
+    "buys_today": 8,
+    "candidates_filled": 0,
+    "candidates_planned": 5,
+    "cash": 150204.68100625003,
+    "confidence": "high",
+    "day_pnl": 22319.000000000004,
+    "day_return_pct": 17.452305703332986,
+    "equity": 150204.68100625003,
+    "fees_paid": 0.0,
+    "filled_symbols": [
+      "BANKNIFTY26OCT55200PE",
+      "FINNIFTY26OCT25000PE",
+      "HDFCBANK26OCT710PE",
+      "INFY26OCT1020PE",
+      "MIDCPNIFTY26OCT13675PE",
+      "NIFTY26OCT22550PE",
+      "RELIANCE26OCT1170PE",
+      "TCS26OCT2160PE"
+    ],
+    "fills_today": 16,
+    "holdings_value": 0.0,
+    "ist_date": "2026-10-12",
+    "kpi_label": null,
+    "lessons_count": 0,
+    "marks_available": 0,
+    "marks_pct": 100.0,
+    "marks_total": 0,
+    "net_contributed_capital": 100000.0,
+    "open_positions": 0,
+    "phase": "active",
+    "plan_fill_rate": 0.0,
+    "planned_symbols": [
+      "HFCL.NS",
+      "IDEA.NS",
+      "SUNTV.NS",
+      "TRENT.NS",
+      "WELCORP.NS"
+    ],
+    "planned_symbols_note": null,
+    "planned_symbols_status": "ok",
+    "portfolio_gate_blocks": 0,
+    "research_studied": 0,
+    "sells_today": 8,
+    "size_trims": 0,
+    "top_no_fill_reasons": [
+      {
+        "count": 1148,
+        "reason": "capability_gap"
+      },
+      {
+        "count": 679,
+        "reason": "strategy_hold"
+      },
+      {
+        "count": 376,
+        "reason": "switch_blocked"
+      },
+      {
+        "count": 137,
+        "reason": "fno_no_cash_alts"
+      },
+      {
+        "count": 1,
+        "reason": "yahoo_cooldown"
+      }
+    ],
+    "total_pnl": 50204.68100625003,
+    "total_return_pct": 50.20468100625003,
+    "valuation_basis": "no_open_positions"
+  },
+  "portfolio_key": "india_fno_learner",
+  "version": "trading.kpis.1"
+}

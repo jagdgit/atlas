@@ -35,6 +35,7 @@ class Application:
         lifecycle: LifecycleManager,
         capabilities: CapabilityRegistry | None = None,
         tools: ToolRegistry | None = None,
+        ephemeral: bool = False,
     ) -> None:
         self.config = config
         self.logger = logger
@@ -44,6 +45,8 @@ class Application:
         self.lifecycle = lifecycle
         self.capabilities = capabilities or CapabilityRegistry()
         self.tools = tools or ToolRegistry()
+        # F1: CLI/ephemeral kernels must not reconcile programs (creates workers → schedules).
+        self.ephemeral = bool(ephemeral)
         self._stop_event = threading.Event()
         self._started_at: float | None = None
 
@@ -69,9 +72,12 @@ class Application:
         )
         self.lifecycle.start_all()
         self._started_at = time.monotonic()
-        self._reconcile_program_members()
+        if not self.ephemeral:
+            self._reconcile_program_members()
         self.events.emit("KernelStarted", source="kernel")
-        self.logger.info("Atlas is ready.")
+        self.logger.info(
+            "Atlas is ready%s.", " (ephemeral)" if self.ephemeral else ""
+        )
 
     def _reconcile_program_members(self) -> None:
         """LAB-LOOP0 Step 1 — fill ENABLED catalog members missing from live programs.

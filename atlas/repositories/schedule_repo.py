@@ -124,6 +124,54 @@ class ScheduleRepository(BaseRepository):
         )
         return Schedule.from_row(row) if row else None
 
+    def find_by_identity(
+        self,
+        *,
+        task_type: str,
+        payload: dict[str, Any] | None = None,
+        mission_id: str | None = None,
+        worker_id: str | None = None,
+        kind: str = KIND_INTERVAL,
+        cron_expr: str | None = None,
+    ) -> Schedule | None:
+        """F5 — locate a schedule by durable identity (ignores enabled / next_run_at).
+
+        Identity = (task_type, kind, cron_expr, worker_id, mission_id, payload).
+        Prefers an enabled row when duplicates already exist from pre-F5 boots.
+        """
+        kind = (kind or KIND_INTERVAL).strip().lower()
+        row = self.fetch_one(
+            f"""
+            SELECT {_COLS} FROM scheduler.schedules
+            WHERE task_type = %s
+              AND kind = %s
+              AND COALESCE(cron_expr, '') = COALESCE(%s, '')
+              AND COALESCE(worker_id::text, '') = COALESCE(%s, '')
+              AND COALESCE(mission_id::text, '') = COALESCE(%s, '')
+              AND payload = %s
+            ORDER BY enabled DESC, created_at ASC
+            LIMIT 1
+            """,
+            (
+                task_type,
+                kind,
+                cron_expr,
+                str(worker_id) if worker_id else None,
+                str(mission_id) if mission_id else None,
+                Jsonb(_json_safe(payload or {})),
+            ),
+        )
+        return Schedule.from_row(row) if row else None
+
+    def exists_task_type(self, task_type: str) -> bool:
+        """True if any row (enabled or not) exists for ``task_type`` — no LIMIT 200 trap."""
+        return bool(
+            self.fetch_one(
+                "SELECT 1 AS ok FROM scheduler.schedules WHERE task_type = %s LIMIT 1",
+                (task_type,),
+            )
+        )
+
     def list(
         self,
         *,

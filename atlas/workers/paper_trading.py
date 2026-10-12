@@ -777,6 +777,16 @@ class PaperTradingWorker(PersistentWorker):
                     f"yahoo_cooldown ({cd_rem:.0f}s) — durable prefer; skip live hammer"
                 )
             for inst in batch:
+                if self._flatten_fno_lab_if_due(
+                    cfg=cfg,
+                    portfolio_id=portfolio_id,
+                    portfolio_key=portfolio_key,
+                    mission_id=ctx.mission_id,
+                    state=state,
+                    pack=pack,
+                    record_action=_record_action,
+                ):
+                    break
                 symbol = str(inst.get("symbol") or "").strip()
                 asset_name = str(inst.get("asset") or symbol).strip()
                 if not symbol:
@@ -840,8 +850,21 @@ class PaperTradingWorker(PersistentWorker):
                         )
                         continue
                     if last_bar_keys.get(symbol) == bar_key and not as_alt:
-                        _record_action(f"{symbol}: mark_only @ {price:.2f} (same bar)")
-                        continue
+                        # Cash equity decides once per daily bar. F&O premiums and
+                        # the underlier quote move inside that bar, so the lab
+                        # rebuilds the pack and can paper an option on a later tick.
+                        refresh_fno = False
+                        try:
+                            from atlas.investment.index_proxy_lot import (
+                                is_fno_lab as _is_fno_lab,
+                            )
+
+                            refresh_fno = bool(_is_fno_lab(cfg, portfolio_key))
+                        except Exception:  # noqa: BLE001
+                            refresh_fno = False
+                        if not refresh_fno:
+                            _record_action(f"{symbol}: mark_only @ {price:.2f} (same bar)")
+                            continue
                     # Alternatives always get one decision attempt even if bar was marked,
                     # so "next better name" can still fire when the primary book was quiet.
                     if as_alt and last_bar_keys.get(symbol) == bar_key:
@@ -959,11 +982,14 @@ class PaperTradingWorker(PersistentWorker):
                     _record_action("next_alt: skipped (intraday_yahoo_budget)")
                 else:
                     _record_action("next_alt: skipped (fno_no_cash_alts)")
+        if state.get("fno_session_flat_stop"):
+            prefer_alt = False
         if (
             session_open
             and prefer_alt
             and int(totals.get("buys") or 0) == 0
             and feed_mode == "live"
+            and not state.get("fno_session_flat_stop")
         ):
             alts = self._next_alternative_instruments(
                 have={str(i.get("symbol") or "") for i in instruments},
@@ -1843,6 +1869,36 @@ class PaperTradingWorker(PersistentWorker):
                         ),
                         "path": aud.get("path"),
                     }
+                    # P1 — join prediction→…→attribution into one replayable day dataset.
+                    try:
+                        from atlas.investment.fno_closed_loop_dataset import (
+                            LABORATORY_ID as _FNO_CL_LAB,
+                            build_and_persist_day as _build_fno_closed_loop,
+                        )
+                        from atlas.investment.laboratory import DEFAULT_FNO_LAB
+
+                        _lab_key = str(portfolio_key or "")
+                        if _lab_key in {_FNO_CL_LAB, DEFAULT_FNO_LAB, "india_fno_learner"}:
+                            from zoneinfo import ZoneInfo
+
+                            _day = datetime.now(ZoneInfo("Asia/Kolkata")).strftime(
+                                "%Y-%m-%d"
+                            )
+                            _cl = _build_fno_closed_loop(
+                                data_dir_er,
+                                as_of_ist=_day,
+                                laboratory_id="india_fno_learner",
+                            )
+                            state["fno_closed_loop"] = {
+                                "pipeline_complete": _cl.get("pipeline_complete"),
+                                "n_complete": _cl.get("n_complete"),
+                                "n_rows": _cl.get("n_rows"),
+                                "path": (_cl.get("persist") or {}).get("path"),
+                            }
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug(
+                            "fno closed-loop dataset skipped", exc_info=True
+                        )
                     # Parallel track — promote L3 → L4 candidates (never auto-L5)
                     try:
                         from atlas.investment.l5_validation import promote_lab_l3_records
@@ -3843,6 +3899,8 @@ class PaperTradingWorker(PersistentWorker):
         snapshot: dict[str, Any],
         indicators: dict[str, Any],
         control_action: str | None = None,
+        spot_as_of: Any = None,
+        session_open: bool | None = None,
     ) -> dict[str, Any]:
         from atlas.investment.fno_contract import (
             choose_atm_overlay,
@@ -3865,6 +3923,23 @@ class PaperTradingWorker(PersistentWorker):
                 "reason": "not_in_lab_v1_universe",
             }
         feed = self._zerodha_feed()
+        from atlas.investment.fno_data_pack import choose_underlier_spot
+
+        live_quote = None
+        if feed is not None:
+            try:
+                live_quote = feed.get_ltp(symbol)
+            except Exception:  # noqa: BLE001
+                self._logger.debug("underlier ltp skipped", exc_info=True)
+                live_quote = None
+        spot_choice = choose_underlier_spot(
+            live_quote, bar_price=price, bar_as_of=spot_as_of
+        )
+        try:
+            spot_px = float(spot_choice["price"]) if spot_choice.get("price") is not None else price
+        except (TypeError, ValueError):
+            spot_px = price
+        spot_stamp = spot_choice.get("as_of")
         dump: list[dict[str, Any]] = []
         if feed is not None:
             try:
@@ -3875,7 +3950,7 @@ class PaperTradingWorker(PersistentWorker):
                 dump.extend(list(feed.list_nfo_options() or []))
             except Exception:  # noqa: BLE001
                 self._logger.debug("nfo options list for ATM overlay skipped", exc_info=True)
-        bundle = resolve_phase2_bundle(dump, symbol=symbol, spot=price, as_of=self._clock())
+        bundle = resolve_phase2_bundle(dump, symbol=symbol, spot=spot_px, as_of=self._clock())
         if bundle.get("ok"):
             try:
                 if data_dir:
@@ -3888,6 +3963,28 @@ class PaperTradingWorker(PersistentWorker):
         ce_ltp = self._nfo_ltp(str(ce.get("tradingsymbol") or "") or None) if ce.get("ok") else None
         pe_ltp = self._nfo_ltp(str(pe.get("tradingsymbol") or "") or None) if pe.get("ok") else None
         fut_ltp = self._nfo_ltp(str(fut.get("tradingsymbol") or "") or None) if fut.get("ok") else None
+        from atlas.investment.fno_contract import fno_control_action
+
+        rsi_raw = indicators.get("rsi") if isinstance(indicators, dict) else None
+        try:
+            rsi_v = float(rsi_raw) if rsi_raw is not None else None
+        except (TypeError, ValueError):
+            rsi_v = None
+        control_action = fno_control_action(
+            kind=control_action,
+            sma_margin=_sma_margin(indicators),
+            positions=list(snapshot.get("positions") or []),
+            symbol=symbol,
+            rsi=rsi_v,
+        )
+        from atlas.investment.fno_lab_v1 import must_flatten_experiments
+
+        if control_action == "buy" and must_flatten_experiments(self._clock()):
+            return {
+                "used": False,
+                "fallback_l4": False,
+                "reason": "session_flat",
+            }
         overlay = choose_atm_overlay(
             sma_margin=_sma_margin(indicators),
             underlier_held=held,
@@ -3897,7 +3994,7 @@ class PaperTradingWorker(PersistentWorker):
             ce_ltp=ce_ltp,
             pe_ltp=pe_ltp,
             control_action=control_action,
-            underlying_price=price,
+            underlying_price=spot_px,
             future_price=fut_ltp,
         )
         if overlay.get("used"):
@@ -3933,6 +4030,53 @@ class PaperTradingWorker(PersistentWorker):
                         lab_v1.persist_entry_prediction(data_dir, pred)
             except Exception:  # noqa: BLE001
                 self._logger.debug("fno lab v1 attribution/prediction skipped", exc_info=True)
+        try:
+            from atlas.investment.fno_data_pack import (
+                apply_pack_to_overlay,
+                build_fno_data_pack,
+                persist_fno_data_pack,
+            )
+
+            expiry = str(ce.get("expiry") or pe.get("expiry") or "") or None
+            now = self._clock()
+            fut_master_state = None
+            if feed is not None and hasattr(feed, "nfo_master_status"):
+                try:
+                    fut_master_state = (feed.nfo_master_status().get("futures") or {}).get("state")
+                except Exception:  # noqa: BLE001
+                    fut_master_state = None
+            pack = build_fno_data_pack(
+                underlying=symbol,
+                spot=spot_px,
+                spot_as_of=spot_stamp,
+                spot_provider=spot_choice.get("provider"),
+                instrument_rows=dump,
+                expiry=expiry,
+                atm_strike=bundle.get("atm_strike") if bundle.get("ok") else None,
+                ce=ce if ce else None,
+                pe=pe if pe else None,
+                ce_ltp=ce_ltp,
+                pe_ltp=pe_ltp,
+                ce_ltp_as_of=now.isoformat() if ce_ltp is not None else None,
+                pe_ltp_as_of=now.isoformat() if pe_ltp is not None else None,
+                session_open=session_open,
+                now=now,
+                session_ready=True if feed is not None else None,
+                futures_master_state=fut_master_state,
+            )
+            if data_dir:
+                persist_fno_data_pack(data_dir, pack)
+            overlay = apply_pack_to_overlay(overlay, pack)
+            self._logger.info(
+                "FNO-PACK %s %s %s spot=%s overlay=%s",
+                pack.get("underlying"),
+                pack.get("status"),
+                pack.get("reason"),
+                spot_choice.get("source"),
+                overlay.get("reason"),
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("fno data pack skipped", exc_info=True)
         return overlay
 
     def _run_fno_paper_001(
@@ -4479,6 +4623,53 @@ class PaperTradingWorker(PersistentWorker):
                 pass
         return lines
 
+    def _flatten_fno_lab_if_due(
+        self,
+        *,
+        cfg: dict[str, Any],
+        portfolio_id: Any,
+        portfolio_key: str,
+        mission_id: Any,
+        state: dict[str, Any],
+        pack: Any,
+        record_action: Any = None,
+    ) -> bool:
+        """Close Lab v1 options as soon as the flatten clock hits, mid-walk.
+
+        A tick that started before 15:30 must not keep deciding until the
+        universe walk ends. Returns True when new entries should stop.
+        """
+        try:
+            from atlas.investment.fno_lab_v1 import must_flatten_experiments
+            from atlas.investment.index_proxy_lot import is_fno_lab
+        except Exception:  # noqa: BLE001
+            return False
+        if not is_fno_lab(cfg, portfolio_key):
+            return False
+        if not must_flatten_experiments(self._clock()):
+            return False
+        if not state.get("fno_session_flat_stop"):
+            try:
+                flat_lines = self._flatten_fno_lab_v1_experiments(
+                    cfg=cfg,
+                    portfolio_id=portfolio_id,
+                    portfolio_key=portfolio_key,
+                    mission_id=mission_id,
+                    state=state,
+                    pack=pack,
+                )
+                for line in flat_lines:
+                    self._logger.info("FNO-LAB-v1 %s", line)
+                    if record_action is not None:
+                        record_action(line)
+            except Exception:  # noqa: BLE001
+                self._logger.warning(
+                    "FNO-LAB-v1 mid-walk flatten failed",
+                    exc_info=True,
+                )
+            state["fno_session_flat_stop"] = True
+        return True
+
     def _flatten_fno_lab_v1_experiments(
         self,
         *,
@@ -4540,6 +4731,10 @@ class PaperTradingWorker(PersistentWorker):
         profile_id = str(cfg.get("broker_profile") or "").strip() or (
             pack.default_broker_profile() if pack is not None else ""
         )
+        # Closes and fill mail finish before any scientist call. A slow review
+        # must not hold the next sell or the email past the session.
+        deferred_reviews: list[dict[str, Any]] = []
+        pending_learn: list[dict[str, Any]] = []
         for pos in open_opts:
             sym = str(pos.get("symbol") or "").strip()
             if not sym:
@@ -4758,7 +4953,10 @@ class PaperTradingWorker(PersistentWorker):
                 if self._reasoning is not None:
                     llm = getattr(self._reasoning, "_llm", None)
                 if llm is not None:
-                    advice = reason_as_scientist(packet=pkt, llm=llm)
+                    deferred_reviews.append(
+                        {"symbol": sym, "packet": pkt, "llm": llm}
+                    )
+                    advice = None
             except Exception:  # noqa: BLE001
                 advice = None
             att = lab_v1.apply_cognitive_to_attribution(att, advice=advice)
@@ -4884,19 +5082,79 @@ class PaperTradingWorker(PersistentWorker):
                         "realized_return_pct": realized_pct,
                     },
                 }
+                pending_learn.append(
+                    {
+                        "symbol": sym,
+                        "trade": trade,
+                        "learn_cfg": learn_cfg,
+                        "family": att.get("experiment_family"),
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("FNO-LAB-v1 experience skipped", exc_info=True)
+
+        for job in deferred_reviews:
+            advice = None
+            try:
+                advice = reason_as_scientist(packet=job.get("packet"), llm=job.get("llm"))
+            except Exception:  # noqa: BLE001
+                advice = None
+            sym_j = str(job.get("symbol") or "")
+            for o in outcomes:
+                if str(o.get("symbol") or "") != sym_j or o.get("status") != "closed":
+                    continue
+                att2 = lab_v1.apply_cognitive_to_attribution(
+                    o.get("attribution") or {}, advice=advice
+                )
+                o["attribution"] = att2
+                o["cognitive_review"] = att2.get("cognitive_review")
+                break
+            review = None
+            for o in outcomes:
+                if str(o.get("symbol") or "") == sym_j and o.get("status") == "closed":
+                    review = o.get("cognitive_review")
+                    break
+            if review:
+                for i, line in enumerate(lines):
+                    if line.startswith(f"{sym_j}: "):
+                        lines[i] = line.replace(
+                            "review=UNREVIEWED",
+                            f"review={review}",
+                            1,
+                        )
+                        break
+        for item in pending_learn:
+            try:
+                from types import SimpleNamespace
+
+                sym_l = str(item.get("symbol") or "")
+                learn_cfg = item.get("learn_cfg") or {}
+                att2 = None
+                for o in outcomes:
+                    if str(o.get("symbol") or "") == sym_l and o.get("status") == "closed":
+                        att2 = o.get("attribution") if isinstance(o.get("attribution"), dict) else None
+                        break
+                if att2 is not None and isinstance(learn_cfg, dict):
+                    packet = dict(learn_cfg.get("_learning_packet") or {})
+                    packet["fno_lab_v1"] = att2
+                    cog2 = att2.get("cognitive") if isinstance(att2.get("cognitive"), dict) else {}
+                    packet["cognitive"] = cog2
+                    learn_cfg["_learning_packet"] = packet
+                review = (att2 or {}).get("cognitive_review") or "UNREVIEWED"
                 self._remember_outcome(
-                    sym,
-                    trade,
+                    sym_l,
+                    item.get("trade"),
                     SimpleNamespace(
                         id=None,
                         action="sell",
                         kind="sell",
-                        symbol=sym,
+                        symbol=sym_l,
                         rationale="F&O Lab v1 experiment-scoped session_flat exit",
                         why="F&O Lab v1 experiment-scoped session_flat exit",
                         confidence="medium",
                         status=lab_v1.REASON_EXPERIMENT_CLOSE,
-                        cognitive_review=att.get("cognitive_review") or "UNREVIEWED",
+                        cognitive_review=review,
+                        experiment_family=item.get("family"),
                         reasons_for=[
                             "F&O Lab v1 experiment-scoped session_flat exit"
                         ],
@@ -5338,6 +5596,8 @@ class PaperTradingWorker(PersistentWorker):
             except Exception:  # noqa: BLE001
                 pass
             try:
+                sess_state = state.get("session") if isinstance(state.get("session"), dict) else {}
+                bar = bars[cursor] if 0 <= cursor < len(bars) else {}
                 option_overlay = self._fno_atm_overlay(
                     symbol=symbol,
                     price=price,
@@ -5345,6 +5605,8 @@ class PaperTradingWorker(PersistentWorker):
                     snapshot=snapshot,
                     indicators=indicators,
                     control_action=kind or "hold",
+                    spot_as_of=bar.get("t") if isinstance(bar, dict) else None,
+                    session_open=sess_state.get("open"),
                 )
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("F&O ATM overlay skipped: %s", exc)

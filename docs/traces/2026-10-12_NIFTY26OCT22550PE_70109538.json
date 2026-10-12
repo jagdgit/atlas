@@ -1,0 +1,741 @@
+{
+  "cells": [
+    {
+      "blocked_by": [],
+      "dimension": "IDENTITY",
+      "field": "round_trip_pair",
+      "gap_class": null,
+      "note": "unique equal-quantity buy/sell pair on symbol+portfolio+day",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:45:59.866877+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:70109538-b48c-4d03-a600-5e2482d606e1",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 1,
+      "value": {
+        "candidates": [],
+        "entry_id": "70109538-b48c-4d03-a600-5e2482d606e1",
+        "exit_id": "17b5cb05-a102-40c4-b5b3-35594405f127"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "IDENTITY",
+      "field": "quantities",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:45:59.866877+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:70109538-b48c-4d03-a600-5e2482d606e1",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T10:02:29.696643+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:17b5cb05-a102-40c4-b5b3-35594405f127",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 1,
+      "value": {
+        "entry_qty": 65.0,
+        "entry_side": "buy",
+        "exit_qty": 65.0,
+        "exit_side": "sell"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "stored_realized_pnl",
+      "gap_class": null,
+      "note": "stored sell realized_pnl is exit-fee net (F18); check = (exit-entry)*qty - exit_fee",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T10:02:29.696643+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:17b5cb05-a102-40c4-b5b3-35594405f127",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": 5099.249999999999
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "fees",
+      "gap_class": null,
+      "note": "zero-fee paper_demo expected for this lab profile",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:45:59.866877+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:70109538-b48c-4d03-a600-5e2482d606e1",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T10:02:29.696643+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:17b5cb05-a102-40c4-b5b3-35594405f127",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": {
+        "entry_fee": 0.0,
+        "exit_fee": 0.0,
+        "profile": "paper_demo"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "return_on_cost_roc_v1",
+      "gap_class": null,
+      "note": "entry_cost=17192.5; round_trip_net=5099.249999999999",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "roc.v1 = round_trip_net / (qty*entry_price + entry_fee) * 100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 7,
+      "value": 29.6597
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "stored_realized_return_pct",
+      "gap_class": "COMPUTATION",
+      "note": "stored=22.8751; roc.v1=29.6597; exit-notional formula would give 22.8751",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:14.798482+05:30",
+          "original_ts": "2026-10-12T04:45:53.777623+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/investment/fno/lab_v1_predictions/NIFTY26OCT22550PE.json",
+          "sha256": "0bd1d419d7746354651a9064ad409d19f1c248bd4bcf5d2177f8f6bd9126ffea"
+        }
+      ],
+      "status": "CONFLICT",
+      "step": 7,
+      "value": 22.8751
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_decision",
+      "gap_class": "LINKAGE",
+      "note": "fill is BUY option but linked engine decision is HOLD underlier",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:45:59.866877+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:70109538-b48c-4d03-a600-5e2482d606e1",
+          "sha256": null
+        },
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T04:45:51.015557+00:00",
+          "original_tz": "UTC",
+          "ref": "decision.decisions:0cb0d567-2ee9-4a91-a564-e2adbd3b75fc",
+          "sha256": null
+        }
+      ],
+      "status": "CONFLICT",
+      "step": 3,
+      "value": {
+        "action": "hold",
+        "created_at_ist": "2026-10-12T10:15:51.015557+05:30",
+        "decision_id": "0cb0d567-2ee9-4a91-a564-e2adbd3b75fc",
+        "symbol": "NIFTY",
+        "why": "Chose 'hold' (score 0.5800, high confidence). no actionable signal; ctx wm:idx.nifty50 Influenced by policy exp-bias:31."
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_prediction",
+      "gap_class": null,
+      "note": "prediction file is historical overlay evidence only (A5); not a decision record",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:14.798482+05:30",
+          "original_ts": "2026-10-12T04:45:53.777623+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/investment/fno/lab_v1_predictions/NIFTY26OCT22550PE.json",
+          "sha256": "0bd1d419d7746354651a9064ad409d19f1c248bd4bcf5d2177f8f6bd9126ffea"
+        }
+      ],
+      "status": "OK",
+      "step": 2,
+      "value": {
+        "calibration_status": "uncalibrated_default",
+        "entry_time_ist": "2026-10-12T10:15:53.777623+05:30",
+        "er_model": "fno_lab_v1_control_signal.v1",
+        "expected_return": 0.08,
+        "experiment_family": "FNO-ATM-NIF-001",
+        "horizon": "session_flat",
+        "predicted_probability": 0.7,
+        "prediction_type": "rule_output",
+        "reason": "v1_buy_atm_pe",
+        "thesis": "Control SMA margin -0.03090 \u2192 long ATM PE; expect premium E[R]=8.00% over session_flat.",
+        "trade_id": "70109538-b48c-4d03-a600-5e2482d606e1"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "experiment_family_definition",
+      "gap_class": null,
+      "note": "Identifier only \u2014 generated by experiment_family_id(underlying); not a defined experiment protocol (A16)",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:14.798482+05:30",
+          "original_ts": "2026-10-12T04:45:53.777623+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/investment/fno/lab_v1_predictions/NIFTY26OCT22550PE.json",
+          "sha256": "0bd1d419d7746354651a9064ad409d19f1c248bd4bcf5d2177f8f6bd9126ffea"
+        },
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "atlas.investment.fno_lab_v1.experiment_family_id",
+          "sha256": null
+        }
+      ],
+      "status": "OK",
+      "step": 2,
+      "value": "FNO-ATM-NIF-001"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "entry_decision_packet",
+      "gap_class": "LINKAGE",
+      "note": "no by_day packet for engine decision / fill",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T12:58:01.752870+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/decisions/by_day/india_fno_learner/2026-10-12.jsonl",
+          "sha256": "42449814cfc05fc6a4dce29fdbf82da23afdd07d7fdd2bfa185278bf0a7d03fe"
+        }
+      ],
+      "status": "MISSING",
+      "step": 3,
+      "value": {
+        "matches": 0
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "exit_decision",
+      "gap_class": "LINKAGE",
+      "note": "sell path passed decision_id=None",
+      "sources": [
+        {
+          "kind": "db",
+          "mtime_ist": null,
+          "original_ts": "2026-10-12T10:02:29.696643+00:00",
+          "original_tz": "UTC",
+          "ref": "sim.trades:17b5cb05-a102-40c4-b5b3-35594405f127",
+          "sha256": null
+        }
+      ],
+      "status": "MISSING",
+      "step": 6,
+      "value": {
+        "decision_id": null
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_LINKAGE",
+      "field": "exit_trigger",
+      "gap_class": null,
+      "note": "trigger recoverable from integrity; expiry/strike null on record",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T21:12:53.212191+05:30",
+          "original_ts": "2026-10-12T15:42:53.199337+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/investment/fno/lab_v1_integrity/2026-10-12.json#flatten_outcomes",
+          "sha256": "0838dedc0be32827ee475c7c8d26105d804e19193822fbdd9d47b7d9f24dd4c5"
+        }
+      ],
+      "status": "OK",
+      "step": 6,
+      "value": {
+        "exit_policy": "session_flat",
+        "expiry": null,
+        "reason": "fno_lab_v1_experiment_close",
+        "status": "closed",
+        "strike": null
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "entry_pack_snapshot",
+      "gap_class": "PERSISTENCE",
+      "note": "pack overwritten after entry \u2014 stored copy is later version, not decision-time evidence",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:26:34.268646+05:30",
+          "original_ts": "2026-10-12T09:56:34.269394+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/investment/fno/packs/NIFTY_2026-10-12.json#as_of",
+          "sha256": "f7405230271b5cae82a48391e28181f7764470ce416ea8b84c1d0db5b531c69a"
+        }
+      ],
+      "status": "MISSING",
+      "step": 1,
+      "value": {
+        "age_s_after_entry": 18634.402517,
+        "atm": 22400.0,
+        "pack_as_of_ist": "2026-10-12T15:26:34.269394+05:30",
+        "spot": 22387.9
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "order_intent",
+      "gap_class": "PERSISTENCE",
+      "note": "no order-intent record on paper path (A6); derivable ATM/1 lot/LTP are context only",
+      "sources": [],
+      "status": "MISSING",
+      "step": 4,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_session_context",
+      "gap_class": null,
+      "note": "session context only \u2014 not entry-to-exit underlier path (A8)",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:26:33.901635+05:30",
+          "original_ts": "2026-10-12T00:00:00+00:00",
+          "original_tz": "UTC",
+          "ref": "/data/atlas_data/market/bars/_NSEI.json#bars[2026-10-12]",
+          "sha256": "fc1610f5d33ca2808fead4501934dce8b2921f4a3b55d2c688214978f6fbf025"
+        }
+      ],
+      "status": "OK",
+      "step": 5,
+      "value": {
+        "alias": "_NSEI",
+        "close_to_close_pct": -1.0149,
+        "day_close": 22383.1,
+        "day_open": 22657.0,
+        "open_to_close_pct": -1.2089,
+        "prior_close": 22612.6
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_open_to_close_pct",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "(close-open)/open*100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 5,
+      "value": -1.2089
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_close_to_close_pct",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "calculated",
+          "mtime_ist": null,
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "(close-prior_close)/prior_close*100",
+          "sha256": null
+        }
+      ],
+      "status": "CALCULATED",
+      "step": 5,
+      "value": -1.0149
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "underlier_entry_to_exit_path",
+      "gap_class": "PERSISTENCE",
+      "note": "requires entry/exit-time underlier prices or intraday bars; daily bar is not sufficient",
+      "sources": [],
+      "status": "MISSING",
+      "step": 5,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "DECISION_EVIDENCE",
+      "field": "iv_greeks",
+      "gap_class": "PERSISTENCE",
+      "note": "IV and Greeks never captured for this round trip",
+      "sources": [],
+      "status": "MISSING",
+      "step": 5,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ATTRIBUTION",
+      "field": "stored_attribution_status",
+      "gap_class": null,
+      "note": "stored label reported verbatim",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:13.817454+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_fno_learner/2026-10-12.jsonl#EXPERIENCE.attribution",
+          "sha256": "8c1f3298c0c1a01090b8d768a5ba9d24968d90468d73c7b143bfffc40945bc3f"
+        }
+      ],
+      "status": "OK",
+      "step": 8,
+      "value": "partial"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ATTRIBUTION",
+      "field": "trace_attribution_state",
+      "gap_class": "ATTRIBUTION",
+      "note": "mechanical: outcome channel listed as cause (circular); mechanical: LLM narrative uses premium path as cause; mechanical: attribution claimed no session bar but daily bar exists",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:13.817454+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_fno_learner/2026-10-12.jsonl",
+          "sha256": "8c1f3298c0c1a01090b8d768a5ba9d24968d90468d73c7b143bfffc40945bc3f"
+        }
+      ],
+      "status": "MISSING",
+      "step": 8,
+      "value": "NOT_EVALUABLE"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ATTRIBUTION",
+      "field": "attribution_underlier_input_lookup",
+      "gap_class": "LINKAGE",
+      "note": "session context bar exists via alias; attribution lookup failed to find it",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:13.817454+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_fno_learner/2026-10-12.jsonl",
+          "sha256": "8c1f3298c0c1a01090b8d768a5ba9d24968d90468d73c7b143bfffc40945bc3f"
+        },
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:26:33.901635+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/market/bars/_NSEI.json",
+          "sha256": "fc1610f5d33ca2808fead4501934dce8b2921f4a3b55d2c688214978f6fbf025"
+        }
+      ],
+      "status": "CONFLICT",
+      "step": 8,
+      "value": "claimed_missing_session_bar"
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "hypothesis",
+      "gap_class": "LEARNING",
+      "note": "observation-style lesson text is not a named hypothesis",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:13.817454+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_fno_learner/2026-10-12.jsonl",
+          "sha256": "8c1f3298c0c1a01090b8d768a5ba9d24968d90468d73c7b143bfffc40945bc3f"
+        }
+      ],
+      "status": "MISSING",
+      "step": 9,
+      "value": "Direction matched stated expectation \u2014 thin sample until n grows."
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "validation_test",
+      "gap_class": "LEARNING",
+      "note": "no validation test defined",
+      "sources": [],
+      "status": "MISSING",
+      "step": 10,
+      "value": null
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "learning_story",
+      "gap_class": null,
+      "note": "",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T15:51:13.817454+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/learning/india_fno_learner/2026-10-12.jsonl#LEARNING_STORY",
+          "sha256": "8c1f3298c0c1a01090b8d768a5ba9d24968d90468d73c7b143bfffc40945bc3f"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "belief_update": "unchanged",
+        "cause": {
+          "helped": [
+            "option_premium_path"
+          ],
+          "hurt": [],
+          "narrative": "helped: option_premium_path; unknown: underlying_move, entry_exit_timing, iv_change, option_greeks, news, sector",
+          "status": "partial",
+          "unknown": [
+            "underlying_move",
+            "entry_exit_timing",
+            "iv_change",
+            "option_greeks",
+            "news",
+            "sector"
+          ]
+        },
+        "story_id": "20d26197-4df6-4fd0-8897-c54db2fcf523"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "fel_features",
+      "gap_class": null,
+      "note": "FEL features present",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T16:14:14.854988+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/fel/datasets/india_fno_learner/DS-E-paper-round-trip-india_fno_learner.jsonl",
+          "sha256": "06f5b10b8d0b8a1d668443f30af4e3dffa1e3a204430ae6e8b53f0ecf83ccd2b"
+        }
+      ],
+      "status": "OK",
+      "step": 9,
+      "value": {
+        "keys_sample": [
+          "kind",
+          "as_of",
+          "symbol",
+          "laboratory_id",
+          "features",
+          "target",
+          "experience_id",
+          "fingerprint"
+        ],
+        "null_fields": {}
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "LEARNING",
+      "field": "thesis_tracker_instrument_class",
+      "gap_class": "LINKAGE",
+      "note": "option contract tracked as equity (.NS / long_term / idle) \u2014 A13",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T10:16:05.730406+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/investment/thesis_tracker/market_intelligence/NIFTY26OCT22550PE.NS.json",
+          "sha256": "5c3545d86a1442a3a54773eb64b66421f48235569a151fa7551e3c217c2e9598"
+        }
+      ],
+      "status": "CONFLICT",
+      "step": 9,
+      "value": {
+        "decision": "buy",
+        "horizon": "long_term",
+        "hypothesis": "idle",
+        "symbol": "NIFTY26OCT22550PE.NS"
+      }
+    },
+    {
+      "blocked_by": [],
+      "dimension": "ACCOUNTING",
+      "field": "lab_day_pnl_kpi",
+      "gap_class": null,
+      "note": "lab-level day_pnl (all symbols); not this trade alone",
+      "sources": [
+        {
+          "kind": "file",
+          "mtime_ist": "2026-10-12T21:14:54.782579+05:30",
+          "original_ts": null,
+          "original_tz": null,
+          "ref": "/data/atlas_data/market/trading_kpis/india_fno_learner/2026-10-12.json#kpis.day_pnl",
+          "sha256": "16d54332d91dc7952b7426323226c95e33f596bb994e660ab7e1e86f70d433dc"
+        }
+      ],
+      "status": "OK",
+      "step": 7,
+      "value": 22319.000000000004
+    }
+  ],
+  "first_blocking_dependency": {
+    "dimension": "ACCOUNTING",
+    "fields": [
+      "stored_realized_return_pct"
+    ],
+    "gap_classes": [
+      "COMPUTATION"
+    ]
+  },
+  "generated_at_ist": "2026-10-12T21:15:02.253622+05:30",
+  "git_sha": "fe3d009",
+  "meta": {
+    "accounting": {
+      "check_realized_exit_fee_net": 5099.249999999999,
+      "entry_cost": 17192.5,
+      "entry_fee_allocated": 0.0,
+      "exit_fee": 0.0,
+      "gross": 5099.249999999999,
+      "roc_v1_pct": 29.659735349716442,
+      "round_trip_net": 5099.249999999999,
+      "stored_realized": 5099.249999999999,
+      "stored_return_pct": null
+    },
+    "db_mode": "dump:/data/atlas/docs/traces/_db_dump",
+    "entry": {
+      "cash_after": 110693.18100625002,
+      "created_at": "2026-10-12T04:45:59.866877+00:00",
+      "decision_id": "0cb0d567-2ee9-4a91-a564-e2adbd3b75fc",
+      "fee": 0.0,
+      "fees": {
+        "brokerage": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "profile_id": "paper_demo",
+        "side": "buy",
+        "stamp": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "total": 0.0,
+        "turnover": 17192.5
+      },
+      "id": "70109538-b48c-4d03-a600-5e2482d606e1",
+      "mission_id": "5ff9fb98-330e-4eee-a31d-9a4065a73a14",
+      "portfolio_id": "9f237a93-0945-4bcd-8309-d2eda576b4fa",
+      "price": 264.5,
+      "quantity": 65.0,
+      "realized_pnl": 0.0,
+      "side": "buy",
+      "symbol": "NIFTY26OCT22550PE"
+    },
+    "exit": {
+      "cash_after": 121240.93100625002,
+      "created_at": "2026-10-12T10:02:29.696643+00:00",
+      "decision_id": null,
+      "fee": 0.0,
+      "fees": {
+        "brokerage": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "profile_id": "paper_demo",
+        "side": "sell",
+        "stamp": 0.0,
+        "stt": 0.0,
+        "tds": 0.0,
+        "total": 0.0,
+        "turnover": 22291.75
+      },
+      "id": "17b5cb05-a102-40c4-b5b3-35594405f127",
+      "mission_id": "5ff9fb98-330e-4eee-a31d-9a4065a73a14",
+      "portfolio_id": "9f237a93-0945-4bcd-8309-d2eda576b4fa",
+      "price": 342.95,
+      "quantity": 65.0,
+      "realized_pnl": 5099.249999999999,
+      "side": "sell",
+      "symbol": "NIFTY26OCT22550PE"
+    },
+    "ist_day": "2026-10-12",
+    "lab": "india_fno_learner",
+    "portfolio_id": "9f237a93-0945-4bcd-8309-d2eda576b4fa",
+    "symbol": "NIFTY26OCT22550PE",
+    "trade_id_seed": "70109538-b48c-4d03-a600-5e2482d606e1",
+    "underlying": "NIFTY"
+  },
+  "script_version": "trace_trade.v1"
+}

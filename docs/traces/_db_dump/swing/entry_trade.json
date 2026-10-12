@@ -1,0 +1,26 @@
+{
+  "cash_after": 27408.499908447313,
+  "created_at": "2026-09-24T10:01:16.004264+00:00",
+  "decision_id": "3f962391-4762-43ac-b0f7-681754e56cbc",
+  "fee": 0.0,
+  "fees": {
+    "brokerage": 0.0,
+    "exchange": 0.0,
+    "gst": 0.0,
+    "profile_id": "paper_demo",
+    "side": "buy",
+    "stamp": 0.0,
+    "stt": 0.0,
+    "tds": 0.0,
+    "total": 0.0,
+    "turnover": 8066.45
+  },
+  "id": "0d9a5313-cf68-4dd6-b883-002e21313023",
+  "mission_id": "9bcc3175-c613-486c-bcbb-e2f094ba5dfd",
+  "portfolio_id": "40d5cf03-e312-45d0-a3d4-b93ac44a76f7",
+  "price": 424.55,
+  "quantity": 19.0,
+  "realized_pnl": 0.0,
+  "side": "buy",
+  "symbol": "COALINDIA.NS"
+}

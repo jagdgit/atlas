@@ -1,0 +1,328 @@
+{
+  "version": "fno.lab.v1.1",
+  "kind": "FNO_LAB_V1_INTEGRITY",
+  "laboratory_id": "india_fno_learner",
+  "as_of_ist": "2026-10-12",
+  "exit_policy": "session_flat",
+  "status": "flat_ok",
+  "flatten_outcomes": [
+    {
+      "qty": 65.0,
+      "price": 342.95,
+      "reason": "fno_lab_v1_experiment_close",
+      "status": "closed",
+      "symbol": "NIFTY26OCT22550PE",
+      "trade_id": "17b5cb05-a102-40c4-b5b3-35594405f127",
+      "attribution": {
+        "expiry": null,
+        "strike": null,
+        "writing": false,
+        "exit_ltp": 342.95,
+        "lab_role": "derivatives_controlled_experiments",
+        "lot_size": 65.0,
+        "trade_id": "17b5cb05-a102-40c4-b5b3-35594405f127",
+        "cognitive": {
+          "advice": {
+            "llm": true,
+            "kind": "SCIENTIST_ADVICE",
+            "claims": [],
+            "symbol": "NIFTY26OCT22550PE",
+            "honesty": "Cognitive Core REVIEWED \u2014 advice-only. Deterministic gates own capital.",
+            "payload": {
+              "summary": "This session_flat paper close shows a 29.66% premium return on NIFTY26OCT22550PE (PE) with realized PnL of \u20b95099.25. The premium path was the primary driver, while underlying move, IV change, and option Greeks remain unknown.",
+              "question": "Interpret this F&O Lab v1 session_flat paper close using ONLY the listed observable evidence. State which causes are supported vs still unknown. Do not invent IV, delta, news, or sector moves. Do not recommend orders. Not a validated lesson.",
+              "unknowns": [
+                "Underlying move",
+                "IV change",
+                "Option delta/gamma at entry/exit",
+                "Whether ATM premium move generalizes"
+              ],
+              "analogues": [],
+              "falsifiers": [
+                "Underlying move confirms positive",
+                "IV change increases",
+                "Option delta/gamma shifts significantly"
+              ],
+              "explanations": [],
+              "contradictions": [],
+              "interpretation": "This session_flat paper close shows a 29.66% premium return on NIFTY26OCT22550PE (PE) with realized PnL of \u20b95099.25. The premium path was the primary driver, while underlying move, IV change, and option Greeks remain unknown.",
+              "recommendation": "No action; premium path was the cause but underlying move and IV change are unknown"
+            },
+            "summary": "This session_flat paper close shows a 29.66% premium return on NIFTY26OCT22550PE (PE) with realized PnL of \u20b95099.25. The premium path was the primary driver, while underlying move, IV change, and option Greeks remain unknown.",
+            "surface": "scientist",
+            "version": "now.cognitive_core.v1",
+            "question": "Interpret this F&O Lab v1 session_flat paper close using ONLY the listed observable evidence. State which causes are supported vs still unknown. Do not invent IV, delta, news, or sector moves. Do not recommend orders. Not a validated lesson.",
+            "unknowns": [
+              "Underlying move",
+              "IV change",
+              "Option delta/gamma at entry/exit",
+              "Whether ATM premium move generalizes"
+            ],
+            "analogues": [],
+            "confidence": 0.85,
+            "falsifiers": [
+              "Underlying move confirms positive",
+              "IV change increases",
+              "Option delta/gamma shifts significantly"
+            ],
+            "provenance": [
+              "underlying=NIFTY",
+              "option=NIFTY26OCT22550PE",
+              "right=PE",
+              "entry_premium=264.5",
+              "exit_premium=342.95",
+              "premium_return_pct=29.659735349716442",
+              "underlying_session_return_pct=None",
+              "holding_minutes=None",
+              "realized_pnl=5099.249999999999",
+              "mark_source=option_ltp",
+              "iv_change=unknown (not in durable store)",
+              "delta_gamma=unknown (not in durable store)",
+              "ATTRIBUTION_RULE: label only from lines above; iv_change/delta/gamma/news remain unknown if not listed with values",
+              "pre_core_attribution_status=partial",
+              "pre_core_narrative=helped: option_premium_path; unknown: underlying_move, entry_exit_timing, iv_change, option_greeks, news, sector"
+            ],
+            "advice_only": true,
+            "decision_id": null,
+            "skip_reason": null,
+            "explanations": [],
+            "never_orders": true,
+            "laboratory_id": "india_fno_learner",
+            "review_status": "REVIEWED",
+            "contradictions": [],
+            "interpretation": "This session_flat paper close shows a 29.66% premium return on NIFTY26OCT22550PE (PE) with realized PnL of \u20b95099.25. The premium path was the primary driver, while underlying move, IV change, and option Greeks remain unknown.",
+            "recommendation": "No action; premium path was the cause but underlying move and IV change are unknown",
+            "contract_version": "cognitive.contract.v1"
+          },
+          "honesty": "Single controlled close is not L5. UNREVIEWED means Core did not complete a REVIEWED pass \u2014 never invent REVIEWED.",
+          "lab_role": "derivatives_controlled_experiments",
+          "trade_id": "17b5cb05-a102-40c4-b5b3-35594405f127",
+          "underlying": "NIFTY",
+          "exit_reason": "fno_lab_v1_experiment_close",
+          "lab_version": "fno.lab.v1.1",
+          "live_orders": false,
+          "mark_source": "option_ltp",
+          "option_type": "PE",
+          "skip_reason": null,
+          "realized_pnl": 5099.249999999999,
+          "experiment_id": "FNO-ATM-NIF-001",
+          "laboratory_id": "india_fno_learner",
+          "learning_status": "PROVISIONAL \u2014 single RT",
+          "option_contract": "NIFTY26OCT22550PE",
+          "cognitive_review": "REVIEWED",
+          "lesson_candidate": "This session_flat paper close shows a 29.66% premium return on NIFTY26OCT22550PE (PE) with realized PnL of \u20b95099.25. The premium path was the primary driver, while underlying move, IV change, and option Greeks remain unknown.",
+          "experiment_family": "FNO-ATM-NIF-001"
+        },
+        "entry_ltp": 264.5,
+        "underlying": "NIFTY",
+        "exit_reason": "fno_lab_v1_experiment_close",
+        "lab_version": "fno.lab.v1.1",
+        "live_orders": false,
+        "mark_source": "option_ltp",
+        "option_type": "PE",
+        "skip_reason": null,
+        "entry_reason": "lab_v1_open_experiment",
+        "realized_pnl": 5099.249999999999,
+        "experiment_id": "FNO-ATM-NIF-001",
+        "laboratory_id": "india_fno_learner",
+        "causal_factors": {
+          "pnl": 5099.249999999999,
+          "hurt": [],
+          "helped": [
+            "option_premium_path"
+          ],
+          "status": "partial",
+          "factors": [
+            {
+              "note": "no durable underlier session bar",
+              "role": "unknown",
+              "factor": "underlying_move",
+              "evidence": null,
+              "decide_contrib": null
+            },
+            {
+              "note": "Premium path is the measured outcome channel \u2014 not an independent cause.",
+              "role": "helped",
+              "factor": "option_premium_path",
+              "evidence": "premium 264.5\u2192342.95 (+29.66%)",
+              "decide_contrib": null
+            },
+            {
+              "note": "entry/exit timestamps missing",
+              "role": "unknown",
+              "factor": "entry_exit_timing",
+              "evidence": null,
+              "decide_contrib": null
+            },
+            {
+              "note": null,
+              "role": "neutral",
+              "factor": "mark_quality",
+              "evidence": "mark_source=option_ltp",
+              "decide_contrib": null
+            },
+            {
+              "note": "IV not in durable store for this RT",
+              "role": "unknown",
+              "factor": "iv_change",
+              "evidence": null,
+              "decide_contrib": null
+            },
+            {
+              "note": "delta/gamma not recorded at entry/exit",
+              "role": "unknown",
+              "factor": "option_greeks",
+              "evidence": null,
+              "decide_contrib": null
+            },
+            {
+              "note": "no linked headlines on F&O close path",
+              "role": "unknown",
+              "factor": "news",
+              "evidence": null,
+              "decide_contrib": null
+            },
+            {
+              "note": "no sector-relative return supplied for underlier",
+              "role": "unknown",
+              "factor": "sector",
+              "evidence": null,
+              "decide_contrib": null
+            }
+          ],
+          "honesty": "F&O path-alignment from durable underlier bars + premiums. IV/greeks/news stay unknown when absent \u2014 Core must not invent them. status=partial is not a validated lesson / not L5.",
+          "unknown": [
+            "underlying_move",
+            "entry_exit_timing",
+            "iv_change",
+            "option_greeks",
+            "news",
+            "sector"
+          ],
+          "version": "fno.option_attribution.v1",
+          "narrative": "helped: option_premium_path; unknown: underlying_move, entry_exit_timing, iv_change, option_greeks, news, sector",
+          "fno_rt_evidence": {
+            "kind": "FNO_RT_EVIDENCE",
+            "honesty": "Durable underlier daily bars + recorded premiums only. No invented IV/delta/news. Core may interpret; not a validated lesson.",
+            "version": "fno.option_attribution.v1",
+            "observables": {
+              "as_of_ist": "2026-10-12",
+              "underlying": "NIFTY",
+              "mark_source": "option_ltp",
+              "exit_premium": 342.95,
+              "option_right": "PE",
+              "realized_pnl": 5099.249999999999,
+              "entry_premium": 264.5,
+              "option_symbol": "NIFTY26OCT22550PE",
+              "holding_minutes": null,
+              "prediction_error": null,
+              "premium_return_pct": 29.659735349716442,
+              "underlying_session": {
+                "low": null,
+                "date": null,
+                "high": null,
+                "open": null,
+                "close": null,
+                "source": null,
+                "return_pct": null
+              }
+            },
+            "evidence_lines": [
+              "underlying=NIFTY",
+              "option=NIFTY26OCT22550PE",
+              "right=PE",
+              "entry_premium=264.5",
+              "exit_premium=342.95",
+              "premium_return_pct=29.659735349716442",
+              "underlying_session_return_pct=None",
+              "holding_minutes=None",
+              "realized_pnl=5099.249999999999",
+              "mark_source=option_ltp",
+              "iv_change=unknown (not in durable store)",
+              "delta_gamma=unknown (not in durable store)"
+            ],
+            "missing_evidence": [
+              "underlying_session_return",
+              "iv_change",
+              "option_delta",
+              "option_gamma",
+              "news",
+              "sector_rel"
+            ]
+          },
+          "missing_evidence": [
+            "underlying_session_return",
+            "iv_change",
+            "option_delta",
+            "option_gamma",
+            "news",
+            "sector_rel"
+          ],
+          "price_change_pct": null
+        },
+        "fno_rt_evidence": {
+          "kind": "FNO_RT_EVIDENCE",
+          "honesty": "Durable underlier daily bars + recorded premiums only. No invented IV/delta/news. Core may interpret; not a validated lesson.",
+          "version": "fno.option_attribution.v1",
+          "observables": {
+            "as_of_ist": "2026-10-12",
+            "underlying": "NIFTY",
+            "mark_source": "option_ltp",
+            "exit_premium": 342.95,
+            "option_right": "PE",
+            "realized_pnl": 5099.249999999999,
+            "entry_premium": 264.5,
+            "option_symbol": "NIFTY26OCT22550PE",
+            "holding_minutes": null,
+            "prediction_error": null,
+            "premium_return_pct": 29.659735349716442,
+            "underlying_session": {
+              "low": null,
+              "date": null,
+              "high": null,
+              "open": null,
+              "close": null,
+              "source": null,
+              "return_pct": null
+            }
+          },
+          "evidence_lines": [
+            "underlying=NIFTY",
+            "option=NIFTY26OCT22550PE",
+            "right=PE",
+            "entry_premium=264.5",
+            "exit_premium=342.95",
+            "premium_return_pct=29.659735349716442",
+            "underlying_session_return_pct=None",
+            "holding_minutes=None",
+            "realized_pnl=5099.249999999999",
+            "mark_source=option_ltp",
+            "iv_change=unknown (not in durable store)",
+            "delta_gamma=unknown (not in durable store)"
+          ],
+          "missing_evidence": [
+            "underlying_session_return",
+            "iv_change",
+            "option_delta",
+            "option_gamma",
+            "news",
+            "sector_rel"
+          ]
+        },
+        "future_contract": null,
+        "learning_status": "PROVISIONAL \u2014 single RT",
+        "option_contract": "NIFTY26OCT22550PE",
+        "underlying_type": "index",
+        "cognitive_review": "REVIEWED",
+        "lesson_candidate": "This session_flat paper close shows a 29.66% premium return on NIFTY26OCT22550PE (PE) with realized PnL of \u20b95099.25. The premium path was the primary driver, while underlying move, IV change, and option Greeks remain unknown.",
+        "experiment_family": "FNO-ATM-NIF-001",
+        "attribution_status": "partial",
+        "uses_l4_index_proxy": false
+      },
+      "mark_source": "option_ltp",
+      "realized_pnl": 5099.249999999999,
+      "session_date": "2026-10-12",
+      "cognitive_review": "REVIEWED"
+    }
+  ]
+}

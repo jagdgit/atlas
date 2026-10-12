@@ -80,10 +80,19 @@ def handle_paper_round_trip(item: dict[str, Any], data_dir: str) -> dict[str, An
     return run_paper_round_trip(data_dir, laboratory_id=lab)
 
 
+def handle_hypothesis_test(item: dict[str, Any], data_dir: str) -> dict[str, Any]:
+    from atlas.investment.cognitive.experiment_bridge import (
+        handle_hypothesis_test as run_hypothesis_test,
+    )
+
+    return run_hypothesis_test(item, data_dir)
+
+
 DEFAULT_HANDLERS: dict[str, Handler] = {
     "e001": handle_e001,
     "e002": handle_e002,
     "paper_round_trip": handle_paper_round_trip,
+    "hypothesis_test": handle_hypothesis_test,
 }
 
 

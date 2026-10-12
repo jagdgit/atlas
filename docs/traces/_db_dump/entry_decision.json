@@ -1,0 +1,36 @@
+{
+  "id": "0cb0d567-2ee9-4a91-a564-e2adbd3b75fc",
+  "mission_id": "5ff9fb98-330e-4eee-a31d-9a4065a73a14",
+  "mission_type": "paper_trading",
+  "config_id": null,
+  "config_version": 2,
+  "action": {
+    "key": "hold",
+    "kind": "recommend",
+    "payload": {
+      "kind": "hold",
+      "symbol": "NIFTY"
+    }
+  },
+  "action_kind": "recommend",
+  "why": "Chose 'hold' (score 0.5800, high confidence). no actionable signal; ctx wm:idx.nifty50 Influenced by policy exp-bias:31.",
+  "decision_rule": "paper_trading",
+  "rule_version": "1.0.0",
+  "evidence_refs": [],
+  "knowledge_refs": [],
+  "experience_refs": [],
+  "model_versions": {
+    "policy": "1.0.0",
+    "intelligence": "0.1.0",
+    "decision_engine": "1.0.0"
+  },
+  "policy_ids": [
+    "exp-bias:31"
+  ],
+  "confidence": "high",
+  "confidence_score": 1.0,
+  "alternatives_rejected": [],
+  "requires_approval": false,
+  "status": "recorded",
+  "created_at": "2026-10-12T04:45:51.015557+00:00"
+}

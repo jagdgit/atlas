@@ -25,6 +25,13 @@ STATUS_PENDING = "PENDING"
 STATUS_DONE = "DONE"
 STATUS_NOT_WORTHWHILE = "NOT_WORTHWHILE"
 STATUS_EXPIRED = "EXPIRED"
+# Acquired, not yet decision-usable. A later enqueue must not reopen this as missing.
+STATUS_PENDING_VALIDATION = "PENDING_VALIDATION"
+# Evidence exists and disagrees. Not missing, and not a value to trade on.
+STATUS_CONFLICT = "CONFLICT"
+_PROTECTED_REQUEUE = frozenset(
+    {STATUS_DONE, STATUS_NOT_WORTHWHILE, STATUS_PENDING_VALIDATION, STATUS_CONFLICT}
+)
 
 # Material unknowns that block or degrade fundamental confidence
 MATERIAL_UNKNOWN_CODES = frozenset(
@@ -130,8 +137,9 @@ def upsert_task(data_dir: str | Path, task: dict[str, Any]) -> dict[str, Any]:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             existing = {}
-    if existing.get("status") in {STATUS_DONE, STATUS_NOT_WORTHWHILE}:
-        return existing
+    if existing.get("status") in _PROTECTED_REQUEUE and task.get("status") == STATUS_PENDING:
+        if not task.get("reopen"):
+            return existing
     merged = {**existing, **task, "updated_at": _now_iso()}
     if existing.get("created_at"):
         merged["created_at"] = existing["created_at"]
@@ -160,6 +168,17 @@ def mark_task(
     if not path.is_file():
         return {"ok": False, "error": "not_found"}
     doc = json.loads(path.read_text(encoding="utf-8"))
+    prev = doc.get("status")
+    if prev and prev != status:
+        hist = list(doc.get("history") or [])
+        hist.append(
+            {
+                "status": prev,
+                "last_error": doc.get("last_error"),
+                "at": doc.get("updated_at"),
+            }
+        )
+        doc["history"] = hist[-50:]
     doc["status"] = status
     doc["updated_at"] = _now_iso()
     if note:
@@ -252,6 +271,14 @@ def enqueue_from_unknowns(
         if only_material and code not in MATERIAL_UNKNOWN_CODES:
             skipped.append(code)
             continue
+        try:
+            from atlas.investment.data_quality import blocks_missing_code
+
+            if not blocks_missing_code(data_dir, laboratory_id, symbol, code):
+                skipped.append(code)
+                continue
+        except Exception:  # noqa: BLE001
+            _log.debug("capability gate skipped for %s", code, exc_info=True)
         task = make_acquisition_task(
             laboratory_id=laboratory_id, symbol=symbol, unknown_code=code
         )

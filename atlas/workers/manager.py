@@ -459,6 +459,13 @@ class WorkerManager:
     # --- the tick (registered as the `worker_tick` handler) -------------
 
     def worker_tick(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            from atlas.ops.service_locks import require_service
+
+            if not require_service("atlas.svc.workers"):
+                return {"skipped": "service_lock_passive"}
+        except Exception:  # noqa: BLE001
+            pass
         worker_id = (payload or {}).get("worker_id")
         if not worker_id:
             return {"skipped": "no worker_id"}
@@ -871,6 +878,21 @@ class WorkerManager:
                         )
                     except Exception:  # noqa: BLE001
                         sc = SERVICE_BATCH
+                elif str(wtype) == "investor_reports":
+                    # Fill mail and the evening digest share this worker. During
+                    # cash hours and the evening catch-up window (through 23:00)
+                    # it must rank with market realtime, not sit in BATCH.
+                    sc = prof.service_class
+                    try:
+                        from atlas.core.resources.capacity_shares import (
+                            market_priority_window,
+                        )
+                        from atlas.core.resources.work_profile import SERVICE_REALTIME
+
+                        if market_priority_window():
+                            sc = SERVICE_REALTIME
+                    except Exception:  # noqa: BLE001
+                        sc = prof.service_class
                 elif str(wtype) == "fundamental_evidence":
                     try:
                         from atlas.investment.yahoo_fundamentals import (
@@ -1031,6 +1053,14 @@ class WorkerManager:
     # --- lifecycle (kernel service) ------------------------------------
 
     def start(self) -> None:
+        try:
+            from atlas.ops.service_locks import get_service_lock_manager
+
+            mgr = get_service_lock_manager()
+            if mgr is not None:
+                mgr.acquire("atlas.svc.workers")
+        except Exception:  # noqa: BLE001
+            self._logger.exception("workers service lock acquire failed")
         return None
 
     def stop(self) -> None:

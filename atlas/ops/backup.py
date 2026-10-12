@@ -129,6 +129,19 @@ class BackupManager:
     # --- Service lifecycle ---------------------------------------------
     def start(self) -> None:
         """Seed a durable backup chain on startup (idempotent across restarts)."""
+        try:
+            from atlas.ops.service_locks import get_service_lock_manager
+
+            mgr = get_service_lock_manager()
+            if mgr is not None:
+                lock = mgr.acquire("atlas.svc.backup")
+                if lock.passive:
+                    self._logger.error(
+                        "backup staying passive — service lock not held"
+                    )
+                    return
+        except Exception:  # noqa: BLE001
+            self._logger.exception("backup service lock acquire failed")
         if not self._enabled or self._enqueue is None or self._interval <= 0:
             return
         if self._count_pending is not None and self._count_pending("backup") > 0:
