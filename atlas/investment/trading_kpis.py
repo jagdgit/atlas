@@ -255,12 +255,74 @@ def build_trading_kpis(
         else port.get("positions_value")
     )
 
+    day_pnl = _f(port.get("day_pnl"))
+    day_return_pct = _f(port.get("day_return_pct"))
+    # Flat EOD books often hit the statement API with marks={} → day_pnl left null
+    # even after a full day of closed round-trips. Recompute from today's ledger.
+    if day_pnl is None and trades:
+        try:
+            from atlas.workers.investor_reports import InvestorReportsWorker
+
+            day_pnl = InvestorReportsWorker._compute_day_pnl(
+                positions=positions,
+                day_trades=trades,
+                marks=port.get("marks") or {},
+                previous=port.get("previous_closes") or {},
+            )
+            if day_pnl is None:
+                day_pnl = 0.0
+            # Same-day closed round-trips: prefer ledger realized when algebra ≈ 0.
+            if abs(float(day_pnl)) < 1e-6 and not positions:
+                realized = 0.0
+                buy_qty: dict[str, float] = {}
+                sell_qty: dict[str, float] = {}
+                for t in trades:
+                    sym = str(t.get("symbol") or "")
+                    if not sym:
+                        continue
+                    qty = float(t.get("quantity") or t.get("qty") or 0)
+                    side = str(t.get("side") or "").lower()
+                    if side == "buy":
+                        buy_qty[sym] = buy_qty.get(sym, 0.0) + qty
+                    elif side == "sell":
+                        sell_qty[sym] = sell_qty.get(sym, 0.0) + qty
+                        try:
+                            realized += float(t.get("realized_pnl") or 0)
+                        except (TypeError, ValueError):
+                            pass
+                if (
+                    realized
+                    and sell_qty
+                    and all(
+                        buy_qty.get(sym, 0.0) + 1e-9 >= qty
+                        for sym, qty in sell_qty.items()
+                    )
+                ):
+                    day_pnl = realized
+            if day_return_pct is None and equity is not None and day_pnl is not None:
+                base = float(equity) - float(day_pnl)
+                day_return_pct = 100.0 * float(day_pnl) / base if base > 0 else None
+        except Exception:  # noqa: BLE001
+            _log.debug("trading kpi day_pnl recompute skipped", exc_info=True)
+
+    day_fees = 0.0
+    for t in trades:
+        try:
+            day_fees += float(t.get("fee") or 0)
+        except (TypeError, ValueError):
+            continue
+    if port.get("fees_paid_today") is not None:
+        fees_paid = _f(port.get("fees_paid_today"), 0.0)
+    else:
+        # Day scorecard must not inherit lifetime statement fees_paid.
+        fees_paid = round(day_fees, 4)
+
     return {
         "cash": _f(port.get("cash")),
         "holdings_value": holdings,
         "equity": equity,
-        "day_pnl": _f(port.get("day_pnl")),
-        "day_return_pct": _f(port.get("day_return_pct")),
+        "day_pnl": day_pnl,
+        "day_return_pct": day_return_pct,
         "total_pnl": _f(port.get("total_pnl")),
         "total_return_pct": _f(port.get("total_return_pct")),
         "net_contributed_capital": _f(port.get("net_contributed_capital")),
@@ -271,7 +333,7 @@ def build_trading_kpis(
         "candidates_planned": candidates_planned,
         "candidates_filled": candidates_filled,
         "plan_fill_rate": plan_fill_rate,
-        "fees_paid": _f(port.get("fees_paid"), 0.0),
+        "fees_paid": fees_paid,
         "size_trims": size_trims,
         "portfolio_gate_blocks": gate_blocks,
         "top_no_fill_reasons": [

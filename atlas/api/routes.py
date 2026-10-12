@@ -5985,63 +5985,71 @@ def portfolio_ledger_statement(portfolio_ref: str, request: Request) -> dict:
         stmt["taxes_and_pnl"] = tax_pnl
     stmt["day_pnl"] = None
     stmt["day_return_pct"] = None
-    if marks and previous_closes:
-        try:
-            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    # Flat EOD books have no open marks — still owe a day P&L from today's fills.
+    # Prefer full ledger over recent_trades[:10] (F&O often >10 fills/day).
+    try:
+        from atlas.investment.trading_kpis import tag_trades_ist_day as _tag_day
+        from atlas.workers.investor_reports import InvestorReportsWorker
 
-            today_ist = _dt.now(_tz(_td(hours=5, minutes=30))).date()
-            day_trades: list[dict] = []
-            blotter_for_day = stmt.get("trades") or stmt.get("recent_trades") or []
-            for trade in blotter_for_day:
-                raw = trade.get("created_at")
-                if raw is None:
+        _ist = stmt.get("ist_date")
+        if not _ist:
+            from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+
+            _ist = _dt2.now(_tz2(_td2(hours=5, minutes=30))).date().isoformat()
+        blotter_for_day = list(stmt.get("trades") or stmt.get("recent_trades") or [])
+        tagged_day = _tag_day(blotter_for_day, ist_date=str(_ist))
+        day_trades = [t for t in tagged_day if t.get("ist_day_match")]
+        stmt["day_trades"] = day_trades
+        stmt["fills_today_ledger"] = len(day_trades)
+        day_pnl = InvestorReportsWorker._compute_day_pnl(
+            positions=list(stmt.get("positions") or []),
+            day_trades=day_trades,
+            marks=marks or {},
+            previous=previous_closes or {},
+        )
+        if day_pnl is None and not day_trades and not (stmt.get("positions") or []):
+            day_pnl = 0.0
+        elif day_pnl is None and day_trades:
+            day_pnl = 0.0
+        if day_pnl is not None and abs(float(day_pnl)) < 1e-6 and day_trades:
+            realized = 0.0
+            buy_qty: dict[str, float] = {}
+            sell_qty: dict[str, float] = {}
+            for t in day_trades:
+                sym = str(t.get("symbol") or "")
+                if not sym:
                     continue
-                created = raw if isinstance(raw, _dt) else _dt.fromisoformat(
-                    str(raw).replace("Z", "+00:00")
+                qty = float(t.get("quantity") or t.get("qty") or 0)
+                side = str(t.get("side") or "").lower()
+                if side == "buy":
+                    buy_qty[sym] = buy_qty.get(sym, 0.0) + qty
+                elif side == "sell":
+                    sell_qty[sym] = sell_qty.get(sym, 0.0) + qty
+                    try:
+                        realized += float(t.get("realized_pnl") or 0)
+                    except (TypeError, ValueError):
+                        pass
+            if (
+                realized
+                and sell_qty
+                and not (stmt.get("positions") or [])
+                and all(
+                    buy_qty.get(sym, 0.0) + 1e-9 >= qty
+                    for sym, qty in sell_qty.items()
                 )
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=_tz.utc)
-                if created.astimezone(_tz(_td(hours=5, minutes=30))).date() == today_ist:
-                    day_trades.append(trade)
-            current_qty = {
-                str(p.get("symbol")): float(p.get("quantity") or 0)
-                for p in stmt.get("positions") or []
-                if p.get("symbol")
-            }
-            start_qty = dict(current_qty)
-            for trade in day_trades:
-                symbol = str(trade.get("symbol") or "")
-                qty = float(trade.get("quantity") or 0)
-                if str(trade.get("side") or "").lower() == "buy":
-                    start_qty[symbol] = start_qty.get(symbol, 0) - qty
-                elif str(trade.get("side") or "").lower() == "sell":
-                    start_qty[symbol] = start_qty.get(symbol, 0) + qty
-            day_pnl = sum(
-                qty * (marks[symbol] - previous_closes[symbol])
-                for symbol, qty in start_qty.items()
-                if symbol in marks and symbol in previous_closes
-            )
-            for trade in day_trades:
-                symbol = str(trade.get("symbol") or "")
-                if symbol not in marks:
-                    continue
-                qty = float(trade.get("quantity") or 0)
-                price = float(trade.get("price") or 0)
-                fee = float(trade.get("fee") or 0)
-                if str(trade.get("side") or "").lower() == "buy":
-                    day_pnl += qty * (marks[symbol] - price) - fee
-                elif (
-                    str(trade.get("side") or "").lower() == "sell"
-                    and symbol in previous_closes
-                ):
-                    day_pnl += qty * (price - previous_closes[symbol]) - fee
-            stmt["day_pnl"] = day_pnl
-            opening_equity = float(stmt.get("equity") or 0) - day_pnl
+            ):
+                day_pnl = realized
+        stmt["day_pnl"] = day_pnl
+        if day_pnl is not None:
+            opening_equity = float(stmt.get("equity") or 0) - float(day_pnl)
             stmt["day_return_pct"] = (
-                100.0 * day_pnl / opening_equity if opening_equity > 0 else None
+                100.0 * float(day_pnl) / opening_equity if opening_equity > 0 else None
             )
-        except Exception:  # noqa: BLE001
-            pass
+        stmt["fees_paid_today"] = round(
+            sum(float(t.get("fee") or 0) for t in day_trades), 4
+        )
+    except Exception:  # noqa: BLE001
+        pass
     # Attach P9 explanations so the Market UI can answer "why did this buy?".
     # Prefer open-book buys (holdings) + recent blotter; avoid N lookups on full history.
     try:

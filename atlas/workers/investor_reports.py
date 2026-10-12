@@ -695,15 +695,28 @@ class InvestorReportsWorker(PersistentWorker):
             else None
         )
 
-        trades = list(portfolio_doc.get("recent_trades") or [])
+        # OI-LAB-LOOP0 / day-PnL: always use the full IST day ledger. recent_trades
+        # is a UI blotter capped at 10 and will silently drop closed F&O legs.
+        raw_ledger = list(
+            portfolio_doc.get("day_trades")
+            or portfolio_doc.get("trades")
+            or portfolio_doc.get("recent_trades")
+            or []
+        )
         # LM-PNL1 — ensure IST day stamps before filtering (some blotters omit them).
-        if trades and ist_date and not any(
-            isinstance(t, dict) and "ist_day_match" in t for t in trades
+        if raw_ledger and ist_date and not any(
+            isinstance(t, dict) and "ist_day_match" in t for t in raw_ledger
         ):
-            trades = self._tag_trades_ist_day(trades, ist_date=str(ist_date))
-            portfolio_doc["recent_trades"] = trades
+            raw_ledger = self._tag_trades_ist_day(raw_ledger, ist_date=str(ist_date))
+            if portfolio_doc.get("day_trades") is not None:
+                portfolio_doc["day_trades"] = raw_ledger
+            elif portfolio_doc.get("trades") is not None:
+                portfolio_doc["trades"] = raw_ledger
+            else:
+                portfolio_doc["recent_trades"] = raw_ledger
         day_trades = [
-            t for t in trades
+            t
+            for t in raw_ledger
             if isinstance(t, dict) and t.get("ist_day_match")
         ]
         previous = portfolio_doc.get("previous_closes") or {}
@@ -712,6 +725,13 @@ class InvestorReportsWorker(PersistentWorker):
         # Flat books still have a real day P&L from closed round-trips — do not
         # null it just because there are no open marks (OI: +19260 phantom vanish).
         if not day_trades and (not marks or not previous):
+            # An empty book that traded nothing today made exactly zero, and that is
+            # knowable without any market mark. Reporting it as unknown was why the
+            # F&O lab's day P&L read "unavailable" on a flat, idle day.
+            if not positions:
+                portfolio_doc["day_pnl"] = 0.0
+                portfolio_doc["day_pnl_note"] = "no open positions and no fills today"
+                return
             portfolio_doc["day_pnl"] = None
             portfolio_doc.pop("day_pnl_note", None)
             return
@@ -729,11 +749,6 @@ class InvestorReportsWorker(PersistentWorker):
                 portfolio_doc["day_pnl"] = None
                 portfolio_doc.pop("day_pnl_note", None)
                 return
-        portfolio_doc["day_pnl"] = day_pnl
-        base = equity - day_pnl
-        portfolio_doc["day_return_pct"] = (
-            100.0 * day_pnl / base if base > 0 else None
-        )
         # Operator honesty: concentration sell @ prior close looks like "no P&L today"
         sells = [
             t
@@ -747,7 +762,29 @@ class InvestorReportsWorker(PersistentWorker):
                     realized += float(t.get("realized_pnl") or 0)
                 except (TypeError, ValueError):
                     pass
-            if realized:
+            buy_qty: dict[str, float] = {}
+            sell_qty: dict[str, float] = {}
+            for t in day_trades:
+                sym = str(t.get("symbol") or "")
+                if not sym:
+                    continue
+                qty = float(t.get("quantity") or t.get("qty") or 0)
+                side = str(t.get("side") or "").lower()
+                if side == "buy":
+                    buy_qty[sym] = buy_qty.get(sym, 0.0) + qty
+                elif side == "sell":
+                    sell_qty[sym] = sell_qty.get(sym, 0.0) + qty
+            same_day_flat = bool(sell_qty) and all(
+                buy_qty.get(sym, 0.0) + 1e-9 >= qty for sym, qty in sell_qty.items()
+            )
+            if realized and same_day_flat and not positions:
+                # Truncated blotter / mark inference can zero the algebra while the
+                # ledger still has the real same-day round-trip P&L.
+                day_pnl = realized
+                portfolio_doc["day_pnl_note"] = (
+                    f"day_pnl from same-day realized_pnl sum ({realized:.2f})"
+                )
+            elif realized:
                 portfolio_doc["day_pnl_note"] = (
                     f"Day mark P&L ≈ 0 (sell near prior mark). "
                     f"Trade realized_pnl sum ≈ {realized:.2f} — gap/MTM usually "
@@ -760,6 +797,18 @@ class InvestorReportsWorker(PersistentWorker):
                 )
         else:
             portfolio_doc.pop("day_pnl_note", None)
+        portfolio_doc["day_pnl"] = day_pnl
+        base = equity - day_pnl
+        portfolio_doc["day_return_pct"] = (
+            100.0 * day_pnl / base if base > 0 else None
+        )
+        # Day fee rollup (statement fees_paid is lifetime — do not leak into KPIs).
+        try:
+            portfolio_doc["fees_paid_today"] = round(
+                sum(float(t.get("fee") or 0) for t in day_trades), 4
+            )
+        except (TypeError, ValueError):
+            portfolio_doc["fees_paid_today"] = 0.0
 
     @staticmethod
     def _compute_day_pnl(

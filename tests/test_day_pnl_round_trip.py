@@ -111,3 +111,98 @@ def test_add_cash_sell_at_mark_is_zero_not_null():
     assert doc.get("day_pnl") == 0.0
     assert doc.get("day_pnl_note")
     assert "prior" in doc["day_pnl_note"].lower() or "0" in doc["day_pnl_note"]
+
+
+def test_add_cash_prefers_full_day_trades_over_truncated_recent():
+    """F&O-style day: 16 fills, recent_trades capped at 10 must not understate P&L."""
+    w = InvestorReportsWorker.__new__(InvestorReportsWorker)
+    w._portfolio = None
+    day_trades = []
+    for i, (buy, sell, qty, rpnl) in enumerate(
+        [
+            (100.0, 110.0, 10.0, 100.0),
+            (200.0, 220.0, 5.0, 100.0),
+            (50.0, 60.0, 20.0, 200.0),
+            (10.0, 12.0, 100.0, 200.0),
+            (30.0, 33.0, 40.0, 120.0),
+            (40.0, 44.0, 25.0, 100.0),
+            (15.0, 18.0, 50.0, 150.0),
+            (8.0, 10.0, 80.0, 160.0),
+        ]
+    ):
+        sym = f"OPT{i}"
+        day_trades.append(
+            {
+                "symbol": sym,
+                "side": "buy",
+                "quantity": qty,
+                "price": buy,
+                "fee": 0,
+                "ist_day_match": True,
+            }
+        )
+        day_trades.append(
+            {
+                "symbol": sym,
+                "side": "sell",
+                "quantity": qty,
+                "price": sell,
+                "fee": 0,
+                "realized_pnl": rpnl,
+                "ist_day_match": True,
+            }
+        )
+    # Newest-first blotter truncation keeps only sells + 2 buys.
+    recent = list(reversed(day_trades))[:10]
+    doc = {
+        "equity": 150000.0,
+        "starting_cash": 100000.0,
+        "positions": [],
+        "marks": {},
+        "previous_closes": {},
+        "recent_trades": recent,
+        "day_trades": day_trades,
+    }
+    w._add_cash_and_pnl_metrics(doc, pid="x", ist_date="2026-10-12")
+    assert abs(float(doc["day_pnl"]) - 1130.0) < 1e-6
+
+
+def test_kpi_rebuilds_day_pnl_for_flat_book_without_marks():
+    from atlas.investment.trading_kpis import build_trading_kpis
+
+    day = [
+        {
+            "symbol": "NIFTY26OCT22550PE",
+            "side": "buy",
+            "quantity": 65,
+            "price": 264.5,
+            "fee": 0,
+            "ist_day_match": True,
+        },
+        {
+            "symbol": "NIFTY26OCT22550PE",
+            "side": "sell",
+            "quantity": 65,
+            "price": 342.95,
+            "fee": 0,
+            "realized_pnl": 5099.25,
+            "ist_day_match": True,
+        },
+    ]
+    kpis = build_trading_kpis(
+        portfolio={
+            "cash": 150204.68,
+            "equity": 150204.68,
+            "positions": [],
+            "marks": {},
+            "previous_closes": {},
+            "day_pnl": None,
+            "fees_paid": 603.26,  # lifetime — must not leak into day KPI
+            "day_trades": day,
+            "recent_trades": day[:1],
+        },
+        ist_date="2026-10-12",
+    )
+    assert abs(float(kpis["day_pnl"]) - 5099.25) < 1e-6
+    assert float(kpis["fees_paid"]) == 0.0
+    assert kpis["fills_today"] == 2
