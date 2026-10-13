@@ -321,4 +321,5 @@ Full detail in `docs/2026-10-06_COGNITIVE_LOOP_C1_PLAN.md` §8 (2026-10-13 entry
 - **R1 trade reviews.** Each eligible closed F&O round trip gets an LLM review (driver, signal vs luck, lesson candidate, missing data, optional testable idea), saved under `investment/cognitive/llm_research/india_fno_learner/`.
 - **R2 proposals.** Once a day the LLM proposes ≤ 3 questions from the feature table; code rejects anything the data can't support; the nightly cycle admits ≤ 1, with counts and confounds recomputed from the data.
 - **Bounds.** Off-hours only, ≤ 8 LLM calls per day for this, ≤ 3 per worker tick. Advice only — no order, strategy or sizing path reads any of it.
+- **First live run (00:10 restart):** overlapping worker ticks reviewed 3 trades twice each (6 of 8 calls). Fixed with a step lock; duplicates on disk count once. See the C1 plan log.
 - **Dry run on a copy of today's data:** review in 87 s, 3 proposals accepted in 193 s, one admitted (`entry_time_bucket`) and waiting for fresh trades; `5623ea11` closed as post-hoc.

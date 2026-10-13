@@ -156,6 +156,29 @@ def test_review_failures_stop_after_two_attempts(tmp_path: Path):
     assert lr._unreviewed(tmp_path, _LAB, [_episode("only", right="CE", matched=True)]) == []
 
 
+def test_overlapping_step_skips_instead_of_reviewing_the_same_trade(tmp_path: Path):
+    _store(tmp_path, _episodes())
+    inner = _FakeLLM([_review()])
+    nested: dict = {}
+
+    class Reentrant:
+        def chat(self, messages, **kwargs):  # noqa: ANN001
+            nested.update(lr.run_research_step(tmp_path, laboratory_id=_LAB, llm=inner, now=_EVENING))
+            return LLMResponse(text=json.dumps(_review()), model="fake")
+
+    lr.run_research_step(tmp_path, laboratory_id=_LAB, llm=Reentrant(), now=_EVENING, max_calls=1)
+    assert nested["skipped"] == "busy"
+    assert inner.calls == []
+    assert [r["experience_id"] for r in lr.load_trade_reviews(tmp_path, _LAB)] == ["pe-3"]
+
+
+def test_duplicate_review_rows_count_once(tmp_path: Path):
+    path = tmp_path / lr.STORE_REL / _LAB / "trade_reviews.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("".join(json.dumps({"experience_id": e, "n": i}) + "\n" for i, e in enumerate("aab")))
+    assert [(r["experience_id"], r["n"]) for r in lr.load_trade_reviews(tmp_path, _LAB)] == [("a", 0), ("b", 2)]
+
+
 def test_daily_budget_caps_calls(tmp_path: Path):
     _store(tmp_path, [_episode(f"e{i}", right="CE", matched=True) for i in range(20)])
     llm = _FakeLLM([_review()] * 20)

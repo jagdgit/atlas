@@ -20,6 +20,7 @@ invocation, with a daily call budget.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import time
@@ -261,7 +262,15 @@ def _reviews_path(data_dir: str | Path, laboratory_id: str) -> Path:
 def load_trade_reviews(data_dir: str | Path | None, laboratory_id: str) -> list[dict[str, Any]]:
     if not data_dir:
         return []
-    return _read_jsonl(_reviews_path(data_dir, laboratory_id))
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for r in _read_jsonl(_reviews_path(data_dir, laboratory_id)):
+        key = str(r.get("experience_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(r)
+    return rows
 
 
 def review_next_trade(
@@ -566,6 +575,39 @@ def run_research_step(
     if not off_hours(now):
         receipt["skipped"] = "market_hours"
         return receipt
+    # Overlapping ticks would both pick the same newest trade while Ollama queues
+    # their calls; a second caller skips instead of waiting.
+    lock_path = _root(data_dir, laboratory_id) / "step.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fh = lock_path.open("a")
+    except OSError:
+        receipt["skipped"] = "lock_unavailable"
+        return receipt
+    try:
+        try:
+            fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            receipt["skipped"] = "busy"
+            return receipt
+        return _run_research_step_locked(
+            data_dir, laboratory_id=laboratory_id, llm=llm, now=now,
+            max_calls=max_calls, max_seconds=max_seconds, receipt=receipt,
+        )
+    finally:
+        lock_fh.close()
+
+
+def _run_research_step_locked(
+    data_dir: str | Path,
+    *,
+    laboratory_id: str,
+    llm: Any,
+    now: datetime | None,
+    max_calls: int,
+    max_seconds: float,
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
     day = _now_ist(now).strftime("%Y-%m-%d")
     try:
         from atlas.investment.fno_closed_loop_dataset import load_closed_loop_episodes
