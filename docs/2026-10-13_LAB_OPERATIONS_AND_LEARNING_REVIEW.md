@@ -196,6 +196,8 @@ The running service was restarted on `d9a99a9`. Everything after that is committ
 | `29d38fd` | Switch review records an unexecutable switch as HOLD, not SELL (§6 #9) | After restart |
 | `e13cad1` | Docs for the switch fix | Doc |
 | `82af44e` | **F&O decide-time feature capture** (§4 feature table, §6 #10): `atlas/investment/fno_features.py` | After restart |
+| `39d016e` | Cognitive loop no longer learns from quarantined episodes (§9.1); AtlasNet hard-gate API no longer 500s on mixed naive/aware timestamps | After restart |
+| `fb9fff5` | **Research scientist actually reviews now** (§9.1): schema-constrained output, reviews saved, bounded drain, stale backlog dead-lettered | After restart |
 
 ### 7.2 Data changes (all append-only; no ledger edits)
 
@@ -230,7 +232,7 @@ A quarantine is undone by appending a `release` row for the same experience id; 
 
 ### 7.5 Tests added or changed
 
-`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`, `tests/test_decision_chain_mail.py`, `tests/test_switch_packet_action.py`, `tests/test_fno_features.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
+`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`, `tests/test_decision_chain_mail.py`, `tests/test_switch_packet_action.py`, `tests/test_fno_features.py`, `tests/test_lint0_research_scientist.py` (schema, saved reviews, bounded drain, dead-letter, budget), `tests/test_laboratory_li6_atlasnet_prep.py` (mixed timestamps). Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
 
 ### 7.6 Checks for 2026-10-14 (agent, read-only)
 
@@ -241,6 +243,7 @@ A quarantine is undone by appending a `release` row for the same experience id; 
 | 15:25 | F&O close-out ran between 15:20 and 15:30; every exit `learning_eligible: true` |
 | Any fill | Fill email has a "Decision chain" block; SELLs show "linked on the sell" (P0.5 entry link) rather than "matched by symbol" |
 | Evening | Email shows the F&O real-vs-shadow section and per-lab tick lines |
+| Evening | `research_scientist/<lab>/reviews/2026-10-14.jsonl` exists with ≤ 3 reviews per lab; `<day>.budget.json` attempts ≤ 6; learning-audit `research_scientist` calls in the tens, not hundreds; cognitive cycle reports 29+ episodes (no quarantined ones) |
 
 ## 8. Ollama (the local LLM): what it does, and why it stays loaded
 
@@ -262,3 +265,46 @@ So "intelligence" in the sense that changes tomorrow's trades comes from **clean
 **Why unloading is not needed.** The outage was the RAM gate, not the LLM: every tick needed 3,072 MB free, and with Ollama (~4 GB) + browser + IDE resident the host had ~2.8 GB. Since `8057120`, lab and ledger ticks in market hours need only 128 MB above a 2,048 MB floor; at the time of writing the host shows ~5.4 GB available with Ollama loaded. Research and LLM-heavy workers keep the stricter gate and yield first under pressure — which is the right priority (a missed thesis note can wait; a missed exit cannot).
 
 **Safeguard instead of unloading.** The per-lab tick alert (§7.4) reports any lab with no admitted tick for 20 min and names the cause. If it ever fires with `host_pressure` while Ollama is busy, the next step is to cap LLM concurrency during 09:15–15:30 (one request at a time, smaller context), not to remove it.
+
+## 9. Making the LLM do research (2026-10-13 evening)
+
+Goal set by the operator: Atlas should use the LLM as a research agent — form ideas, run research, learn — while learning only from evidence.
+
+### 9.1 What was broken (fixed tonight)
+
+**The research scientist had never produced a single review.** Every buy/sell/flatten and contradicting hold queues an "event" for the LLM (analyst / skeptic / researcher / teacher). Measured on disk:
+
+| Lab | Events queued | Reviews ever saved |
+|-----|---------------|--------------------|
+| `india_equity_learner` | 1,331 | 0 |
+| `equity_intraday_learner` | 239 | 0 |
+| `india_fno_learner` | 68 | 0 |
+
+The learning audit for the latest day shows 1,967 LLM calls, 896 of them for this scientist, 0 reviewed. Causes, reproduced live against Ollama:
+
+1. The prompt asked for `format: "json"` with a filled-in example; qwen3:4b echoed the input packet back, hit the 400-token cap mid-object, and the JSON never parsed (~127 s CPU per call).
+2. Failed calls did not count against the daily budget, and the drain's limit counted successes only — so one drain pass called the LLM for every record in the queue, every tick.
+3. A successful review was not written anywhere (only a count went into worker state).
+
+Fix (`fb9fff5`): Ollama is given a JSON **schema** (exact keys, ≤ 3 items per list, ≤ 240 chars per text); the prompt says "do not repeat the packet"; every review is appended to `investment/research_scientist/<lab>/reviews/<day>.jsonl`; failed attempts spend budget (cap 2 × passes per lab per day, keyed by the day the LLM works); the drain takes newest first and at most `max_n` attempts per pass; a record that fails twice, or is older than 7 days, moves to `dead_letter.jsonl` (kept, not deleted, not reviewed). Live check: one F&O event reviewed in 114 s with valid output. On the first drain after restart, most of the 1,638 backlog moves to dead-letter as `stale_backlog`.
+
+**Review quality is the next problem.** For an F&O option the review asked to "verify FCF and PE for TCS": the packet is built for equities and gives the model none of the option facts (IV, DTE, theta, moneyness, outcome). See R1.
+
+**Quarantine leak in the cognitive loop.** The nightly loop read all closed F&O episodes, including the 10 quarantined after-close exits. Fixed in `39d016e`: it reads `learning_eligible` and the quarantine manifest (39 → 29 episodes).
+
+**Why the cognitive loop finds nothing.** Since 10-08: 0 patterns from 39 episodes. Five of its split dimensions are constant in the data, 35 of 39 trades are PE, and a split must differ by ≥ 0.5 in hit rate to count — too coarse for 30-ish samples. Its only hypothesis (`5623ea11`) is `NOT_EVALUABLE` every night ("bars_not_replayable") and nothing acts on that. The LLM only rewords hypothesis text.
+
+### 9.2 Proposed research layer (not built yet)
+
+Principle: **the LLM proposes, the evidence decides.** The LLM never touches the fill path, never places or blocks an order, and never promotes anything. Every claim it makes enters the existing deterministic ladder (admission → experiment → validator → belief) and is tagged `source: llm_proposed`. Rejected ideas are kept — learning what is false counts.
+
+| Step | What | Why |
+|------|------|-----|
+| R1 | **F&O-aware review packet + post-trade review.** Give the scientist the decide-time features (IV, delta, theta, DTE, moneyness, time of day), the prediction, the outcome, exit code and prediction error; drop equity fundamentals for options. Review every eligible closed round trip, off-hours. | Makes reviews about the trade that happened, not about FCF |
+| R2 | **LLM-proposed hypotheses.** Nightly, give the LLM a bucketed table of closed episodes and the current beliefs; it returns ≤ 3 candidates in a strict schema (feature from an allowed list, bucket rule, expected direction, falsifier, data needed). A validator rejects any feature not in the data, duplicates, and rules that can't be computed. | Widens the search beyond the 5 hard-coded dimensions |
+| R3 | **Statistical gate instead of `MIN_SPLIT_DELTA = 0.5`.** Minimum samples per side, an exact test, and false-discovery control (more ideas tested → stricter bar). | Lets small real effects through without learning noise |
+| R4 | **NOT_EVALUABLE → data request.** When a hypothesis can't be tested, record exactly what data is missing (e.g. 5-min underlier bars kept for F&O days for `5623ea11`) as a data request in the evening email. | Turns dead ends into concrete collection work |
+| R5 | Run the loop for the two equity labs too | Today it runs for F&O only |
+| R6 | **Validated belief → shadow policy.** A belief that passes validation runs as a shadow variant next to the live rule (shadow trades exist); going live needs operator approval. | Learning changes behaviour only with out-of-sample proof |
+
+Cost: ~110 s CPU per review on this host, so R1/R2 run after 15:30 with a daily budget; nothing new runs in market hours.
