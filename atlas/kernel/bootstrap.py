@@ -766,6 +766,10 @@ def build_application(
         ),
         host_ram_reserve_mb=int(getattr(cfg.resources, "host_ram_reserve_mb", 2048) or 2048),
         tick_ram_mb=int(getattr(cfg.resources, "tick_ram_mb", 512) or 512),
+        critical_tick_ram_mb=int(getattr(cfg.resources, "critical_tick_ram_mb", 128) or 128),
+        critical_reserve_mb=(
+            int(getattr(cfg.resources, "critical_reserve_mb", 0) or 0) or None
+        ),
         logger=get_logger("atlas.host_guard"),
     )
     from atlas.core.resources.memory_watchdog import RuntimeMemoryWatchdog

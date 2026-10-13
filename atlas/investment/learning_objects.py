@@ -669,6 +669,8 @@ def record_from_trade_close(
         outcome_check=oc_from_pkt,
         attribution=attr,
     )
+    if isinstance(pkt, dict) and isinstance(pkt.get("learning_eligibility"), dict):
+        exp["learning_eligibility"] = dict(pkt["learning_eligibility"])
     try:
         from atlas.investment.lab_experience import (
             already_recorded,

@@ -44,9 +44,13 @@ PREDICTION_REL = Path("investment") / "fno" / "lab_v1_predictions"
 PREDICTION_BY_ID_REL = Path("investment") / "fno" / "lab_v1_predictions" / "by_id"
 ENTRY_SNAPSHOT_REL = Path("investment") / "fno" / "lab_v1_entry_snapshots"
 REASON_EXPERIMENT_CLOSE = "fno_lab_v1_experiment_close"
-# NSE F&O cash market close — after this, Lab v1 option experiments must flatten.
-FNO_FLAT_AFTER = time(15, 30)
+# Close-out starts before the 15:30 NSE close so the exit is tradeable; no new
+# entries from here on. A close executed at/after FNO_MARKET_CLOSE is a
+# bookkeeping flatten and is not learning-eligible.
+FNO_FLAT_AFTER = time(15, 20)
+FNO_MARKET_CLOSE = time(15, 30)
 FNO_SESSION_OPEN = time(9, 15)
+EXIT_AFTER_SESSION_CLOSE = "exit_after_session_close"
 # Bounded control-linked premium E[R] model id (not a valued option pricer).
 ENTRY_ER_MODEL = "fno_lab_v1_control_signal.v1"
 
@@ -515,7 +519,9 @@ def persist_entry_prediction(
     body = dict(pred)
     if not body.get("prediction_id"):
         body["prediction_id"] = str(uuid4())
-    body["recorded_at"] = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # recorded_at is decide time; outcome stamps (consumed) must not move it.
+    body.setdefault("recorded_at", now_iso)
     by_id = prediction_by_id_path(data_dir, prediction_id=str(body["prediction_id"]))
     pointer = prediction_path(data_dir, option_symbol=str(body.get("contract") or ""))
     if by_id is None:
@@ -532,7 +538,7 @@ def persist_entry_prediction(
                 "prediction_id": body["prediction_id"],
                 "by_id_path": str(by_id),
                 "prediction_status": body.get("prediction_status"),
-                "updated_at": body["recorded_at"],
+                "updated_at": now_iso,
                 "honesty": (
                     "Pointer only — full prediction lives under by_id. "
                     "Re-entry must not erase prior prediction_id records."
@@ -816,7 +822,9 @@ def policy(data_dir: str | Path | None = None) -> dict[str, Any]:
                 "ENTRY → defined exit (session close / explicit experiment_close) → "
                 "SELL → realized P&L → experience → Cognitive Core."
             ),
-            "flat_after_ist": "15:30",
+            "flat_after_ist": FNO_FLAT_AFTER.strftime("%H:%M"),
+            "market_close_ist": FNO_MARKET_CLOSE.strftime("%H:%M"),
+            "after_close_exit_learning_eligible": False,
             "allows_avg_cost_mark_when_ltp_missing": True,
             "honesty": (
                 "avg_cost mark is an integrity flatten of last resort — stamped "
@@ -868,12 +876,36 @@ def to_ist(now: datetime | None = None) -> datetime:
 
 
 def must_flatten_experiments(now: datetime | None = None) -> bool:
-    """True when Lab v1 option inventory must be flat (after 15:30 IST / weekend)."""
+    """True when Lab v1 option inventory must be flat (from 15:20 IST / weekend)."""
     ist = to_ist(now)
     if ist.weekday() >= 5:
         return True
     t = ist.time().replace(tzinfo=None)
     return t >= FNO_FLAT_AFTER or t < FNO_SESSION_OPEN
+
+
+def exit_is_tradeable(now: datetime | None = None) -> bool:
+    """True when an exit at ``now`` could have been executed on NSE (09:15–15:30 weekday)."""
+    ist = to_ist(now)
+    if ist.weekday() >= 5:
+        return False
+    t = ist.time().replace(tzinfo=None)
+    return FNO_SESSION_OPEN <= t < FNO_MARKET_CLOSE
+
+
+def exit_learning_eligibility(now: datetime | None = None) -> dict[str, Any]:
+    """Learning eligibility of a close by execution time (not by outcome)."""
+    if exit_is_tradeable(now):
+        return {"eligible": True, "exit_timing": "in_session", "reasons": []}
+    return {
+        "eligible": False,
+        "exit_timing": "after_close",
+        "reasons": [EXIT_AFTER_SESSION_CLOSE],
+        "honesty": (
+            "Close executed outside NSE hours — mark is the last traded print, "
+            "not a tradeable exit. Ledger keeps it; learning must not train on it."
+        ),
+    }
 
 
 def flatten_session_date(now: datetime | None = None) -> str:

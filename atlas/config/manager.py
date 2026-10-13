@@ -584,6 +584,9 @@ class ResourcesConfig(BaseModel):
     archive_evening_until_hour_ist: int = 22
     host_ram_reserve_mb: int = 2048  # keep free for OS / desktop / Ollama
     tick_ram_mb: int = 512  # default projected RAM for one worker tick
+    # Trading labs (paper_trading, portfolio_ledger) during 09:00–16:00 IST weekdays.
+    critical_tick_ram_mb: int = 128
+    critical_reserve_mb: int = 0  # 0 ⇒ host_ram_reserve_mb − 512 (floor 1024)
     # IR-RO11 Layer 2: soft ceiling for the whole Atlas process (keep below systemd MemoryMax).
     process_rss_soft_mb: int = 5120
     memory_soft_ratio: float = 0.85  # yield tick at this fraction of per-worker budget

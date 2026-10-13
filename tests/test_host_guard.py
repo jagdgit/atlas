@@ -15,8 +15,9 @@ class _FakeResources:
         self.reason = reason
         self.calls = 0
 
-    def can_admit_tick(self, **_kwargs):
+    def can_admit_tick(self, **kwargs):
         self.calls += 1
+        self.last_kwargs = dict(kwargs)
         from atlas.core.resources.manager import AdmissionDecision
 
         return AdmissionDecision(
@@ -157,6 +158,71 @@ def test_archive_rth_demotes_excess_runners(monkeypatch):
     running = [w for w in workers.rows if w.status == "running"]
     assert len(running) == 1
     assert running[0].id == "old"
+
+
+def _ist(y, m, d, hh, mm):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime(y, m, d, hh, mm, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+
+def test_trading_lab_gets_market_critical_lane_in_session():
+    resources = _FakeResources(allow=True)
+    guard = HostGuardService(
+        resources=resources,
+        host_ram_reserve_mb=2560,
+        tick_ram_mb=512,
+        clock=lambda: _ist(2026, 10, 13, 15, 25),
+    )
+    ok, reason = guard.can_run_tick(worker_type="paper_trading")
+    assert ok is True and reason == "admitted_market_critical"
+    assert resources.last_kwargs == {"expected_ram_mb": 128, "reserve_mb": 2048}
+
+
+def test_research_and_off_hours_keep_generic_gate():
+    resources = _FakeResources(allow=True)
+    guard = HostGuardService(
+        resources=resources,
+        host_ram_reserve_mb=2560,
+        clock=lambda: _ist(2026, 10, 13, 15, 25),
+    )
+    guard.can_run_tick(worker_type="market_observer")
+    assert resources.last_kwargs == {"expected_ram_mb": 512, "reserve_mb": 2560}
+    evening = HostGuardService(
+        resources=resources,
+        host_ram_reserve_mb=2560,
+        clock=lambda: _ist(2026, 10, 13, 17, 35),
+    )
+    evening.can_run_tick(worker_type="paper_trading")
+    assert resources.last_kwargs == {"expected_ram_mb": 512, "reserve_mb": 2560}
+
+
+def test_critical_lane_admits_where_generic_gate_starved(monkeypatch):
+    """2026-10-13: ~2.8 GiB free starved every tick under 2560+512."""
+    rm = ResourceManager(profile="overnight", host_ram_reserve_mb=2560)
+
+    def fake_snap(_logger=None):
+        return SystemSnapshot(
+            load_1m=1.0,
+            cpu_count=8,
+            load_pressure=0.125,
+            mem_total_kb=16 * 1024 * 1024,
+            mem_available_kb=2800 * 1024,
+            ram_used_fraction=0.82,
+        )
+
+    monkeypatch.setattr("atlas.core.resources.manager.read_snapshot", fake_snap)
+    guard = HostGuardService(
+        resources=rm,
+        host_ram_reserve_mb=2560,
+        tick_ram_mb=512,
+        clock=lambda: _ist(2026, 10, 13, 11, 30),
+    )
+    assert guard.can_run_tick(worker_type="market_observer")[0] is False
+    ok, reason = guard.can_run_tick(worker_type="paper_trading")
+    assert ok is True, reason
+    assert guard.status()["deferred_critical_ticks_total"] == 0
 
 
 def test_can_admit_tick_respects_reserve(monkeypatch):

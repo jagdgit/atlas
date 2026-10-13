@@ -10,16 +10,37 @@ Design (aligned with Stage 3.2 detect→slow):
 from __future__ import annotations
 
 import logging
+from datetime import datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from atlas.models.worker import WORKER_PAUSED, WORKER_RUNNING
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+# Trading labs must tick through the NSE session (incl. the F&O close-out
+# window). Background research shares the generic 512MB-headroom gate; these
+# get a smaller per-tick need and a lower floor so they are not starved.
+MARKET_CRITICAL_WORKER_TYPES = frozenset({"paper_trading", "portfolio_ledger"})
+MARKET_CRITICAL_WINDOW_IST = (time(9, 0), time(16, 0))
+
+
+def in_market_critical_window(now: datetime | None = None) -> bool:
+    clock = now if isinstance(now, datetime) else datetime.now(_IST)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=_IST)
+    ist = clock.astimezone(_IST)
+    if ist.weekday() >= 5:
+        return False
+    start, end = MARKET_CRITICAL_WINDOW_IST
+    return start <= ist.time().replace(tzinfo=None) < end
 
 
 class HostGuardService:
     """Admit / defer / resume worker activity against host limits."""
 
     name = "host_guard"
-    VERSION = "hg.1.3-archive-cap"
+    VERSION = "hg.1.4-market-critical-lane"
 
     def __init__(
         self,
@@ -35,6 +56,8 @@ class HostGuardService:
         archive_evening_until_hour_ist: int = 22,
         host_ram_reserve_mb: int = 2048,
         tick_ram_mb: int = 512,
+        critical_tick_ram_mb: int = 128,
+        critical_reserve_mb: int | None = None,
         logger: logging.Logger | None = None,
         clock: Any | None = None,
     ) -> None:
@@ -51,26 +74,46 @@ class HostGuardService:
         )
         self._ram_reserve_mb = max(256, int(host_ram_reserve_mb or 2048))
         self._tick_ram_mb = max(64, int(tick_ram_mb or 512))
+        self._critical_tick_ram_mb = max(32, int(critical_tick_ram_mb or 128))
+        self._critical_reserve_mb = max(
+            1024,
+            int(
+                critical_reserve_mb
+                if critical_reserve_mb is not None
+                else self._ram_reserve_mb - 512
+            ),
+        )
         self._logger = logger or logging.getLogger("atlas.host_guard")
         self._clock = clock
         self._deferred_ticks = 0
+        self._deferred_critical_ticks = 0
         self._resumed = 0
         self._queued_starts = 0
         self._last_defer_reason = ""
 
     # --- admission (called from WorkerManager before a tick) -------------
 
+    def is_market_critical(self, worker_type: str | None) -> bool:
+        if str(worker_type or "") not in MARKET_CRITICAL_WORKER_TYPES:
+            return False
+        now = self._clock() if callable(self._clock) else None
+        return in_market_critical_window(now)
+
     def can_run_tick(self, *, worker_type: str | None = None) -> tuple[bool, str]:
         """Return (ok, reason). False ⇒ defer this tick; schedule keeps the job."""
+        critical = self.is_market_critical(worker_type)
         decision = self._resources.can_admit_tick(
-            expected_ram_mb=self._tick_ram_mb,
-            reserve_mb=self._ram_reserve_mb,
+            expected_ram_mb=self._critical_tick_ram_mb if critical else self._tick_ram_mb,
+            reserve_mb=self._critical_reserve_mb if critical else self._ram_reserve_mb,
         )
         if not decision.allowed:
             self._deferred_ticks += 1
+            if critical:
+                self._deferred_critical_ticks += 1
             self._last_defer_reason = decision.reason
-            return False, decision.reason
-        return True, "admitted"
+            reason = f"market_critical: {decision.reason}" if critical else decision.reason
+            return False, reason
+        return True, "admitted_market_critical" if critical else "admitted"
 
     def note_deferred(self, reason: str) -> None:
         self._deferred_ticks += 1
@@ -307,6 +350,10 @@ class HostGuardService:
             "archive_rth_clamped": eff_archive < self._max_archive,
             "host_ram_reserve_mb": self._ram_reserve_mb,
             "tick_ram_mb": self._tick_ram_mb,
+            "market_critical_worker_types": sorted(MARKET_CRITICAL_WORKER_TYPES),
+            "critical_tick_ram_mb": self._critical_tick_ram_mb,
+            "critical_reserve_mb": self._critical_reserve_mb,
+            "deferred_critical_ticks_total": self._deferred_critical_ticks,
             "running_workers": running,
             "archive_workers_running": archive_running,
             "capacity_queued_workers": queued,

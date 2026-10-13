@@ -195,6 +195,72 @@ def test_policy_marks_equity_audit_parallel():
     assert p["exit_lifecycle"]["reason_code"] == "fno_lab_v1_experiment_close"
 
 
+def test_close_out_starts_before_market_close_and_late_exits_are_not_learning():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from atlas.investment.fno_lab_v1 import (
+        EXIT_AFTER_SESSION_CLOSE,
+        exit_learning_eligibility,
+        must_flatten_experiments,
+    )
+
+    ist = ZoneInfo("Asia/Kolkata")
+    assert must_flatten_experiments(datetime(2026, 10, 13, 15, 19, tzinfo=ist)) is False
+    assert must_flatten_experiments(datetime(2026, 10, 13, 15, 20, tzinfo=ist)) is True
+    in_session = exit_learning_eligibility(datetime(2026, 10, 13, 15, 22, tzinfo=ist))
+    assert in_session["eligible"] is True and in_session["exit_timing"] == "in_session"
+    late = exit_learning_eligibility(datetime(2026, 10, 13, 17, 35, tzinfo=ist))
+    assert late["eligible"] is False
+    assert late["reasons"] == [EXIT_AFTER_SESSION_CLOSE]
+    assert exit_learning_eligibility(datetime(2026, 10, 17, 11, 0, tzinfo=ist))["eligible"] is False
+
+
+def test_quarantined_and_late_closes_never_reach_fel_dataset(tmp_path):
+    import json
+
+    from atlas.investment.fel.experiments.paper_round_trip import load_round_trip_experiences
+    from atlas.investment.learning_quarantine import quarantine_experiences, quarantined_ids
+
+    lab = "india_fno_learner"
+    root = tmp_path / "investment" / "learning" / lab
+    root.mkdir(parents=True)
+
+    def _exp(eid, **extra):
+        row = {
+            "kind": "EXPERIENCE",
+            "experience_id": eid,
+            "laboratory_id": lab,
+            "symbol": "NIFTY26OCT25000PE",
+            "event_kind": "sell",
+            "pnl": -120.0,
+            "realized_pnl": -120.0,
+        }
+        row.update(extra)
+        return row
+
+    rows = [
+        _exp("ok-1"),
+        _exp("late-1", learning_eligibility={"eligible": False, "reasons": ["exit_after_session_close"]}),
+        _exp("held-1"),
+    ]
+    (root / "2026-10-13.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    before = {e["experience_id"] for e in load_round_trip_experiences(tmp_path, lab)}
+    out = quarantine_experiences(
+        tmp_path, lab, experience_ids=["held-1"], reasons=["exit_after_session_close"], note="t"
+    )
+    assert out["added"] == ["held-1"]
+    again = quarantine_experiences(tmp_path, lab, experience_ids=["held-1"], reasons=["x"], note="t")
+    assert again["added"] == []
+    assert quarantined_ids(tmp_path, lab) == {"held-1"}
+    after = {e["experience_id"] for e in load_round_trip_experiences(tmp_path, lab)}
+    assert "late-1" not in before
+    assert "held-1" not in after
+    assert after <= {"ok-1"}
+
+
 def test_must_flatten_after_session():
     from datetime import datetime
     from zoneinfo import ZoneInfo

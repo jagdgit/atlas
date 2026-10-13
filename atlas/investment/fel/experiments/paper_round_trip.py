@@ -87,17 +87,22 @@ def load_round_trip_experiences(
     *,
     limit_per_day: int = 400,
 ) -> list[dict[str, Any]]:
-    """All rewarded round-trips for one lab. Does not pool laboratories."""
+    """All rewarded, learning-eligible round-trips for one lab. Does not pool laboratories."""
+    from atlas.investment.learning_quarantine import is_learning_eligible, quarantined_ids
+
     lab = normalize_laboratory_id(laboratory_id=laboratory_id)
     root = learning_store_dir(data_dir, lab)
     if root is None or not root.is_dir():
         return []
+    held = quarantined_ids(data_dir, lab)
     out: list[dict[str, Any]] = []
     want_fno = "fno" in lab.lower()
     for path in sorted(root.glob("*.jsonl")):
         day = path.stem
         for exp in load_learning_events(data_dir, lab, as_of_ist=day, limit=limit_per_day):
             if not _is_rewarded_round_trip(exp):
+                continue
+            if not is_learning_eligible(exp, quarantined=held):
                 continue
             row_lab = str(exp.get("laboratory_id") or lab)
             if normalize_laboratory_id(laboratory_id=row_lab) != lab:

@@ -151,15 +151,10 @@ def test_persist_resolves_predictions(tmp_path: Path):
     loaded = load_closed_loop_day(tmp_path, as_of_ist=day)
     assert loaded is not None
     assert loaded["n_rows"] == 2
-    pred = json.loads(
-        (
-            tmp_path
-            / "investment"
-            / "fno"
-            / "lab_v1_predictions"
-            / "ADANIPORTS26OCT1760CE.json"
-        ).read_text(encoding="utf-8")
-    )
+    from atlas.investment.fno_lab_v1 import load_entry_prediction
+
+    pred = load_entry_prediction(tmp_path, option_symbol="ADANIPORTS26OCT1760CE")
+    assert pred is not None
     assert pred["prediction_status"] == "consumed"
     assert pred["closed_loop_experience_id"] == "exp-0"
     assert VERSION in (out.get("version") or "")

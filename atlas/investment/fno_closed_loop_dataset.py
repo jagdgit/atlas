@@ -197,6 +197,9 @@ def assemble_closed_loop_rows(
         if e.get("kind") == "LEARNING_STORY" and e.get("experience_id")
     }
 
+    from atlas.investment.learning_quarantine import is_learning_eligible, quarantined_ids
+
+    held = quarantined_ids(data_dir, laboratory_id)
     rows: list[dict[str, Any]] = []
     for exp in experiences:
         if not isinstance(exp, dict):
@@ -255,6 +258,7 @@ def assemble_closed_loop_rows(
             "underlying": obs.get("underlying") or (pred_file or {}).get("underlying"),
             "option_type": obs.get("option_right") or (pred_file or {}).get("option_type"),
             "experience_id": eid or None,
+            "learning_eligible": is_learning_eligible(exp, quarantined=held),
             "learning_story_id": (story or {}).get("story_id"),
             "decision_id": predicted.get("decision_id")
             or (pred_file or {}).get("decision_id"),

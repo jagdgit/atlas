@@ -4805,6 +4805,13 @@ class PaperTradingWorker(PersistentWorker):
         # must not hold the next sell or the email past the session.
         deferred_reviews: list[dict[str, Any]] = []
         pending_learn: list[dict[str, Any]] = []
+        exit_eligibility = lab_v1.exit_learning_eligibility(now)
+        if not exit_eligibility.get("eligible"):
+            self._logger.warning(
+                "FNO-LAB-v1 experiment_close outside NSE hours (%s) — closes are "
+                "bookkeeping only and excluded from learning",
+                now.isoformat() if hasattr(now, "isoformat") else now,
+            )
         for pos in open_opts:
             sym = str(pos.get("symbol") or "").strip()
             if not sym:
@@ -4890,6 +4897,7 @@ class PaperTradingWorker(PersistentWorker):
                     "parent_decision_id": open_entry.get("parent_decision_id"),
                     "exit_decision_id": exit_did,
                     "exit_reason_code": lab_v1.REASON_EXPERIMENT_CLOSE,
+                    "exit_timing": exit_eligibility.get("exit_timing"),
                     "order_intent": build_order_intent(
                         side="sell",
                         symbol=sym,
@@ -4964,6 +4972,7 @@ class PaperTradingWorker(PersistentWorker):
             )
             att["mark_source"] = mark_src
             att["realized_pnl"] = realized
+            att["learning_eligibility"] = dict(exit_eligibility)
             # Observable F&O evidence BEFORE Core — Core interprets, never invents.
             fno_evidence: dict[str, Any] | None = None
             fno_causal: dict[str, Any] | None = None
@@ -5106,6 +5115,7 @@ class PaperTradingWorker(PersistentWorker):
                     "mark_source": mark_src,
                     "attribution": att,
                     "cognitive_review": att.get("cognitive_review"),
+                    "learning_eligibility": dict(exit_eligibility),
                 }
             )
             try:
@@ -5196,6 +5206,7 @@ class PaperTradingWorker(PersistentWorker):
                     "mark_source": mark_src,
                     "strategy_tag": lab_v1.REASON_EXPERIMENT_CLOSE,
                     "action": "sell",
+                    "learning_eligibility": dict(exit_eligibility),
                     "expected": expected,
                     "entry_prediction": entry_pred,
                     "outcome_check": {
