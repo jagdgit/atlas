@@ -97,7 +97,7 @@ Tests: `tests/test_host_guard.py` (critical lane in session, generic gate for re
 1. ~~RC3 held-option exit management~~ — fixed (F6).
 2. ~~RC5 alert semantics~~ — fixed (F7, F8).
 3. **Host memory** — Ollama (~4 GB) resident during market hours. Unload/keep-alive=0 during 09:00–16:00, or move LLM work after 16:00.
-4. **Trade emails lack the decision chain** (see review doc §5).
+4. ~~Trade emails lack the decision chain~~ — built in `45d85dd` (review doc §5).
 
 F1–F5 are live (service restarted on `d9a99a9`). F6–F8 need the next operator restart. Full change log: review doc §7.
 5. **Equity swing pre-market noise** — 10 `switch_exploratory` SELL decisions on HBLPOWER.NS recorded 01:32–02:18 IST (market closed, none executed). Switch review should not mint SELL decisions outside the session.

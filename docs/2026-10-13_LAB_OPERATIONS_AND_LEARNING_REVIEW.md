@@ -142,6 +142,14 @@ Recommended path:
 
 The fill email (`reports.format_trade_report`) prints a "Decision detail" block from the **engine** decision dict (rationale, confidence, rule…). For F&O the actual decision is the **overlay** (why PE, which strike, spot, margin, RSI, capital budget, E[R]/p) and for sells the **exit reason + entry link + outcome vs prediction**; those live in trade lineage / entry prediction and are not passed to the mailer. Fix (P3 in OI-DELI0, now possible because lineage is live): render a "Decision chain" block from `trade_lineage` + `load_entry_prediction(prediction_id)`.
 
+**Built (`45d85dd`, live after restart)** — `atlas/investment/decision_chain_mail.py`, shown in every fill email above the engine "Decision detail":
+
+- **BUY**: control rule action + decision id, overlay (e.g. `v1_buy_atm_pe`) + decision id, reasons for/against from the decision packet, the stated prediction (E[R], p, horizon, model, marked *uncalibrated* for the control-signal model), thesis and key evidence (`sma_margin`, right, premium), prediction id.
+- **SELL**: exit reason in plain words (`premium_stop`, `underlier_reversal`, `premium_target`, session close-out, EOD flatten), exit decision id, the entry (qty, price, time, decision id — "linked on the sell" or "matched by symbol" for pre-P0.5 rows), minutes held, the prediction made at entry, **outcome vs prediction** (price return, direction RIGHT/WRONG, error), and **learning eligibility** (after-close exits say NOT eligible).
+- Missing lineage is printed as "Not recorded", never filled in. Lineage rows now also keep `exit_timing`.
+
+Example rendered from today's real records (NIFTY26OCT22500PE): bought 65 @ 249.3 at 09:21 expecting E[R] +8.0% (p 0.70, uncalibrated); held 498 min; closed by session close-out after the market; price return −58.2% → direction WRONG, error −66.2%; NOT eligible for learning.
+
 ## 6. Next actions (in order)
 
 | # | Action | Owner | When |
@@ -153,7 +161,7 @@ The fill email (`reports.format_trade_report`) prints a "Decision detail" block 
 | 5 | Ollama: unload during 09:00–16:00 (keep-alive 0) or schedule LLM work after close | Operator/agent | This week |
 | 6 | ~~Held-option exit rules~~ — **built**: every tick, any held Lab v1 option on the underlier (ATM or not) is checked on its own live LTP: exit at −40% premium (`premium_stop`) or when the trend flips against it (`underlier_reversal`); profit target available but off. No exit without a live mark. No same-day re-entry on that underlier after a managed exit. Session flatten 15:20 still closes the rest. **All of these numbers, plus max open positions and the cash reserve, live in one operator file: `/data/atlas_data/investment/fno/lab_v1_risk_settings.json`** (read every tick; out-of-range values are ignored with a warning; it overrides `lab_v1_policy.json`) | Agent | Live after restart |
 | 7 | Alerting: ~~staleness alerts must not auto-resolve at session end~~ — **fixed**: the F&O worker incident counted "any pack today" as recovery, so morning packs "verified" the 15:30 RESOLVED mail. Now only a pack written after the incident opened counts; otherwise it ends `UNRESOLVED_OPERATOR_ACTION_REQUIRED`. ~~"Admitted lab ticks in session" check~~ — **built** for all three labs (§7, `27c4890`): P0 email when a lab has no admitted in-session tick for 20 min (from 09:35), naming the deferral cause; never self-resolves at the close; evening digest lists admitted/deferred ticks per lab | Agent | Live after restart |
-| 8 | Decision chain in trade emails (§5) | Agent | After 6–7 |
+| 8 | ~~Decision chain in trade emails (§5)~~ — **built** (`45d85dd`) | Agent | Live after restart |
 | 9 | Switch review must not mint SELL decisions when session is closed | Agent | Small fix |
 | 10 | FEL rows: add `sma_margin`; F&O feature capture (IV/Greeks/DTE/VIX/OI) into the entry snapshot | Agent | R0 |
 | 11 | Realistic cost profile for learning evaluation on all labs (keep zero-fee ledger separate — F18) | Agent | OI-DELI0 P0.2/P0.3 |
@@ -182,6 +190,8 @@ The running service was restarted on `d9a99a9`. Everything after that is committ
 | `259649e` | **One operator risk-settings file** for F&O exits and capital limits (§7.3) | After restart |
 | `05e7286` | Ops alert fix: F&O worker incident recovers only on a pack written **after** the incident opened (today's 15:30 "RESOLVED" was false) | After restart |
 | `27c4890` | **Per-lab tick admission ledger + stale-lab P0 alert** (§7.4) | After restart |
+| `c2afba1` | This change log and doc updates | Doc |
+| `45d85dd` | **Decision chain in trade emails** (§5): why it bought, why it sold, outcome vs prediction, learning eligibility; lineage keeps `exit_timing` | After restart |
 
 ### 7.2 Data changes (all append-only; no ledger edits)
 
@@ -216,13 +226,14 @@ A quarantine is undone by appending a `release` row for the same experience id; 
 
 ### 7.5 Tests added or changed
 
-`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
+`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`, `tests/test_decision_chain_mail.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
 
 ### 7.6 Checks for 2026-10-14 (agent, read-only)
 
 | Time IST | Check |
 |----------|-------|
-| 09:30 | Service on `27c4890` or later; `host_guard` shows `admitted_market_critical`; `lab_ticks/2026-10-14.json` has in-session ticks for all three labs |
+| 09:30 | Service on `45d85dd` or later; `host_guard` shows `admitted_market_critical`; `lab_ticks/2026-10-14.json` has in-session ticks for all three labs |
 | 12:00 | No `lab:*:ticks` incident; `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open; any managed exit has a `premium_stop` / `underlier_reversal` lineage code; shadows only on capital/cash blocks |
 | 15:25 | F&O close-out ran between 15:20 and 15:30; every exit `learning_eligible: true` |
+| Any fill | Fill email has a "Decision chain" block; SELLs show "linked on the sell" (P0.5 entry link) rather than "matched by symbol" |
 | Evening | Email shows the F&O real-vs-shadow section and per-lab tick lines |
