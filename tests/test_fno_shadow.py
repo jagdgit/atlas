@@ -92,10 +92,14 @@ def test_previous_day_open_shadow_is_marked_missed(tmp_path):
 
 
 
-@pytest.mark.parametrize("pack_status,expect_shadow", [("READY", True), ("NOT_READY", False)])
+@pytest.mark.parametrize(
+    "pack_status,scenario",
+    [("READY", "capital"), ("NOT_READY", "capital"), ("READY", "reentry")],
+)
 def test_worker_overlay_records_shadow_when_capital_budget_blocks(
-    tmp_path, monkeypatch, pack_status, expect_shadow
+    tmp_path, monkeypatch, pack_status, scenario
 ):
+    expect_shadow = pack_status == "READY" and scenario == "capital"
     import logging
     from types import SimpleNamespace
 
@@ -140,6 +144,16 @@ def test_worker_overlay_records_shadow_when_capital_budget_blocks(
         {"symbol": "BANKNIFTY26OCT55300PE", "quantity": 30, "avg_cost": 600.0},
         {"symbol": "FINNIFTY26OCT25050PE", "quantity": 60, "avg_cost": 400.0},
     ]
+    if scenario == "reentry":
+        import json
+
+        open_opts = []
+        lineage = tmp_path / "investment" / "trade_lineage" / LAB
+        lineage.mkdir(parents=True)
+        (lineage / "2026-10-14.jsonl").write_text(
+            json.dumps({"side": "sell", "symbol": "NIFTY26OCT22400PE", "exit_reason_code": "premium_stop"}) + "\n",
+            encoding="utf-8",
+        )
     overlay = worker._fno_atm_overlay(
         symbol="NIFTY",
         price=22480.0,
@@ -150,7 +164,9 @@ def test_worker_overlay_records_shadow_when_capital_budget_blocks(
         laboratory_id=LAB,
     )
     assert overlay["used"] is False
-    assert overlay["reason"] == "capital_budget_max_open"
+    assert overlay["reason"] == (
+        "capital_budget_max_open" if scenario == "capital" else "reentry_after_managed_exit"
+    )
     rows = fno_shadow.open_shadows(tmp_path, LAB, "2026-10-14")
     if expect_shadow:
         assert overlay.get("shadow_id")

@@ -3909,6 +3909,71 @@ class PaperTradingWorker(PersistentWorker):
             return None
         return px if px > 0 else None
 
+    def _fno_managed_exit(
+        self,
+        *,
+        symbol: str,
+        positions: list[dict[str, Any]],
+        sma_margin: float | None,
+        control_action: str | None,
+        underlying_price: float | None,
+    ) -> dict[str, Any] | None:
+        """Sell overlay for a held Lab v1 option that hit stop/target/reversal, else None.
+
+        Runs on the held contract's own LTP, so an ATM shift or a stale ATM pack
+        cannot leave the position unmanaged.
+        """
+        from atlas.investment import fno_lab_v1 as lab_v1
+        from atlas.investment.fno_contract import (
+            ADAPTER_ID,
+            CONTROL_STRATEGY_TAG,
+            option_positions_for_underlier,
+            option_state_marks,
+        )
+
+        held = option_positions_for_underlier(positions, underlier=symbol)
+        if not held:
+            return None
+        ltps = {str(h["symbol"]): self._nfo_ltp(str(h["symbol"])) for h in held}
+        ex = lab_v1.evaluate_held_option_exit(held, ltp_by_symbol=ltps, sma_margin=sma_margin)
+        if ex is None:
+            return None
+        qty = float(ex["qty"])
+        self._logger.info(
+            "FNO managed exit %s %s: premium %.2f→%.2f (%+.1f%%)",
+            ex["symbol"],
+            ex["exit_code"],
+            ex["entry_premium"],
+            ex["price"],
+            ex["premium_change_pct"],
+        )
+        return {
+            "used": True,
+            "fallback_l4": False,
+            "kind": "sell",
+            "symbol": ex["symbol"],
+            "qty": qty,
+            "price": ex["price"],
+            "right": ex["right"],
+            "held": qty,
+            "lot_size": int(qty),
+            "reason": f"v1_exit_{ex['exit_code']}",
+            "exit_code": ex["exit_code"],
+            "managed_exit": ex,
+            "strategy_tag": CONTROL_STRATEGY_TAG,
+            "adapter_id": ADAPTER_ID,
+            "writing": False,
+            "control_action": control_action,
+            "marks": option_state_marks(
+                right=ex["right"],
+                contract={"tradingsymbol": ex["symbol"], "lot_size": int(qty)},
+                option_ltp=ex["price"],
+                underlying_price=underlying_price,
+                future_price=None,
+                lot_size=int(qty),
+            ),
+        }
+
     def _fno_atm_overlay(
         self,
         *,
@@ -4017,6 +4082,15 @@ class PaperTradingWorker(PersistentWorker):
             ) or None
         except (TypeError, ValueError):
             starting_cash = None
+        managed = self._fno_managed_exit(
+            symbol=symbol,
+            positions=positions_now,
+            sma_margin=_sma_margin(indicators),
+            control_action=control_action,
+            underlying_price=spot_px,
+        )
+        if managed is not None:
+            return managed
         overlay = choose_atm_overlay(
             sma_margin=_sma_margin(indicators),
             underlier_held=held,
@@ -4029,6 +4103,26 @@ class PaperTradingWorker(PersistentWorker):
             underlying_price=spot_px,
             future_price=fut_ltp,
         )
+        if overlay.get("used") and str(overlay.get("kind") or "").lower() == "buy" and data_dir:
+            try:
+                from atlas.investment import fno_lab_v1 as lab_v1
+
+                day = lab_v1.to_ist(self._clock()).date().isoformat()
+                exited = lab_v1.managed_exit_underliers(
+                    data_dir,
+                    laboratory_id=str(laboratory_id or lab_v1.LABORATORY_ID),
+                    ist_day=day,
+                )
+                if lab_v1.normalize_underlier(symbol) in exited:
+                    overlay = {
+                        "used": False,
+                        "fallback_l4": False,
+                        "reason": lab_v1.SKIP_REENTRY_AFTER_EXIT,
+                        "control_action": control_action,
+                        "writing": False,
+                    }
+            except Exception:  # noqa: BLE001
+                self._logger.debug("fno re-entry check skipped", exc_info=True)
         # Finite F&O capital — no auto top-up; cap concurrent option experiments.
         if overlay.get("used") and str(overlay.get("kind") or "").lower() == "buy":
             try:

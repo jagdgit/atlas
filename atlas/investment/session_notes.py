@@ -118,6 +118,8 @@ def classify_action(action: str) -> str | None:
         return "capital_budget_max_open"
     if "capital_budget_cash_floor" in a:
         return "capital_budget_cash_floor"
+    if "reentry_after_managed_exit" in a:
+        return "reentry_after_managed_exit"
     if "intraday_yahoo_budget" in a:
         return "intraday_yahoo_budget"
     if "session_closed" in a:
@@ -180,6 +182,7 @@ REASON_LABELS = {
     "fno_no_cash_alts": "F&O lab skipped cash-equity alternatives (operator contracts only)",
     "capital_budget_max_open": "F&O capital budget — max concurrent option experiments reached (no auto top-up)",
     "capital_budget_cash_floor": "F&O capital budget — buy would breach cash reserve floor (finite book)",
+    "reentry_after_managed_exit": "F&O no same-day re-entry on an underlier after a stop/reversal exit",
     "intraday_yahoo_budget": "Intraday lab capped at ≤3 names (Yahoo 5m budget; no extra alts)",
     "feed_exhausted": "Replay feed exhausted",
     "other_idle": "Other idle / skip reasons",

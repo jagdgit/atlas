@@ -62,7 +62,7 @@ All three labs are **paper simulations** — no broker orders. All three share o
 | Mapping | Bullish margin → BUY 1 lot ATM **CE**; bearish margin → BUY 1 lot ATM **PE**; SMA reversal while holding → SELL; RSI ≤ 30 with bearish margin → HOLD. Writing options is forbidden |
 | Constraints | 1 lot per experiment; **≤ 2 open option experiments**; keep **30% of starting cash** in reserve; refuse if cash < premium × lot; never auto-top-up |
 | Prediction | `build_entry_prediction`: `strength = min(1, |margin|/0.005)`; E[R] = 1%–8% of premium; p = 0.45–0.70; horizon `session_flat`; **`uncalibrated_default`** — a formula, not a model |
-| Exits | SMA reversal on an ATM-held option; `fno_lab_v1_experiment_close` (session flat). Mark: option LTP → last mark → avg cost (labeled). **Gap:** once spot moves, a held strike stops being ATM and the lab idles it (`legacy_non_atm_option`) — no stop, no target, no time exit until the flatten |
+| Exits | **Managed every tick (after restart):** −40% premium stop, trend reversal against the option, on the held contract's own LTP whether or not it is still ATM; no same-day re-entry after such an exit. Then `fno_lab_v1_experiment_close` from 15:20. Mark: option LTP → last mark → avg cost (labeled). Before this fix a held strike that drifted off ATM idled as `legacy_non_atm_option` until the flatten |
 | Today | 10 PE buys in 3 minutes (swarm, before the capital budget existed), unmanaged after ~11:15 due to starvation, closed 17:34–17:42 after market close |
 
 ## 3. What Atlas records, and when it really learns
@@ -151,7 +151,7 @@ The fill email (`reports.format_trade_report`) prints a "Decision detail" block 
 | 3 | ~~Decide F&O cash~~ — **decided: keep ₹85.7k**, no deposit, ledger unchanged | Operator | Done |
 | 4 | ~~2026-09-21 swing churn~~ — **quarantined** (137 rows). Root cause to fix: switch review re-selling and re-buying the same name at the same price (add same-symbol / zero-advantage guard) | Agent | Guard: next code slice |
 | 5 | Ollama: unload during 09:00–16:00 (keep-alive 0) or schedule LLM work after close | Operator/agent | This week |
-| 6 | Held-option exit rules (premium stop, underlier reversal, time stop) instead of idling `legacy_non_atm_option` | Agent | Next code slice |
+| 6 | ~~Held-option exit rules~~ — **built**: every tick, any held Lab v1 option on the underlier (ATM or not) is checked on its own live LTP: exit at −40% premium (`premium_stop`) or when the trend flips against it (`underlier_reversal`); profit target available but off. No exit without a live mark. No same-day re-entry on that underlier after a managed exit. Session flatten 15:20 still closes the rest | Agent | Live after restart |
 | 7 | Alerting: staleness alerts must not auto-resolve at session end; add "admitted lab ticks in session" health check | Agent | Next code slice |
 | 8 | Decision chain in trade emails (§5) | Agent | After 6–7 |
 | 9 | Switch review must not mint SELL decisions when session is closed | Agent | Small fix |

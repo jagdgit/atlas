@@ -121,6 +121,109 @@ SKIP_NOT_IN_UNIVERSE = "not_in_lab_v1_universe"
 SKIP_SESSION_CLOSED = "session_closed"
 SKIP_CAPITAL_MAX_OPEN = "capital_budget_max_open"
 SKIP_CAPITAL_CASH_FLOOR = "capital_budget_cash_floor"
+SKIP_REENTRY_AFTER_EXIT = "reentry_after_managed_exit"
+
+# Held-option management every tick, ATM or not. Session flatten still closes the rest.
+EXIT_PREMIUM_STOP = "premium_stop"
+EXIT_PREMIUM_TARGET = "premium_target"
+EXIT_UNDERLIER_REVERSAL = "underlier_reversal"
+MANAGED_EXIT_CODES = frozenset({EXIT_PREMIUM_STOP, EXIT_PREMIUM_TARGET, EXIT_UNDERLIER_REVERSAL})
+DEFAULT_EXIT_POLICY: dict[str, Any] = {
+    "version": "fno.lab.v1.exit.v1",
+    "premium_stop_pct": 0.40,
+    "premium_target_pct": None,
+    "exit_on_underlier_reversal": True,
+    "no_reentry_same_day_after_managed_exit": True,
+}
+
+
+def evaluate_held_option_exit(
+    held: list[dict[str, Any]],
+    *,
+    ltp_by_symbol: dict[str, float | None],
+    sma_margin: float | None,
+    policy_doc: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """First held option that must exit now, or None.
+
+    ``held`` rows: {symbol, right, qty, position:{avg_price|avg_cost}}. A missing
+    LTP never triggers an exit (no invented marks); the session flatten covers it.
+    """
+    pol = dict(DEFAULT_EXIT_POLICY)
+    pol.update({k: v for k, v in (policy_doc or {}).items() if k in DEFAULT_EXIT_POLICY})
+    try:
+        margin = float(sma_margin) if sma_margin is not None else None
+    except (TypeError, ValueError):
+        margin = None
+    for row in held or []:
+        sym = str(row.get("symbol") or "")
+        pos = row.get("position") if isinstance(row.get("position"), dict) else {}
+        try:
+            entry = float(pos.get("avg_price") or pos.get("avg_cost") or 0)
+            ltp = float(ltp_by_symbol.get(sym) or 0)
+        except (TypeError, ValueError):
+            continue
+        if entry <= 0 or ltp <= 0:
+            continue
+        change = (ltp - entry) / entry
+        code = None
+        stop = pol.get("premium_stop_pct")
+        target = pol.get("premium_target_pct")
+        right = str(row.get("right") or "")
+        if stop is not None and change <= -float(stop):
+            code = EXIT_PREMIUM_STOP
+        elif target is not None and change >= float(target):
+            code = EXIT_PREMIUM_TARGET
+        elif pol.get("exit_on_underlier_reversal") and margin is not None and (
+            (right == "CE" and margin < 0) or (right == "PE" and margin > 0)
+        ):
+            code = EXIT_UNDERLIER_REVERSAL
+        if code:
+            return {
+                "symbol": sym,
+                "right": right,
+                "qty": float(row.get("qty") or 0),
+                "price": ltp,
+                "entry_premium": entry,
+                "premium_change_pct": round(change * 100.0, 4),
+                "exit_code": code,
+                "policy_version": pol["version"],
+            }
+    return None
+
+
+def managed_exit_underliers(
+    data_dir: str | Path | None,
+    *,
+    laboratory_id: str = "india_fno_learner",
+    ist_day: str,
+) -> set[str]:
+    """Underliers that had a managed (stop/target/reversal) exit today, from trade lineage."""
+    if not data_dir:
+        return set()
+    path = Path(data_dir) / "investment" / "trade_lineage" / laboratory_id / f"{ist_day}.jsonl"
+    if not path.is_file():
+        return set()
+    out: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("side") == "sell" and row.get("exit_reason_code") in MANAGED_EXIT_CODES:
+            und = option_underlier_name(str(row.get("symbol") or ""))
+            if und:
+                out.add(und)
+    return out
+
+
+def option_underlier_name(option_symbol: str) -> str | None:
+    """'NIFTY26OCT22500PE' → 'NIFTY'; weekly 'NIFTY2610622500PE' → 'NIFTY'."""
+    m = re.match(
+        r"^([A-Z&\-]+?)\d{2}(?:[A-Z]{3}|[1-9OND]\d{2})\d+(?:CE|PE)$",
+        str(option_symbol or "").upper(),
+    )
+    return m.group(1) if m else None
 
 
 def capital_policy(data_dir: str | Path | None = None) -> dict[str, Any]:
@@ -841,6 +944,7 @@ def policy(data_dir: str | Path | None = None) -> dict[str, Any]:
             ),
         },
         "capital": capital_policy(data_dir),
+        "exit": dict(DEFAULT_EXIT_POLICY),
         "expansion_rule": (
             "seed → experiences → coverage/data problems → repeated behaviours → "
             "lessons with attribution → revise seed/rules → expand"
