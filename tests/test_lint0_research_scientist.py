@@ -171,6 +171,76 @@ def test_drain_retries_queue(tmp_path):
     assert stats["pending"] == 0
 
 
+class _KwLLM(_SeqLLM):
+    def chat(self, messages, **kwargs):  # noqa: ANN001
+        self.kwargs = kwargs
+        return super().chat(messages, **kwargs)
+
+
+def _enqueue(tmp_path, symbol, *, day=None):
+    from atlas.reasoning.research_scientist import _ist_day
+
+    enqueue_unreviewed(
+        tmp_path,
+        laboratory_id="india_fno_learner",
+        packet={
+            "symbol": symbol,
+            "laboratory": "india_fno_learner",
+            "action": "sell",
+            "strategy_tag": "eod_flatten",
+            "ts_ist": day or _ist_day(),
+        },
+        reason="pending_event",
+    )
+
+
+def test_review_is_persisted_and_uses_schema_format(tmp_path):
+    from atlas.reasoning.research_scientist import OUTPUT_SCHEMA, _ist_day, load_reviews
+
+    llm = _KwLLM([json.dumps({"belief_changed": False, "new_stance": "WATCH", "teacher": "t"})])
+    out = run_research_scientist(
+        llm=llm,
+        data_dir=tmp_path,
+        symbol="NIFTY26OCT25000PE",
+        laboratory_id="india_fno_learner",
+        action="sell",
+        strategy_tag="eod_flatten",
+    )
+    assert out["status"] == "reviewed"
+    assert llm.kwargs["format"] is OUTPUT_SCHEMA
+    rows = load_reviews(tmp_path, "india_fno_learner", _ist_day())
+    assert len(rows) == 1 and rows[0]["output"]["teacher"] == "t"
+
+
+def test_drain_failures_bounded_and_dead_lettered(tmp_path):
+    from atlas.reasoning.research_scientist import _dead_letter_path
+
+    for sym in ("A", "B", "C", "D", "E"):
+        _enqueue(tmp_path, sym)
+    _enqueue(tmp_path, "OLD", day="2026-01-02")
+    llm = _SeqLLM(["not json"] * 50)
+    stats = drain_scientist_queue(tmp_path, laboratory_id="india_fno_learner", llm=llm, max_n=2)
+    assert llm.calls == 2  # max_n records, not the whole queue
+    assert stats["attempted"] == 2 and stats["done"] == 0
+    assert stats["dead_lettered"] == 1  # the stale one
+    assert stats["pending"] == 5
+    stats = drain_scientist_queue(tmp_path, laboratory_id="india_fno_learner", llm=llm, max_n=2)
+    assert stats["dead_lettered"] == 2  # E and D failed twice
+    dead = [json.loads(x) for x in _dead_letter_path(tmp_path, "india_fno_learner").read_text().splitlines()]
+    assert [d["symbol"] for d in dead] == ["OLD", "E", "D"]
+    assert {d["dead_reason"] for d in dead} == {"stale_backlog", "attempts_exhausted"}
+
+
+def test_failed_attempts_spend_daily_budget(tmp_path):
+    for sym in ("A", "B", "C", "D", "E", "F", "G", "H"):
+        _enqueue(tmp_path, sym)
+    llm = _SeqLLM(["not json"] * 100)
+    total = 0
+    for _ in range(6):
+        total += drain_scientist_queue(tmp_path, laboratory_id="india_fno_learner", llm=llm, max_n=3)["attempted"]
+    assert total == 6  # attempts cap = 2 x DEFAULT_EVENT_PASSES per day
+
+
 def test_bre2_missing_llm_is_unreviewed_not_unchanged(tmp_path):
     w = empty_wso(symbol="CIPLA.NS", laboratory_id="lab")
     out = revise_one_wso(

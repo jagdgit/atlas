@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -294,37 +294,52 @@ def build_research_packet(
     return packet
 
 
+_SHORT = {"type": "string", "maxLength": 240}
+_SHORT_LIST = {"type": "array", "items": _SHORT, "maxItems": 3}
+# Passed as Ollama ``format``: a bare "json" let the model echo the packet back
+# until num_predict cut it off, so no review ever parsed.
+OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "belief_changed": {"type": "boolean"},
+        "new_stance": {"type": "string", "enum": sorted(_STANCES)},
+        "confidence": {"type": "number"},
+        "important_evidence": _SHORT_LIST,
+        "contradictions": _SHORT_LIST,
+        "unknowns": _SHORT_LIST,
+        "falsifiers_triggered": _SHORT_LIST,
+        "research_tasks": _SHORT_LIST,
+        "analyst": _SHORT,
+        "skeptic": _SHORT,
+        "researcher": _SHORT,
+        "teacher": _SHORT,
+    },
+    "required": [
+        "belief_changed",
+        "new_stance",
+        "confidence",
+        "important_evidence",
+        "unknowns",
+        "research_tasks",
+        "analyst",
+        "skeptic",
+        "researcher",
+        "teacher",
+    ],
+}
+NUM_PREDICT = 500
+MAX_RECORD_ATTEMPTS = 2
+STALE_QUEUE_DAYS = 7
+
+
 def scientist_prompt(packet: dict[str, Any]) -> str:
-    schema = {
-        "belief_changed": False,
-        "new_stance": "WATCH",
-        "confidence": 0.0,
-        "important_evidence": [],
-        "contradictions": [],
-        "unknowns": [],
-        "falsifiers_triggered": [],
-        "research_tasks": [],
-        "decision_advice": DECISION_ADVICE,
-        "er_advice": None,
-        "analyst": "",
-        "skeptic": "",
-        "researcher": "",
-        "teacher": "",
-    }
-    return json.dumps(
-        {
-            "roles": ["analyst", "skeptic", "researcher", "teacher"],
-            "packet": packet,
-            "return_schema": schema,
-            "rules": [
-                "JSON only",
-                "concise (max 1-2 sentences per role)",
-                "decision_advice must be DO_NOT_OVERRIDE_RULE_ENGINE",
-                "do not invent fundamentals or news",
-                "belief_changed true only with cited packet evidence",
-            ],
-        },
-        default=str,
+    return (
+        "PACKET:\n"
+        + json.dumps(packet, default=str)
+        + "\n\nReview this packet as analyst, skeptic, researcher and teacher. "
+        "Do not repeat the packet. One short sentence per role; at most 3 items per list. "
+        "Do not invent fundamentals or news. "
+        "belief_changed true only with cited packet evidence."
     )
 
 
@@ -344,8 +359,8 @@ def chat_with_retry(
                 messages,
                 _atlas_purpose="research_scientist",
                 think=False,
-                num_predict=400,
-                format="json",
+                num_predict=NUM_PREDICT,
+                format=OUTPUT_SCHEMA,
             )
             text = getattr(resp, "text", None) or getattr(resp, "content", None) or str(resp)
             if text and str(text).strip():
@@ -388,6 +403,38 @@ def _save_budget(data_dir: str | Path, laboratory_id: str, ist_day: str, doc: di
 
 def _queue_path(data_dir: str | Path, laboratory_id: str) -> Path:
     return Path(data_dir) / STORE_REL / _safe(laboratory_id) / "reschedule.jsonl"
+
+
+def _reviews_path(data_dir: str | Path, laboratory_id: str, ist_day: str) -> Path:
+    return Path(data_dir) / STORE_REL / _safe(laboratory_id) / "reviews" / f"{ist_day}.jsonl"
+
+
+def _dead_letter_path(data_dir: str | Path, laboratory_id: str) -> Path:
+    return Path(data_dir) / STORE_REL / _safe(laboratory_id) / "dead_letter.jsonl"
+
+
+def _append_jsonl(path: Path, rec: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, default=str) + "\n")
+    except OSError:
+        _log.debug("scientist write failed: %s", path, exc_info=True)
+
+
+def load_reviews(data_dir: str | Path, laboratory_id: str, ist_day: str) -> list[dict[str, Any]]:
+    path = _reviews_path(data_dir, laboratory_id, ist_day)
+    if not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            rows.append(obj)
+    return rows
 
 
 def enqueue_unreviewed(
@@ -469,12 +516,15 @@ def run_research_scientist(
         }
 
     lab = str(pkt.get("laboratory") or packet_kwargs.get("laboratory_id") or "unknown")
-    day = str(pkt.get("ts_ist") or _ist_day())
+    # Budget is spent on the day the LLM works, not the event's day; keying by
+    # event day gave every backlogged day a fresh allowance.
+    day = _ist_day()
     if data_dir and consume_budget:
         bud = _load_budget(data_dir, lab, day)
         used = int(bud.get("used") or 0)
         cap = int(bud.get("max") or max_passes)
-        if used >= cap:
+        attempts = int(bud.get("attempts") or 0)
+        if used >= cap or attempts >= cap * 2:
             out = _unreviewed_result(reason="cognitive_budget_exhausted", packet=pkt)
             if enqueue_on_fail:
                 enqueue_unreviewed(data_dir, laboratory_id=lab, packet=pkt, reason=out["reason"])
@@ -485,6 +535,13 @@ def run_research_scientist(
         if enqueue_on_fail:
             enqueue_unreviewed(data_dir, laboratory_id=lab, packet=pkt, reason=out["reason"])
         return out
+
+    if data_dir and consume_budget:
+        bud = _load_budget(data_dir, lab, day)
+        bud["attempts"] = int(bud.get("attempts") or 0) + 1
+        bud["max"] = int(bud.get("max") or max_passes)
+        bud["day"] = day
+        _save_budget(data_dir, lab, day, bud)
 
     messages = [
         ChatMessage(role="system", content=SYSTEM_PROMPT),
@@ -512,7 +569,7 @@ def run_research_scientist(
         _save_budget(data_dir, lab, day, bud)
 
     output = normalize_scientist_output(parsed)
-    return {
+    result = {
         "version": VERSION,
         "status": REVIEWED,
         "reason": "ok",
@@ -523,6 +580,12 @@ def run_research_scientist(
         "influence": INFLUENCE,
         "llm": True,
     }
+    if data_dir:
+        _append_jsonl(
+            _reviews_path(data_dir, lab, day),
+            {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **result},
+        )
+    return result
 
 
 def drain_scientist_queue(
@@ -532,24 +595,38 @@ def drain_scientist_queue(
     llm: Any | None,
     max_n: int = 3,
 ) -> dict[str, Any]:
-    """Retry UNREVIEWED packets. Still advice-only."""
+    """Retry UNREVIEWED packets, newest first. Still advice-only.
+
+    ``max_n`` bounds LLM attempts per pass, not successes: when every call
+    failed, one pass used to call the LLM for the whole queue. A record that
+    fails ``MAX_RECORD_ATTEMPTS`` times, or is older than ``STALE_QUEUE_DAYS``,
+    moves to ``dead_letter.jsonl`` (kept, never reviewed).
+    """
+    empty = {"done": 0, "pending": 0, "skipped": 0, "attempted": 0, "dead_lettered": 0}
     if not data_dir:
-        return {"done": 0, "pending": 0, "skipped": 0}
+        return empty
     path = _queue_path(data_dir, laboratory_id)
     if not path.is_file():
-        return {"done": 0, "pending": 0, "skipped": 0}
+        return empty
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return {"done": 0, "pending": 0, "skipped": 0}
-    remaining: list[str] = []
+        return empty
+    today = _ist_day()
+    try:
+        stale_before = (
+            datetime.fromisoformat(today) - timedelta(days=STALE_QUEUE_DAYS)
+        ).date().isoformat()
+    except ValueError:
+        stale_before = ""
+    kept: list[str] = []
     done = 0
     skipped = 0
-    for line in lines:
+    attempted = 0
+    dead = 0
+    budget_out = False
+    for line in reversed(lines):
         if not line.strip():
-            continue
-        if done >= max_n:
-            remaining.append(line)
             continue
         try:
             rec = json.loads(line)
@@ -559,6 +636,14 @@ def drain_scientist_queue(
         pkt = rec.get("packet") if isinstance(rec, dict) else None
         if not isinstance(pkt, dict):
             skipped += 1
+            continue
+        event_day = str(pkt.get("ts_ist") or rec.get("ts") or "")[:10]
+        if stale_before and event_day and event_day < stale_before:
+            _append_jsonl(_dead_letter_path(data_dir, laboratory_id), {**rec, "dead_reason": "stale_backlog"})
+            dead += 1
+            continue
+        if budget_out or attempted >= max_n:
+            kept.append(line)
             continue
         if not pkt.get("question"):
             pkt = build_research_packet(
@@ -579,12 +664,30 @@ def drain_scientist_queue(
             consume_budget=True,
             enqueue_on_fail=False,
         )
+        if out.get("reason") in ("cognitive_budget_exhausted", LLM_UNAVAILABLE):
+            budget_out = True
+            kept.append(line)
+            continue
+        attempted += 1
         if out.get("status") == REVIEWED:
             done += 1
+            continue
+        tries = int(rec.get("attempts") or 0) + 1
+        rec = {**rec, "attempts": tries, "last_reason": out.get("reason")}
+        if tries >= MAX_RECORD_ATTEMPTS:
+            _append_jsonl(_dead_letter_path(data_dir, laboratory_id), {**rec, "dead_reason": "attempts_exhausted"})
+            dead += 1
         else:
-            remaining.append(line)
+            kept.append(json.dumps(rec, default=str))
+    kept.reverse()
     try:
-        path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+        path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
     except OSError:
         pass
-    return {"done": done, "pending": len(remaining), "skipped": skipped}
+    return {
+        "done": done,
+        "pending": len(kept),
+        "skipped": skipped,
+        "attempted": attempted,
+        "dead_lettered": dead,
+    }
