@@ -66,3 +66,16 @@ def test_assess_symbols_provisional_when_missing(tmp_path: Path):
     assert doc["n_replayable"] == 1
     assert doc["all_replayable"] is False
     assert "provisional_ranking" in doc["ranking_honest"]
+
+
+def test_index_names_resolve_to_the_writer_file(tmp_path):
+    import json
+
+    from atlas.investment.market_bars_health import assess_symbols, bar_path
+
+    root = tmp_path / "market" / "bars"
+    root.mkdir(parents=True)
+    bars = [{"date": f"2026-09-{d:02d}", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1} for d in range(1, 29)]
+    (root / "_NSEI.json").write_text(json.dumps({"bars": bars}), encoding="utf-8")
+    assert bar_path(tmp_path, "NIFTY").name == "_NSEI.json"
+    assert assess_symbols(tmp_path, ["NIFTY"])["all_replayable"] is True

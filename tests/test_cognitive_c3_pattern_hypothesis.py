@@ -30,6 +30,8 @@ from atlas.investment.cognitive.pattern_detector import (
 
 _LAB = "india_fno_learner"
 _DAY = "2026-10-05"
+# Two sessions: a group drawn from one day is that day's market, not the feature.
+_SESSIONS = ("2026-10-05", "2026-10-06")
 
 
 def _episode(
@@ -39,6 +41,7 @@ def _episode(
     matched: bool,
     sma_margin: float,
     underlier_pct: float,
+    day: str = "2026-10-05",
 ) -> dict:
     return {
         "experience_id": eid,
@@ -61,8 +64,8 @@ def _episode(
         },
         "underlier_movement": {"price_change_pct": underlier_pct},
         "fill": {
-            "entry_at": "2026-10-05T05:48:00+00:00",
-            "exit_at": "2026-10-05T10:11:00+00:00",
+            "entry_at": f"{day}T05:48:00+00:00",
+            "exit_at": f"{day}T10:11:00+00:00",
         },
     }
 
@@ -78,6 +81,7 @@ def _day_like_today() -> list[dict]:
                 matched=i < 3,
                 sma_margin=0.02,
                 underlier_pct=0.4,
+                day=_SESSIONS[i % 2],
             )
         )
     for i in range(4):
@@ -88,6 +92,7 @@ def _day_like_today() -> list[dict]:
                 matched=False,
                 sma_margin=-0.02,
                 underlier_pct=0.3 if i < 1 else -0.5,
+                day=_SESSIONS[i % 2],
             )
         )
     return rows
@@ -120,18 +125,43 @@ def test_detector_is_blind_to_the_dimension_name():
     assert opt["split_delta"] == 0.75
 
 
-def test_a_separable_split_outranks_a_larger_confounded_one():
+def test_a_separable_split_outranks_an_equally_strong_confounded_one():
     """The one question per cycle should be one this sample can actually separate."""
-    patterns = detect_patterns(_day_like_today(), laboratory_id=_LAB, as_of_ist=_DAY)
+    rows = _day_like_today()
+    early = {"ce-0", "ce-1", "ce-2", "pe-0"}
+    for row in rows:
+        day = row["fill"]["entry_at"][:10]
+        start, end = ("04", "06") if row["experience_id"] in early else ("08", "10")
+        row["fill"]["entry_at"] = f"{day}T{start}:00:00+00:00"
+        row["fill"]["exit_at"] = f"{day}T{end}:00:00+00:00"  # same holding time
+    patterns = detect_patterns(rows, laboratory_id=_LAB, as_of_ist=_DAY)
     candidates = [p for p in patterns if p["status"] == STATUS_CANDIDATE]
-    assert candidates
     first = candidates[0]
+    assert first["dimension"] == "entry_time_bucket"
     assert not first["confounded_with"]
-    # option_type has the larger gap and is tied to the margin sign.
     opt = {p["dimension"]: p for p in patterns}["option_type"]
-    assert opt["split_delta"] > first["split_delta"]
+    assert opt["p_value"] == first["p_value"]
     assert opt["confounded_with"]
     assert patterns.index(first) < patterns.index(opt)
+
+
+def test_post_hoc_dimensions_are_never_candidates():
+    from atlas.investment.cognitive.pattern_detector import STATUS_POST_HOC
+
+    patterns = detect_patterns(_day_like_today(), laboratory_id=_LAB, as_of_ist=_DAY)
+    under = {p["dimension"]: p for p in patterns}.get("underlier_direction")
+    assert under is not None and under["status"] == STATUS_POST_HOC
+    hypo = build_hypothesis(under, laboratory_id=_LAB)
+    assert hypo["evaluable"] is False
+
+
+def test_noise_split_does_not_pass_the_screen():
+    rows = _day_like_today()
+    # CE 2/4 vs PE 1/4: chance alone does this often.
+    for row, matched in zip(rows, [True, True, False, False, True, False, False, False]):
+        row["prediction_error"]["direction_match"] = "matched" if matched else "missed"
+    patterns = detect_patterns(rows, laboratory_id=_LAB, as_of_ist=_DAY)
+    assert "option_type" not in {p["dimension"] for p in patterns if p["status"] == STATUS_CANDIDATE}
 
 
 def test_perfectly_correlated_dimensions_are_reported_as_confounded():
@@ -233,3 +263,13 @@ def test_persist_round_trip_and_duplicate_detection(tmp_path: Path):
     assert duplicate_of(tmp_path, laboratory_id=_LAB, dimension="option_type") == out[
         "hypothesis_id"
     ]
+
+
+def test_a_group_from_one_session_is_that_day_not_the_feature():
+    rows = _day_like_today()
+    for row in rows:
+        if row["option_type"] == "PE":
+            row["fill"]["entry_at"] = "2026-10-06T05:48:00+00:00"
+    opt = {p["dimension"]: p for p in detect_patterns(rows, laboratory_id=_LAB, as_of_ist=_DAY)}["option_type"]
+    assert opt["status"] == STATUS_INSUFFICIENT
+    assert opt["single_session_groups"] == ["PE"]

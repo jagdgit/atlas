@@ -91,6 +91,7 @@ def _episode(
     option_type: str,
     matched: bool,
     underlier_up: bool,
+    day: str = _DAY,
 ) -> dict:
     return {
         "experience_id": eid,
@@ -115,8 +116,8 @@ def _episode(
             },
         },
         "fill": {
-            "entry_at": "2026-10-05T05:48:00+00:00",
-            "exit_at": "2026-10-05T10:11:00+00:00",
+            "entry_at": f"{day}T05:48:00+00:00",
+            "exit_at": f"{day}T10:11:00+00:00",
         },
     }
 
@@ -134,6 +135,7 @@ def _episodes() -> list[dict]:
                 option_type="CE",
                 matched=i < 3,
                 underlier_up=True,
+                day=("2026-10-02", _DAY)[i % 2],
             )
         )
     for i, sym in enumerate(_SYMS):
@@ -144,8 +146,26 @@ def _episodes() -> list[dict]:
                 option_type="PE",
                 matched=False,
                 underlier_up=True,
+                day=("2026-10-02", _DAY)[i % 2],
             )
         )
+    return rows
+
+
+_LATER = "2026-10-06"
+
+
+def _fresh_episodes(n_each: int = 5) -> list[dict]:
+    """Closed after the question was asked — the only sample allowed to answer it."""
+    rows = []
+    for i in range(n_each):
+        sym = _SYMS[i % len(_SYMS)]
+        for right in ("CE", "PE"):
+            day = (_LATER, "2026-10-07")[i % 2]
+            row = _episode(f"fresh-{right}-{i}", underlying=sym, option_type=right,
+                           matched=right == "CE", underlier_up=True, day=day)
+            row["as_of_ist"] = day
+            rows.append(row)
     return rows
 
 
@@ -251,10 +271,56 @@ def test_experiment_refuses_to_score_without_replayable_bars(tmp_path: Path):
         laboratory_id=_LAB,
         hypothesis_id="h1",
         experiment_spec=spec,
-        episodes=_episodes(),
+        episodes=_episodes() + _fresh_episodes(),
     )
     assert res["result"] == RESULT_NOT_EVALUABLE
     assert res["reason"] == "bars_not_replayable"
+
+
+def test_experiment_never_answers_a_question_with_its_own_discovery_sample(tmp_path: Path):
+    _with_bars(tmp_path)
+    spec = [s for s in _hypothesis()["experiment_specs"] if s.get("evaluable")][0]
+    res = evaluate_hypothesis(
+        tmp_path, laboratory_id=_LAB, hypothesis_id="h1", experiment_spec=spec, episodes=_episodes()
+    )
+    assert res["result"] == RESULT_NOT_EVALUABLE
+    assert res["reason"] == "awaiting_fresh_sample"
+
+
+def test_thin_fresh_sample_waits_instead_of_judging(tmp_path: Path):
+    _with_bars(tmp_path)
+    spec = [s for s in _hypothesis()["experiment_specs"] if s.get("evaluable")][0]
+    res = evaluate_hypothesis(
+        tmp_path, laboratory_id=_LAB, hypothesis_id="h1", experiment_spec=spec,
+        episodes=_episodes() + _fresh_episodes(n_each=3),
+    )
+    assert res["reason"] == "awaiting_fresh_sample"
+    assert "CE=3" in res["detail"]
+
+
+def test_fresh_reversal_rejects(tmp_path: Path):
+    _with_bars(tmp_path)
+    spec = [s for s in _hypothesis()["experiment_specs"] if s.get("evaluable")][0]
+    fresh = _fresh_episodes()
+    for row in fresh:
+        row["underlier_movement"]["session"]["close"] = 99.0  # every underlier fell: puts right
+    res = evaluate_hypothesis(
+        tmp_path, laboratory_id=_LAB, hypothesis_id="h1", experiment_spec=spec,
+        episodes=_episodes() + fresh,
+    )
+    assert res["result"] == RESULT_REJECTED
+    assert res["gap"] < 0
+
+
+def test_post_hoc_spec_is_closed_not_retried(tmp_path: Path):
+    _with_bars(tmp_path)
+    spec = {"evaluable": True, "dimension": "underlier_direction", "groups": ["up", "down"],
+            "baseline_required": True}
+    res = evaluate_hypothesis(
+        tmp_path, laboratory_id=_LAB, hypothesis_id="h1", experiment_spec=spec,
+        episodes=_episodes() + _fresh_episodes(),
+    )
+    assert res["reason"] == "post_hoc_dimension"
 
 
 def test_experiment_translates_premium_direction_into_underlier_direction(tmp_path: Path):
@@ -270,12 +336,13 @@ def test_experiment_translates_premium_direction_into_underlier_direction(tmp_pa
         laboratory_id=_LAB,
         hypothesis_id="h1",
         experiment_spec=spec,
-        episodes=_episodes(),
+        episodes=_episodes() + _fresh_episodes(),
     )
     assert res["group_rates"]["CE"] == 1.0
     assert res["group_rates"]["PE"] == 0.0
     assert res["result"] == RESULT_SUPPORTED
-    assert res["baseline"]["n"] == 8
+    assert res["p_value"] < 0.05
+    assert res["baseline"]["n"] == 10  # only the fresh episodes
     assert res["mutates_strategy"] is False
     assert res["promotion"] is None
     assert res["live_orders"] is False
@@ -512,6 +579,11 @@ def test_cycle_asks_a_question_then_answers_it_then_asks_the_next(tmp_path: Path
     # Run the experiment the way the FEL worker would.
     from atlas.investment.cognitive.queue import next_admitted_hypothesis
     from atlas.investment.fel.experiments.dispatch import process_one
+
+    # Nothing closed after the question yet: the cycle waits instead of judging.
+    assert first["awaiting"][0]["reason"] == "awaiting_fresh_sample"
+    later = tmp_path / CL_STORE / _LAB / f"{_LATER}.jsonl"
+    later.write_text("\n".join(json.dumps(r) for r in _fresh_episodes()) + "\n", encoding="utf-8")
 
     row = next_admitted_hypothesis(tmp_path, laboratory_id=_LAB)
     assert row["hypothesis_id"] == hid

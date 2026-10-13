@@ -32,6 +32,12 @@ RESULT_REJECTED = "REJECTED"
 RESULT_INCONCLUSIVE = "INCONCLUSIVE"
 RESULT_NOT_EVALUABLE = "NOT_EVALUABLE"
 
+REASON_AWAITING_FRESH = "awaiting_fresh_sample"
+REASON_POST_HOC = "post_hoc_dimension"
+# NOT_EVALUABLE for these reasons is "not yet", not an answer: the loop re-tests
+# as episodes accumulate or the data gap closes.
+RETRYABLE_REASONS = frozenset({REASON_AWAITING_FRESH, "bars_not_replayable", "no_episodes"})
+
 # Two independent passes before anything may be called validated (plan §7.5).
 REPLICATION_PASSES = 2
 
@@ -218,6 +224,29 @@ def evaluate_hypothesis(
     dim_path = {name: path for name, path in _dimension_paths()}.get(dim)
     if dim_path is None:
         return not_evaluable("unknown_dimension", dim)
+    from atlas.investment.cognitive.pattern_detector import POST_HOC_DIMENSIONS
+
+    if dim in POST_HOC_DIMENSIONS:
+        return not_evaluable(
+            REASON_POST_HOC,
+            f"{dim} is only known after the trade; a split on it can't be acted on at entry",
+        )
+    if "exclude_experience_ids" not in spec:
+        return not_evaluable(
+            "no_holdout_declared",
+            "spec predates holdout rules; testing on the discovery sample would confirm itself",
+        )
+    # The question was found in some episodes; only later ones can answer it.
+    seen = {str(x) for x in spec.get("exclude_experience_ids") or []}
+    asked = str(spec.get("asked_as_of") or "")
+    rows = [
+        r
+        for r in rows
+        if str(r.get("experience_id") or "") not in seen
+        and (not asked or str(r.get("as_of_ist") or "") > asked)
+    ]
+    if not rows:
+        return not_evaluable(REASON_AWAITING_FRESH, f"no episodes closed after {asked or 'the question'}")
 
     symbols = sorted({str(r.get("underlying") or "").upper() for r in rows if r.get("underlying")})
     try:
@@ -236,7 +265,10 @@ def evaluate_hypothesis(
 
     # Baseline: the control's overall directional accuracy across every group. The
     # candidate claim must beat its own population, not an empty comparison.
+    from atlas.investment.cognitive.pattern_detector import MIN_SESSIONS, session_of
+
     groups: dict[str, dict[str, int]] = {g: {"n": 0, "hits": 0} for g in compare_groups}
+    group_days: dict[str, set[str]] = {g: set() for g in compare_groups}
     population = {"n": 0, "hits": 0}
     unresolved = 0
     for row in rows:
@@ -249,8 +281,12 @@ def evaluate_hypothesis(
         session = (row.get("underlier_movement") or {}).get("session") or {}
         observed = _session_direction(session)
         if observed is None:
-            bars = _load_bars(data_dir, underlying)
-            observed = _session_direction(bars[-1]) if bars else None
+            day_key = session_of(row)
+            bar = next(
+                (b for b in _load_bars(data_dir, underlying) if str(b.get("date") or "")[:10] == day_key),
+                None,
+            )
+            observed = _session_direction(bar) if bar else None
         expected_underlier = _expected_underlier_direction(
             predicted, row.get("option_type") or (row.get("features") or {}).get("option_type")
         )
@@ -263,12 +299,23 @@ def evaluate_hypothesis(
         if value in groups:
             groups[value]["n"] += 1
             groups[value]["hits"] += 1 if hit else 0
+            group_days[value].add(session_of(row))
 
-    thin = [g for g, v in groups.items() if v["n"] < 3]
+    min_n = int(spec.get("min_fresh_n") or 5)
+    thin = [
+        g for g, v in groups.items() if v["n"] < min_n or len(group_days[g]) < MIN_SESSIONS
+    ]
     if thin:
-        return not_evaluable(
-            "insufficient_sample", f"groups below n=3: {', '.join(sorted(thin))}"
-        )
+        return {
+            **not_evaluable(
+                REASON_AWAITING_FRESH,
+                f"fresh groups need n>={min_n} over >={MIN_SESSIONS} sessions: "
+                + ", ".join(
+                    f"{g}={groups[g]['n']}/{len(group_days[g])}d" for g in sorted(thin)
+                ),
+            ),
+            "group_counts": groups,
+        }
 
     rates = {
         g: round(v["hits"] / v["n"], 4) if v["n"] else None for g, v in groups.items()
@@ -281,15 +328,24 @@ def evaluate_hypothesis(
     if rates.get(high) is not None and rates.get(low) is not None:
         gap = round(float(rates[high]) - float(rates[low]), 4)
 
-    min_effect = float(spec.get("min_effect") or 0.5)
+    from atlas.investment.cognitive.stats import fisher_exact
+
+    alpha = float(spec.get("alpha") or 0.05)
+    p_value = round(
+        fisher_exact(
+            groups[high]["hits"], groups[high]["n"], groups[low]["hits"], groups[low]["n"],
+            alternative="greater",
+        ),
+        4,
+    )
     if gap is None:
         result, reason = RESULT_NOT_EVALUABLE, "gap_uncomputable"
-    elif gap >= min_effect:
-        result, reason = RESULT_SUPPORTED, "gap_met_or_exceeded_min_effect"
-    elif gap <= -min_effect:
-        result, reason = RESULT_REJECTED, "gap_reversed_sign_beyond_min_effect"
+    elif gap <= 0:
+        result, reason = RESULT_REJECTED, "gap_zero_or_reversed_on_fresh_sample"
+    elif p_value <= alpha:
+        result, reason = RESULT_SUPPORTED, "gap_held_on_fresh_sample"
     else:
-        result, reason = RESULT_INCONCLUSIVE, "gap_smaller_than_min_effect"
+        result, reason = RESULT_INCONCLUSIVE, "gap_same_sign_not_significant"
 
     return {
         **base,
@@ -303,6 +359,10 @@ def evaluate_hypothesis(
             "n": population["n"],
         },
         "gap": gap,
+        "p_value": p_value,
+        "alpha": alpha,
+        "fresh_episodes": len(rows),
+        "holdout": "episodes_closed_after_question",
         "unresolved_episodes": unresolved,
         "replication": {
             "passes_required": REPLICATION_PASSES,

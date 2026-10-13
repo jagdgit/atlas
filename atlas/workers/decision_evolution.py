@@ -559,16 +559,34 @@ class DecisionEvolutionWorker(PersistentWorker):
                     data_dir = str(get_config().paths.data)
                 except Exception:  # noqa: BLE001
                     data_dir = None
-            sci = drain_scientist_queue(
-                data_dir,
-                laboratory_id=portfolio_key,
-                llm=self._llm,
-                max_n=max(1, min(int(cfg.get("scientist_passes") or DEFAULT_EVENT_PASSES), 5)),
-            )
+            # One evolution worker serves every lab's scientist queue; F&O events are
+            # covered by post-trade reviews below instead.
+            sci_labs = cfg.get("scientist_labs") or [portfolio_key, "equity_intraday_learner"]
+            sci: dict[str, Any] = {}
+            for lab in dict.fromkeys(str(x) for x in sci_labs if x):
+                sci[lab] = drain_scientist_queue(
+                    data_dir,
+                    laboratory_id=lab,
+                    llm=self._llm,
+                    max_n=max(1, min(int(cfg.get("scientist_passes") or DEFAULT_EVENT_PASSES), 5)),
+                )
             if isinstance(state.get("last_evolution"), dict):
                 state["last_evolution"]["research_scientist"] = sci
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("research scientist drain skipped: %s", exc)
+
+        # Cognitive-loop LLM research: post-trade reviews and proposed questions,
+        # off-hours, one LLM call per tick. Advice only; the nightly cycle decides.
+        try:
+            from atlas.investment.cognitive.llm_research import run_research_step
+            from atlas.investment.laboratory import DEFAULT_FNO_LAB
+
+            if data_dir:
+                research = run_research_step(data_dir, laboratory_id=DEFAULT_FNO_LAB, llm=self._llm)
+                if isinstance(state.get("last_evolution"), dict):
+                    state["last_evolution"]["llm_research"] = research
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("cognitive LLM research skipped: %s", exc)
 
         # UTS.F — Missed Opportunity Ledger (T+20)
         missed_meta: dict[str, Any] = {}

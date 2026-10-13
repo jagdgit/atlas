@@ -22,11 +22,16 @@ import logging
 from typing import Any
 
 from atlas.investment.cognitive.pattern_detector import (
-    MIN_SPLIT_DELTA,
+    DECIDE_TIME_DIMENSIONS,
+    MIN_EFFECT,
     STATUS_CANDIDATE,
 )
 
-VERSION = "cognitive.hypothesis.v1"
+VERSION = "cognitive.hypothesis.v2"
+
+# Verdict rules for the fresh-sample test (experiment_bridge applies them).
+CONFIRM_ALPHA = 0.05
+MIN_FRESH_N = 5
 
 SCOPE_OPTION_PREMIUM = "option_premium"
 SCOPE_UNDERLIER_DIRECTION = "underlier_direction"
@@ -48,7 +53,6 @@ _UNDERLIER_RESTATEMENT: dict[str, str] = {
     "expected_direction": "control_direction_bias",
     "er_model": "model",
     "sma_margin_sign": "control_margin_sign",
-    "underlier_direction": "realized_underlier_direction",
 }
 
 _log = logging.getLogger("atlas.investment.cognitive.hypothesis_engine")
@@ -61,6 +65,13 @@ def _statement(pattern: dict[str, Any]) -> str:
     groups = pattern.get("groups") or {}
     hi = groups.get(str(high)) or {}
     lo = groups.get(str(low)) or {}
+    if pattern.get("source") == "llm_proposed":
+        return (
+            f"Proposed question on {dim}: do episodes with {dim}={high} match their stated "
+            f"direction more often than {dim}={low}? So far {high} is {hi.get('hits')}/{hi.get('n')} "
+            f"and {low} is {lo.get('hits')}/{lo.get('n')}; only trades closed after this "
+            f"question will answer it."
+        )
     return (
         f"On dimension {dim}, episodes with {dim}={high} matched their stated direction "
         f"more often ({hi.get('hits')}/{hi.get('n')}) than {dim}={low} "
@@ -72,10 +83,11 @@ def _statement(pattern: dict[str, Any]) -> str:
 def _falsifier(pattern: dict[str, Any]) -> str:
     dim = pattern.get("dimension")
     return (
-        f"Rejected if, over the pre-declared independent sample, the direction-match "
-        f"rate gap between {dim}={pattern.get('high_group')} and "
-        f"{dim}={pattern.get('low_group')} falls below {MIN_SPLIT_DELTA} or reverses "
-        f"sign. A smaller-but-same-sign gap is INCONCLUSIVE, not support."
+        f"Tested only on episodes closed after this question was asked. Rejected if the "
+        f"direction-match gap between {dim}={pattern.get('high_group')} and "
+        f"{dim}={pattern.get('low_group')} is zero or reverses sign. Supported only if "
+        f"the gap is positive with a one-sided exact-test p <= {CONFIRM_ALPHA}; a "
+        f"same-sign gap short of that is INCONCLUSIVE, not support."
     )
 
 
@@ -120,7 +132,9 @@ def _experiment_specs(pattern: dict[str, Any]) -> list[dict[str, Any]]:
         }
     ]
 
-    restated = _UNDERLIER_RESTATEMENT.get(dim)
+    restated = _UNDERLIER_RESTATEMENT.get(dim) or (
+        f"control_accuracy_by_{dim}" if dim in DECIDE_TIME_DIMENSIONS else None
+    )
     if not restated:
         return specs
 
@@ -136,7 +150,14 @@ def _experiment_specs(pattern: dict[str, Any]) -> list[dict[str, Any]]:
             "dimension": dim,
             "groups": [str(high), str(low)],
             "metric": "direction_match_rate",
-            "min_effect": MIN_SPLIT_DELTA,
+            "min_effect": MIN_EFFECT,
+            "alpha": CONFIRM_ALPHA,
+            "min_fresh_n": MIN_FRESH_N,
+            "holdout": "episodes_closed_after_question",
+            "exclude_experience_ids": sorted(
+                str(x) for x in (pattern.get("source_experience_ids") or []) if x
+            ),
+            "asked_as_of": pattern.get("as_of_ist"),
             "baseline_required": True,
             "evaluator": "walk_forward",
             "mutates_strategy": False,
@@ -176,9 +197,11 @@ def build_hypothesis(
         "statement_source": source,
         "deterministic_statement": deterministic,
         "prediction": (
-            f"If real, the gap on {pattern.get('dimension')} persists in an "
-            f"independent sample at or above {MIN_SPLIT_DELTA}."
+            f"If real, the gap on {pattern.get('dimension')} keeps its sign on episodes "
+            f"closed after this question, at one-sided p <= {CONFIRM_ALPHA}."
         ),
+        "source": pattern.get("source") or "pattern_detector",
+        "mechanism": pattern.get("mechanism"),
         "falsifier": _falsifier(pattern),
         "experiment_specs": specs,
         "evaluable": bool(evaluable),
@@ -194,8 +217,13 @@ def build_hypothesis(
         "confidence": "very_low",
         "honesty": (
             "Question, not a finding. One day of episodes cannot support a verdict. "
-            "Deterministic code chose the evidence, sample, boundaries and falsifier; "
-            f"the statement wording came from {source}."
+            + (
+                "The LLM proposed which split to ask about; "
+                if pattern.get("source") == "llm_proposed"
+                else ""
+            )
+            + "deterministic code counted the evidence and set the sample, boundaries "
+            f"and falsifier; the statement wording came from {source}."
         ),
     }
 
@@ -232,6 +260,8 @@ def persist_hypothesis(
                 "source_pattern": hypothesis.get("source_pattern"),
                 "statement_source": hypothesis.get("statement_source"),
                 "deterministic_statement": hypothesis.get("deterministic_statement"),
+                "source": hypothesis.get("source"),
+                "mechanism": hypothesis.get("mechanism"),
                 "honesty": hypothesis.get("honesty"),
             },
         )

@@ -25,6 +25,7 @@ STORE_REL = Path("investment") / "cognitive" / "cycles"
 
 # One new question per cycle. The point is depth, not volume.
 MAX_NEW_HYPOTHESES = 1
+MAX_LLM_HYPOTHESES = 1
 
 _IST = ZoneInfo("Asia/Kolkata")
 _log = logging.getLogger("atlas.investment.cognitive.loop")
@@ -115,84 +116,113 @@ def run_cycle(
     )
 
     # --- hypotheses + admission ------------------------------------------
-    created = 0
-    for pattern in candidates:
-        if created >= max(0, int(max_new_hypotheses)):
-            break
-        try:
-            from atlas.investment.cognitive.admission import ADMITTED, admit_hypothesis
-            from atlas.investment.cognitive.hypothesis_engine import (
-                build_hypothesis,
-                duplicate_of,
-                persist_hypothesis,
+    def ask(pattern: dict[str, Any]) -> bool:
+        from atlas.investment.cognitive.admission import ADMITTED, admit_hypothesis
+        from atlas.investment.cognitive.hypothesis_engine import (
+            build_hypothesis,
+            duplicate_of,
+            persist_hypothesis,
+        )
+        from atlas.investment.cognitive.queue import record_decision
+
+        dim = str(pattern.get("dimension") or "")
+        source = str(pattern.get("source") or "pattern_detector")
+        if duplicate_of(data_dir, laboratory_id=laboratory_id, dimension=dim):
+            cycle["refused"].append({"dimension": dim, "reason": "duplicate_hypothesis", "source": source})
+            return False
+
+        hypo = build_hypothesis(pattern, laboratory_id=laboratory_id, llm=llm)
+        if hypo is None:
+            return False
+        decision = admit_hypothesis(
+            hypo,
+            data_dir=data_dir,
+            laboratory_id=laboratory_id,
+            underlying_symbols=symbols,
+        )
+        if decision.get("status") != ADMITTED:
+            cycle["refused"].append(
+                {
+                    "dimension": dim,
+                    "reason": decision.get("reason"),
+                    "detail": decision.get("detail"),
+                    "source": source,
+                }
             )
-            from atlas.investment.cognitive.queue import record_decision
-
-            dim = str(pattern.get("dimension") or "")
-            if duplicate_of(data_dir, laboratory_id=laboratory_id, dimension=dim):
-                cycle["refused"].append({"dimension": dim, "reason": "duplicate_hypothesis"})
-                continue
-
-            hypo = build_hypothesis(pattern, laboratory_id=laboratory_id, llm=llm)
-            if hypo is None:
-                continue
-            decision = admit_hypothesis(
-                hypo,
-                data_dir=data_dir,
-                laboratory_id=laboratory_id,
-                underlying_symbols=symbols,
-            )
-            if decision.get("status") != ADMITTED:
-                cycle["refused"].append(
-                    {
-                        "dimension": dim,
-                        "reason": decision.get("reason"),
-                        "detail": decision.get("detail"),
-                    }
-                )
-                record_decision(
-                    data_dir,
-                    laboratory_id=laboratory_id,
-                    hypothesis_id=None,
-                    decision=decision,
-                    statement=hypo.get("statement"),
-                )
-                continue
-
-            stored = persist_hypothesis(data_dir, hypo, laboratory_id=laboratory_id)
-            if not stored.get("ok"):
-                continue
-            decision["falsifier"] = hypo.get("falsifier")
             record_decision(
                 data_dir,
                 laboratory_id=laboratory_id,
-                hypothesis_id=stored.get("hypothesis_id"),
+                hypothesis_id=None,
                 decision=decision,
                 statement=hypo.get("statement"),
             )
-            created += 1
-            cycle["admitted"] += 1
-            cycle.setdefault("hypotheses", []).append(
-                {
-                    "hypothesis_id": stored.get("hypothesis_id"),
-                    "dimension": dim,
-                    "statement": hypo.get("statement"),
-                    "confounded_with": (hypo.get("source_pattern") or {}).get(
-                        "confounded_with"
-                    ),
-                }
+            return False
+
+        stored = persist_hypothesis(data_dir, hypo, laboratory_id=laboratory_id)
+        if not stored.get("ok"):
+            return False
+        decision["falsifier"] = hypo.get("falsifier")
+        record_decision(
+            data_dir,
+            laboratory_id=laboratory_id,
+            hypothesis_id=stored.get("hypothesis_id"),
+            decision=decision,
+            statement=hypo.get("statement"),
+        )
+        cycle["admitted"] += 1
+        cycle.setdefault("hypotheses", []).append(
+            {
+                "hypothesis_id": stored.get("hypothesis_id"),
+                "dimension": dim,
+                "statement": hypo.get("statement"),
+                "source": source,
+                "mechanism": hypo.get("mechanism"),
+                "confounded_with": (hypo.get("source_pattern") or {}).get("confounded_with"),
+            }
+        )
+        return True
+
+    created = 0
+    try:
+        for pattern in candidates:
+            if created >= max(0, int(max_new_hypotheses)):
+                break
+            created += 1 if ask(pattern) else 0
+    except Exception as exc:  # noqa: BLE001
+        stage("hypotheses", False, type(exc).__name__)
+        _log.debug("cognitive cycle: hypothesis stage failed", exc_info=True)
+
+    # LLM-proposed questions get their own allowance; same admission, same test.
+    llm_created = 0
+    try:
+        from atlas.investment.cognitive.llm_research import accepted_proposals, proposal_to_pattern
+
+        for row in accepted_proposals(data_dir, laboratory_id=laboratory_id, as_of_ist=day):
+            if llm_created >= MAX_LLM_HYPOTHESES:
+                break
+            pattern = proposal_to_pattern(
+                row["proposal"], episodes, laboratory_id=laboratory_id, as_of_ist=day
             )
-        except Exception as exc:  # noqa: BLE001
-            stage("hypotheses", False, type(exc).__name__)
-            _log.debug("cognitive cycle: hypothesis stage failed", exc_info=True)
-            break
+            if pattern is not None and ask(pattern):
+                llm_created += 1
+    except Exception as exc:  # noqa: BLE001
+        stage("llm_hypotheses", False, type(exc).__name__)
+        _log.debug("cognitive cycle: LLM proposal stage failed", exc_info=True)
+    cycle["llm_hypotheses_created"] = llm_created
+    created += llm_created
     cycle["hypotheses_created"] = created
     cycle["stages"].setdefault("hypotheses", {"ok": True, "detail": f"{created} created"})
 
     # --- results → learning candidates → belief proposals -----------------
     try:
         from atlas.investment.cognitive.beliefs import propose_revision
-        from atlas.investment.cognitive.experiment_bridge import load_result
+        from atlas.investment.cognitive.experiment_bridge import (
+            RESULT_NOT_EVALUABLE,
+            RETRYABLE_REASONS,
+            evaluate_hypothesis,
+            load_result,
+            persist_result,
+        )
         from atlas.investment.cognitive.queue import load_queue
         from atlas.investment.cognitive.validator import (
             build_learning_candidate,
@@ -210,7 +240,36 @@ def run_cycle(
             result = load_result(
                 data_dir, laboratory_id=laboratory_id, hypothesis_id=hid
             )
+            spec = row.get("experiment_spec")
+            pending = not result or (
+                result.get("result") == RESULT_NOT_EVALUABLE
+                and result.get("reason") in RETRYABLE_REASONS
+            )
+            if pending and isinstance(spec, dict) and spec.get("evaluable"):
+                # Deterministic and cheap: re-test every night as fresh trades arrive.
+                result = evaluate_hypothesis(
+                    data_dir,
+                    laboratory_id=laboratory_id,
+                    hypothesis_id=hid,
+                    experiment_spec=spec,
+                    episodes=episodes,
+                )
+                persist_result(data_dir, result)
+                cycle["retested"] = int(cycle.get("retested") or 0) + 1
             if not result:
+                continue
+            if (
+                result.get("result") == RESULT_NOT_EVALUABLE
+                and result.get("reason") in RETRYABLE_REASONS
+            ):
+                cycle.setdefault("awaiting", []).append(
+                    {
+                        "hypothesis_id": hid,
+                        "dimension": result.get("dimension"),
+                        "reason": result.get("reason"),
+                        "detail": result.get("detail"),
+                    }
+                )
                 continue
             stored = get_hypothesis(data_dir, hid, laboratory_id=laboratory_id) or {}
             extra = stored.get("extra") if isinstance(stored.get("extra"), dict) else {}
@@ -260,8 +319,38 @@ def run_cycle(
         stage("validation", False, type(exc).__name__)
 
     # --- C9: what is still open -------------------------------------------
-    cycle["open_questions"] = _next_questions(data_dir, laboratory_id=laboratory_id)
+    waiting = [
+        {
+            "question": f"{row.get('dimension')}: waiting for trades closed after the question ({row.get('detail')})",
+            "hypothesis_id": row.get("hypothesis_id"),
+            "why": "verdicts come only from a fresh sample",
+        }
+        for row in cycle.get("awaiting") or []
+    ]
+    asked = {str(r.get("hypothesis_id")) for r in waiting}
+    cycle["open_questions"] = (
+        waiting
+        + [
+            q
+            for q in _next_questions(data_dir, laboratory_id=laboratory_id)
+            if str(q.get("hypothesis_id")) not in asked
+        ]
+    )[:12]
     stage("next_questions", True, f"{len(cycle['open_questions'])} open")
+    try:
+        from atlas.investment.cognitive.llm_research import accepted_proposals, load_trade_reviews
+
+        reviews = load_trade_reviews(data_dir, laboratory_id)
+        cycle["llm_research"] = {
+            "trade_reviews_total": len(reviews),
+            "trade_reviews_today": sum(1 for r in reviews if str(r.get("reviewed_at") or "")[:10] == day),
+            "proposals_accepted_recent": len(
+                accepted_proposals(data_dir, laboratory_id=laboratory_id, as_of_ist=day)
+            ),
+            "llm_hypotheses_created": llm_created,
+        }
+    except Exception:  # noqa: BLE001
+        _log.debug("cognitive cycle: llm research summary skipped", exc_info=True)
 
     cycle["ladder"] = {
         "episodes": cycle["episodes"],
@@ -327,6 +416,17 @@ def _next_questions(
                         ),
                         "hypothesis_id": cand.get("hypothesis_id"),
                         "why": "inconclusive: needs a larger independent sample",
+                    }
+                )
+            elif result == RESULT_NOT_EVALUABLE and cand.get("experiment_reason") == "post_hoc_dimension":
+                out.append(
+                    {
+                        "question": (
+                            f"closed: {cand.get('dimension')} is only known after the trade, "
+                            "so it can't be tested as an entry rule"
+                        ),
+                        "hypothesis_id": cand.get("hypothesis_id"),
+                        "why": "post-hoc dimension",
                     }
                 )
             elif result == RESULT_NOT_EVALUABLE:
@@ -424,8 +524,22 @@ def format_cognitive_loop_section(cycle: dict[str, Any] | None) -> list[str]:
             validated=ladder.get("validated", 0),
         )
     )
+    research = cycle.get("llm_research") or {}
+    if research:
+        lines.append(
+            "  LLM research: trade reviews {today} today ({total} total), "
+            "{acc} accepted proposals waiting, {made} LLM question(s) admitted".format(
+                today=research.get("trade_reviews_today", 0),
+                total=research.get("trade_reviews_total", 0),
+                acc=research.get("proposals_accepted_recent", 0),
+                made=research.get("llm_hypotheses_created", 0),
+            )
+        )
     for row in (cycle.get("hypotheses") or [])[:2]:
-        lines.append(f"  asked [{row.get('dimension')}]: {row.get('statement')}")
+        src = " (LLM-proposed)" if row.get("source") == "llm_proposed" else ""
+        lines.append(f"  asked [{row.get('dimension')}]{src}: {row.get('statement')}")
+        if row.get("mechanism"):
+            lines.append(f"    mechanism offered: {row.get('mechanism')}")
     for row in (cycle.get("results") or [])[:3]:
         lines.append(
             f"  result [{row.get('hypothesis_id', '')[:8]}]: {row.get('result')} "

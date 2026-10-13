@@ -27,6 +27,16 @@ def bar_path(data_dir: str | Path, symbol: str) -> Path | None:
     sym = str(symbol or "").strip().upper()
     if not sym:
         return None
+    try:
+        from atlas.investment.bar_store import symbol_path
+
+        # The writer's own name (NIFTY → _NSEI.json); a bare index name never
+        # matched it, so every NIFTY/BANKNIFTY episode read as unreplayable.
+        canonical = symbol_path(data_dir, sym)
+        if canonical is not None and canonical.is_file():
+            return canonical
+    except Exception:  # noqa: BLE001
+        pass
     candidates = []
     if sym.endswith(".NS") or sym.endswith(".BO"):
         candidates.append(root / f"{sym}.json")
