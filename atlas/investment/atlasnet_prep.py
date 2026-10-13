@@ -71,13 +71,11 @@ def _parse_ts(raw: Any) -> datetime | None:
     if raw is None or raw == "":
         return None
     try:
-        s = str(raw).replace("Z", "+00:00")
-        # date-only
-        if len(s) <= 10 and "T" not in s:
-            return datetime.fromisoformat(s)
-        return datetime.fromisoformat(s)
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except Exception:  # noqa: BLE001
         return None
+    # Date-only and naive values are IST (ts_ist); mixing them with aware stamps used to 500.
+    return ts if ts.tzinfo else ts.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
 
 
 def evaluate_atlasnet_hard_gate(

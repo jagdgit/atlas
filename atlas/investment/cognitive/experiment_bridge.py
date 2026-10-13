@@ -375,7 +375,7 @@ def handle_hypothesis_test(item: dict[str, Any], data_dir: str) -> dict[str, Any
     try:
         from atlas.investment.fno_closed_loop_dataset import load_closed_loop_episodes
 
-        episodes = load_closed_loop_episodes(data_dir, laboratory_id=lab)
+        episodes = load_closed_loop_episodes(data_dir, laboratory_id=lab, eligible_only=True)
     except Exception:  # noqa: BLE001
         _log.debug("closed-loop episodes unavailable for hypothesis test", exc_info=True)
 

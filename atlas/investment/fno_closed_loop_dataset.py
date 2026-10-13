@@ -464,14 +464,25 @@ def load_closed_loop_episodes(
     *,
     laboratory_id: str = LABORATORY_ID,
     max_days: int = 60,
+    eligible_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Every persisted episode, newest day last. The cognitive loop reasons over
-    all closed episodes it has, not only today's."""
+    all closed episodes it has, not only today's.
+
+    ``eligible_only`` drops rows marked ``learning_eligible: false`` and any
+    experience in the quarantine manifest (rows written before a quarantine
+    don't carry the flag).
+    """
     if not data_dir:
         return []
     root = Path(data_dir) / STORE_REL / str(laboratory_id)
     if not root.is_dir():
         return []
+    held: set[str] = set()
+    if eligible_only:
+        from atlas.investment.learning_quarantine import quarantined_ids
+
+        held = set(quarantined_ids(data_dir, laboratory_id=str(laboratory_id)))
     rows: list[dict[str, Any]] = []
     for path in sorted(root.glob("*.jsonl"))[-max_days:]:
         try:
@@ -479,8 +490,14 @@ def load_closed_loop_episodes(
                 if not line.strip():
                     continue
                 obj = json.loads(line)
-                if isinstance(obj, dict):
-                    rows.append(obj)
+                if not isinstance(obj, dict):
+                    continue
+                if eligible_only and (
+                    obj.get("learning_eligible") is False
+                    or str(obj.get("experience_id") or "") in held
+                ):
+                    continue
+                rows.append(obj)
         except (OSError, json.JSONDecodeError):
             continue
     return rows

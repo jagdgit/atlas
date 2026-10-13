@@ -73,7 +73,7 @@ def run_cycle(
     try:
         from atlas.investment.fno_closed_loop_dataset import load_closed_loop_episodes
 
-        episodes = load_closed_loop_episodes(data_dir, laboratory_id=laboratory_id)
+        episodes = load_closed_loop_episodes(data_dir, laboratory_id=laboratory_id, eligible_only=True)
         cycle["episodes"] = len(episodes)
         stage("episodes", bool(episodes), f"{len(episodes)} closed episodes")
     except Exception as exc:  # noqa: BLE001

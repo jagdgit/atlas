@@ -2,6 +2,30 @@
 
 from __future__ import annotations
 
+import json as _json
+
+
+def test_eligible_only_drops_flagged_and_quarantined_episodes(tmp_path):
+    from atlas.investment.fno_closed_loop_dataset import STORE_REL, load_closed_loop_episodes
+    from atlas.investment.learning_quarantine import quarantine_experiences
+
+    root = tmp_path / STORE_REL / "india_fno_learner"
+    root.mkdir(parents=True)
+    rows = [
+        {"experience_id": "ok-1", "learning_eligible": True},
+        {"experience_id": "late-1", "learning_eligible": False},
+        {"experience_id": "old-quarantined"},
+        {"experience_id": "old-ok"},
+    ]
+    (root / "2026-10-13.jsonl").write_text("\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    quarantine_experiences(
+        tmp_path, "india_fno_learner", experience_ids=["old-quarantined"], reasons=["test"], note="test"
+    )
+    all_ids = [r["experience_id"] for r in load_closed_loop_episodes(tmp_path)]
+    assert all_ids == ["ok-1", "late-1", "old-quarantined", "old-ok"]
+    kept = [r["experience_id"] for r in load_closed_loop_episodes(tmp_path, eligible_only=True)]
+    assert kept == ["ok-1", "old-ok"]
+
 import json
 from pathlib import Path
 

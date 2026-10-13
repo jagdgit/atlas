@@ -134,3 +134,12 @@ def test_lane_partition_key_stable():
     }
     key = lane_partition_key(row)
     assert "sma_cross_rsi" in key
+
+
+def test_parse_ts_mixed_naive_and_aware_are_comparable():
+    from atlas.investment.atlasnet_prep import _parse_ts
+
+    stamps = [_parse_ts("2026-10-13"), _parse_ts("2026-10-13T10:00:00"), _parse_ts("2026-10-13T04:00:00Z")]
+    assert all(s is not None and s.tzinfo is not None for s in stamps)
+    assert sorted(stamps)[0] == stamps[0]
+    assert _parse_ts("not-a-date") is None
