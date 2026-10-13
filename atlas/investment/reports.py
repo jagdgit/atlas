@@ -1471,6 +1471,19 @@ def format_evening_report(
             ]
         )
     try:
+        from atlas.investment.fno_shadow import format_shadow_section
+
+        shadow_dd = portfolio.get("data_dir") if isinstance(portfolio, dict) else None
+        if not shadow_dd:
+            from atlas.config import get_config
+
+            shadow_dd = str(get_config().paths.data)
+        lines.extend(
+            format_shadow_section(shadow_dd, laboratory_id="india_fno_learner", ist_day=str(as_of))
+        )
+    except Exception:  # noqa: BLE001
+        lines.extend(["", "══ F&O real vs shadow ══", "(section failed to render)"])
+    try:
         from atlas.investment.nse_xbrl.digest import format_fundamental_intelligence_section
 
         lines.extend(

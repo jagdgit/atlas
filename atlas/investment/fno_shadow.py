@@ -296,6 +296,74 @@ def load_shadow_outcomes(
     return out
 
 
+def _real_closes_day(data_dir: str | Path, laboratory_id: str, ist_day: str) -> dict[str, Any]:
+    from atlas.investment.learning_quarantine import is_learning_eligible, quarantined_ids
+    from atlas.investment.learning_objects import load_learning_events
+
+    held = quarantined_ids(data_dir, laboratory_id)
+    exps = [
+        e
+        for e in load_learning_events(data_dir, laboratory_id, as_of_ist=ist_day)
+        if e.get("kind") == "EXPERIENCE" and e.get("pnl") is not None
+    ]
+    eligible = [e for e in exps if is_learning_eligible(e, quarantined=held)]
+    pnls = [float(e.get("pnl") or 0) for e in exps]
+    return {
+        "closed": len(exps),
+        "eligible": len(eligible),
+        "wins": sum(1 for p in pnls if p > 0),
+        "pnl_inr_sum": round(sum(pnls), 2),
+    }
+
+
+def format_shadow_section(
+    data_dir: str | Path | None,
+    *,
+    laboratory_id: str,
+    ist_day: str,
+) -> list[str]:
+    """Evening-mail lines: real closes vs counterfactual shadows for one day."""
+    if not data_dir:
+        return []
+    shadow = summarize_shadow_day(data_dir, laboratory_id, ist_day)
+    try:
+        real = _real_closes_day(data_dir, laboratory_id, ist_day)
+    except Exception:  # noqa: BLE001
+        real = None
+    lines = ["", f"══ F&O real vs shadow — {ist_day} ══"]
+    if real is not None:
+        lines.append(
+            f"  Real closes: {real['closed']} (learning-eligible {real['eligible']}) · "
+            f"wins {real['wins']} · P&L ₹{real['pnl_inr_sum']:,.2f}"
+        )
+    lines.append(
+        f"  Shadows (blocked by capital/cash): opened {shadow['opened']} · "
+        f"evaluable {shadow['closed_evaluable']} · not evaluable {shadow['not_evaluable']} · "
+        f"still open {shadow['still_open']}"
+    )
+    if shadow["closed_evaluable"]:
+        lines.append(
+            f"  Shadow outcome: wins {shadow['wins']}/{shadow['closed_evaluable']} · "
+            f"counterfactual P&L ₹{shadow['pnl_inr_sum']:,.2f}"
+        )
+        rows = [
+            r
+            for r in _read(shadow_path(data_dir, laboratory_id, ist_day))
+            if r.get("kind") == KIND_CLOSE and r.get("status") == "CLOSED"
+        ]
+        for r in sorted(rows, key=lambda x: float((x.get("outcome") or {}).get("pnl_inr") or 0))[:10]:
+            out = r.get("outcome") or {}
+            lines.append(
+                f"    · {r.get('symbol')}: {out.get('return_pct_on_premium')}% on premium "
+                f"(₹{float(out.get('pnl_inr') or 0):,.2f})"
+            )
+    lines.append(
+        "  Shadows are counterfactual: no ledger effect, LTP fills without slippage/fees "
+        "(optimistic), same-day rows share one market move."
+    )
+    return lines
+
+
 def summarize_shadow_day(data_dir: str | Path | None, laboratory_id: str, ist_day: str) -> dict[str, Any]:
     rows = _read(shadow_path(data_dir, laboratory_id, ist_day))
     opens = [r for r in rows if r.get("kind") == KIND_OPEN]

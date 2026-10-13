@@ -161,6 +161,32 @@ def test_worker_overlay_records_shadow_when_capital_budget_blocks(
         assert not overlay.get("shadow_id") and rows == []
 
 
+def test_evening_section_compares_real_and_shadow(tmp_path):
+    import json
+
+    learn = tmp_path / "investment" / "learning" / LAB
+    learn.mkdir(parents=True)
+    rows = [
+        {"kind": "EXPERIENCE", "experience_id": "r1", "laboratory_id": LAB, "symbol": "X", "pnl": -500.0},
+        {
+            "kind": "EXPERIENCE",
+            "experience_id": "r2",
+            "laboratory_id": LAB,
+            "symbol": "Y",
+            "pnl": 300.0,
+            "learning_eligibility": {"eligible": False},
+        },
+    ]
+    (learn / "2026-10-14.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    _enter(tmp_path)
+    fno_shadow.close_due_shadows(tmp_path, laboratory_id=LAB, ltp_fn=lambda s: 130.0, now=_at(15, 22))
+    text = "\n".join(fno_shadow.format_shadow_section(tmp_path, laboratory_id=LAB, ist_day="2026-10-14"))
+    assert "Real closes: 2 (learning-eligible 1) · wins 1 · P&L ₹-200.00" in text
+    assert "opened 1 · evaluable 1" in text
+    assert "wins 1/1 · counterfactual P&L ₹1,950.00" in text
+    assert "NIFTY26OCT22500PE: 30.0% on premium" in text
+
+
 def test_shadows_write_only_their_own_store(tmp_path):
     _enter(tmp_path)
     fno_shadow.close_due_shadows(tmp_path, laboratory_id=LAB, ltp_fn=lambda s: 110.0, now=_at(15, 25))
