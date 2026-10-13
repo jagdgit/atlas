@@ -185,6 +185,24 @@ def test_paper_worker_outage_not_cleared_by_market_close(tmp_path: Path):
     assert "fno:paper_worker" in oh.load_state(tmp_path, DAY)["open_incidents"]
 
 
+def test_morning_packs_do_not_verify_afternoon_worker_outage(tmp_path: Path):
+    """2026-10-13: packs written until ~11:15, worker starved, incident 'verified' at 15:30."""
+    _nfo_state(tmp_path, "READY")
+    _packs(tmp_path, status="READY", reason="ok", at=_at(11, 13))
+    mail = _Mail()
+    t = _at(12, 18)
+    for _ in range(3):
+        _run(tmp_path, READY, t, None, mail)
+        t += timedelta(minutes=2)
+    assert oh.load_state(tmp_path, DAY)["incidents"]["fno:paper_worker"]["status"] == oh.STATUS_OPEN
+    for hh in (15, 30), (15, 32), (15, 34), (16, 0):
+        _run(tmp_path, READY, _at(*hh), None, mail)
+    inc = oh.load_state(tmp_path, DAY)["incidents"]["fno:paper_worker"]
+    assert inc["status"] == oh.STATUS_UNRESOLVED
+    assert inc["resolution"] == "market_window_ended_without_recovery"
+    assert not any("RESOLVED" in s for s, _ in mail.sent)
+
+
 def test_paper_worker_recovered_only_when_pack_written(tmp_path: Path):
     _nfo_state(tmp_path, "READY")
     mail = _Mail()

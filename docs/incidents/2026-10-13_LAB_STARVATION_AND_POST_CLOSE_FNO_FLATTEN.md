@@ -48,6 +48,8 @@ Ten same-direction PE buys on highly correlated underliers in 3 minutes, sized "
 ### RC5 — Monitoring auto-resolves on session end
 The F&O-pack-staleness alert resolved at 15:30 because the session closed, not because packs resumed. The operator therefore saw "RESOLVED" while the lab had not run for 4+ hours.
 
+Exact mechanism: `ops_health` treated `packs > 0` (any pack file for the day) as "pack_write_confirmed". Packs from before 11:15 satisfied that at 15:30. Fixed: recovery now requires `latest_pack_at > incident.opened_at`; regression test `test_morning_packs_do_not_verify_afternoon_worker_outage`.
+
 ## 3. Verdict on the post-close F&O sells
 
 | Question | Answer |

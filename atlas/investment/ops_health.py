@@ -500,6 +500,14 @@ def assess_fno(
     return {"category": category, "findings": findings, "summary": summary}
 
 
+def _pack_written_since_open(summary: dict[str, Any], incident: dict[str, Any]) -> bool:
+    latest = _parse_ts(summary.get("latest_pack_at"))
+    opened = _parse_ts(incident.get("opened_at"))
+    if latest is None:
+        return False
+    return opened is None or latest > opened
+
+
 # --- systemic safety blocks (O4) -------------------------------------------------------
 
 
@@ -942,7 +950,7 @@ def _tick(
         # Packs present while a paper-worker incident is pending confirm → verified recovery.
         if (
             key == "fno:paper_worker"
-            and int(fno["summary"].get("packs") or 0) > 0
+            and _pack_written_since_open(fno["summary"], inc)
             and inc.get("recovery") in {"RECOVERED_PENDING_CONFIRM", "IN_PROGRESS", "PENDING"}
         ):
             inc["status"] = STATUS_RECOVERED_VERIFIED
@@ -988,9 +996,8 @@ def _tick(
             STATUS_RECOVERED_VERIFIED,
         }:
             continue
-        packs_now = int(fno["summary"].get("packs") or 0)
-        # A resume alone is not verification — a pack write (or READY pack) is.
-        if key == "fno:paper_worker" and packs_now > 0:
+        # A resume alone is not verification — a pack written after the incident opened is.
+        if key == "fno:paper_worker" and _pack_written_since_open(fno["summary"], inc):
             inc["status"] = STATUS_RECOVERED_VERIFIED
             inc["resolved_at"] = clock.isoformat()
             inc["resolution"] = "pack_write_confirmed"
