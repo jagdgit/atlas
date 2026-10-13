@@ -96,7 +96,9 @@ Current eligible sample after quarantine:
 |-----|-----:|-------------:|-----:|---------|
 | `india_fno_learner` | 39 | 6 | 23 | Each day is ~one correlated market bet; effectively ~6 observations |
 | `equity_intraday_learner` | 40 | 13 | 23 | Cleanest series, but ≤ 3 names/tick and zero fees |
-| `india_equity_learner` | 137 | 5 | 3 | **130 rows are from 2026-09-21** (exploratory switch churn on HBLPOWER) — needs review/quarantine like today's F&O day |
+| `india_equity_learner` | 10 | 5 | 3 | Was 137: 137 HBLPOWER.NS `switch_exploratory` sell-and-rebuy exits on 2026-09-21 (72 @ ₹760, P&L ₹0.00 each) **quarantined** as `switch_churn_zero_information` (operator decision 2026-10-13) |
+
+The swing lab therefore has almost no learning evidence: 10 closes across 5 days.
 
 Realistic timeline if the labs run cleanly every session from now: first defensible L5-type statements on the intraday lab in **~3–4 weeks**; F&O in **~6–8 weeks** (needs ~25–30 independent days with the new capital limit); swing equity in **months** (few closes per week by design).
 
@@ -146,8 +148,8 @@ The fill email (`reports.format_trade_report`) prints a "Decision detail" block 
 |---|--------|-------|------|
 | 1 | Restart to load fixes F1–F4 + yesterday's P0.5–P0.7 + capital budget: `sudo systemctl restart atlas` | Operator | Tonight (after 16:00) |
 | 2 | Tomorrow 09:30 / 12:00 / 15:25: confirm `host_guard` status shows `admitted_market_critical` for both labs and `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open experiments; flatten fires 15:20–15:30 | Agent (read-only) | 2026-10-14 |
-| 3 | Decide F&O cash: keep ₹85.7k (recommended) or journaled deposit | Operator | Before 09:15 tomorrow |
-| 4 | Decide on quarantining the 2026-09-21 swing churn (130 rows) | Operator | This week |
+| 3 | ~~Decide F&O cash~~ — **decided: keep ₹85.7k**, no deposit, ledger unchanged | Operator | Done |
+| 4 | ~~2026-09-21 swing churn~~ — **quarantined** (137 rows). Root cause to fix: switch review re-selling and re-buying the same name at the same price (add same-symbol / zero-advantage guard) | Agent | Guard: next code slice |
 | 5 | Ollama: unload during 09:00–16:00 (keep-alive 0) or schedule LLM work after close | Operator/agent | This week |
 | 6 | Held-option exit rules (premium stop, underlier reversal, time stop) instead of idling `legacy_non_atm_option` | Agent | Next code slice |
 | 7 | Alerting: staleness alerts must not auto-resolve at session end; add "admitted lab ticks in session" health check | Agent | Next code slice |
