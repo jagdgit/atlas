@@ -3989,10 +3989,11 @@ class PaperTradingWorker(PersistentWorker):
         cash_now = float(snapshot.get("cash") or 0)
         starting_cash = None
         try:
-            starting_cash = float(
-                snapshot.get("starting_cash")
-                or snapshot.get("net_contributed_capital")
-                or 0
+            # Deposits raise contributed capital above the persona starting_cash;
+            # the reserve must scale with the larger of the two.
+            starting_cash = max(
+                float(snapshot.get("starting_cash") or 0),
+                float(snapshot.get("net_contributed_capital") or 0),
             ) or None
         except (TypeError, ValueError):
             starting_cash = None
