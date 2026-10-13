@@ -6886,6 +6886,23 @@ class PaperTradingWorker(PersistentWorker):
                 )
             except Exception:  # noqa: BLE001
                 lab_books = None
+            chain: list[str] | None = None
+            trade_id = (trade or {}).get("id") or (trade or {}).get("trade_id")
+            if trade_id:
+                try:
+                    from atlas.config import get_config as _gc_chain
+                    from atlas.investment.decision_chain_mail import build_decision_chain
+
+                    chain = build_decision_chain(
+                        str(_gc_chain().paths.data),
+                        laboratory_id=str(portfolio_key or "india_equity_learner"),
+                        symbol=symbol,
+                        side=side,
+                        trade_id=str(trade_id),
+                        now=self._clock(),
+                    )
+                except Exception:  # noqa: BLE001
+                    chain = None
             self._investor_mailer.send_trade(
                 side=side,
                 symbol=symbol,
@@ -6900,6 +6917,7 @@ class PaperTradingWorker(PersistentWorker):
                 laboratory_id=str(portfolio_key or "india_equity_learner"),
                 portfolio_key=str(portfolio_key or "india_equity_learner"),
                 lab_books=lab_books or None,
+                decision_chain=chain or None,
             )
         except Exception:  # noqa: BLE001 - never fail a fill on email
             self._logger.debug("investor trade email failed", exc_info=True)

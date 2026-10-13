@@ -262,6 +262,7 @@ def write_trade_lineage(
     evidence_snapshot_ref: str | None = None,
     evidence_snapshot: dict[str, Any] | None = None,
     instrument_path: str | None = None,
+    exit_timing: str | None = None,
     logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """Persist lineage in shadow mode. Never raises to the fill path."""
@@ -349,6 +350,7 @@ def write_trade_lineage(
         "parent_decision_id": effective_parent,
         "exit_decision_id": exit_decision_id if side == "sell" else None,
         "exit_reason_code": exit_reason_code if side == "sell" else None,
+        "exit_timing": exit_timing if side == "sell" else None,
         "order_intent": order_intent,
         "order_intent_id": (order_intent or {}).get("order_intent_id")
         if isinstance(order_intent, dict)
@@ -446,6 +448,7 @@ def shadow_after_fill(
             evidence_snapshot_ref=ctx.get("evidence_snapshot_ref"),
             evidence_snapshot=ctx.get("evidence_snapshot"),
             instrument_path=instrument_path or ctx.get("instrument_path"),
+            exit_timing=ctx.get("exit_timing"),
             logger=log,
         )
     except Exception as exc:  # noqa: BLE001

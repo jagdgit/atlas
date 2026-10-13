@@ -2325,6 +2325,7 @@ def format_trade_report(
     laboratory_id: str | None = None,
     portfolio_key: str | None = None,
     lab_books: list[dict[str, Any]] | None = None,
+    decision_chain: list[str] | None = None,
 ) -> tuple[str, str]:
     side_u = (side or "").upper()
     from atlas.investment.laboratory import normalize_laboratory_id
@@ -2363,6 +2364,10 @@ def format_trade_report(
     if reason:
         lines.append("")
         lines.append(f"Why (tick summary): {reason}")
+    if decision_chain:
+        lines.append("")
+        lines.append("Decision chain (from stored lineage, decision packet and prediction):")
+        lines.extend(decision_chain)
     if decision:
         lines.append("")
         lines.append("Decision detail:")
