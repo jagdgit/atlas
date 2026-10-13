@@ -157,12 +157,12 @@ Example rendered from today's real records (NIFTY26OCT22500PE): bought 65 @ 249.
 | 1 | Restart to load everything in §7 that says "needs restart": `sudo systemctl restart atlas` | Operator | Tonight, before 09:15 on 2026-10-14 |
 | 2 | Tomorrow 09:30 / 12:00 / 15:25: confirm `host_guard` status shows `admitted_market_critical` for both labs and `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open experiments; flatten fires 15:20–15:30 | Agent (read-only) | 2026-10-14 |
 | 3 | ~~Decide F&O cash~~ — **decided: keep ₹85.7k**, no deposit, ledger unchanged | Operator | Done |
-| 4 | ~~2026-09-21 swing churn~~ — **quarantined** (137 rows). Root cause to fix: switch review re-selling and re-buying the same name at the same price (add same-symbol / zero-advantage guard) | Agent | Guard: next code slice |
+| 4 | ~~2026-09-21 swing churn~~ — **quarantined** (137 rows). Root cause traced: a loop, not a same-symbol switch — switch IDEA→HBLPOWER (adv ≈ +10%) → `plc_b_concentration` immediately sold HBLPOWER → SMA re-bought IDEA → switch again, ~136× at ₹760 (zero P&L each). **Already fixed on 2026-09-28** (`c97f2a6`): same-day re-entry lock (`wash_lock.reentry_blocked`) and `challenger_breaches_concentration` now gate the switch buy. No recurrence since (0 swing buy/sell fills 2026-09-25 → 10-13) | Agent | Done |
 | 5 | Ollama: unload during 09:00–16:00 (keep-alive 0) or schedule LLM work after close | Operator/agent | This week |
 | 6 | ~~Held-option exit rules~~ — **built**: every tick, any held Lab v1 option on the underlier (ATM or not) is checked on its own live LTP: exit at −40% premium (`premium_stop`) or when the trend flips against it (`underlier_reversal`); profit target available but off. No exit without a live mark. No same-day re-entry on that underlier after a managed exit. Session flatten 15:20 still closes the rest. **All of these numbers, plus max open positions and the cash reserve, live in one operator file: `/data/atlas_data/investment/fno/lab_v1_risk_settings.json`** (read every tick; out-of-range values are ignored with a warning; it overrides `lab_v1_policy.json`) | Agent | Live after restart |
 | 7 | Alerting: ~~staleness alerts must not auto-resolve at session end~~ — **fixed**: the F&O worker incident counted "any pack today" as recovery, so morning packs "verified" the 15:30 RESOLVED mail. Now only a pack written after the incident opened counts; otherwise it ends `UNRESOLVED_OPERATOR_ACTION_REQUIRED`. ~~"Admitted lab ticks in session" check~~ — **built** for all three labs (§7, `27c4890`): P0 email when a lab has no admitted in-session tick for 20 min (from 09:35), naming the deferral cause; never self-resolves at the close; evening digest lists admitted/deferred ticks per lab | Agent | Live after restart |
 | 8 | ~~Decision chain in trade emails (§5)~~ — **built** (`45d85dd`) | Agent | Live after restart |
-| 9 | Switch review must not mint SELL decisions when session is closed | Agent | Small fix |
+| 9 | ~~Switch review must not mint SELL decisions when session is closed~~ — **fixed** (`29d38fd`): a recommended switch that cannot execute now (session closed, execution disabled, per-tick cap) is recorded as a HOLD packet with `switch_not_executed:<reason>`; the review and its ROTATE recommendation stay recorded. Same noise was 50–153 phantom SELLs/day on 2026-09-21..24 | Agent | Live after restart |
 | 10 | FEL rows: add `sma_margin`; F&O feature capture (IV/Greeks/DTE/VIX/OI) into the entry snapshot | Agent | R0 |
 | 11 | Realistic cost profile for learning evaluation on all labs (keep zero-fee ledger separate — F18) | Agent | OI-DELI0 P0.2/P0.3 |
 | 12 | Propensity logging on every decision (needed for any bandit evaluation) | Agent | R0 |
@@ -192,6 +192,8 @@ The running service was restarted on `d9a99a9`. Everything after that is committ
 | `27c4890` | **Per-lab tick admission ledger + stale-lab P0 alert** (§7.4) | After restart |
 | `c2afba1` | This change log and doc updates | Doc |
 | `45d85dd` | **Decision chain in trade emails** (§5): why it bought, why it sold, outcome vs prediction, learning eligibility; lineage keeps `exit_timing` | After restart |
+| `a402745` | Docs for the decision chain | Doc |
+| `29d38fd` | Switch review records an unexecutable switch as HOLD, not SELL (§6 #9) | After restart |
 
 ### 7.2 Data changes (all append-only; no ledger edits)
 
@@ -226,13 +228,13 @@ A quarantine is undone by appending a `release` row for the same experience id; 
 
 ### 7.5 Tests added or changed
 
-`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`, `tests/test_decision_chain_mail.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
+`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`, `tests/test_decision_chain_mail.py`, `tests/test_switch_packet_action.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
 
 ### 7.6 Checks for 2026-10-14 (agent, read-only)
 
 | Time IST | Check |
 |----------|-------|
-| 09:30 | Service on `45d85dd` or later; `host_guard` shows `admitted_market_critical`; `lab_ticks/2026-10-14.json` has in-session ticks for all three labs |
+| 09:30 | Service on `29d38fd` or later; no swing `sell` packets with `fill_trade_id: null` recorded overnight; `host_guard` shows `admitted_market_critical`; `lab_ticks/2026-10-14.json` has in-session ticks for all three labs |
 | 12:00 | No `lab:*:ticks` incident; `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open; any managed exit has a `premium_stop` / `underlier_reversal` lineage code; shadows only on capital/cash blocks |
 | 15:25 | F&O close-out ran between 15:20 and 15:30; every exit `learning_eligible: true` |
 | Any fill | Fill email has a "Decision chain" block; SELLs show "linked on the sell" (P0.5 entry link) rather than "matched by symbol" |

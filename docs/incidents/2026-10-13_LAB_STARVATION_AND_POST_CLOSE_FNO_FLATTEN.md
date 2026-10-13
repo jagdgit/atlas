@@ -100,6 +100,6 @@ Tests: `tests/test_host_guard.py` (critical lane in session, generic gate for re
 4. ~~Trade emails lack the decision chain~~ — built in `45d85dd` (review doc §5).
 
 F1–F5 are live (service restarted on `d9a99a9`). F6–F8 need the next operator restart. Full change log: review doc §7.
-5. **Equity swing pre-market noise** — 10 `switch_exploratory` SELL decisions on HBLPOWER.NS recorded 01:32–02:18 IST (market closed, none executed). Switch review should not mint SELL decisions outside the session.
+5. **Equity swing pre-market noise** — 10 `switch_exploratory` SELL decisions on HBLPOWER.NS recorded 01:32–02:18 IST (market closed, none executed). Switch review should not mint SELL decisions outside the session. **Fixed in `29d38fd`** (recorded as HOLD with `switch_not_executed:session_closed`).
 
 See `docs/2026-10-13_LAB_OPERATIONS_AND_LEARNING_REVIEW.md` for per-lab mechanics, learning, RL assessment and the full next-action list.
