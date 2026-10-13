@@ -146,21 +146,83 @@ The fill email (`reports.format_trade_report`) prints a "Decision detail" block 
 
 | # | Action | Owner | When |
 |---|--------|-------|------|
-| 1 | Restart to load fixes F1–F4 + yesterday's P0.5–P0.7 + capital budget: `sudo systemctl restart atlas` | Operator | Tonight (after 16:00) |
+| 1 | Restart to load everything in §7 that says "needs restart": `sudo systemctl restart atlas` | Operator | Tonight, before 09:15 on 2026-10-14 |
 | 2 | Tomorrow 09:30 / 12:00 / 15:25: confirm `host_guard` status shows `admitted_market_critical` for both labs and `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open experiments; flatten fires 15:20–15:30 | Agent (read-only) | 2026-10-14 |
 | 3 | ~~Decide F&O cash~~ — **decided: keep ₹85.7k**, no deposit, ledger unchanged | Operator | Done |
 | 4 | ~~2026-09-21 swing churn~~ — **quarantined** (137 rows). Root cause to fix: switch review re-selling and re-buying the same name at the same price (add same-symbol / zero-advantage guard) | Agent | Guard: next code slice |
 | 5 | Ollama: unload during 09:00–16:00 (keep-alive 0) or schedule LLM work after close | Operator/agent | This week |
 | 6 | ~~Held-option exit rules~~ — **built**: every tick, any held Lab v1 option on the underlier (ATM or not) is checked on its own live LTP: exit at −40% premium (`premium_stop`) or when the trend flips against it (`underlier_reversal`); profit target available but off. No exit without a live mark. No same-day re-entry on that underlier after a managed exit. Session flatten 15:20 still closes the rest. **All of these numbers, plus max open positions and the cash reserve, live in one operator file: `/data/atlas_data/investment/fno/lab_v1_risk_settings.json`** (read every tick; out-of-range values are ignored with a warning; it overrides `lab_v1_policy.json`) | Agent | Live after restart |
-| 7 | Alerting: ~~staleness alerts must not auto-resolve at session end~~ — **fixed**: the F&O worker incident counted "any pack today" as recovery, so morning packs "verified" the 15:30 RESOLVED mail. Now only a pack written after the incident opened counts; otherwise it ends `UNRESOLVED_OPERATOR_ACTION_REQUIRED`. Still open: "admitted lab ticks in session" health check (incl. equity labs) | Agent | Fix live after restart; tick check next |
+| 7 | Alerting: ~~staleness alerts must not auto-resolve at session end~~ — **fixed**: the F&O worker incident counted "any pack today" as recovery, so morning packs "verified" the 15:30 RESOLVED mail. Now only a pack written after the incident opened counts; otherwise it ends `UNRESOLVED_OPERATOR_ACTION_REQUIRED`. ~~"Admitted lab ticks in session" check~~ — **built** for all three labs (§7, `27c4890`): P0 email when a lab has no admitted in-session tick for 20 min (from 09:35), naming the deferral cause; never self-resolves at the close; evening digest lists admitted/deferred ticks per lab | Agent | Live after restart |
 | 8 | Decision chain in trade emails (§5) | Agent | After 6–7 |
 | 9 | Switch review must not mint SELL decisions when session is closed | Agent | Small fix |
 | 10 | FEL rows: add `sma_margin`; F&O feature capture (IV/Greeks/DTE/VIX/OI) into the entry snapshot | Agent | R0 |
 | 11 | Realistic cost profile for learning evaluation on all labs (keep zero-fee ledger separate — F18) | Agent | OI-DELI0 P0.2/P0.3 |
 | 12 | Propensity logging on every decision (needed for any bandit evaluation) | Agent | R0 |
 | 13 | Re-assess RL at ≥ 30 eligible independent days per lab | Operator + agent | ~6–8 weeks |
-| 14 | **F&O shadow trades (built 2026-10-13, `atlas/investment/fno_shadow.py`)** — every BUY signal blocked by the capital budget or cash, with a READY data pack, opens a counterfactual entry at live LTP (≤ 1 per underlier per day); closes on the 15:20 flatten clock at live LTP. After-close / missed / no-mark closes are `NOT_EVALUABLE`. Store: `investment/fno/shadow/<lab>/<day>.jsonl`; never touches ledger, lineage or the paper round-trip dataset. Assumes no slippage/fees (optimistic). Next: same for equity labs; a shadow-vs-real comparison in the evening email | Agent | Live after restart |
+| 14 | **F&O shadow trades (built 2026-10-13, `atlas/investment/fno_shadow.py`)** — every BUY signal blocked by the capital budget or cash, with a READY data pack, opens a counterfactual entry at live LTP (≤ 1 per underlier per day); closes on the 15:20 flatten clock at live LTP. After-close / missed / no-mark closes are `NOT_EVALUABLE`. Store: `investment/fno/shadow/<lab>/<day>.jsonl`; never touches ledger, lineage or the paper round-trip dataset. Assumes no slippage/fees (optimistic). Evening email "F&O real vs shadow" section built (`f8bdd69`). Next: same for equity labs | Agent | Live after restart |
 
 Why not more capital instead: cash does not create independent observations. Signals are daily-bar, positions are capped, and same-day trades share one market move. Shadows add labelled examples for free; only more trading days add independent ones.
 
 R2 (DB-level checks for the 2026-10-12 duplicate-instance window) remains open.
+
+## 7. Everything changed on 2026-10-13 (code, data, settings)
+
+The running service was restarted on `d9a99a9`. Everything after that is committed but **not live until the next operator restart**.
+
+### 7.1 Code commits
+
+| Commit | What it does | Live? |
+|--------|--------------|-------|
+| `8057120` | Host Guard **market-critical lane** (`paper_trading`, `portfolio_ledger`, weekdays 09:00–16:00 IST: 128 MB tick need vs 2048 MB floor; others keep 512 vs 2560). F&O close-out from **15:20** (was 15:30). Exits after 15:30 stamped `learning_eligible: false`. Learning **quarantine** manifest + FEL filter. Entry prediction keeps its original `recorded_at`. Incident doc + this review | Yes |
+| `ca84377` | Records operator decisions (keep F&O cash ₹85.7k; quarantine 2026-09-21 swing churn) | Doc |
+| `d9a99a9` | F&O cash reserve based on `max(starting_cash, net_contributed_capital)` | Yes |
+| `1afa1e2` | **F&O shadow trades** (counterfactual entries for capital/cash-blocked BUYs on READY packs) — `atlas/investment/fno_shadow.py` | After restart |
+| `f8bdd69` | Evening email: **F&O real vs shadow** section | After restart |
+| `9506ab2` | **Managed exits for held options** every tick: premium stop, trend reversal, optional target; no same-day re-entry after a managed exit | After restart |
+| `259649e` | **One operator risk-settings file** for F&O exits and capital limits (§7.3) | After restart |
+| `05e7286` | Ops alert fix: F&O worker incident recovers only on a pack written **after** the incident opened (today's 15:30 "RESOLVED" was false) | After restart |
+| `27c4890` | **Per-lab tick admission ledger + stale-lab P0 alert** (§7.4) | After restart |
+
+### 7.2 Data changes (all append-only; no ledger edits)
+
+| What | Where | Effect |
+|------|-------|--------|
+| Quarantined the 10 F&O round trips closed 17:34–17:42 on 2026-10-13 (`after_session_close_exit`) | `investment/integrity/learning_quarantine/india_fno_learner.jsonl` | FEL F&O rows 49 → 39. Ledger P&L −₹64,476.75 unchanged (honest hold-to-close accounting) |
+| Quarantined 137 HBLPOWER.NS `switch_exploratory` rows of 2026-09-21 (`switch_churn_zero_information`) | `investment/integrity/learning_quarantine/india_equity_learner.jsonl` | Swing FEL rows 137 → 10 |
+| Created the F&O risk-settings file with current defaults | `investment/fno/lab_v1_risk_settings.json` | No behaviour change until edited |
+
+A quarantine is undone by appending a `release` row for the same experience id; nothing is deleted.
+
+### 7.3 F&O risk settings — the one file to edit
+
+`/data/atlas_data/investment/fno/lab_v1_risk_settings.json` — read every tick (no restart once `259649e` is loaded). Out-of-range or malformed values are ignored, the default is kept, and a warning is logged. It overrides the older `lab_v1_policy.json`. `auto_top_up` is always off.
+
+| Key | Default | Allowed | Meaning |
+|-----|---------|---------|---------|
+| `exit.premium_stop_pct` | 0.40 | 0.05–0.95 or `null` | Exit when the premium is this fraction below entry |
+| `exit.premium_target_pct` | `null` (off) | 0.05–10 or `null` | Exit when the premium is this fraction above entry |
+| `exit.exit_on_underlier_reversal` | `true` | bool | Exit a PE when the trend turns up / a CE when it turns down |
+| `exit.no_reentry_same_day_after_managed_exit` | `true` | bool | No new entry on that underlier the same day after a managed exit |
+| `capital.max_open_option_experiments` | 2 | 1–10 | Max open option positions |
+| `capital.cash_reserve_fraction_of_starting` | 0.30 | 0–0.9 | Cash kept untouched, fraction of contributed capital |
+
+### 7.4 Lab tick health check (closes the gap that hid today's outage)
+
+- **Ledger** `investment/ops_health/lab_ticks/<day>.json`: per lab — admitted ticks, in-session ticks, last in-session tick, worker id; per worker — deferred ticks by cause (`host_pressure`, `schedule`, `budget`, `reservation`) and the last reason (e.g. the RAM numbers). Written by `paper_trading` (start of each admitted tick) and `WorkerManager._record_wait` (each deferral). Counters only, never a trading input.
+- **Alert**: from 09:35 to 15:30 on trading days, any lab seen today or on the previous recorded day with no admitted in-session tick for **20 min** → P0 `lab:<lab>:ticks`, emailed once, with the deferral cause in WHY.
+- **Resolution**: only an admitted in-session tick after the incident opened marks it `RECOVERED_VERIFIED` (`admitted_tick_confirmed`). If the session ends first it becomes `UNRESOLVED_OPERATOR_ACTION_REQUIRED`, never "RESOLVED".
+- **Evening digest** (Operational Health section): `Lab ticks in session — <lab>: admitted N, deferred M, last HH:MM`.
+- On today's data this would have emailed a P0 for both F&O and swing at ~11:35 naming `host_pressure`.
+
+### 7.5 Tests added or changed
+
+`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
+
+### 7.6 Checks for 2026-10-14 (agent, read-only)
+
+| Time IST | Check |
+|----------|-------|
+| 09:30 | Service on `27c4890` or later; `host_guard` shows `admitted_market_critical`; `lab_ticks/2026-10-14.json` has in-session ticks for all three labs |
+| 12:00 | No `lab:*:ticks` incident; `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open; any managed exit has a `premium_stop` / `underlier_reversal` lineage code; shadows only on capital/cash blocks |
+| 15:25 | F&O close-out ran between 15:20 and 15:30; every exit `learning_eligible: true` |
+| Evening | Email shows the F&O real-vs-shadow section and per-lab tick lines |

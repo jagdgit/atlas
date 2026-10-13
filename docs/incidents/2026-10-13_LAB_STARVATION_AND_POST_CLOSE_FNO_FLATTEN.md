@@ -85,16 +85,21 @@ Book after the day: cash ₹85,727.93, net contributed ₹1,00,000, lifetime P&L
 | F2 | **F&O close-out starts 15:20 IST** (no new entries from 15:20; flatten while NSE is still trading). | `fno_lab_v1.FNO_FLAT_AFTER` | Ten minutes of tradeable window for the exits, matching the equity intraday lab. |
 | F3 | **Late exits are never learning.** Every experiment_close is stamped `learning_eligibility` by execution time; a close at/after 15:30 or before 09:15 is `eligible: false, reasons: [exit_after_session_close]`, on the attribution, the learning packet and the EXPERIENCE row; lineage carries `exit_timing`. | `fno_lab_v1.exit_learning_eligibility`, `paper_trading._flatten_fno_lab_v1_experiments`, `learning_objects.record_from_trade_close` | A repeat of today cannot contaminate learning, even if starvation recurs. |
 | F4 | **Learning quarantine** (append-only manifest, releasable). FEL round-trip dataset skips quarantined + ineligible rows; F&O closed-loop rows carry `learning_eligible`. | `atlas/investment/learning_quarantine.py`, `fel/experiments/paper_round_trip.py`, `fno_closed_loop_dataset.py` | Operator can exclude a bad day without rewriting history. |
-| F5 | Capital budget (yesterday, `d6b1203`): ≤2 open option experiments, 30% starting-cash reserve, never auto-top-up. | `fno_lab_v1.evaluate_option_buy_budget` | Ends the 10-underlier swarm. |
+| F5 | Capital budget (yesterday, `d6b1203`): ≤2 open option experiments, 30% starting-cash reserve, never auto-top-up. Reserve base corrected to `max(starting_cash, net_contributed)` in `d9a99a9`. | `fno_lab_v1.evaluate_option_buy_budget` | Ends the 10-underlier swarm. |
+| F6 | **Managed exits for held options (RC3)**, `9506ab2`: every tick, each held Lab v1 option is checked on its own live LTP — premium stop (default −40%), trend reversal, optional target; no same-day re-entry after a managed exit. Values in the operator file `investment/fno/lab_v1_risk_settings.json` (`259649e`). | `fno_lab_v1.evaluate_held_option_exit`, `paper_trading._fno_managed_exit` | A held put cannot ride a reversal unmanaged until the close. |
+| F7 | **Alert can no longer falsely resolve (RC5)**, `05e7286`: the F&O worker incident verifies recovery only on a pack written after it opened. | `ops_health._pack_written_since_open` | Today's 15:30 "RESOLVED" would have stayed UNRESOLVED. |
+| F8 | **Per-lab tick admission check (RC5)**, `27c4890`: ledger of admitted/deferred ticks per lab; P0 after 20 min without an admitted in-session tick, naming the deferral cause; no self-resolve at close; digest line per lab. Covers the equity labs, which had no alert at all today. | `atlas/investment/lab_ticks.py`, `ops_health.assess_lab_ticks`, `WorkerManager._record_wait` | On today's data: P0 for F&O and swing at ~11:35 with cause `host_pressure`. |
 
-Tests: `tests/test_host_guard.py` (critical lane in session, generic gate for research + after hours, the 2026-10-13 RAM scenario), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL filter).
+Tests: `tests/test_host_guard.py` (critical lane in session, generic gate for research + after hours, the 2026-10-13 RAM scenario), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL filter), `tests/test_fno_managed_exit.py`, `tests/test_ops_health_loop0.py::test_morning_packs_do_not_verify_afternoon_worker_outage`, `tests/test_lab_ticks.py` (today's starvation replayed).
 
 ## 5. Still open (not fixed by this change)
 
-1. **RC3 held-option exit management** — held options need an exit evaluation every tick (stop on premium, underlier reversal, time stop) instead of idling as `legacy_non_atm_option`.
-2. **RC5 alert semantics** — staleness alerts must not auto-resolve at session close; add a "trading lab admitted ticks in session" health check (expected ≥ 60 per lab per day at 300 s).
+1. ~~RC3 held-option exit management~~ — fixed (F6).
+2. ~~RC5 alert semantics~~ — fixed (F7, F8).
 3. **Host memory** — Ollama (~4 GB) resident during market hours. Unload/keep-alive=0 during 09:00–16:00, or move LLM work after 16:00.
-4. **Trade emails lack the decision chain** (see review doc §7).
+4. **Trade emails lack the decision chain** (see review doc §5).
+
+F1–F5 are live (service restarted on `d9a99a9`). F6–F8 need the next operator restart. Full change log: review doc §7.
 5. **Equity swing pre-market noise** — 10 `switch_exploratory` SELL decisions on HBLPOWER.NS recorded 01:32–02:18 IST (market closed, none executed). Switch review should not mint SELL decisions outside the session.
 
 See `docs/2026-10-13_LAB_OPERATIONS_AND_LEARNING_REVIEW.md` for per-lab mechanics, learning, RL assessment and the full next-action list.

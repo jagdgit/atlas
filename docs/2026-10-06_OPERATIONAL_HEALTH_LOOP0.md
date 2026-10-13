@@ -71,7 +71,7 @@ classifies the F&O lab:
 | B safety-blocked | gates held (recorded; systemic only via O4) | `equity:systemic:*` |
 | C capability-blocked | masters and provider healthy, packs fail on data quality | `fno:capability` (P1) |
 | D infrastructure failure | login, provider, futures/options/instrument master | `fno:futures_master` (P0), `fno:zerodha_provider` (P1) |
-| E worker/scheduler failure | no pack for 60 min in session; ≥3 permanent task failures/day | `fno:paper_worker` (P0), `ops:scheduler_failures` (P1) |
+| E worker/scheduler failure | no pack for 60 min in session; any paper lab with no admitted in-session tick for 20 min (from 09:35, added 2026-10-13); ≥3 permanent task failures/day | `fno:paper_worker` (P0), `lab:<lab>:ticks` (P0), `ops:scheduler_failures` (P1) |
 | OPERATING | at least one pack READY | — |
 
 Incidents:
@@ -90,6 +90,9 @@ Escalation (deduplicated, one mail per incident, through the same SMTP path as t
 - Zerodha `LOGIN_REQUIRED` is P0 but owned by the existing MDPH login email. Loop 0 records it and
   does not send a duplicate.
 - When an alerted incident clears, a short `RESOLVED` mail follows.
+- Exception (2026-10-13): `fno:paper_worker` and `lab:<lab>:ticks` never clear because the market
+  window ended. They need fresh evidence written **after** the incident opened (a pack, or an admitted
+  in-session tick) to become `RECOVERED_VERIFIED`; otherwise they end `UNRESOLVED_OPERATOR_ACTION_REQUIRED`.
 
 Email layout (subject `[Atlas OPS] P0 ACTION REQUIRED — F&O DATA PLANE: … (day)`):
 
@@ -430,3 +433,23 @@ remains `enabled: false` until the operator chooses.
    move provides.
 3. Separately, stop writing a `TaskCompleted` audit row per tick: 36.5 M rows that
    nothing has ever read is the upstream defect, and retention only mops it up.
+
+## 9. 2026-10-13 — lab starvation the alerts did not catch
+
+Host Guard deferred every paper-lab tick from ~11:15 to 17:35 (free RAM ~2.8 GB vs a 3072 MB
+gate). Loop 0 sent one correct P0 at 12:18 ("Last F&O pack 65 min ago") and then a false
+`RESOLVED` at 15:30: `packs > 0` was satisfied by packs written that morning. The equity labs had
+no check at all.
+
+Fixes:
+
+- `05e7286` — the F&O worker incident verifies recovery only when `latest_pack_at > opened_at`.
+- `27c4890` — `atlas/investment/lab_ticks.py`: per-day ledger `investment/ops_health/lab_ticks/<day>.json`
+  of admitted ticks per lab (written at the start of each `paper_trading` tick) and deferred ticks
+  per worker by cause (written by `WorkerManager._record_wait`). `assess_lab_ticks` raises a P0
+  `lab:<lab>:ticks` for any lab seen today or on the previous recorded day with no admitted
+  in-session tick for 20 min; the WHY line names the deferral cause and last reason. The evening
+  digest prints `Lab ticks in session — <lab>: admitted N, deferred M, last HH:MM`.
+- The admission problem itself is fixed in Host Guard hg.1.4 (market-critical lane, `8057120`).
+
+Incident write-up: `docs/incidents/2026-10-13_LAB_STARVATION_AND_POST_CLOSE_FNO_FLATTEN.md`.
