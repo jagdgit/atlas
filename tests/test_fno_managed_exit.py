@@ -40,6 +40,55 @@ def test_target_is_off_by_default_and_configurable():
     assert ex["exit_code"] == lab_v1.EXIT_PREMIUM_TARGET
 
 
+def test_risk_settings_file_drives_exit_and_capital(tmp_path):
+    created = lab_v1.write_default_risk_settings(tmp_path)
+    assert created["created"] is True
+    path = lab_v1.risk_settings_path(tmp_path)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["exit"]["premium_stop_pct"] == 0.40 and doc["exit"]["premium_target_pct"] is None
+    assert doc["capital"] == {"max_open_option_experiments": 2, "cash_reserve_fraction_of_starting": 0.30}
+    assert lab_v1.exit_policy(tmp_path)["premium_stop_pct"] == 0.40
+
+    doc["exit"]["premium_stop_pct"] = 0.25
+    doc["exit"]["premium_target_pct"] = 0.6
+    doc["exit"]["no_reentry_same_day_after_managed_exit"] = False
+    doc["capital"]["max_open_option_experiments"] = 3
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    pol = lab_v1.exit_policy(tmp_path)
+    assert pol["premium_stop_pct"] == 0.25 and pol["premium_target_pct"] == 0.6
+    assert pol["no_reentry_same_day_after_managed_exit"] is False
+    assert lab_v1.capital_policy(tmp_path)["max_open_option_experiments"] == 3
+    held = [_held("NIFTY26OCT22500PE", "PE", 100.0)]
+    assert lab_v1.evaluate_held_option_exit(
+        held, ltp_by_symbol={"NIFTY26OCT22500PE": 74.0}, sma_margin=-0.002, policy_doc=pol
+    )["exit_code"] == "premium_stop"
+
+    assert lab_v1.write_default_risk_settings(tmp_path)["created"] is False
+    assert json.loads(path.read_text(encoding="utf-8"))["exit"]["premium_stop_pct"] == 0.25
+
+
+def test_risk_settings_reject_out_of_range_and_garbage(tmp_path):
+    path = lab_v1.risk_settings_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "exit": {"premium_stop_pct": 4.0, "premium_target_pct": "lots", "exit_on_underlier_reversal": "no"},
+                "capital": {"max_open_option_experiments": 50, "cash_reserve_fraction_of_starting": -1, "auto_top_up": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    pol = lab_v1.exit_policy(tmp_path)
+    assert pol["premium_stop_pct"] == 0.40 and pol["premium_target_pct"] is None
+    assert pol["exit_on_underlier_reversal"] is True
+    cap = lab_v1.capital_policy(tmp_path)
+    assert cap["max_open_option_experiments"] == 2 and cap["cash_reserve_fraction_of_starting"] == 0.30
+    assert cap["auto_top_up"] is False
+    path.write_text("{not json", encoding="utf-8")
+    assert lab_v1.exit_policy(tmp_path)["premium_stop_pct"] == 0.40
+
+
 def test_option_underlier_name_handles_monthly_weekly_and_ampersand():
     assert lab_v1.option_underlier_name("NIFTY26OCT22500PE") == "NIFTY"
     assert lab_v1.option_underlier_name("BANKNIFTY26OCT55300PE") == "BANKNIFTY"

@@ -226,32 +226,115 @@ def option_underlier_name(option_symbol: str) -> str | None:
     return m.group(1) if m else None
 
 
+# Operator-owned tunables. Atlas reads this file every tick and never rewrites it.
+RISK_SETTINGS_REL = Path("investment") / "fno" / "lab_v1_risk_settings.json"
+
+# (min, max, allow_null) per tunable; out-of-range values fall back to the default.
+_CAPITAL_BOUNDS: dict[str, tuple[float, float, bool]] = {
+    "max_open_option_experiments": (1, 10, False),
+    "cash_reserve_fraction_of_starting": (0.0, 0.9, False),
+}
+_EXIT_BOUNDS: dict[str, tuple[float, float, bool]] = {
+    "premium_stop_pct": (0.05, 0.95, True),
+    "premium_target_pct": (0.05, 10.0, True),
+}
+_EXIT_FLAGS = ("exit_on_underlier_reversal", "no_reentry_same_day_after_managed_exit")
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _log.warning("F&O settings unreadable (%s): %s — using defaults", path, exc)
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _apply_bounded(
+    body: dict[str, Any],
+    raw: dict[str, Any],
+    bounds: dict[str, tuple[float, float, bool]],
+    *,
+    section: str,
+) -> None:
+    for key, (lo, hi, nullable) in bounds.items():
+        if key not in raw:
+            continue
+        val = raw[key]
+        if val is None and nullable:
+            body[key] = None
+            continue
+        try:
+            num = float(val)
+        except (TypeError, ValueError):
+            _log.warning("F&O settings %s.%s=%r invalid — keeping %r", section, key, val, body.get(key))
+            continue
+        if not lo <= num <= hi:
+            _log.warning(
+                "F&O settings %s.%s=%r outside [%s, %s] — keeping %r", section, key, val, lo, hi, body.get(key)
+            )
+            continue
+        body[key] = int(num) if isinstance(body.get(key), int) and not isinstance(body.get(key), bool) else num
+
+
+def risk_settings_path(data_dir: str | Path | None) -> Path | None:
+    return Path(data_dir) / RISK_SETTINGS_REL if data_dir else None
+
+
 def capital_policy(data_dir: str | Path | None = None) -> dict[str, Any]:
     """Finite-capital rules for Lab v1 option BUYs (never auto top-up)."""
     body = dict(DEFAULT_CAPITAL_POLICY)
     if not data_dir:
         return body
-    path = Path(data_dir) / POLICY_REL
-    if not path.is_file():
-        return body
-    try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return body
-    raw = doc.get("capital") if isinstance(doc, dict) else None
-    if not isinstance(raw, dict):
-        return body
-    for key in (
-        "auto_top_up",
-        "operator_deposit_only",
-        "max_open_option_experiments",
-        "cash_reserve_fraction_of_starting",
-        "honesty",
-    ):
-        if key in raw:
-            body[key] = raw[key]
+    for path in (Path(data_dir) / POLICY_REL, Path(data_dir) / RISK_SETTINGS_REL):
+        doc = _read_json(path)
+        raw = doc.get("capital") if isinstance(doc, dict) else None
+        if isinstance(raw, dict):
+            _apply_bounded(body, raw, _CAPITAL_BOUNDS, section="capital")
     body["auto_top_up"] = False  # hard invariant — never auto-refill
     return body
+
+
+def exit_policy(data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Held-option exit rules; operator file overrides defaults."""
+    body = dict(DEFAULT_EXIT_POLICY)
+    doc = _read_json(Path(data_dir) / RISK_SETTINGS_REL) if data_dir else None
+    raw = doc.get("exit") if isinstance(doc, dict) else None
+    if isinstance(raw, dict):
+        _apply_bounded(body, raw, _EXIT_BOUNDS, section="exit")
+        for flag in _EXIT_FLAGS:
+            if isinstance(raw.get(flag), bool):
+                body[flag] = raw[flag]
+    return body
+
+
+def write_default_risk_settings(data_dir: str | Path | None) -> dict[str, Any]:
+    """Create the operator settings file with current defaults; never overwrites."""
+    path = risk_settings_path(data_dir)
+    if path is None:
+        return {"ok": False, "reason": "no_data_dir"}
+    if path.exists():
+        return {"ok": True, "path": str(path), "created": False}
+    cap = capital_policy(data_dir)
+    doc = {
+        "_help": {
+            "what": "F&O Lab v1 risk settings. Edit values and save; Atlas reads this every tick (no restart).",
+            "capital.max_open_option_experiments": "Max open option positions at once (1-10).",
+            "capital.cash_reserve_fraction_of_starting": "Cash kept untouched, as a fraction of contributed capital (0-0.9).",
+            "exit.premium_stop_pct": "Exit when premium falls this fraction below entry, e.g. 0.30 = -30% (0.05-0.95, or null to disable).",
+            "exit.premium_target_pct": "Exit when premium rises this fraction above entry, e.g. 0.60 = +60% (or null to disable).",
+            "exit.exit_on_underlier_reversal": "true = exit a put when the trend turns up / a call when it turns down.",
+            "exit.no_reentry_same_day_after_managed_exit": "true = no new entry on that underlier the same day after a stop/target/reversal exit.",
+            "invalid": "Out-of-range or malformed values are ignored (default kept) and logged as a warning.",
+        },
+        "capital": {k: cap[k] for k in _CAPITAL_BOUNDS},
+        "exit": {k: v for k, v in DEFAULT_EXIT_POLICY.items() if k != "version"},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "path": str(path), "created": True}
 
 
 def count_open_option_experiments(positions: list[dict[str, Any]] | None) -> int:
@@ -944,7 +1027,7 @@ def policy(data_dir: str | Path | None = None) -> dict[str, Any]:
             ),
         },
         "capital": capital_policy(data_dir),
-        "exit": dict(DEFAULT_EXIT_POLICY),
+        "exit": exit_policy(data_dir),
         "expansion_rule": (
             "seed → experiences → coverage/data problems → repeated behaviours → "
             "lessons with attribution → revise seed/rules → expand"

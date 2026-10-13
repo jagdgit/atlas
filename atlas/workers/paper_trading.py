@@ -3934,8 +3934,16 @@ class PaperTradingWorker(PersistentWorker):
         held = option_positions_for_underlier(positions, underlier=symbol)
         if not held:
             return None
+        try:
+            from atlas.config import get_config
+
+            exit_pol = lab_v1.exit_policy(str(get_config().paths.data))
+        except Exception:  # noqa: BLE001
+            exit_pol = lab_v1.exit_policy(None)
         ltps = {str(h["symbol"]): self._nfo_ltp(str(h["symbol"])) for h in held}
-        ex = lab_v1.evaluate_held_option_exit(held, ltp_by_symbol=ltps, sma_margin=sma_margin)
+        ex = lab_v1.evaluate_held_option_exit(
+            held, ltp_by_symbol=ltps, sma_margin=sma_margin, policy_doc=exit_pol
+        )
         if ex is None:
             return None
         qty = float(ex["qty"])
@@ -4107,12 +4115,13 @@ class PaperTradingWorker(PersistentWorker):
             try:
                 from atlas.investment import fno_lab_v1 as lab_v1
 
-                day = lab_v1.to_ist(self._clock()).date().isoformat()
-                exited = lab_v1.managed_exit_underliers(
-                    data_dir,
-                    laboratory_id=str(laboratory_id or lab_v1.LABORATORY_ID),
-                    ist_day=day,
-                )
+                exited: set[str] = set()
+                if lab_v1.exit_policy(data_dir).get("no_reentry_same_day_after_managed_exit"):
+                    exited = lab_v1.managed_exit_underliers(
+                        data_dir,
+                        laboratory_id=str(laboratory_id or lab_v1.LABORATORY_ID),
+                        ist_day=lab_v1.to_ist(self._clock()).date().isoformat(),
+                    )
                 if lab_v1.normalize_underlier(symbol) in exited:
                     overlay = {
                         "used": False,
