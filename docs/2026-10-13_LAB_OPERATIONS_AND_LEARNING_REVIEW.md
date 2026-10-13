@@ -126,12 +126,12 @@ Recommended path:
 
 | Family | Features | Labs | Available today? |
 |--------|----------|------|------------------|
-| Trend | `sma_margin`, `sma_fast`, `sma_slow`, slope of SMA, `macd` hist | all | computed; `sma_margin` **dropped** from FEL rows |
+| Trend | `sma_margin`, `sma_fast`, `sma_slow`, slope of SMA, `macd` hist | all | computed; `sma_margin` in FEL rows since `82af44e` (F&O); slope/MACD not yet |
 | Momentum / mean reversion | `rsi`, 1/5/20-day return, distance from 20-day high/low | all | partly |
 | Volatility | ATR%, realised vol 10/20d, **India VIX** | all | no |
-| Option | **IV (ATM), IV rank, delta, theta, vega, DTE**, premium/spot, CE–PE skew, bid/ask spread | F&O | **no** |
+| Option | **IV (ATM), IV rank, delta, theta, vega, DTE**, premium/spot, CE–PE skew, bid/ask spread | F&O | **yes since `82af44e`** (IV/Greeks Black-Scholes-derived from the traded premium, r = 6.5%); IV rank needs history; bid/ask no |
 | Positioning | OI and OI change, PCR, futures basis | F&O | no |
-| Time | minutes since open, minutes to close, day-of-week, expiry week | all | derivable |
+| Time | minutes since open, minutes to close, day-of-week, expiry week | all | F&O yes since `82af44e`; equity derivable |
 | Market regime | NIFTY trend/margin, breadth, sector RS | all | partly (ranking) |
 | Liquidity | volume vs 20-day avg, spread | intraday, F&O | partly |
 | Fundamentals / research | PE, ROE, D/E, sector, thesis stance, E[R] prototype | swing | yes |
@@ -158,12 +158,12 @@ Example rendered from today's real records (NIFTY26OCT22500PE): bought 65 @ 249.
 | 2 | Tomorrow 09:30 / 12:00 / 15:25: confirm `host_guard` status shows `admitted_market_critical` for both labs and `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open experiments; flatten fires 15:20–15:30 | Agent (read-only) | 2026-10-14 |
 | 3 | ~~Decide F&O cash~~ — **decided: keep ₹85.7k**, no deposit, ledger unchanged | Operator | Done |
 | 4 | ~~2026-09-21 swing churn~~ — **quarantined** (137 rows). Root cause traced: a loop, not a same-symbol switch — switch IDEA→HBLPOWER (adv ≈ +10%) → `plc_b_concentration` immediately sold HBLPOWER → SMA re-bought IDEA → switch again, ~136× at ₹760 (zero P&L each). **Already fixed on 2026-09-28** (`c97f2a6`): same-day re-entry lock (`wash_lock.reentry_blocked`) and `challenger_breaches_concentration` now gate the switch buy. No recurrence since (0 swing buy/sell fills 2026-09-25 → 10-13) | Agent | Done |
-| 5 | Ollama: unload during 09:00–16:00 (keep-alive 0) or schedule LLM work after close | Operator/agent | This week |
+| 5 | ~~Ollama: unload during 09:00–16:00~~ — **withdrawn** (see §8): the LLM is not in the trading or learning path, and the Host Guard market-critical lane (`8057120`) admits lab ticks with Ollama resident. Keep Ollama; watch the new `lab:*:ticks` alert. Only if that alert fires with `host_pressure` again: cap LLM concurrency in market hours rather than unloading | Agent (watch) | From 2026-10-14 |
 | 6 | ~~Held-option exit rules~~ — **built**: every tick, any held Lab v1 option on the underlier (ATM or not) is checked on its own live LTP: exit at −40% premium (`premium_stop`) or when the trend flips against it (`underlier_reversal`); profit target available but off. No exit without a live mark. No same-day re-entry on that underlier after a managed exit. Session flatten 15:20 still closes the rest. **All of these numbers, plus max open positions and the cash reserve, live in one operator file: `/data/atlas_data/investment/fno/lab_v1_risk_settings.json`** (read every tick; out-of-range values are ignored with a warning; it overrides `lab_v1_policy.json`) | Agent | Live after restart |
 | 7 | Alerting: ~~staleness alerts must not auto-resolve at session end~~ — **fixed**: the F&O worker incident counted "any pack today" as recovery, so morning packs "verified" the 15:30 RESOLVED mail. Now only a pack written after the incident opened counts; otherwise it ends `UNRESOLVED_OPERATOR_ACTION_REQUIRED`. ~~"Admitted lab ticks in session" check~~ — **built** for all three labs (§7, `27c4890`): P0 email when a lab has no admitted in-session tick for 20 min (from 09:35), naming the deferral cause; never self-resolves at the close; evening digest lists admitted/deferred ticks per lab | Agent | Live after restart |
 | 8 | ~~Decision chain in trade emails (§5)~~ — **built** (`45d85dd`) | Agent | Live after restart |
 | 9 | ~~Switch review must not mint SELL decisions when session is closed~~ — **fixed** (`29d38fd`): a recommended switch that cannot execute now (session closed, execution disabled, per-tick cap) is recorded as a HOLD packet with `switch_not_executed:<reason>`; the review and its ROTATE recommendation stay recorded. Same noise was 50–153 phantom SELLs/day on 2026-09-21..24 | Agent | Live after restart |
-| 10 | FEL rows: add `sma_margin`; F&O feature capture (IV/Greeks/DTE/VIX/OI) into the entry snapshot | Agent | R0 |
+| 10 | ~~FEL rows: add `sma_margin`; F&O feature capture~~ — **built** (`82af44e`): every F&O entry stores IV, delta, gamma, theta/day, vega, DTE, expiry week, moneyness, premium/spot, CE–PE skew, minutes since open / to close, RSI, SMAs, `sma_margin`; carried to EXPERIENCE and FEL rows. Still not captured (no data feed): India VIX, OI/OI change, PCR, bid/ask, futures basis | Agent | Live after restart; VIX/OI need a feed |
 | 11 | Realistic cost profile for learning evaluation on all labs (keep zero-fee ledger separate — F18) | Agent | OI-DELI0 P0.2/P0.3 |
 | 12 | Propensity logging on every decision (needed for any bandit evaluation) | Agent | R0 |
 | 13 | Re-assess RL at ≥ 30 eligible independent days per lab | Operator + agent | ~6–8 weeks |
@@ -194,6 +194,8 @@ The running service was restarted on `d9a99a9`. Everything after that is committ
 | `45d85dd` | **Decision chain in trade emails** (§5): why it bought, why it sold, outcome vs prediction, learning eligibility; lineage keeps `exit_timing` | After restart |
 | `a402745` | Docs for the decision chain | Doc |
 | `29d38fd` | Switch review records an unexecutable switch as HOLD, not SELL (§6 #9) | After restart |
+| `e13cad1` | Docs for the switch fix | Doc |
+| `82af44e` | **F&O decide-time feature capture** (§4 feature table, §6 #10): `atlas/investment/fno_features.py` | After restart |
 
 ### 7.2 Data changes (all append-only; no ledger edits)
 
@@ -228,14 +230,35 @@ A quarantine is undone by appending a `release` row for the same experience id; 
 
 ### 7.5 Tests added or changed
 
-`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`, `tests/test_decision_chain_mail.py`, `tests/test_switch_packet_action.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
+`tests/test_host_guard.py` (critical lane), `tests/test_fno_lab_v1.py` (15:20 flatten, eligibility, quarantine → FEL), `tests/test_fno_closed_loop_dataset.py`, `tests/test_fno_shadow.py`, `tests/test_fno_managed_exit.py` (incl. risk-settings file), `tests/test_ops_health_loop0.py` (morning packs must not verify an afternoon outage), `tests/test_lab_ticks.py`, `tests/test_decision_chain_mail.py`, `tests/test_switch_packet_action.py`, `tests/test_fno_features.py`. Pre-existing failures unrelated to this work: 3 in `tests/test_workers.py` (budget/throttle), present at HEAD before these changes.
 
 ### 7.6 Checks for 2026-10-14 (agent, read-only)
 
 | Time IST | Check |
 |----------|-------|
-| 09:30 | Service on `29d38fd` or later; no swing `sell` packets with `fill_trade_id: null` recorded overnight; `host_guard` shows `admitted_market_critical`; `lab_ticks/2026-10-14.json` has in-session ticks for all three labs |
+| 09:30 | Service on `82af44e` or later; first F&O entry prediction has `decide_time_features.iv`; no swing `sell` packets with `fill_trade_id: null` recorded overnight; `host_guard` shows `admitted_market_critical`; `lab_ticks/2026-10-14.json` has in-session ticks for all three labs |
 | 12:00 | No `lab:*:ticks` incident; `deferred_critical_ticks_total` ≈ 0; F&O ≤ 2 open; any managed exit has a `premium_stop` / `underlier_reversal` lineage code; shadows only on capital/cash blocks |
 | 15:25 | F&O close-out ran between 15:20 and 15:30; every exit `learning_eligible: true` |
 | Any fill | Fill email has a "Decision chain" block; SELLs show "linked on the sell" (P0.5 entry link) rather than "matched by symbol" |
 | Evening | Email shows the F&O real-vs-shadow section and per-lab tick lines |
+
+## 8. Ollama (the local LLM): what it does, and why it stays loaded
+
+Question raised 2026-10-13: "if we unload Ollama, how will Atlas be intelligent, cognitive, autonomous and learn?" Answer: **it stays loaded.** The earlier "unload in market hours" action is withdrawn.
+
+**What the LLM is for today.** `qwen3:4b` (Q4, ~3.5 GB resident, CPU only, `keep_alive` 5 min) writes language: research/thesis enrichment, incumbent "scientist notes" (ICR5; ≤ 2 drain passes per lab tick in session, more off-hours), mentor and engineering-mentor workers, overnight densify, chat.
+
+**What the LLM is not for.** No trading decision and no learning step calls it:
+
+| Step | How it is decided |
+|------|-------------------|
+| BUY / SELL / HOLD | SMA10/30 + RSI14 rule and the lab gates (§1–§2) — deterministic |
+| F&O strike, sizing, budget, exits | ATM overlay, capital budget, risk-settings file — deterministic |
+| Prediction at entry | `fno_lab_v1_control_signal.v1` formula — deterministic |
+| Learning (EXPERIENCE → FEL → L3–L5) | Recorded outcomes, error, attribution, statistics vs cash — deterministic |
+
+So "intelligence" in the sense that changes tomorrow's trades comes from **clean, independent, feature-rich outcomes** (§3–§4), not from the LLM being resident. The LLM makes Atlas *explain* better; the evidence makes it *learn*.
+
+**Why unloading is not needed.** The outage was the RAM gate, not the LLM: every tick needed 3,072 MB free, and with Ollama (~4 GB) + browser + IDE resident the host had ~2.8 GB. Since `8057120`, lab and ledger ticks in market hours need only 128 MB above a 2,048 MB floor; at the time of writing the host shows ~5.4 GB available with Ollama loaded. Research and LLM-heavy workers keep the stricter gate and yield first under pressure — which is the right priority (a missed thesis note can wait; a missed exit cannot).
+
+**Safeguard instead of unloading.** The per-lab tick alert (§7.4) reports any lab with no admitted tick for 20 min and names the cause. If it ever fires with `host_pressure` while Ollama is busy, the next step is to cap LLM concurrency during 09:15–15:30 (one request at a time, smaller context), not to remove it.
