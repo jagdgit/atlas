@@ -607,3 +607,26 @@ be refused as a duplicate first.
 - A separating sample for the confounded dimensions requires a CE bought on a *negative*
   margin (or the reverse), which the current control never does. Noted, not acted on —
   adding trades to manufacture contrast is on the freeze list.
+
+### 2026-10-13 — R1–R3: the LLM proposes, fresh trades decide (`9b0b238`)
+
+Operator goal: use the LLM to do research. Review of the loop before building found four reasons it had learned nothing since 10-08:
+
+| Finding | Effect | Fix |
+|---------|--------|-----|
+| `bar_path("NIFTY")` looked for `NIFTY.NS.json`; the writer stores `_NSEI.json` (same for BANKNIFTY) | Every cycle with an index trade refused admission as `bars_not_replayable` — including the only hypothesis, `5623ea11` | `bar_path` asks `bar_store.symbol_path` first |
+| The experiment scored a hypothesis on the episodes it was found in | Any SUPPORTED would have been self-confirmation | Spec carries `exclude_experience_ids` + `asked_as_of`; only later episodes count. Old specs without a holdout → `no_holdout_declared` |
+| `underlier_direction` / `holding_bucket` are known only after the trade | `5623ea11` asked a circular, non-actionable question | `POST_HOC_DIMENSIONS`: reported, never a hypothesis; `5623ea11` closes as `post_hoc_dimension` |
+| Fallback scored episodes against `bars[-1]` (today's bar) | Old trades judged on the wrong day | Bar for the episode's own session, else unresolved |
+
+**R3 — gate.** `MIN_SPLIT_DELTA = 0.5` replaced by: groups n ≥ 3 **and ≥ 2 sessions** (same-day trades share one market move), gap ≥ 0.15, two-sided Fisher exact p ≤ 0.25, Benjamini–Hochberg at q = 0.25 across the scan. That is a screen for *asking*. The verdict is on the fresh sample only: each group n ≥ 5 over ≥ 2 sessions (else `awaiting_fresh_sample`, re-tested every night), gap ≤ 0 → REJECTED, one-sided p ≤ 0.05 → SUPPORTED, else INCONCLUSIVE. Validation still needs 2 passes.
+
+**Feature space.** Added fixed-edge buckets: `sma_margin_strength`, `entry_time_bucket`, `entry_weekday` (available on all episodes now) and `dte_bucket`, `iv_bucket`, `moneyness_bucket`, `theta_share_bucket` (from decide-time features captured since `82af44e`).
+
+**R1 — trade reviews.** `cognitive/llm_research.py`: newest unreviewed eligible round trip → schema-constrained review (`what_happened`, `main_driver`, `signal_or_luck`, `lesson_candidate`, `data_missing`, optional `testable_idea`) → `investment/cognitive/llm_research/<lab>/trade_reviews.jsonl`. Packet carries decide-time features, prediction, outcome, error, attribution; times in IST.
+
+**R2 — proposals.** Once a day, the LLM gets the per-feature table, constants, never-captured features, already-asked dimensions and review ideas, and returns ≤ 3 questions (dimension restricted by schema to decide-time features). Code validates each (feature in data, both groups present, not asked, mechanism + falsifier present) → `proposals/<day>.jsonl` with verdict. The nightly cycle takes ≤ 1 accepted proposal (last 3 days), rebuilds it as a pattern **from the data** (LLM numbers ignored; confounds computed), and sends it through the normal admission. Statement reads "Proposed question … so far a/b"; never claims the LLM's ordering.
+
+**Where it runs.** `decision_evolution` (the one worker holding the LLM), after the scientist drain: off-hours only (not 09:00–15:45 IST weekdays), ≤ 3 calls / 480 s per tick, ≤ 8 calls per lab per day, last call reserved for the proposal. ~90 s per review, ~190 s per proposal on this host.
+
+**Dry run on a copy of live data (2026-10-13).** 29 eligible episodes. Detector: no candidate (the only uneven split, Thu 7/7 vs Wed 3/6, is one session each). LLM review of TCS26OCT2160PE in 87 s; proposal call 193 s → 3 accepted (`sma_margin_sign` — confounded with `option_type`, `sma_margin_strength`, `entry_time_bucket`). Cycle admitted `entry_time_bucket` (LLM-proposed) → `awaiting_fresh_sample`; `5623ea11` closed as post-hoc. No strategy, sizing or order change.

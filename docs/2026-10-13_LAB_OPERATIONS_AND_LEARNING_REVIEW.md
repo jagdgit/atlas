@@ -198,6 +198,7 @@ The running service was restarted on `d9a99a9`. Everything after that is committ
 | `82af44e` | **F&O decide-time feature capture** (§4 feature table, §6 #10): `atlas/investment/fno_features.py` | After restart |
 | `39d016e` | Cognitive loop no longer learns from quarantined episodes (§9.1); AtlasNet hard-gate API no longer 500s on mixed naive/aware timestamps | After restart |
 | `fb9fff5` | **Research scientist actually reviews now** (§9.1): schema-constrained output, reviews saved, bounded drain, stale backlog dead-lettered | After restart |
+| `9b0b238` | **LLM research layer R1–R3** (§9.3): trade reviews, LLM-proposed questions, exact-test screen, fresh-sample verdicts, session rule; NIFTY/BANKNIFTY bars found; scientist drain covers the intraday lab | After restart |
 
 ### 7.2 Data changes (all append-only; no ledger edits)
 
@@ -244,6 +245,8 @@ A quarantine is undone by appending a `release` row for the same experience id; 
 | Any fill | Fill email has a "Decision chain" block; SELLs show "linked on the sell" (P0.5 entry link) rather than "matched by symbol" |
 | Evening | Email shows the F&O real-vs-shadow section and per-lab tick lines |
 | Evening | `research_scientist/<lab>/reviews/2026-10-14.jsonl` exists with ≤ 3 reviews per lab; `<day>.budget.json` attempts ≤ 6; learning-audit `research_scientist` calls in the tens, not hundreds; cognitive cycle reports 29+ episodes (no quarantined ones) |
+| Evening (after 15:45) | `cognitive/llm_research/india_fno_learner/trade_reviews.jsonl` gains reviews for 2026-10-14 trades; `proposals/2026-10-14.jsonl` exists; `budget/2026-10-14.json` calls ≤ 8; no LLM research entries timestamped 09:00–15:45 |
+| Night cycle | `cycles/india_fno_learner/2026-10-14.json`: `5623ea11` result `post_hoc_dimension`; any admitted question shows `awaiting` with fresh counts; `refused` has no `bars_not_replayable` |
 
 ## 8. Ollama (the local LLM): what it does, and why it stays loaded
 
@@ -294,7 +297,7 @@ Fix (`fb9fff5`): Ollama is given a JSON **schema** (exact keys, ≤ 3 items per 
 
 **Why the cognitive loop finds nothing.** Since 10-08: 0 patterns from 39 episodes. Five of its split dimensions are constant in the data, 35 of 39 trades are PE, and a split must differ by ≥ 0.5 in hit rate to count — too coarse for 30-ish samples. Its only hypothesis (`5623ea11`) is `NOT_EVALUABLE` every night ("bars_not_replayable") and nothing acts on that. The LLM only rewords hypothesis text.
 
-### 9.2 Proposed research layer (not built yet)
+### 9.2 Research layer plan (R1–R3 built 2026-10-13, see §9.3)
 
 Principle: **the LLM proposes, the evidence decides.** The LLM never touches the fill path, never places or blocks an order, and never promotes anything. Every claim it makes enters the existing deterministic ladder (admission → experiment → validator → belief) and is tagged `source: llm_proposed`. Rejected ideas are kept — learning what is false counts.
 
@@ -308,3 +311,14 @@ Principle: **the LLM proposes, the evidence decides.** The LLM never touches the
 | R6 | **Validated belief → shadow policy.** A belief that passes validation runs as a shadow variant next to the live rule (shadow trades exist); going live needs operator approval. | Learning changes behaviour only with out-of-sample proof |
 
 Cost: ~110 s CPU per review on this host, so R1/R2 run after 15:30 with a daily budget; nothing new runs in market hours.
+
+### 9.3 What was built (R1–R3, `9b0b238`)
+
+Full detail in `docs/2026-10-06_COGNITIVE_LOOP_C1_PLAN.md` §8 (2026-10-13 entry). In short:
+
+- **Four defects fixed first.** NIFTY/BANKNIFTY bar files were never found (the writer names them `_NSEI.json` / `_NSEBANK.json`), so every question was refused or NOT_EVALUABLE. Hypotheses were tested on the same trades they came from. The only hypothesis was on the underlier's realised direction — known only after the trade. The fallback scored old trades against today's bar.
+- **R3 gate.** A split is *asked* when each side has ≥ 3 trades from ≥ 2 sessions, the gap is ≥ 0.15, and an exact test with false-discovery control says chance is unlikely (screen level 0.25). It is *answered* only by trades closed after the question: ≥ 5 per side over ≥ 2 sessions, reversed → REJECTED, one-sided p ≤ 0.05 → SUPPORTED, otherwise INCONCLUSIVE; re-tested nightly until then. Validation still needs two passes.
+- **R1 trade reviews.** Each eligible closed F&O round trip gets an LLM review (driver, signal vs luck, lesson candidate, missing data, optional testable idea), saved under `investment/cognitive/llm_research/india_fno_learner/`.
+- **R2 proposals.** Once a day the LLM proposes ≤ 3 questions from the feature table; code rejects anything the data can't support; the nightly cycle admits ≤ 1, with counts and confounds recomputed from the data.
+- **Bounds.** Off-hours only, ≤ 8 LLM calls per day for this, ≤ 3 per worker tick. Advice only — no order, strategy or sizing path reads any of it.
+- **Dry run on a copy of today's data:** review in 87 s, 3 proposals accepted in 193 s, one admitted (`entry_time_bucket`) and waiting for fresh trades; `5623ea11` closed as post-hoc.
