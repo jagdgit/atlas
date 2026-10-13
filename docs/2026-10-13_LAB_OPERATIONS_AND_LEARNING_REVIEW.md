@@ -159,5 +159,8 @@ The fill email (`reports.format_trade_report`) prints a "Decision detail" block 
 | 11 | Realistic cost profile for learning evaluation on all labs (keep zero-fee ledger separate — F18) | Agent | OI-DELI0 P0.2/P0.3 |
 | 12 | Propensity logging on every decision (needed for any bandit evaluation) | Agent | R0 |
 | 13 | Re-assess RL at ≥ 30 eligible independent days per lab | Operator + agent | ~6–8 weeks |
+| 14 | **F&O shadow trades (built 2026-10-13, `atlas/investment/fno_shadow.py`)** — every BUY signal blocked by the capital budget or cash, with a READY data pack, opens a counterfactual entry at live LTP (≤ 1 per underlier per day); closes on the 15:20 flatten clock at live LTP. After-close / missed / no-mark closes are `NOT_EVALUABLE`. Store: `investment/fno/shadow/<lab>/<day>.jsonl`; never touches ledger, lineage or the paper round-trip dataset. Assumes no slippage/fees (optimistic). Next: same for equity labs; a shadow-vs-real comparison in the evening email | Agent | Live after restart |
+
+Why not more capital instead: cash does not create independent observations. Signals are daily-bar, positions are capped, and same-day trades share one market move. Shadows add labelled examples for free; only more trading days add independent ones.
 
 R2 (DB-level checks for the 2026-10-12 duplicate-instance window) remains open.

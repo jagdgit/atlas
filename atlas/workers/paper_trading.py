@@ -239,6 +239,25 @@ class PaperTradingWorker(PersistentWorker):
                 )
                 for line in flat_lines:
                     self._logger.info("FNO-LAB-v1 %s", line)
+                try:
+                    from atlas.config import get_config as _gc_shadow
+                    from atlas.investment import fno_shadow
+
+                    for row in fno_shadow.close_due_shadows(
+                        str(_gc_shadow().paths.data),
+                        laboratory_id=portfolio_key,
+                        ltp_fn=self._nfo_ltp,
+                        now=self._clock(),
+                    ):
+                        self._logger.info(
+                            "FNO shadow close %s %s exit=%s pnl=%s",
+                            row.get("symbol"),
+                            row.get("status"),
+                            row.get("exit_premium"),
+                            (row.get("outcome") or {}).get("pnl_inr"),
+                        )
+                except Exception:  # noqa: BLE001
+                    self._logger.warning("FNO shadow close failed", exc_info=True)
         except Exception:  # noqa: BLE001
             self._logger.warning(
                 "FNO-LAB-v1 early experiment flatten failed",
@@ -3901,6 +3920,7 @@ class PaperTradingWorker(PersistentWorker):
         control_action: str | None = None,
         spot_as_of: Any = None,
         session_open: bool | None = None,
+        laboratory_id: str | None = None,
     ) -> dict[str, Any]:
         from atlas.investment.fno_contract import (
             choose_atm_overlay,
@@ -4039,6 +4059,10 @@ class PaperTradingWorker(PersistentWorker):
                     }
             except Exception:  # noqa: BLE001
                 self._logger.debug("fno capital budget gate skipped", exc_info=True)
+        shadow_block = (
+            str(overlay.get("reason") or "") if not overlay.get("used") else ""
+        )
+        shadow_budget = overlay.get("capital_budget")
         if overlay.get("used"):
             try:
                 from atlas.investment import fno_lab_v1 as lab_v1
@@ -4120,6 +4144,41 @@ class PaperTradingWorker(PersistentWorker):
             )
         except Exception:  # noqa: BLE001
             self._logger.debug("fno data pack skipped", exc_info=True)
+        # Shadow only on a READY pack — a counterfactual entry needs the same
+        # fresh-LTP evidence a real fill would.
+        if data_dir and shadow_block and pack is not None and pack.get("status") == "READY":
+            try:
+                from atlas.investment import fno_lab_v1 as lab_v1
+                from atlas.investment import fno_shadow
+
+                if fno_shadow.is_shadowable_block(shadow_block):
+                    shadow = fno_shadow.record_shadow_entry(
+                        data_dir,
+                        laboratory_id=str(laboratory_id or lab_v1.LABORATORY_ID),
+                        underlying=symbol,
+                        control_action=control_action,
+                        sma_margin=_sma_margin(indicators),
+                        rsi=rsi_v,
+                        spot=spot_px,
+                        ce=ce,
+                        pe=pe,
+                        ce_ltp=ce_ltp,
+                        pe_ltp=pe_ltp,
+                        block_reason=shadow_block,
+                        capital_budget=shadow_budget,
+                        now=self._clock(),
+                    )
+                    if shadow.get("ok"):
+                        overlay["shadow_id"] = shadow.get("shadow_id")
+                        self._logger.info(
+                            "FNO shadow BUY %s %s @ %.2f (blocked: %s)",
+                            shadow.get("symbol"),
+                            shadow.get("qty"),
+                            float(shadow.get("entry_premium") or 0),
+                            shadow.get("block_reason"),
+                        )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("fno shadow entry skipped", exc_info=True)
         # P0.7 — freeze decide-time pack snapshot under prediction_id (not live pack path).
         if (
             data_dir
@@ -5741,6 +5800,7 @@ class PaperTradingWorker(PersistentWorker):
                     control_action=kind or "hold",
                     spot_as_of=bar.get("t") if isinstance(bar, dict) else None,
                     session_open=sess_state.get("open"),
+                    laboratory_id=portfolio_key,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("F&O ATM overlay skipped: %s", exc)
