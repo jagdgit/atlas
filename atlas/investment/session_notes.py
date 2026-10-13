@@ -114,6 +114,10 @@ def classify_action(action: str) -> str | None:
         return "portfolio_hold"
     if "fno_no_cash_alts" in a:
         return "fno_no_cash_alts"
+    if "capital_budget_max_open" in a:
+        return "capital_budget_max_open"
+    if "capital_budget_cash_floor" in a:
+        return "capital_budget_cash_floor"
     if "intraday_yahoo_budget" in a:
         return "intraday_yahoo_budget"
     if "session_closed" in a:
@@ -174,6 +178,8 @@ REASON_LABELS = {
     "margin": "Index-proxy lot blocked by margin (not cash-equity concentration)",
     "next_alternatives": "Primary names idle — tried next ranked alternatives",
     "fno_no_cash_alts": "F&O lab skipped cash-equity alternatives (operator contracts only)",
+    "capital_budget_max_open": "F&O capital budget — max concurrent option experiments reached (no auto top-up)",
+    "capital_budget_cash_floor": "F&O capital budget — buy would breach cash reserve floor (finite book)",
     "intraday_yahoo_budget": "Intraday lab capped at ≤3 names (Yahoo 5m budget; no extra alts)",
     "feed_exhausted": "Replay feed exhausted",
     "other_idle": "Other idle / skip reasons",

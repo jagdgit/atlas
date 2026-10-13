@@ -21,6 +21,7 @@ import re
 from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from atlas.investment.fno_contract import (
@@ -40,12 +41,29 @@ SEED_REL = Path("investment") / "fno" / "lab_v1_seed.json"
 POLICY_REL = Path("investment") / "fno" / "lab_v1_policy.json"
 INTEGRITY_REL = Path("investment") / "fno" / "lab_v1_integrity"
 PREDICTION_REL = Path("investment") / "fno" / "lab_v1_predictions"
+PREDICTION_BY_ID_REL = Path("investment") / "fno" / "lab_v1_predictions" / "by_id"
+ENTRY_SNAPSHOT_REL = Path("investment") / "fno" / "lab_v1_entry_snapshots"
 REASON_EXPERIMENT_CLOSE = "fno_lab_v1_experiment_close"
 # NSE F&O cash market close — after this, Lab v1 option experiments must flatten.
 FNO_FLAT_AFTER = time(15, 30)
 FNO_SESSION_OPEN = time(9, 15)
 # Bounded control-linked premium E[R] model id (not a valued option pricer).
 ENTRY_ER_MODEL = "fno_lab_v1_control_signal.v1"
+
+# Finite paper capital — operator does not top up F&O indefinitely.
+# max_open stops underlier-swarm buys; cash_floor keeps residual dry powder.
+DEFAULT_CAPITAL_POLICY: dict[str, Any] = {
+    "version": "fno.lab.v1.capital.v1",
+    "auto_top_up": False,
+    "operator_deposit_only": True,
+    "max_open_option_experiments": 2,
+    "cash_reserve_fraction_of_starting": 0.30,
+    "honesty": (
+        "Paper F&O capital is finite (starting_cash / net contributed). "
+        "Atlas must not auto-deposit or void-reset to refill the book. "
+        "New option BUYs stop at max_open or when cash would breach the reserve floor."
+    ),
+}
 
 # Stable short tags for experiment families (FNO-ATM-REL-001).
 _INDEX_SHORT = {
@@ -97,6 +115,134 @@ SKIP_NO_LTP = "no_fresh_option_ltp"
 SKIP_INSUFFICIENT_CASH = "insufficient_cash"
 SKIP_NOT_IN_UNIVERSE = "not_in_lab_v1_universe"
 SKIP_SESSION_CLOSED = "session_closed"
+SKIP_CAPITAL_MAX_OPEN = "capital_budget_max_open"
+SKIP_CAPITAL_CASH_FLOOR = "capital_budget_cash_floor"
+
+
+def capital_policy(data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Finite-capital rules for Lab v1 option BUYs (never auto top-up)."""
+    body = dict(DEFAULT_CAPITAL_POLICY)
+    if not data_dir:
+        return body
+    path = Path(data_dir) / POLICY_REL
+    if not path.is_file():
+        return body
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return body
+    raw = doc.get("capital") if isinstance(doc, dict) else None
+    if not isinstance(raw, dict):
+        return body
+    for key in (
+        "auto_top_up",
+        "operator_deposit_only",
+        "max_open_option_experiments",
+        "cash_reserve_fraction_of_starting",
+        "honesty",
+    ):
+        if key in raw:
+            body[key] = raw[key]
+    body["auto_top_up"] = False  # hard invariant — never auto-refill
+    return body
+
+
+def count_open_option_experiments(positions: list[dict[str, Any]] | None) -> int:
+    n = 0
+    for pos in positions or []:
+        if not isinstance(pos, dict):
+            continue
+        try:
+            qty = float(pos.get("quantity") or pos.get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty <= 1e-12:
+            continue
+        if option_right(str(pos.get("symbol") or "")):
+            n += 1
+    return n
+
+
+def evaluate_option_buy_budget(
+    *,
+    positions: list[dict[str, Any]] | None,
+    cash: float,
+    premium: float | None,
+    qty: float | None,
+    starting_cash: float | None = None,
+    policy_doc: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Gate a new 1-lot option BUY against finite paper capital.
+
+    Does not deposit, withdraw, or reset the book. Deny reasons are explicit
+    skip codes for KPI / session notes.
+    """
+    pol = dict(DEFAULT_CAPITAL_POLICY)
+    if isinstance(policy_doc, dict):
+        pol.update({k: policy_doc[k] for k in policy_doc if k in DEFAULT_CAPITAL_POLICY or k in pol})
+    pol["auto_top_up"] = False
+    try:
+        max_open = int(pol.get("max_open_option_experiments") or 2)
+    except (TypeError, ValueError):
+        max_open = 2
+    max_open = max(1, max_open)
+    try:
+        reserve_frac = float(pol.get("cash_reserve_fraction_of_starting") or 0.30)
+    except (TypeError, ValueError):
+        reserve_frac = 0.30
+    reserve_frac = min(0.90, max(0.0, reserve_frac))
+
+    open_n = count_open_option_experiments(positions)
+    if open_n >= max_open:
+        return {
+            "ok": False,
+            "reason": SKIP_CAPITAL_MAX_OPEN,
+            "open_option_experiments": open_n,
+            "max_open_option_experiments": max_open,
+            "auto_top_up": False,
+            "honesty": pol.get("honesty"),
+        }
+    try:
+        cash_f = float(cash)
+    except (TypeError, ValueError):
+        cash_f = 0.0
+    try:
+        px = float(premium) if premium is not None else 0.0
+        q = float(qty) if qty is not None else 0.0
+    except (TypeError, ValueError):
+        px, q = 0.0, 0.0
+    debit = max(0.0, px * q)
+    try:
+        base = float(starting_cash) if starting_cash is not None else cash_f
+    except (TypeError, ValueError):
+        base = cash_f
+    floor = max(0.0, base * reserve_frac)
+    cash_after = cash_f - debit
+    if cash_after + 1e-9 < floor:
+        return {
+            "ok": False,
+            "reason": SKIP_CAPITAL_CASH_FLOOR,
+            "cash": cash_f,
+            "debit": debit,
+            "cash_after": cash_after,
+            "cash_floor": floor,
+            "starting_cash": base,
+            "reserve_fraction": reserve_frac,
+            "open_option_experiments": open_n,
+            "auto_top_up": False,
+            "honesty": pol.get("honesty"),
+        }
+    return {
+        "ok": True,
+        "reason": "within_capital_budget",
+        "cash": cash_f,
+        "debit": debit,
+        "cash_after": cash_after,
+        "cash_floor": floor,
+        "open_option_experiments": open_n,
+        "max_open_option_experiments": max_open,
+        "auto_top_up": False,
+    }
 
 
 def normalize_underlier(symbol: str | None) -> str:
@@ -223,10 +369,34 @@ def prediction_path(
     *,
     option_symbol: str | None = None,
 ) -> Path | None:
+    """Contract pointer path (latest open prediction for a tradingsymbol)."""
     if not data_dir or not option_symbol:
         return None
     key = re.sub(r"[^A-Z0-9]+", "_", str(option_symbol).strip().upper()) or "UNK"
     return Path(data_dir) / PREDICTION_REL / f"{key}.json"
+
+
+def prediction_by_id_path(
+    data_dir: str | Path | None,
+    *,
+    prediction_id: str | None = None,
+) -> Path | None:
+    """Immutable prediction record path (P0.7 — survives re-entry overwrite)."""
+    if not data_dir or not prediction_id:
+        return None
+    key = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(prediction_id).strip()) or "UNK"
+    return Path(data_dir) / PREDICTION_BY_ID_REL / f"{key}.json"
+
+
+def entry_snapshot_path(
+    data_dir: str | Path | None,
+    *,
+    prediction_id: str | None = None,
+) -> Path | None:
+    if not data_dir or not prediction_id:
+        return None
+    key = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(prediction_id).strip()) or "UNK"
+    return Path(data_dir) / ENTRY_SNAPSHOT_REL / f"{key}.json"
 
 
 def build_entry_prediction(
@@ -273,10 +443,19 @@ def build_entry_prediction(
             "horizon=session_flat (must flatten by 15:30 IST)",
             "live_orders=false",
         ]
+    prediction_id = str(uuid4())
     return {
         "version": VERSION,
         "kind": "FNO_LAB_V1_ENTRY_PREDICTION",
+        "prediction_id": prediction_id,
         "prediction_status": "stated",
+        # OI-DELI0 P0.7 / §4.1 prediction contract
+        "prediction_type": "rule_output",
+        "target_variable": "option_premium_return",
+        "horizon": "session_flat",
+        "prediction_time": clock.isoformat(),
+        "model_or_rule_version": ENTRY_ER_MODEL,
+        "calibration_status": "uncalibrated_default",
         "laboratory_id": LABORATORY_ID,
         "lab_role": LAB_ROLE,
         "decision_id": decision_id,
@@ -307,6 +486,7 @@ def build_entry_prediction(
             "Not a valued option model — control-linked provisional E[R]",
             "Vol / regime between entry and session_flat unknown",
             "Single RT is not a validated lesson",
+            "p≈predicted_probability is uncalibrated_default — not a probability claim",
         ],
         "trade_id": trade_id,
         "control_action": control_action,
@@ -314,7 +494,9 @@ def build_entry_prediction(
         "live_orders": False,
         "honesty": (
             "Decide-time prediction persisted before outcome. "
-            f"Model={ENTRY_ER_MODEL}. Not L5 until outcome→error→attribution→lesson validates."
+            f"Model={ENTRY_ER_MODEL}. prediction_type=rule_output; "
+            "calibration_status=uncalibrated_default. "
+            "Not L5 until outcome→error→attribution→lesson validates."
         ),
     }
 
@@ -323,17 +505,48 @@ def persist_entry_prediction(
     data_dir: str | Path | None,
     prediction: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Durable open-experiment prediction (keyed by option tradingsymbol)."""
+    """Persist prediction by ``prediction_id``; contract file is a pointer (P0.7).
+
+    Re-entry overwrites only the pointer — historical ``by_id`` records stay.
+    """
     pred = prediction if isinstance(prediction, dict) else {}
-    path = prediction_path(data_dir, option_symbol=str(pred.get("contract") or ""))
-    if path is None or not pred:
+    if not pred or not data_dir:
         return {"ok": False, "reason": "no_path_or_prediction"}
     body = dict(pred)
+    if not body.get("prediction_id"):
+        body["prediction_id"] = str(uuid4())
     body["recorded_at"] = datetime.now(timezone.utc).isoformat()
+    by_id = prediction_by_id_path(data_dir, prediction_id=str(body["prediction_id"]))
+    pointer = prediction_path(data_dir, option_symbol=str(body.get("contract") or ""))
+    if by_id is None:
+        return {"ok": False, "reason": "no_path_or_prediction"}
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(body, indent=2, default=str) + "\n", encoding="utf-8")
-        return {"ok": True, "path": str(path), **body}
+        by_id.parent.mkdir(parents=True, exist_ok=True)
+        by_id.write_text(json.dumps(body, indent=2, default=str) + "\n", encoding="utf-8")
+        if pointer is not None:
+            pointer.parent.mkdir(parents=True, exist_ok=True)
+            pointer_doc = {
+                "version": VERSION,
+                "kind": "FNO_LAB_V1_PREDICTION_POINTER",
+                "contract": body.get("contract"),
+                "prediction_id": body["prediction_id"],
+                "by_id_path": str(by_id),
+                "prediction_status": body.get("prediction_status"),
+                "updated_at": body["recorded_at"],
+                "honesty": (
+                    "Pointer only — full prediction lives under by_id. "
+                    "Re-entry must not erase prior prediction_id records."
+                ),
+            }
+            pointer.write_text(
+                json.dumps(pointer_doc, indent=2, default=str) + "\n", encoding="utf-8"
+            )
+        return {
+            "ok": True,
+            "path": str(by_id),
+            "pointer_path": str(pointer) if pointer else None,
+            **body,
+        }
     except OSError as exc:
         _log.debug("lab_v1 prediction persist failed: %s", exc, exc_info=True)
         return {"ok": False, "reason": "persist_error"}
@@ -343,15 +556,108 @@ def load_entry_prediction(
     data_dir: str | Path | None,
     *,
     option_symbol: str | None = None,
+    prediction_id: str | None = None,
 ) -> dict[str, Any] | None:
+    """Load by prediction_id, or follow the contract pointer, or legacy full-file."""
+    if prediction_id:
+        by_id = prediction_by_id_path(data_dir, prediction_id=prediction_id)
+        if by_id is not None and by_id.is_file():
+            try:
+                doc = json.loads(by_id.read_text(encoding="utf-8"))
+                return doc if isinstance(doc, dict) else None
+            except (OSError, json.JSONDecodeError):
+                return None
     path = prediction_path(data_dir, option_symbol=option_symbol)
     if path is None or not path.is_file():
         return None
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
-        return doc if isinstance(doc, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(doc, dict):
+        return None
+    # Pointer → by_id
+    if doc.get("kind") == "FNO_LAB_V1_PREDICTION_POINTER" or (
+        doc.get("prediction_id") and not doc.get("expected_return") and doc.get("by_id_path")
+    ):
+        pid = str(doc.get("prediction_id") or "")
+        return load_entry_prediction(data_dir, prediction_id=pid) if pid else None
+    # Legacy: full prediction stored at contract path
+    return doc
+
+
+def persist_entry_evidence_snapshot(
+    data_dir: str | Path | None,
+    *,
+    prediction_id: str | None,
+    pack: dict[str, Any] | None,
+    overlay: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Freeze decide-time pack/overlay evidence keyed by prediction_id (P0.7)."""
+    if not data_dir or not prediction_id:
+        return {"ok": False, "reason": "no_prediction_id"}
+    path = entry_snapshot_path(data_dir, prediction_id=prediction_id)
+    if path is None:
+        return {"ok": False, "reason": "no_path"}
+    pack_d = dict(pack) if isinstance(pack, dict) else {}
+    overlay_d = dict(overlay) if isinstance(overlay, dict) else {}
+    # Keep snapshot small — drop heavy tick arrays if present.
+    pack_slim = {
+        k: pack_d.get(k)
+        for k in (
+            "version",
+            "underlying",
+            "status",
+            "quality_status",
+            "freshness",
+            "as_of",
+            "spot",
+            "expiry",
+            "atm",
+            "ce",
+            "pe",
+            "provider",
+            "reason",
+            "session",
+        )
+        if k in pack_d
+    }
+    spot_as_of = None
+    if isinstance(pack_d.get("spot"), dict):
+        spot_as_of = pack_d["spot"].get("as_of")
+    body = {
+        "version": "deli.entry_snapshot.v1",
+        "prediction_id": str(prediction_id),
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "pack_as_of": pack_slim.get("as_of") or spot_as_of,
+        "pack": pack_slim,
+        "overlay": {
+            k: overlay_d.get(k)
+            for k in (
+                "kind",
+                "symbol",
+                "right",
+                "price",
+                "qty",
+                "reason",
+                "control_action",
+                "adapter_id",
+                "experiment_family",
+            )
+            if k in overlay_d
+        },
+        "honesty": (
+            "Decide-time snapshot. Later pack overwrites must not replace this file. "
+            "as_of should be ≤ fill time."
+        ),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(body, indent=2, default=str) + "\n", encoding="utf-8")
+        return {"ok": True, "path": str(path), "prediction_id": str(prediction_id)}
+    except OSError as exc:
+        _log.debug("entry snapshot persist failed: %s", exc, exc_info=True)
+        return {"ok": False, "reason": "persist_error"}
 
 
 def bind_entry_prediction_trade(
@@ -385,11 +691,14 @@ def expected_block_from_prediction(prediction: dict[str, Any] | None) -> dict[st
         }
     return {
         "prediction_status": "stated",
+        "prediction_id": p.get("prediction_id"),
+        "prediction_type": p.get("prediction_type") or "rule_output",
+        "calibration_status": p.get("calibration_status") or "uncalibrated_default",
         "expected_return": p.get("expected_return"),
         "expected_direction": p.get("expected_direction") or "up",
         "expected_move": p.get("expected_move"),
         "predicted_probability": p.get("predicted_probability"),
-        "prediction_horizon": p.get("prediction_horizon") or "session_flat",
+        "prediction_horizon": p.get("prediction_horizon") or p.get("horizon") or "session_flat",
         "er_model": p.get("er_model") or ENTRY_ER_MODEL,
         "er_completeness": p.get("er_completeness"),
         "opportunity_confidence": p.get("opportunity_confidence")
@@ -523,6 +832,7 @@ def policy(data_dir: str | Path | None = None) -> dict[str, Any]:
                 "before outcome; session_flat close consumes it for prediction_error."
             ),
         },
+        "capital": capital_policy(data_dir),
         "expansion_rule": (
             "seed → experiences → coverage/data problems → repeated behaviours → "
             "lessons with attribution → revise seed/rules → expand"
@@ -530,7 +840,8 @@ def policy(data_dir: str | Path | None = None) -> dict[str, Any]:
         "equity_horizon_audit": "parallel_not_prerequisite",
         "honesty": (
             "Controlled paper training population. Not an edge claim. "
-            "Not the full NFO master. Missing data SKIPs — never invents fills."
+            "Not the full NFO master. Missing data SKIPs — never invents fills. "
+            "Capital is finite — no auto top-up."
         ),
     }
 

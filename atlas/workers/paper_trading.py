@@ -3985,18 +3985,59 @@ class PaperTradingWorker(PersistentWorker):
                 "fallback_l4": False,
                 "reason": "session_flat",
             }
+        positions_now = list(snapshot.get("positions") or [])
+        cash_now = float(snapshot.get("cash") or 0)
+        starting_cash = None
+        try:
+            starting_cash = float(
+                snapshot.get("starting_cash")
+                or snapshot.get("net_contributed_capital")
+                or 0
+            ) or None
+        except (TypeError, ValueError):
+            starting_cash = None
         overlay = choose_atm_overlay(
             sma_margin=_sma_margin(indicators),
             underlier_held=held,
-            positions=list(snapshot.get("positions") or []),
+            positions=positions_now,
             bundle=bundle,
-            cash=float(snapshot.get("cash") or 0),
+            cash=cash_now,
             ce_ltp=ce_ltp,
             pe_ltp=pe_ltp,
             control_action=control_action,
             underlying_price=spot_px,
             future_price=fut_ltp,
         )
+        # Finite F&O capital — no auto top-up; cap concurrent option experiments.
+        if overlay.get("used") and str(overlay.get("kind") or "").lower() == "buy":
+            try:
+                from atlas.investment import fno_lab_v1 as lab_v1
+
+                gate = lab_v1.evaluate_option_buy_budget(
+                    positions=positions_now,
+                    cash=cash_now,
+                    premium=overlay.get("price"),
+                    qty=overlay.get("qty"),
+                    starting_cash=starting_cash,
+                    policy_doc=lab_v1.capital_policy(data_dir),
+                )
+                if not gate.get("ok"):
+                    self._logger.info(
+                        "FNO capital budget blocked BUY %s: %s open=%s",
+                        overlay.get("symbol"),
+                        gate.get("reason"),
+                        gate.get("open_option_experiments"),
+                    )
+                    overlay = {
+                        "used": False,
+                        "fallback_l4": False,
+                        "reason": str(gate.get("reason") or "capital_budget"),
+                        "capital_budget": gate,
+                        "control_action": control_action,
+                        "writing": False,
+                    }
+            except Exception:  # noqa: BLE001
+                self._logger.debug("fno capital budget gate skipped", exc_info=True)
         if overlay.get("used"):
             try:
                 from atlas.investment import fno_lab_v1 as lab_v1
@@ -4030,6 +4071,7 @@ class PaperTradingWorker(PersistentWorker):
                         lab_v1.persist_entry_prediction(data_dir, pred)
             except Exception:  # noqa: BLE001
                 self._logger.debug("fno lab v1 attribution/prediction skipped", exc_info=True)
+        pack: dict[str, Any] | None = None
         try:
             from atlas.investment.fno_data_pack import (
                 apply_pack_to_overlay,
@@ -4077,6 +4119,34 @@ class PaperTradingWorker(PersistentWorker):
             )
         except Exception:  # noqa: BLE001
             self._logger.debug("fno data pack skipped", exc_info=True)
+        # P0.7 — freeze decide-time pack snapshot under prediction_id (not live pack path).
+        if (
+            data_dir
+            and pack is not None
+            and overlay.get("used")
+            and str(overlay.get("kind") or "").lower() == "buy"
+        ):
+            try:
+                from atlas.investment import fno_lab_v1 as lab_v1
+
+                pred = overlay.get("entry_prediction") if isinstance(overlay, dict) else None
+                pid = (
+                    str((pred or {}).get("prediction_id") or "")
+                    if isinstance(pred, dict)
+                    else ""
+                )
+                if pid:
+                    snap = lab_v1.persist_entry_evidence_snapshot(
+                        data_dir,
+                        prediction_id=pid,
+                        pack=pack,
+                        overlay=overlay,
+                    )
+                    if snap.get("ok"):
+                        overlay["evidence_snapshot_ref"] = snap.get("path")
+                        overlay["prediction_id"] = pid
+            except Exception:  # noqa: BLE001
+                self._logger.debug("fno entry snapshot skipped", exc_info=True)
         return overlay
 
     def _run_fno_paper_001(
@@ -4786,6 +4856,57 @@ class PaperTradingWorker(PersistentWorker):
                     fees_doc = bd.as_dict()
             except Exception:  # noqa: BLE001
                 fee = 0.0
+            exit_did = None
+            try:
+                from atlas.investment.decision_chain import mint_exit_decision
+                from atlas.investment.trade_lineage import (
+                    build_order_intent,
+                    resolve_open_entry_from_lineage,
+                )
+
+                open_entry = resolve_open_entry_from_lineage(
+                    data_dir,
+                    laboratory_id=portfolio_key,
+                    symbol=sym,
+                )
+                entry_did = open_entry.get("entry_decision_id")
+                minted = mint_exit_decision(
+                    self._decision_packets,
+                    symbol=sym,
+                    portfolio_key=portfolio_key,
+                    exit_reason_code=lab_v1.REASON_EXPERIMENT_CLOSE,
+                    rationale=f"{sym}: experiment_close",
+                    price=float(px),
+                    quantity=float(qty),
+                    parent_decision_id=entry_did,
+                    mission_id=mission_id,
+                    strategy_tag=lab_v1.REASON_EXPERIMENT_CLOSE,
+                    logger=self._logger,
+                )
+                exit_did = minted.get("decision_id")
+                xc_lineage = {
+                    "entry_decision_id": entry_did,
+                    "overlay_decision_id": open_entry.get("overlay_decision_id"),
+                    "parent_decision_id": open_entry.get("parent_decision_id"),
+                    "exit_decision_id": exit_did,
+                    "exit_reason_code": lab_v1.REASON_EXPERIMENT_CLOSE,
+                    "order_intent": build_order_intent(
+                        side="sell",
+                        symbol=sym,
+                        quantity=float(qty),
+                        price=float(px),
+                        rationale_source="experiment_close",
+                        rationale_text=lab_v1.REASON_EXPERIMENT_CLOSE,
+                        laboratory_id=portfolio_key,
+                        instrument_path=lab_v1.REASON_EXPERIMENT_CLOSE,
+                        overlay_decision_id=open_entry.get("overlay_decision_id"),
+                    ),
+                }
+            except Exception:  # noqa: BLE001
+                xc_lineage = {
+                    "exit_decision_id": exit_did,
+                    "exit_reason_code": lab_v1.REASON_EXPERIMENT_CLOSE,
+                }
             try:
                 trade = self._portfolio.apply_trade(
                     portfolio_id,
@@ -4796,9 +4917,10 @@ class PaperTradingWorker(PersistentWorker):
                     fee=fee,
                     fees=fees_doc,
                     mission_id=mission_id,
-                    decision_id=None,
+                    decision_id=exit_did,
                     laboratory_id=portfolio_key,
                     instrument_path=lab_v1.REASON_EXPERIMENT_CLOSE,
+                    lineage_ctx=xc_lineage,
                 )
             except Exception as exc:  # noqa: BLE001
                 lines.append(f"{sym}: experiment_close rejected ({exc})")
@@ -6225,25 +6347,106 @@ class PaperTradingWorker(PersistentWorker):
             )
             fee = float(breakdown.total)
             fees_doc = breakdown.as_dict()
-        # OI-DELI0 P0.4 — explicit order intent before fill (never from outcome).
+        # OI-DELI0 P0.4–P0.6 — order intent + overlay/exit decisions before fill.
         lineage_ctx: dict[str, Any] = {}
+        fill_decision_id: Any = getattr(decision, "id", None)
         try:
+            from atlas.investment.decision_chain import (
+                mint_exit_decision,
+                mint_overlay_buy_decision,
+            )
             from atlas.investment.trade_lineage import build_order_intent
 
             overlay_used = bool(option_overlay and option_overlay.get("used"))
-            engine_action = None
+            engine_decision_id = str(getattr(decision, "id", None) or "") or None
+            engine_action = str(kind or "hold").lower()
             if overlay_used:
-                engine_action = str(
-                    option_overlay.get("control_action") or kind or "hold"
-                ).lower()
-            else:
-                engine_action = str(kind or "hold").lower()
-            # Before overlay rewrite, control was HOLD while buy is overlay-driven.
-            if overlay_used and kind == "buy":
                 engine_action = str(
                     option_overlay.get("control_action") or "hold"
                 ).lower()
             rationale_source = "fno_overlay" if overlay_used else "engine"
+
+            # P0.6 — overlay BUY owns the fill decision; engine is parent only.
+            if overlay_used and kind == "buy":
+                pred_for_mint = (
+                    option_overlay.get("entry_prediction")
+                    if isinstance(option_overlay, dict)
+                    else None
+                )
+                minted = mint_overlay_buy_decision(
+                    self._decision_packets,
+                    symbol=symbol,
+                    portfolio_key=portfolio_key,
+                    engine_decision_id=engine_decision_id,
+                    rationale=why_short or None,
+                    price=float(price),
+                    quantity=float(qty),
+                    expected=pred_for_mint if isinstance(pred_for_mint, dict) else None,
+                    mission_id=mission_id,
+                    logger=self._logger,
+                )
+                if minted.get("decision_id"):
+                    fill_decision_id = minted["decision_id"]
+                    lineage_ctx["overlay_decision_id"] = fill_decision_id
+                    lineage_ctx["entry_decision_id"] = fill_decision_id
+                    lineage_ctx["parent_decision_id"] = engine_decision_id
+                    lineage_ctx["trade_class"] = "CONTROLLED_EXPERIMENT"
+                else:
+                    lineage_ctx["parent_decision_id"] = engine_decision_id
+                    lineage_ctx["entry_decision_id"] = None
+                    lineage_ctx["trade_class"] = "CONTROLLED_EXPERIMENT"
+            elif kind == "sell":
+                # P0.5 — sell must carry an exit decision id + reason,
+                # and link the open-lot entry when lineage has it.
+                try:
+                    from atlas.config import get_config as _get_cfg_sell
+                    from atlas.investment.trade_lineage import (
+                        resolve_open_entry_from_lineage,
+                    )
+
+                    open_entry = resolve_open_entry_from_lineage(
+                        str(_get_cfg_sell().paths.data),
+                        laboratory_id=portfolio_key,
+                        symbol=symbol,
+                    )
+                    if open_entry.get("entry_decision_id"):
+                        lineage_ctx["entry_decision_id"] = open_entry[
+                            "entry_decision_id"
+                        ]
+                    if open_entry.get("overlay_decision_id"):
+                        lineage_ctx["overlay_decision_id"] = open_entry[
+                            "overlay_decision_id"
+                        ]
+                    if open_entry.get("parent_decision_id"):
+                        lineage_ctx["parent_decision_id"] = open_entry[
+                            "parent_decision_id"
+                        ]
+                except Exception:  # noqa: BLE001
+                    open_entry = {}
+                if not fill_decision_id:
+                    minted_x = mint_exit_decision(
+                        self._decision_packets,
+                        symbol=symbol,
+                        portfolio_key=portfolio_key,
+                        exit_reason_code=str(exit_reason_code or "sell"),
+                        rationale=why_short or None,
+                        price=float(price),
+                        quantity=float(qty),
+                        parent_decision_id=lineage_ctx.get("entry_decision_id"),
+                        mission_id=mission_id,
+                        logger=self._logger,
+                    )
+                    if minted_x.get("decision_id"):
+                        fill_decision_id = minted_x["decision_id"]
+                lineage_ctx["exit_decision_id"] = (
+                    str(fill_decision_id) if fill_decision_id else None
+                )
+                lineage_ctx["exit_reason_code"] = exit_reason_code
+            else:
+                lineage_ctx["entry_decision_id"] = (
+                    str(fill_decision_id) if fill_decision_id else None
+                )
+
             intent = build_order_intent(
                 side=str(kind),
                 symbol=symbol,
@@ -6251,29 +6454,14 @@ class PaperTradingWorker(PersistentWorker):
                 price=float(price),
                 rationale_source=rationale_source,
                 rationale_text=why_short or None,
-                engine_decision_id=str(getattr(decision, "id", None) or "") or None,
+                engine_decision_id=engine_decision_id,
                 engine_action=engine_action,
+                overlay_decision_id=lineage_ctx.get("overlay_decision_id"),
                 overlay_used=overlay_used,
                 laboratory_id=portfolio_key,
                 instrument_path="buy",
             )
             lineage_ctx["order_intent"] = intent
-            if overlay_used and kind == "buy":
-                # Engine decision is parent only; overlay id arrives in P0.6.
-                lineage_ctx["parent_decision_id"] = (
-                    str(getattr(decision, "id", None) or "") or None
-                )
-                lineage_ctx["entry_decision_id"] = None
-                lineage_ctx["trade_class"] = "CONTROLLED_EXPERIMENT"
-            else:
-                lineage_ctx["entry_decision_id"] = (
-                    str(getattr(decision, "id", None) or "") or None
-                )
-            if kind == "sell":
-                lineage_ctx["exit_decision_id"] = (
-                    str(getattr(decision, "id", None) or "") or None
-                )
-                lineage_ctx["exit_reason_code"] = exit_reason_code
             pred = None
             if overlay_used and isinstance(option_overlay, dict):
                 pred = option_overlay.get("entry_prediction")
@@ -6281,20 +6469,26 @@ class PaperTradingWorker(PersistentWorker):
                 lineage_ctx["prediction_id"] = str(
                     pred.get("prediction_id") or pred.get("id") or ""
                 ) or None
-                pack = option_overlay.get("fno_pack") or option_overlay.get("pack")
-                if isinstance(pack, dict):
+                # Prefer frozen entry snapshot path (P0.7); fall back to live pack stub.
+                snap_ref = str(option_overlay.get("evidence_snapshot_ref") or "") or None
+                if snap_ref:
+                    lineage_ctx["evidence_snapshot_ref"] = snap_ref
+                pack_ev = option_overlay.get("fno_pack") or option_overlay.get("pack")
+                if isinstance(pack_ev, dict):
                     lineage_ctx["evidence_snapshot"] = {
-                        "as_of": pack.get("as_of"),
-                        "spot": pack.get("spot"),
-                        "atm_strike": pack.get("atm_strike"),
-                        "status": pack.get("status"),
+                        "as_of": pack_ev.get("as_of"),
+                        "spot": pack_ev.get("spot"),
+                        "atm_strike": pack_ev.get("atm_strike"),
+                        "status": pack_ev.get("status"),
                     }
-                    lineage_ctx["evidence_snapshot_ref"] = str(
-                        pack.get("path") or pack.get("ref") or ""
-                    ) or None
+                    if not lineage_ctx.get("evidence_snapshot_ref"):
+                        lineage_ctx["evidence_snapshot_ref"] = str(
+                            pack_ev.get("path") or pack_ev.get("ref") or ""
+                        ) or None
         except Exception:  # noqa: BLE001
-            self._logger.debug("order_intent build skipped", exc_info=True)
+            self._logger.debug("order_intent / decision-chain mint skipped", exc_info=True)
             lineage_ctx = {}
+            fill_decision_id = getattr(decision, "id", None)
         try:
             trade = self._portfolio.apply_trade(
                 portfolio_id,
@@ -6305,7 +6499,7 @@ class PaperTradingWorker(PersistentWorker):
                 fee=fee,
                 fees=fees_doc,
                 mission_id=mission_id,
-                decision_id=decision.id,
+                decision_id=fill_decision_id,
                 laboratory_id=portfolio_key,
                 instrument_path="buy",
                 lineage_ctx=lineage_ctx or None,
@@ -6660,6 +6854,60 @@ class PaperTradingWorker(PersistentWorker):
                     fees_doc = bd.as_dict()
             except Exception:  # noqa: BLE001
                 fee = 0.0
+            # P0.5 — mint exit decision before fill so sim.trades.decision_id is set.
+            exit_did = None
+            open_entry: dict[str, Any] = {}
+            try:
+                from atlas.config import get_config as _get_cfg_eod
+                from atlas.investment.decision_chain import mint_exit_decision
+                from atlas.investment.trade_lineage import resolve_open_entry_from_lineage
+
+                open_entry = resolve_open_entry_from_lineage(
+                    str(_get_cfg_eod().paths.data),
+                    laboratory_id=portfolio_key,
+                    symbol=symbol,
+                )
+                entry_did = open_entry.get("entry_decision_id")
+                minted = mint_exit_decision(
+                    self._decision_packets,
+                    symbol=symbol,
+                    portfolio_key=portfolio_key,
+                    exit_reason_code=REASON_EOD_FLATTEN,
+                    rationale="intraday EOD flatten — lab contract (flat overnight)",
+                    price=float(mark),
+                    quantity=float(qty),
+                    parent_decision_id=entry_did,
+                    mission_id=mission_id,
+                    strategy_tag=REASON_EOD_FLATTEN,
+                    logger=self._logger,
+                )
+                exit_did = minted.get("decision_id")
+            except Exception:  # noqa: BLE001
+                exit_did = None
+                entry_did = None
+            eod_lineage: dict[str, Any] = {
+                "entry_decision_id": open_entry.get("entry_decision_id") or entry_did,
+                "overlay_decision_id": open_entry.get("overlay_decision_id"),
+                "parent_decision_id": open_entry.get("parent_decision_id"),
+                "exit_decision_id": exit_did,
+                "exit_reason_code": REASON_EOD_FLATTEN,
+            }
+            try:
+                from atlas.investment.trade_lineage import build_order_intent
+
+                eod_lineage["order_intent"] = build_order_intent(
+                    side="sell",
+                    symbol=symbol,
+                    quantity=float(qty),
+                    price=float(mark),
+                    rationale_source="eod_flatten",
+                    rationale_text="intraday EOD flatten — lab contract (flat overnight)",
+                    laboratory_id=portfolio_key,
+                    instrument_path="eod_flatten",
+                    overlay_decision_id=open_entry.get("overlay_decision_id"),
+                )
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 trade = self._portfolio.apply_trade(
                     portfolio_id,
@@ -6670,9 +6918,10 @@ class PaperTradingWorker(PersistentWorker):
                     fee=fee,
                     fees=fees_doc,
                     mission_id=mission_id,
-                    decision_id=None,
+                    decision_id=exit_did,
                     laboratory_id=portfolio_key,
                     instrument_path="eod_flatten",
+                    lineage_ctx=eod_lineage,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._logger.warning("intraday EOD flatten sell rejected %s: %s", symbol, exc)
@@ -6702,7 +6951,7 @@ class PaperTradingWorker(PersistentWorker):
             except Exception:  # noqa: BLE001
                 pass
             decision = SimpleNamespace(
-                id=None,
+                id=exit_did,
                 why="intraday EOD flatten — lab contract (flat overnight)",
             )
             learn_cfg = dict(cfg)

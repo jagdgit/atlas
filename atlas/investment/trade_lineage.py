@@ -107,6 +107,7 @@ def _validate(
     entry_decision_id: str | None,
     overlay_decision_id: str | None,
     parent_decision_id: str | None,
+    exit_decision_id: str | None = None,
 ) -> list[str]:
     issues: list[str] = []
     if order_intent is None:
@@ -124,12 +125,101 @@ def _validate(
                         issues.append("engine_hold_linked_as_entry_buy")
         if not order_intent.get("order_intent_id"):
             issues.append("order_intent_missing_id")
-    if str(side).lower() == "buy" and not entry_decision_id and not overlay_decision_id:
+    side_l = str(side).lower()
+    if side_l == "buy" and not entry_decision_id and not overlay_decision_id:
         issues.append("missing_entry_decision_id")
-    if str(side).lower() == "sell" and not entry_decision_id:
-        # Exit decision may be absent until P0.5 — flag explicitly.
+    if side_l == "sell" and not entry_decision_id:
+        # Sell must link back to the open-lot entry (P0.4/P0.5).
+        issues.append("missing_entry_decision_id")
+    if side_l == "sell" and not exit_decision_id:
         issues.append("missing_exit_decision_id")
     return issues
+
+
+def resolve_open_entry_from_lineage(
+    data_dir: str | Path | None,
+    *,
+    laboratory_id: str,
+    symbol: str,
+    lookback_days: int = 7,
+) -> dict[str, Any]:
+    """Find the unmatched open-lot entry decision for ``symbol`` from shadow lineage.
+
+    Replays buy/sell rows oldest→newest across recent IST days. A buy opens (or
+    stacks) a lot; a sell closes the latest open lot. Returns entry / overlay /
+    parent ids from the still-open lot, or empty when none found.
+    """
+    empty: dict[str, Any] = {
+        "entry_decision_id": None,
+        "overlay_decision_id": None,
+        "parent_decision_id": None,
+        "buy_fill_trade_id": None,
+        "source": None,
+    }
+    if not data_dir or not symbol:
+        return empty
+    lab = str(laboratory_id or "unknown").strip() or "unknown"
+    sym = str(symbol).strip()
+    root = (
+        Path(data_dir) / "investment" / "trade_lineage" / lab
+    )
+    if not root.is_dir():
+        return empty
+
+    from datetime import timedelta
+
+    today = datetime.now(timezone.utc).astimezone(IST).date()
+    days = [
+        (today - timedelta(days=i)).isoformat()
+        for i in range(max(1, int(lookback_days)) - 1, -1, -1)
+    ]
+    open_lots: list[dict[str, Any]] = []
+    for day in days:
+        path = root / f"{day}.jsonl"
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(row.get("symbol") or "").strip() != sym:
+                continue
+            side = str(row.get("side") or "").lower()
+            if side == "buy":
+                entry = (
+                    str(row.get("entry_decision_id") or "").strip()
+                    or str(row.get("overlay_decision_id") or "").strip()
+                    or None
+                )
+                if not entry:
+                    continue
+                open_lots.append(
+                    {
+                        "entry_decision_id": entry,
+                        "overlay_decision_id": (
+                            str(row.get("overlay_decision_id") or "").strip() or None
+                        ),
+                        "parent_decision_id": (
+                            str(row.get("parent_decision_id") or "").strip() or None
+                        ),
+                        "buy_fill_trade_id": (
+                            str(row.get("fill_trade_id") or "").strip() or None
+                        ),
+                        "source": f"trade_lineage:{day}",
+                    }
+                )
+            elif side == "sell" and open_lots:
+                open_lots.pop()
+    if not open_lots:
+        return empty
+    return dict(open_lots[-1])
 
 
 def lineage_paths(data_dir: str | Path, *, laboratory_id: str, day: str) -> dict[str, Path]:
@@ -204,19 +294,6 @@ def write_trade_lineage(
     elif evidence_snapshot is not None:
         snap_hash = content_hash(evidence_snapshot)
 
-    # Validate against what the caller claimed, then demote HOLD→BUY linkage for storage.
-    issues = _validate(
-        order_intent=order_intent,
-        side=side,
-        entry_decision_id=entry_decision_id if side == "buy" else exit_decision_id,
-        overlay_decision_id=overlay_decision_id,
-        parent_decision_id=parent_decision_id,
-    )
-    if side == "sell":
-        issues = [i for i in issues if i != "missing_entry_decision_id"]
-        if not exit_decision_id and "missing_exit_decision_id" not in issues:
-            issues.append("missing_exit_decision_id")
-
     eng_act = None
     if isinstance(order_intent, dict):
         eng_act = str(order_intent.get("engine_action") or "").lower() or None
@@ -233,8 +310,26 @@ def write_trade_lineage(
         # Demote engine HOLD to parent; leave entry empty until P0.6 mints overlay id.
         effective_parent = entry_decision_id
         effective_entry = None
-        if "engine_hold_linked_as_entry_buy" not in issues:
-            issues.append("engine_hold_linked_as_entry_buy")
+
+    # Validate against what will be stored (after HOLD demotion).
+    issues = _validate(
+        order_intent=order_intent,
+        side=side,
+        entry_decision_id=effective_entry,
+        overlay_decision_id=overlay_decision_id,
+        parent_decision_id=effective_parent,
+        exit_decision_id=exit_decision_id if side == "sell" else None,
+    )
+    if (
+        side == "buy"
+        and eng_act == "hold"
+        and overlay_decision_id is None
+        and entry_decision_id
+        and isinstance(order_intent, dict)
+        and str(order_intent.get("engine_decision_id") or "") == str(entry_decision_id)
+        and "engine_hold_linked_as_entry_buy" not in issues
+    ):
+        issues.append("engine_hold_linked_as_entry_buy")
 
     incomplete = bool(issues)
     record = {
@@ -249,7 +344,7 @@ def write_trade_lineage(
         "side": side,
         "quantity": trade.get("quantity") or trade.get("qty"),
         "price": trade.get("price"),
-        "entry_decision_id": effective_entry,
+        "entry_decision_id": effective_entry if side == "buy" else entry_decision_id,
         "overlay_decision_id": overlay_decision_id,
         "parent_decision_id": effective_parent,
         "exit_decision_id": exit_decision_id if side == "sell" else None,

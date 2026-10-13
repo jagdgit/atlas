@@ -140,7 +140,10 @@ def test_shadow_after_fill_never_raises(tmp_path: Path) -> None:
         lineage_ctx=None,
     )
     assert out.get("lineage_incomplete") is True
-    assert "missing_order_intent" in (out.get("integrity_issues") or [])
+    issues = out.get("integrity_issues") or []
+    assert "missing_order_intent" in issues
+    assert "missing_entry_decision_id" in issues
+    assert "missing_exit_decision_id" in issues
 
 
 def test_complete_buy_lineage_ok(tmp_path: Path) -> None:

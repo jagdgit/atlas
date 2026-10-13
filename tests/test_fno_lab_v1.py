@@ -563,3 +563,100 @@ def test_session_flat_blocks_new_buy_after_close():
 
     ist = ZoneInfo("Asia/Kolkata")
     assert must_flatten_experiments(datetime(2026, 9, 25, 15, 45, tzinfo=ist)) is True
+
+
+def test_capital_budget_blocks_third_open_and_never_autotops():
+    from atlas.investment.fno_lab_v1 import (
+        DEFAULT_CAPITAL_POLICY,
+        SKIP_CAPITAL_CASH_FLOOR,
+        SKIP_CAPITAL_MAX_OPEN,
+        capital_policy,
+        evaluate_option_buy_budget,
+        policy,
+    )
+
+    assert DEFAULT_CAPITAL_POLICY["auto_top_up"] is False
+    assert capital_policy()["auto_top_up"] is False
+    assert policy()["capital"]["auto_top_up"] is False
+    assert policy()["capital"]["max_open_option_experiments"] == 2
+
+    open_two = [
+        {"symbol": "NIFTY26OCT22500PE", "quantity": 65},
+        {"symbol": "BANKNIFTY26OCT55300PE", "quantity": 30},
+    ]
+    blocked = evaluate_option_buy_budget(
+        positions=open_two,
+        cash=80_000,
+        premium=20.0,
+        qty=500,
+        starting_cash=100_000,
+    )
+    assert blocked["ok"] is False
+    assert blocked["reason"] == SKIP_CAPITAL_MAX_OPEN
+    assert blocked["auto_top_up"] is False
+
+    floor = evaluate_option_buy_budget(
+        positions=[],
+        cash=40_000,
+        premium=200.0,
+        qty=65,  # debit 13_000 → cash_after 27k < 30k floor
+        starting_cash=100_000,
+    )
+    assert floor["ok"] is False
+    assert floor["reason"] == SKIP_CAPITAL_CASH_FLOOR
+
+    ok = evaluate_option_buy_budget(
+        positions=[{"symbol": "NIFTY26OCT22500PE", "quantity": 65}],
+        cash=80_000,
+        premium=10.0,
+        qty=65,
+        starting_cash=100_000,
+    )
+    assert ok["ok"] is True
+
+
+def test_prediction_id_survives_reentry_pointer(tmp_path):
+    from atlas.investment.fno_lab_v1 import (
+        build_entry_prediction,
+        load_entry_prediction,
+        persist_entry_evidence_snapshot,
+        persist_entry_prediction,
+    )
+
+    p1 = build_entry_prediction(
+        underlying="NIFTY",
+        option_symbol="NIFTY26OCT22500PE",
+        right="PE",
+        entry_premium=249.3,
+        sma_margin=-0.003,
+        control_action="buy",
+    )
+    assert p1["prediction_id"]
+    assert p1["prediction_type"] == "rule_output"
+    assert p1["calibration_status"] == "uncalibrated_default"
+    persist_entry_prediction(tmp_path, p1)
+    snap = persist_entry_evidence_snapshot(
+        tmp_path,
+        prediction_id=p1["prediction_id"],
+        pack={"as_of": "2026-10-13T03:51:00+00:00", "status": "READY", "spot": {"value": 22584}},
+        overlay={"kind": "buy", "symbol": "NIFTY26OCT22500PE", "price": 249.3},
+    )
+    assert snap["ok"] is True
+
+    p2 = build_entry_prediction(
+        underlying="NIFTY",
+        option_symbol="NIFTY26OCT22500PE",
+        right="PE",
+        entry_premium=104.1,
+        sma_margin=-0.002,
+        control_action="buy",
+    )
+    assert p2["prediction_id"] != p1["prediction_id"]
+    persist_entry_prediction(tmp_path, p2)
+
+    # Pointer follows latest; by_id keeps both.
+    latest = load_entry_prediction(tmp_path, option_symbol="NIFTY26OCT22500PE")
+    assert latest and latest["prediction_id"] == p2["prediction_id"]
+    first = load_entry_prediction(tmp_path, prediction_id=p1["prediction_id"])
+    assert first and first["entry_premium"] == 249.3
+    assert first["expected_return"] == p1["expected_return"]
