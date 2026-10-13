@@ -200,6 +200,18 @@ class PaperTradingWorker(PersistentWorker):
         book = vp.ensure_from_config(cfg, mission_id=str(ctx.mission_id) if ctx.mission_id else None)
         portfolio_key = str(book.get("portfolio_key") or "default")
         state["portfolio_key"] = portfolio_key
+        try:
+            from atlas.config import get_config as _gc_ticks
+            from atlas.investment import lab_ticks
+
+            lab_ticks.record_admitted_tick(
+                str(_gc_ticks().paths.data),
+                laboratory_id=portfolio_key,
+                worker_id=str(ctx.worker_id),
+                now=self._clock(),
+            )
+        except Exception:  # noqa: BLE001
+            self._logger.debug("lab tick record skipped", exc_info=True)
         # Lab v1 experiment-scoped exit MUST run before any early return (MDPH / pack
         # / pause). Overnight option inventory blocks learning — never skip flatten.
         try:

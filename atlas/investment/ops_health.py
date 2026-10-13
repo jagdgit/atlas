@@ -68,6 +68,8 @@ RECOVERY_SPACING_S = 90.0
 CONFIRM_WINDOW_S = 10 * 60.0
 P1_PERSIST_S = 20 * 60.0
 PACK_STALE_S = 60 * 60.0
+LAB_TICK_STALE_S = 20 * 60.0
+LAB_TICK_CHECK_FROM = dtime(9, 35)
 RESOLVED_GRACE_TICKS = 1
 SYSTEMIC_SHARE = 0.60
 SYSTEMIC_SESSIONS = 2
@@ -500,6 +502,76 @@ def assess_fno(
     return {"category": category, "findings": findings, "summary": summary}
 
 
+def _lab_tick_key(lab: str) -> str:
+    return f"lab:{lab}:ticks"
+
+
+def _is_lab_tick_key(key: str) -> bool:
+    return key.startswith("lab:") and key.endswith(":ticks")
+
+
+def assess_lab_ticks(data_dir: str | Path, *, now: datetime | None = None) -> dict[str, Any]:
+    """P0 when a paper lab seen today or on the previous recorded day has no admitted in-session tick."""
+    from atlas.investment import lab_ticks
+
+    ist = _ist(now)
+    day = ist.date().isoformat()
+    doc = lab_ticks.load_day(data_dir, day)
+    labs = set(doc["labs"]) | lab_ticks.previous_day_labs(data_dir, day)
+    summary = {
+        lab: {
+            "in_session": int((doc["labs"].get(lab) or {}).get("in_session") or 0),
+            "last_in_session_at": (doc["labs"].get(lab) or {}).get("last_in_session_at"),
+            "deferred_in_session": int(lab_ticks.deferrals_for_lab(doc, lab).get("in_session") or 0),
+        }
+        for lab in sorted(labs)
+    }
+    findings: list[dict[str, Any]] = []
+    if not (fno_window_open(now) and ist.time() >= LAB_TICK_CHECK_FROM):
+        return {"findings": findings, "summary": summary}
+    for lab in sorted(labs):
+        last = _parse_ts(summary[lab]["last_in_session_at"])
+        idle_s = (_now_utc(now) - last).total_seconds() if last else None
+        if idle_s is not None and idle_s <= LAB_TICK_STALE_S:
+            continue
+        dfr = lab_ticks.deferrals_for_lab(doc, lab)
+        by = dfr.get("by_cause") or {}
+        why = (
+            f"{int(dfr.get('in_session') or 0)} ticks deferred in session "
+            f"({', '.join(f'{k} ×{v}' for k, v in sorted(by.items()))}); last: {dfr.get('last_reason') or dfr.get('last_cause')}."
+            if dfr
+            else "No deferrals recorded for this lab's worker — it may be paused, stopped, or not scheduled."
+        )
+        findings.append(
+            _finding(
+                _lab_tick_key(lab),
+                lab=lab,
+                category=IDLE_WORKER,
+                severity=P0,
+                dependency="lab_tick_admission",
+                what=(
+                    f"{lab}: no admitted tick this session"
+                    if last is None
+                    else f"{lab}: no admitted tick for {int(idle_s // 60)} min"
+                ),
+                why=why,
+                impact="The lab cannot open, manage, or close positions; nothing it does today is learnable.",
+                actions=[
+                    "If the deferrals say host_pressure: free RAM (e.g. `ollama stop <model>`, close browser tabs).",
+                    "If no deferrals: check the worker list / `systemctl status atlas`; the operator restarts if needed.",
+                ],
+                detail={"ticks": summary[lab], "deferrals": dfr},
+            )
+        )
+    return {"findings": findings, "summary": summary}
+
+
+def _lab_ticked_since_open(lab_summary: dict[str, Any], incident: dict[str, Any]) -> bool:
+    last = _parse_ts((lab_summary.get(str(incident.get("lab"))) or {}).get("last_in_session_at"))
+    opened = _parse_ts(incident.get("opened_at"))
+    return last is not None and (opened is None or last > opened)
+
+
 def _pack_written_since_open(summary: dict[str, Any], incident: dict[str, Any]) -> bool:
     latest = _parse_ts(summary.get("latest_pack_at"))
     opened = _parse_ts(incident.get("opened_at"))
@@ -811,7 +883,13 @@ def _tick(
     fno = assess_fno(data_dir, health=health, now=now)
     systemic = assess_systemic_blocks(data_dir, day=day) if ist.time() >= dtime(15, 30) or not fno_window_open(now) else {"findings": []}
     failures = task_failures_for_day(data_dir, day)
-    findings = list(fno["findings"]) + list(systemic.get("findings") or [])
+    lab_ticks_now = assess_lab_ticks(data_dir, now=now)
+    state["lab_ticks"] = lab_ticks_now["summary"]
+    findings = (
+        list(fno["findings"])
+        + list(systemic.get("findings") or [])
+        + list(lab_ticks_now["findings"])
+    )
     if len(failures) >= SCHEDULER_FAIL_ALERT:
         types = Counter(str(f.get("task_type")) for f in failures)
         errors = Counter(str(f.get("error"))[:90] for f in failures)
@@ -856,7 +934,9 @@ def _tick(
             STATUS_UNRESOLVED,
         }:
             if inc is not None and (
-                f["key"].startswith("equity:systemic:") or f["key"] == "fno:paper_worker"
+                f["key"].startswith("equity:systemic:")
+                or f["key"] == "fno:paper_worker"
+                or _is_lab_tick_key(f["key"])
             ):
                 inc["status"] = STATUS_OPEN
                 inc.pop("resolved_at", None)
@@ -997,10 +1077,13 @@ def _tick(
         }:
             continue
         # A resume alone is not verification — a pack written after the incident opened is.
-        if key == "fno:paper_worker" and _pack_written_since_open(fno["summary"], inc):
+        verified = (key == "fno:paper_worker" and _pack_written_since_open(fno["summary"], inc)) or (
+            _is_lab_tick_key(key) and _lab_ticked_since_open(lab_ticks_now["summary"], inc)
+        )
+        if verified:
             inc["status"] = STATUS_RECOVERED_VERIFIED
             inc["resolved_at"] = clock.isoformat()
-            inc["resolution"] = "pack_write_confirmed"
+            inc["resolution"] = "pack_write_confirmed" if key == "fno:paper_worker" else "admitted_tick_confirmed"
             if inc.get("recovery") in {"RECOVERED_PENDING_CONFIRM", "IN_PROGRESS", "PENDING"}:
                 inc["recovery"] = "RECOVERED"
             _event(state, "INCIDENT_RESOLVED", now, key=key, resolution=inc["resolution"])
@@ -1019,7 +1102,7 @@ def _tick(
 
         # F&O paper-worker outages must not become "condition cleared" merely because
         # the market window ended. Require a pack write or an explicit verified recovery.
-        if key == "fno:paper_worker":
+        if key == "fno:paper_worker" or _is_lab_tick_key(key):
             inc["status"] = STATUS_UNRESOLVED
             inc["resolved_at"] = clock.isoformat()
             inc["resolution"] = "market_window_ended_without_recovery"
@@ -1093,6 +1176,12 @@ def digest_lines(data_dir: str | Path, day: str) -> list[str]:
         lines.append(
             "  F&O window minutes by state: "
             + ", ".join(f"{k}={int(v)}" for k, v in sorted(minutes.items()))
+        )
+    for lab, row in sorted((state.get("lab_ticks") or {}).items()):
+        lines.append(
+            f"  Lab ticks in session — {lab}: admitted {row.get('in_session', 0)}, "
+            f"deferred {row.get('deferred_in_session', 0)}, last "
+            + (_ist_hm(row.get("last_in_session_at")) if row.get("last_in_session_at") else "never")
         )
     if not incidents:
         lines.append("  No operational incidents recorded today.")

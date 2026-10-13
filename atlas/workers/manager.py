@@ -448,13 +448,23 @@ class WorkerManager:
         except Exception:  # noqa: BLE001 - timing must never break a tick
             self._logger.debug("failed to record tick timing for %s", worker.id, exc_info=True)
 
-    def _record_wait(self, worker: Worker, reason: str) -> None:
+    def _record_wait(self, worker: Worker, reason: str, detail: str = "") -> None:
         try:
             meta = dict(worker.metadata or {})
             meta["ops"] = update_wait_ops(ops_meta(worker), reason=reason)
             self._repo.update_metadata(worker.id, meta)
         except Exception:  # noqa: BLE001
             self._logger.debug("failed to record wait for %s", worker.id, exc_info=True)
+        if worker.type == "paper_trading":
+            try:
+                from atlas.config import get_config
+                from atlas.investment import lab_ticks
+
+                lab_ticks.record_deferred_tick(
+                    str(get_config().paths.data), worker_id=worker.id, cause=reason, reason=detail
+                )
+            except Exception:  # noqa: BLE001
+                self._logger.debug("lab deferral record skipped", exc_info=True)
 
     # --- the tick (registered as the `worker_tick` handler) -------------
 
@@ -495,7 +505,7 @@ class WorkerManager:
                 self._logger.debug("host_guard check failed: %s", exc)
                 ok, reason = True, "host_guard_error"
             if not ok:
-                self._record_wait(worker, "host_pressure")
+                self._record_wait(worker, "host_pressure", str(reason or ""))
                 self._reschedule_after_deferral(worker, reason=reason)
                 self._emit(
                     "WorkerDeferred",
@@ -523,7 +533,7 @@ class WorkerManager:
                 self._logger.debug("work_admission check failed: %s", exc)
                 timing = None
             if timing is not None and not timing.allowed:
-                self._record_wait(worker, "schedule")
+                self._record_wait(worker, "schedule", str(timing.reason or ""))
                 # Use hint if far; otherwise short retry. Do not waste full interval.
                 self._reschedule_after_deferral(
                     worker,
@@ -551,7 +561,7 @@ class WorkerManager:
                     self._host_guard.note_deferred(verdict.reason)
                 except Exception:  # noqa: BLE001
                     pass
-            self._record_wait(worker, "budget")
+            self._record_wait(worker, "budget", str(verdict.reason or ""))
             self._reschedule_after_deferral(worker, reason=verdict.reason)
             self._emit("WorkerThrottled", worker, reason=verdict.reason, score=round(verdict.score, 4))
             return {"skipped": "budget", "reason": verdict.reason, "worker_id": worker.id}
@@ -564,7 +574,7 @@ class WorkerManager:
                 decision = self._reservations.acquire(ReservationRequest.from_worker_meta(worker))
                 if not decision.allowed:
                     self._arbiter.release(worker.mission_id)
-                    self._record_wait(worker, "reservation")
+                    self._record_wait(worker, "reservation", str(decision.reason or ""))
                     self._reschedule_after_deferral(worker, reason=decision.reason)
                     self._emit(
                         "WorkerThrottled",
