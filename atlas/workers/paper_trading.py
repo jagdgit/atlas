@@ -48,6 +48,27 @@ def skip_cash_alts_for_lab(
     return _skip(cfg, pack_id=pack_id, portfolio_key=portfolio_key)
 
 
+def switch_packet_action(
+    decision: str,
+    *,
+    session_open: bool,
+    execute: bool,
+    switched: int,
+    max_switches: int,
+) -> tuple[bool, list[str]]:
+    """(record as SELL?, reasons it cannot execute now). A recommended switch that cannot run is a HOLD."""
+    blocked = [
+        why
+        for why, hit in (
+            ("switch_not_executed:session_closed", not session_open),
+            ("switch_not_executed:execute_disabled", not execute),
+            ("switch_not_executed:max_switches_per_tick", switched >= max_switches),
+        )
+        if hit
+    ]
+    return decision == "switch" and not blocked, blocked if decision == "switch" else []
+
+
 def _f_peak(state: dict[str, Any], symbol: str, price: float) -> float | None:
     """Track per-symbol peak mark in worker state (for PLC.B trailing_stop)."""
     try:
@@ -2164,18 +2185,21 @@ class PaperTradingWorker(PersistentWorker):
                 except Exception:  # noqa: BLE001
                     pass
             did_execute = False
-            # Packet on the hold symbol (silence = bug).
+            mint_sell, not_executable = switch_packet_action(
+                decision, session_open=session_open, execute=execute, switched=switched, max_switches=max_sw
+            )
+            # Packet on the hold symbol (silence = bug). A switch that cannot run now is a HOLD.
             try:
                 self._record_di_packet(
-                    action="hold" if decision != "switch" else "sell",
+                    action="sell" if mint_sell else "hold",
                     symbol=hold_sym or "UNKNOWN",
                     strategy_tag=reason,
                     portfolio_key=portfolio_key,
                     mission_id=mission_id,
                     price=hold_px or 0.0,
                     cfg=cfg,
-                    reasons_for=[line] if decision == "switch" else [],
-                    reasons_against=[] if decision == "switch" else [line],
+                    reasons_for=[line] if mint_sell else [],
+                    reasons_against=[] if mint_sell else [line, *not_executable],
                     plan_link={
                         "opportunity_switch": rev,
                         "version": rev.get("version"),
