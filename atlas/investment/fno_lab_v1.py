@@ -602,6 +602,7 @@ def build_entry_prediction(
     trade_id: str | None = None,
     entry_time: datetime | None = None,
     evidence: list[str] | None = None,
+    features: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Decide-time E[R] for a Lab v1 option BUY — persisted before outcome.
 
@@ -681,6 +682,7 @@ def build_entry_prediction(
         "trade_id": trade_id,
         "control_action": control_action,
         "sma_margin": margin,
+        "decide_time_features": dict(features) if isinstance(features, dict) else None,
         "live_orders": False,
         "honesty": (
             "Decide-time prediction persisted before outcome. "

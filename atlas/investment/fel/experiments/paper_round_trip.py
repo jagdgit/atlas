@@ -36,6 +36,7 @@ _log = logging.getLogger("atlas.investment.fel.paper_round_trip")
 KIND = "paper_round_trip"
 VERSION = "fel.paper_round_trip.v1"
 MIN_SAMPLE = 3
+BASE_FEATURE_IDS = ("rsi", "sma_fast", "sma_slow")
 FINDINGS_REL = Path("investment") / "fel" / "findings"
 HYPOTHESIS_STATEMENT = (
     "Paper SMA/RSI round-trips in this laboratory earn more than cash "
@@ -153,6 +154,12 @@ def experiences_to_dataset(
                     "rsi": feats.get("rsi"),
                     "sma_fast": feats.get("sma_fast"),
                     "sma_slow": feats.get("sma_slow"),
+                    **{
+                        k: v
+                        for k, v in feats.items()
+                        if k not in BASE_FEATURE_IDS
+                        and isinstance(v, (int, float))
+                    },
                 },
                 "target": {
                     "target_id": "paper_round_trip_reward",
@@ -169,7 +176,8 @@ def experiences_to_dataset(
         "version": VERSION,
         "laboratory_id": lab,
         "decision_type": "buy_name",
-        "feature_ids": ["rsi", "sma_fast", "sma_slow"],
+        "feature_ids": list(BASE_FEATURE_IDS)
+        + sorted({k for r in rows for k in r["features"]} - set(BASE_FEATURE_IDS)),
         "target_id": "paper_round_trip_reward",
         "n_rows": len(rows),
         "source": "paper_round_trip_experiences",

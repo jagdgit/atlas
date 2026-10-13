@@ -138,6 +138,10 @@ def _decide_time_features(prediction: dict[str, Any] | None) -> dict[str, Any]:
         text = str(ev)
         if text.startswith("control=") and "signal" not in out:
             out["signal"] = text.split("=", 1)[1].split(" ", 1)[0]
+    captured = pred.get("decide_time_features")
+    if isinstance(captured, dict):
+        for key, val in captured.items():
+            out.setdefault(key, val)
     return out
 
 

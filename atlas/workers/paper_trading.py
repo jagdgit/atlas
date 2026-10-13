@@ -4219,6 +4219,24 @@ class PaperTradingWorker(PersistentWorker):
                 overlay["experiment_family"] = overlay["attribution"]["experiment_family"]
                 # Decide-time E[R] BEFORE fill/outcome — only on option BUY.
                 if str(overlay.get("kind") or "").lower() == "buy":
+                    feats = None
+                    try:
+                        from atlas.investment.fno_features import entry_features
+
+                        leg = ce if right == "CE" else pe
+                        feats = entry_features(
+                            right=right,
+                            spot=spot_px,
+                            strike=leg.get("strike"),
+                            expiry=leg.get("expiry"),
+                            premium=overlay.get("price"),
+                            other_premium=pe_ltp if right == "CE" else ce_ltp,
+                            indicators=indicators,
+                            sma_margin=_sma_margin(indicators),
+                            now=self._clock(),
+                        )
+                    except Exception:  # noqa: BLE001
+                        self._logger.debug("fno entry features skipped", exc_info=True)
                     pred = lab_v1.build_entry_prediction(
                         underlying=symbol,
                         option_symbol=str(overlay.get("symbol") or ""),
@@ -4228,6 +4246,7 @@ class PaperTradingWorker(PersistentWorker):
                         control_action=control_action,
                         entry_reason=str(overlay.get("reason") or ""),
                         entry_time=self._clock(),
+                        features=feats,
                     )
                     overlay["entry_prediction"] = pred
                     overlay["expected"] = lab_v1.expected_block_from_prediction(pred)
